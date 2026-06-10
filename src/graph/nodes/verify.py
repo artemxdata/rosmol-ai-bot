@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from time import perf_counter
 
 from src.config import get_settings
 from src.graph.state import BotState
 from src.llm.cascade import JUDGE_MODEL
+from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import LLM_JUDGE_SYSTEM, build_judge_user
 from src.models import VerificationResult
 
@@ -44,7 +44,7 @@ async def verify(state: BotState) -> dict:
             response_format="json",
             max_tokens=500,
         )
-        data = json.loads(judge_raw)
+        data = parse_llm_json(judge_raw)
         result = VerificationResult.model_validate({**data, "triggered_llm_judge": True})
     except Exception as exc:
         result = VerificationResult(

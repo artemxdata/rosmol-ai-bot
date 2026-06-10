@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
@@ -24,7 +24,7 @@ class IncomingMessage(BaseModel):
     user_id: str
     channel: Channel
     text: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     request_id: UUID = Field(default_factory=uuid4)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -109,7 +109,7 @@ class VerificationResult(BaseModel):
 
 class TraceRecord(BaseModel):
     request_id: UUID
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     channel: Channel
     user_id_hash: str
     message_masked: str
