@@ -5,7 +5,7 @@ from time import perf_counter
 from typing import Any
 
 import asyncpg
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from loguru import logger
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
@@ -62,6 +62,33 @@ hde_adapter = HDEAdapter()
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready(request: Request) -> dict[str, Any]:
+    checks: dict[str, str] = {}
+
+    try:
+        await request.app.state.redis.ping()
+        checks["redis"] = "ok"
+    except Exception as exc:
+        checks["redis"] = f"error: {type(exc).__name__}"
+
+    try:
+        value = await request.app.state.pg_pool.fetchval("select 1")
+        checks["postgres"] = "ok" if value == 1 else "error: unexpected result"
+    except Exception as exc:
+        checks["postgres"] = f"error: {type(exc).__name__}"
+
+    try:
+        await request.app.state.qdrant.get_collections()
+        checks["qdrant"] = "ok"
+    except Exception as exc:
+        checks["qdrant"] = f"error: {type(exc).__name__}"
+
+    if any(status != "ok" for status in checks.values()):
+        raise HTTPException(status_code=503, detail={"status": "degraded", "checks": checks})
+    return {"status": "ready", "checks": checks}
 
 
 @app.post("/ask")
