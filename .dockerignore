@@ -1,0 +1,13 @@
+.env
+.venv/
+.pip-cache/
+.git/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+logs/
+postgres_data/
+redis_data/
+qdrant_storage/

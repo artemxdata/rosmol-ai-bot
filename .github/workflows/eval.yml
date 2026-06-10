@@ -1,0 +1,22 @@
+name: KB Eval
+
+on:
+  push:
+    paths:
+      - "data/knowledge_base_seed.json"
+      - "data/golden_set.json"
+      - "src/rag/**"
+      - "eval/**"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install ".[dev]"
+      - name: Check regression
+        run: python eval/check_regression.py --threshold 0.85
