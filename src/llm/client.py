@@ -2,31 +2,26 @@ from __future__ import annotations
 
 import asyncio
 from time import perf_counter
+from typing import Any
 
+import httpx
 from loguru import logger
 
 from src.config import get_settings
 
 
-class GigaChatClient:
+class CloudRuLLMClient:
     def __init__(
         self,
         api_key: str | None = None,
-        verify_ssl: bool | None = None,
-        scope: str | None = None,
+        chat_completions_url: str | None = None,
         timeout: float = 30.0,
-        base_url: str | None = None,
-        auth_url: str | None = None,
     ) -> None:
-        from gigachat.settings import AUTH_URL, BASE_URL
-
         settings = get_settings()
-        self.api_key = self._normalize_secret(api_key or settings.gigachat_api_key)
-        self.access_token = self._normalize_secret(settings.gigachat_access_token)
-        self.verify_ssl = settings.gigachat_verify_ssl if verify_ssl is None else verify_ssl
-        self.scope = scope or settings.gigachat_scope
-        self.base_url = self._normalize_url(base_url or settings.gigachat_base_url, BASE_URL)
-        self.auth_url = self._normalize_url(auth_url or settings.gigachat_auth_url, AUTH_URL)
+        self.api_key = self._normalize_secret(api_key or settings.cloud_ru_api_key)
+        self.chat_completions_url = self._normalize_url(
+            chat_completions_url or settings.cloud_ru_chat_completions_url
+        )
         self.timeout = timeout
 
     async def generate(
@@ -38,8 +33,8 @@ class GigaChatClient:
         temperature: float = 0.3,
         max_tokens: int = 1500,
     ) -> str:
-        if not self.api_key and not self.access_token:
-            raise RuntimeError("GIGACHAT_API_KEY or GIGACHAT_ACCESS_TOKEN is not configured")
+        if not self.api_key:
+            raise RuntimeError("CLOUD_RU_API_KEY is not configured")
 
         last_error: Exception | None = None
         for attempt in range(3):
@@ -58,7 +53,7 @@ class GigaChatClient:
                     break
                 await asyncio.sleep(0.5 * (2**attempt))
         raise RuntimeError(
-            f"GigaChat request failed after retries: {self._summarize_exception(last_error)}"
+            f"Cloud.ru LLM request failed after retries: {self._summarize_exception(last_error)}"
         ) from last_error
 
     async def _generate_once(
@@ -70,9 +65,8 @@ class GigaChatClient:
         temperature: float,
         max_tokens: int,
     ) -> str:
-        from gigachat import GigaChat
-
-        payload: dict[str, object] = {
+        payload: dict[str, Any] = {
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -84,28 +78,25 @@ class GigaChatClient:
             payload["response_format"] = {"type": "json_object"}
 
         started_at = perf_counter()
-        async with GigaChat(
-            **self._auth_kwargs(),
-            base_url=self.base_url,
-            auth_url=self.auth_url,
-            model=model,
-            verify_ssl_certs=self.verify_ssl,
-            scope=self.scope,
-            timeout=self.timeout,
-        ) as client:
-            response = await client.achat(payload)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                self.chat_completions_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
 
         latency_ms = int((perf_counter() - started_at) * 1000)
-        usage = getattr(response, "usage", None)
-        logger.info("gigachat_response", model=model, latency_ms=latency_ms, usage=usage)
-        return response.choices[0].message.content
-
-    def _auth_kwargs(self) -> dict[str, str]:
-        if self.access_token:
-            return {"access_token": self.access_token}
-        if self.api_key and self._looks_like_access_token(self.api_key):
-            return {"access_token": self.api_key}
-        return {"credentials": self.api_key}
+        data = response.json()
+        usage = data.get("usage")
+        logger.info("cloud_ru_llm_response", model=model, latency_ms=latency_ms, usage=usage)
+        try:
+            return str(data["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("Cloud.ru LLM response has unexpected format") from exc
 
     @staticmethod
     def _normalize_secret(secret: str | None) -> str:
@@ -117,43 +108,28 @@ class GigaChatClient:
         return value
 
     @staticmethod
-    def _normalize_url(value: str | None, default: str) -> str:
-        normalized = (value or "").strip().strip('"').strip("'")
-        if not normalized:
-            return default
+    def _normalize_url(value: str) -> str:
+        normalized = value.strip().strip('"').strip("'")
         if not normalized.startswith(("http://", "https://")):
-            raise ValueError("GigaChat URL must start with http:// or https://")
+            raise ValueError("Cloud.ru chat completions URL must start with http:// or https://")
         return normalized
 
     @staticmethod
-    def _looks_like_access_token(value: str) -> bool:
-        return value.count(".") >= 2
-
-    @staticmethod
     def _is_retryable(exc: Exception) -> bool:
-        from gigachat.exceptions import (
-            AuthenticationError,
-            BadRequestError,
-            ForbiddenError,
-            NotFoundError,
-            UnprocessableEntityError,
-        )
-
-        non_retryable = (
-            AuthenticationError,
-            BadRequestError,
-            ForbiddenError,
-            NotFoundError,
-            UnprocessableEntityError,
-        )
-        return not isinstance(exc, non_retryable)
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in {408, 409, 429, 500, 502, 503, 504}
+        return isinstance(exc, httpx.TransportError)
 
     @staticmethod
     def _summarize_exception(exc: Exception | None) -> str:
         if exc is None:
             return "unknown error"
-        text = str(exc)
-        for marker in ("Unauthorized", "Forbidden", "Bad Request", "Too Many Requests"):
-            if marker.lower() in text.lower():
-                return marker
-        return text.splitlines()[0][:300]
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            text = exc.response.text.splitlines()[0][:200]
+            if status_code == 401:
+                return "Unauthorized"
+            if status_code == 403:
+                return "Forbidden"
+            return f"HTTP {status_code}: {text}"
+        return str(exc).splitlines()[0][:300]

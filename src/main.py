@@ -15,7 +15,7 @@ from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
 from src.config import get_settings
 from src.graph.graph import build_graph
-from src.llm.client import GigaChatClient
+from src.llm.client import CloudRuLLMClient
 from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
 from src.models import Channel, IncomingMessage
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     app.state.sessions = SessionManager(app.state.redis, app.state.memory)
     app.state.rate_limiter = RateLimiter(app.state.redis)
     app.state.pii_masker = PIIMasker()
-    app.state.llm_client = GigaChatClient()
+    app.state.llm_client = CloudRuLLMClient()
     app.state.embedder = Embedder()
     app.state.retriever = Retriever(app.state.qdrant, app.state.embedder)
     app.state.reranker = Reranker()
@@ -229,7 +229,7 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         await _safe_log(fastapi_app, state)
         return cached_response
 
-    if not settings.gigachat_api_key and not settings.gigachat_access_token:
+    if not settings.cloud_ru_api_key:
         response = "Передаю обращение специалисту, потому что LLM-доступ ещё не настроен."
         state.update(
             {

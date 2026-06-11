@@ -154,8 +154,7 @@ def _app(
 def no_llm_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(
         session_ttl_seconds=1800,
-        gigachat_api_key="",
-        gigachat_access_token="",
+        cloud_ru_api_key="",
     )
     monkeypatch.setattr("src.main.get_settings", lambda: settings)
 
@@ -164,8 +163,7 @@ def no_llm_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 def configured_llm_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(
         session_ttl_seconds=1800,
-        gigachat_api_key="configured",
-        gigachat_access_token="",
+        cloud_ru_api_key="configured",
         reranker_threshold_low=0.4,
         reranker_threshold_high=0.7,
     )

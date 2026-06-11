@@ -34,10 +34,18 @@ python scripts/init_qdrant.py
 pytest
 ```
 
-Для GigaChat используй один из вариантов:
+Для LLM используется Cloud.ru Evolution Foundation Models, OpenAI-compatible endpoint:
 
-- `GIGACHAT_API_KEY` — OAuth authorization key/credentials для получения токена.
-- `GIGACHAT_ACCESS_TOKEN` — готовый access token. Если токен просрочен, `scripts/test_gigachat.py` вернёт `Unauthorized`.
+- `CLOUD_RU_API_KEY` — API-ключ Cloud.ru, отправляется как `Authorization: Bearer ...`.
+- `CLOUD_RU_CHAT_COMPLETIONS_URL` — по умолчанию `https://foundation-models.api.cloud.ru/v1/chat/completions`.
+- `CLOUD_RU_MODEL` — по умолчанию `ai-sage/GigaChat3-10B-A1.8B`.
+
+OAuth flow и developers.sber.ru здесь не используются.
+Проверка доступа:
+
+```bash
+python scripts/test_cloud_ru.py
+```
 
 ## Архитектура
 

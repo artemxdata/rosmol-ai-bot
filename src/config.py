@@ -12,12 +12,11 @@ class Settings(BaseSettings):
     app_env: str = "local"
     log_level: str = "INFO"
 
-    gigachat_api_key: str = ""
-    gigachat_access_token: str = ""
-    gigachat_scope: str = "GIGACHAT_API_CORP"
-    gigachat_verify_ssl: bool = False
-    gigachat_base_url: str = ""
-    gigachat_auth_url: str = ""
+    cloud_ru_api_key: str = ""
+    cloud_ru_chat_completions_url: str = (
+        "https://foundation-models.api.cloud.ru/v1/chat/completions"
+    )
+    cloud_ru_model: str = "ai-sage/GigaChat3-10B-A1.8B"
 
     postgres_dsn: str = "postgresql://rosmol:rosmol@localhost:5432/rosmol_ai_bot"
     redis_url: str = "redis://localhost:6379/0"
