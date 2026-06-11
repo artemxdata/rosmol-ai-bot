@@ -15,6 +15,7 @@ build/
 # local data and model caches
 .cache/
 models/
+/Новый бот Росмол .xlsx
 
 # runtime artifacts
 logs/
