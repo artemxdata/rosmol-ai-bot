@@ -134,8 +134,12 @@ endpoint-ы.
 - Endpoint: `https://foundation-models.api.cloud.ru/v1/chat/completions`
 - Авторизация: `Authorization: Bearer <CLOUD_RU_API_KEY>`
 - Формат: OpenAI-compatible Chat Completions (`model`, `messages`, `max_tokens`, `temperature`)
-- Модель по умолчанию: `ai-sage/GigaChat3-10B-A1.8B`
-- Переменные окружения: `CLOUD_RU_API_KEY`, опционально `CLOUD_RU_CHAT_COMPLETIONS_URL`, `CLOUD_RU_MODEL`
+- Модель для типовых запросов: `ai-sage/GigaChat3-10B-A1.8B`
+- Модель для нетиповых/сложных запросов: Cloud.ru model id для Max, задаётся через
+  `CLOUD_RU_MODEL_COMPLEX` после подтверждения точного имени модели в Cloud.ru
+- Переменные окружения: `CLOUD_RU_API_KEY`, опционально `CLOUD_RU_CHAT_COMPLETIONS_URL`,
+  `CLOUD_RU_MODEL_SIMPLE`, `CLOUD_RU_MODEL_COMPLEX`, `CLOUD_RU_MODEL_ANALYZER`,
+  `CLOUD_RU_MODEL_JUDGE`
 - Не используются: OAuth flow, `GIGACHAT_API_KEY`, `GIGACHAT_ACCESS_TOKEN`, `GIGACHAT_SCOPE`,
   `developers.sber.ru`
 
@@ -299,7 +303,7 @@ endpoint-ы.
 │              QUERY ANALYZER                             │
 │                                                         │
 │  LLM-вызов: Cloud.ru Evolution Foundation Models         │
-│  Модель: ai-sage/GigaChat3-10B-A1.8B                     │
+│  Модель: CLOUD_RU_MODEL_ANALYZER или CLOUD_RU_MODEL_COMPLEX│
 │  Формат: OpenAI-compatible Chat Completions              │
 │  Авторизация: Bearer CLOUD_RU_API_KEY                    │
 │                                                         │
@@ -341,9 +345,9 @@ endpoint-ы.
 │  4. Гранты → RAG по грантовой категории                  │
 │  5. Общее → RAG по общей категории                       │
 │                                                         │
-│  complexity влияет на промпт и детализацию ответа,       │
-│  но не переключает провайдера или схему авторизации.     │
-│  Базовая модель: ai-sage/GigaChat3-10B-A1.8B             │
+│  complexity влияет на маршрутизацию модели:              │
+│  simple → CLOUD_RU_MODEL_SIMPLE (10B)                    │
+│  complex/нетиповой → CLOUD_RU_MODEL_COMPLEX (Max)        │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -426,8 +430,9 @@ endpoint-ы.
 │                                                         │
 │  LLM-провайдер: Cloud.ru Evolution Foundation Models     │
 │  Endpoint: /v1/chat/completions                          │
-│  Модель: ai-sage/GigaChat3-10B-A1.8B                     │
-│  complexity управляет полнотой ответа, а не OAuth/SDK.   │
+│  simple → CLOUD_RU_MODEL_SIMPLE (типовые вопросы)        │
+│  complex → CLOUD_RU_MODEL_COMPLEX (Max для нетиповых)    │
+│  Все модели вызываются через один Cloud.ru endpoint.     │
 │                                                         │
 │  System prompt:                                         │
 │  «Ты — помощник Росмолодёжи. Общайся на «ты».           │
@@ -1059,7 +1064,8 @@ jobs:
 | Backend | **FastAPI** | Async, webhook-ы, команда знает Python |
 | Оркестрация | **LangGraph** | Граф состояний, checkpoint, replay, расширяемость |
 | LLM API | **Cloud.ru Evolution Foundation Models** | OpenAI-compatible `/v1/chat/completions`, Bearer API key, без Sber OAuth |
-| LLM модель | **ai-sage/GigaChat3-10B-A1.8B** | Русскоязычная модель через Cloud.ru, единый endpoint для analyzer/generator/judge |
+| LLM simple/judge | **ai-sage/GigaChat3-10B-A1.8B** | Типовые вопросы вроде регистрации на форум, экономичный judge |
+| LLM complex/analyzer | **Max-модель GigaChat через Cloud.ru** | Нетиповые, составные, путаные запросы; точный Cloud.ru model id задаётся в `CLOUD_RU_MODEL_COMPLEX` |
 | Embedding + Sparse | **bge-m3** | Dense + sparse из одной модели, хороший русский, локально |
 | Reranker | **bge-reranker-v2-m3** | Локально, без API, хороший русский |
 | Векторная БД | **Qdrant** | Hybrid search, metadata filtering, lightweight |
@@ -1084,8 +1090,9 @@ OS: Ubuntu 24
 
 ## 11. Стоимость (детализированная)
 
-При ~1200 тикетов/мес, cache hit rate 35%, единая LLM-модель через Cloud.ru
-`ai-sage/GigaChat3-10B-A1.8B`.
+При ~1200 тикетов/мес, cache hit rate 35%, каскад внутри Cloud.ru:
+типовые запросы → `ai-sage/GigaChat3-10B-A1.8B`, нетиповые/complex → Max-модель через
+`CLOUD_RU_MODEL_COMPLEX`.
 
 Тариф Cloud.ru Evolution Foundation Models фиксируется отдельно в коммерческой части проекта.
 В архитектуре важно правило интеграции: OpenAI-compatible endpoint + Bearer `CLOUD_RU_API_KEY`,
@@ -1093,7 +1100,7 @@ OS: Ubuntu 24
 
 | Статья | Расчёт | Сумма/мес |
 |---|---|---|
-| **Cloud.ru LLM API** | Analyzer + Generator + LLM-judge через `ai-sage/GigaChat3-10B-A1.8B` | зависит от фактического тарифа и токенов |
+| **Cloud.ru LLM API** | Analyzer/complex через Max, simple/judge через 10B | зависит от фактического тарифа и токенов |
 | **Embedding (bge-m3)** | Локально | 0 ₽ |
 | **Reranker (bge-reranker)** | Локально | 0 ₽ |
 | **Сервер Selectel** | 4 vCPU, 16 GB RAM, 100 GB SSD | ~3000 ₽ |

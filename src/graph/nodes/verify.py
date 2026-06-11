@@ -5,7 +5,7 @@ from time import perf_counter
 
 from src.config import get_settings
 from src.graph.state import BotState
-from src.llm.cascade import JUDGE_MODEL
+from src.llm.cascade import select_judge_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import LLM_JUDGE_SYSTEM, build_judge_user
 from src.models import VerificationResult
@@ -37,8 +37,9 @@ async def verify(state: BotState) -> dict:
         return {"verification": result, "verifier_triggered": False}
 
     try:
+        model = select_judge_model()
         judge_raw = await state["llm_client"].generate(
-            model=JUDGE_MODEL,
+            model=model,
             system=LLM_JUDGE_SYSTEM,
             user=build_judge_user(response, chunks),
             response_format="json",

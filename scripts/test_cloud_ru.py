@@ -7,16 +7,15 @@ from time import perf_counter
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.config import get_settings
-from src.llm.cascade import DEFAULT_CLOUD_RU_MODEL
+from src.llm.cascade import select_generator_model
 from src.llm.client import CloudRuLLMClient
+from src.models import Complexity
 
 
 async def main() -> None:
-    settings = get_settings()
     client = CloudRuLLMClient()
     failed = False
-    model = settings.cloud_ru_model or DEFAULT_CLOUD_RU_MODEL
+    model = select_generator_model(Complexity.SIMPLE)
     started_at = perf_counter()
     try:
         answer = await client.generate(

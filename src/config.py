@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     cloud_ru_chat_completions_url: str = (
         "https://foundation-models.api.cloud.ru/v1/chat/completions"
     )
-    cloud_ru_model: str = "ai-sage/GigaChat3-10B-A1.8B"
+    cloud_ru_model_simple: str = "ai-sage/GigaChat3-10B-A1.8B"
+    cloud_ru_model_complex: str = ""
+    cloud_ru_model_analyzer: str = ""
+    cloud_ru_model_judge: str = ""
 
     postgres_dsn: str = "postgresql://rosmol:rosmol@localhost:5432/rosmol_ai_bot"
     redis_url: str = "redis://localhost:6379/0"

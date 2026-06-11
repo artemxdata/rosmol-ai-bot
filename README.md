@@ -38,7 +38,9 @@ pytest
 
 - `CLOUD_RU_API_KEY` — API-ключ Cloud.ru, отправляется как `Authorization: Bearer ...`.
 - `CLOUD_RU_CHAT_COMPLETIONS_URL` — по умолчанию `https://foundation-models.api.cloud.ru/v1/chat/completions`.
-- `CLOUD_RU_MODEL` — по умолчанию `ai-sage/GigaChat3-10B-A1.8B`.
+- `CLOUD_RU_MODEL_SIMPLE` — модель для типовых простых вопросов, по умолчанию `ai-sage/GigaChat3-10B-A1.8B`.
+- `CLOUD_RU_MODEL_COMPLEX` — модель для нетиповых/сложных вопросов. Укажи Cloud.ru model id Max, когда он подтверждён в кабинете.
+- `CLOUD_RU_MODEL_ANALYZER` и `CLOUD_RU_MODEL_JUDGE` — опциональные переопределения для анализатора и verifier judge.
 
 OAuth flow и developers.sber.ru здесь не используются.
 Проверка доступа:
