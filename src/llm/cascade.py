@@ -15,7 +15,12 @@ def _configured(value: str | None) -> str | None:
 
 def _simple_model() -> str:
     settings = get_settings()
-    return _configured(settings.cloud_ru_model_simple) or DEFAULT_CLOUD_RU_SIMPLE_MODEL
+    legacy_model = getattr(settings, "cloud_ru_model", "")
+    return (
+        _configured(settings.cloud_ru_model_simple)
+        or _configured(legacy_model)
+        or DEFAULT_CLOUD_RU_SIMPLE_MODEL
+    )
 
 
 def _complex_model() -> str:

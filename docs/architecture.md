@@ -135,11 +135,12 @@ endpoint-ы.
 - Авторизация: `Authorization: Bearer <CLOUD_RU_API_KEY>`
 - Формат: OpenAI-compatible Chat Completions (`model`, `messages`, `max_tokens`, `temperature`)
 - Модель для типовых запросов: `ai-sage/GigaChat3-10B-A1.8B`
-- Модель для нетиповых/сложных запросов: Cloud.ru model id для Max, задаётся через
-  `CLOUD_RU_MODEL_COMPLEX` после подтверждения точного имени модели в Cloud.ru
+- Модель для нетиповых/сложных запросов: `GigaChat/GigaChat-2-Max`
 - Переменные окружения: `CLOUD_RU_API_KEY`, опционально `CLOUD_RU_CHAT_COMPLETIONS_URL`,
-  `CLOUD_RU_MODEL_SIMPLE`, `CLOUD_RU_MODEL_COMPLEX`, `CLOUD_RU_MODEL_ANALYZER`,
-  `CLOUD_RU_MODEL_JUDGE`
+  `CLOUD_RU_MODEL` или `CLOUD_RU_MODEL_SIMPLE`, `CLOUD_RU_MODEL_COMPLEX`,
+  `CLOUD_RU_MODEL_ANALYZER`, `CLOUD_RU_MODEL_JUDGE`
+- Стоимость Max на Cloud.ru: входные токены — 569.34 ₽/млн, генерируемые токены —
+  569.34 ₽/млн; контекст до 131K токенов
 - Не используются: OAuth flow, `GIGACHAT_API_KEY`, `GIGACHAT_ACCESS_TOKEN`, `GIGACHAT_SCOPE`,
   `developers.sber.ru`
 
@@ -353,7 +354,7 @@ endpoint-ы.
 │                                                         │
 │  complexity влияет на маршрутизацию модели:              │
 │  simple → CLOUD_RU_MODEL_SIMPLE (10B)                    │
-│  complex/нетиповой → CLOUD_RU_MODEL_COMPLEX (Max)        │
+│  complex/нетиповой → GigaChat/GigaChat-2-Max             │
 │  Если pre-routing не уверен, маршрут всегда complex.     │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -438,7 +439,7 @@ endpoint-ы.
 │  LLM-провайдер: Cloud.ru Evolution Foundation Models     │
 │  Endpoint: /v1/chat/completions                          │
 │  simple → CLOUD_RU_MODEL_SIMPLE (типовые вопросы)        │
-│  complex → CLOUD_RU_MODEL_COMPLEX (Max для нетиповых)    │
+│  complex → GigaChat/GigaChat-2-Max для нетиповых         │
 │  Все модели вызываются через один Cloud.ru endpoint.     │
 │                                                         │
 │  System prompt:                                         │
@@ -1073,7 +1074,7 @@ jobs:
 | Оркестрация | **LangGraph** | Граф состояний, checkpoint, replay, расширяемость |
 | LLM API | **Cloud.ru Evolution Foundation Models** | OpenAI-compatible `/v1/chat/completions`, Bearer API key, без Sber OAuth |
 | LLM simple/judge | **ai-sage/GigaChat3-10B-A1.8B** | Типовые вопросы вроде регистрации на форум, экономичный judge |
-| LLM complex/analyzer | **Max-модель GigaChat через Cloud.ru** | Нетиповые, составные, путаные запросы; точный Cloud.ru model id задаётся в `CLOUD_RU_MODEL_COMPLEX` |
+| LLM complex/analyzer | **GigaChat/GigaChat-2-Max** | Нетиповые, составные, путаные запросы; Cloud.ru model id задаётся в `CLOUD_RU_MODEL_COMPLEX` |
 | Embedding + Sparse | **bge-m3** | Dense + sparse из одной модели, хороший русский, локально |
 | Reranker | **bge-reranker-v2-m3** | Локально, без API, хороший русский |
 | Векторная БД | **Qdrant** | Hybrid search, metadata filtering, lightweight |
@@ -1099,16 +1100,18 @@ OS: Ubuntu 24
 ## 11. Стоимость (детализированная)
 
 При ~1200 тикетов/мес, cache hit rate 35%, каскад внутри Cloud.ru:
-типовые запросы → `ai-sage/GigaChat3-10B-A1.8B`, нетиповые/complex → Max-модель через
-`CLOUD_RU_MODEL_COMPLEX`.
+типовые запросы → `ai-sage/GigaChat3-10B-A1.8B`, нетиповые/complex →
+`GigaChat/GigaChat-2-Max`.
 
-Тариф Cloud.ru Evolution Foundation Models фиксируется отдельно в коммерческой части проекта.
-В архитектуре важно правило интеграции: OpenAI-compatible endpoint + Bearer `CLOUD_RU_API_KEY`,
-без OAuth и без `GIGACHAT_*` переменных.
+Тариф Cloud.ru Evolution Foundation Models для Max: входные токены — 569.34 ₽/млн,
+генерируемые токены — 569.34 ₽/млн, контекст до 131K токенов. Это дешевле прямого
+Sber GigaChat API при 650 ₽/млн. В архитектуре важно правило интеграции:
+OpenAI-compatible endpoint + Bearer `CLOUD_RU_API_KEY`, без OAuth и без `GIGACHAT_*`
+переменных.
 
 | Статья | Расчёт | Сумма/мес |
 |---|---|---|
-| **Cloud.ru LLM API** | Analyzer/complex через Max, simple/judge через 10B | зависит от фактического тарифа и токенов |
+| **Cloud.ru LLM API** | Analyzer/complex через `GigaChat/GigaChat-2-Max`, simple/judge через 10B | Max: 569.34 ₽/млн входных и 569.34 ₽/млн выходных токенов |
 | **Embedding (bge-m3)** | Локально | 0 ₽ |
 | **Reranker (bge-reranker)** | Локально | 0 ₽ |
 | **Сервер Selectel** | 4 vCPU, 16 GB RAM, 100 GB SSD | ~3000 ₽ |

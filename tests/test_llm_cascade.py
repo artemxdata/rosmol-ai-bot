@@ -13,8 +13,9 @@ from src.models import Complexity
 
 def _settings(**overrides):
     values = {
+        "cloud_ru_model": "",
         "cloud_ru_model_simple": "",
-        "cloud_ru_model_complex": "",
+        "cloud_ru_model_complex": "GigaChat/GigaChat-2-Max",
         "cloud_ru_model_analyzer": "",
         "cloud_ru_model_judge": "",
     }
@@ -26,9 +27,19 @@ def test_llm_cascade_defaults_to_simple_model(monkeypatch) -> None:
     monkeypatch.setattr("src.llm.cascade.get_settings", lambda: _settings())
 
     assert select_generator_model(Complexity.SIMPLE) == DEFAULT_CLOUD_RU_SIMPLE_MODEL
-    assert select_generator_model(Complexity.COMPLEX) == DEFAULT_CLOUD_RU_SIMPLE_MODEL
-    assert select_analyzer_model() == DEFAULT_CLOUD_RU_SIMPLE_MODEL
+    assert select_generator_model(Complexity.COMPLEX) == "GigaChat/GigaChat-2-Max"
+    assert select_analyzer_model() == "GigaChat/GigaChat-2-Max"
     assert select_judge_model() == DEFAULT_CLOUD_RU_SIMPLE_MODEL
+
+
+def test_llm_cascade_supports_legacy_cloud_ru_model_alias(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.llm.cascade.get_settings",
+        lambda: _settings(cloud_ru_model="legacy-simple-model", cloud_ru_model_simple=""),
+    )
+
+    assert select_generator_model(Complexity.SIMPLE) == "legacy-simple-model"
+    assert select_judge_model() == "legacy-simple-model"
 
 
 def test_llm_cascade_routes_simple_analyzer_and_judge_to_10b(monkeypatch) -> None:

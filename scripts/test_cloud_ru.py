@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -12,10 +13,22 @@ from src.llm.client import CloudRuLLMClient
 from src.models import Complexity
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Check Cloud.ru chat completions access.")
+    parser.add_argument(
+        "--complex",
+        action="store_true",
+        help="Check the configured complex/Max model instead of the simple model.",
+    )
+    return parser.parse_args()
+
+
 async def main() -> None:
+    args = _parse_args()
     client = CloudRuLLMClient()
     failed = False
-    model = select_generator_model(Complexity.SIMPLE)
+    complexity = Complexity.COMPLEX if args.complex else Complexity.SIMPLE
+    model = select_generator_model(complexity)
     started_at = perf_counter()
     try:
         answer = await client.generate(
@@ -30,6 +43,7 @@ async def main() -> None:
         print(
             {
                 "model": model,
+                "complexity": complexity.value,
                 "provider": "cloud.ru",
                 "auth": "bearer_api_key",
                 "ok": False,
@@ -43,6 +57,7 @@ async def main() -> None:
         print(
             {
                 "model": model,
+                "complexity": complexity.value,
                 "provider": "cloud.ru",
                 "auth": "bearer_api_key",
                 "ok": bool(answer),
