@@ -17,6 +17,11 @@ from src.config import get_settings
 from src.graph.graph import build_graph
 from src.llm.client import CloudRuLLMClient
 from src.llm.routing import estimate_routing_hint
+from src.llm.usage import (
+    reset_llm_usage_collection,
+    start_llm_usage_collection,
+    summarize_llm_usage,
+)
 from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
 from src.models import Channel, IncomingMessage
@@ -245,7 +250,12 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         await _safe_log(fastapi_app, state)
         return response
 
-    result = await fastapi_app.state.graph.ainvoke(state)
+    llm_usage_events, llm_usage_token = start_llm_usage_collection()
+    try:
+        result = await fastapi_app.state.graph.ainvoke(state)
+    finally:
+        reset_llm_usage_collection(llm_usage_token)
+    result.update(summarize_llm_usage(llm_usage_events))
     response = result.get("final_response") or "Передаю обращение специалисту."
     await fastapi_app.state.sessions.append_turn(session, masked_text, response)
     result["total_latency_ms"] = int((perf_counter() - started_at) * 1000)

@@ -21,14 +21,16 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
             metadata_filter, retrieved_chunks, reranker_scores, max_reranker_score,
             cache_hit, generator_model, cited_sources, verifier_triggered,
             verifier_result, response_text, was_escalated, escalation_reason,
-            total_latency_ms, trace_events, prompt_version, error
+            llm_usage, llm_prompt_tokens, llm_completion_tokens, llm_total_tokens,
+            llm_estimated_cost_rub, total_latency_ms, trace_events, prompt_version, error
         )
         VALUES (
             $1, $2, $3, $4, $5::jsonb,
             $6::jsonb, $7::jsonb, $8::jsonb, $9,
             $10, $11, $12, $13,
             $14::jsonb, $15, $16, $17,
-            $18, $19::jsonb, $20, $21
+            $18::jsonb, $19, $20, $21,
+            $22, $23, $24::jsonb, $25, $26
         )
         """,
         state["request_id"],
@@ -54,6 +56,11 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
         state.get("final_response") or state.get("generated_response"),
         bool(state.get("should_escalate")),
         state.get("escalation_reason"),
+        json.dumps(state.get("llm_usage") or [], ensure_ascii=False),
+        state.get("llm_prompt_tokens", 0),
+        state.get("llm_completion_tokens", 0),
+        state.get("llm_total_tokens", 0),
+        state.get("llm_estimated_cost_rub", 0.0),
         state.get("total_latency_ms"),
         json.dumps(trace_events, ensure_ascii=False),
         settings.prompt_version,

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from src.llm.client import CloudRuLLMClient
+from src.llm.usage import reset_llm_usage_collection, start_llm_usage_collection
 
 
 def _settings(**overrides):
@@ -70,15 +71,21 @@ async def test_cloud_ru_client_posts_openai_compatible_payload(
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     client = CloudRuLLMClient(api_key="cloud-key")
-    answer = await client.generate(
-        model="ai-sage/GigaChat3-10B-A1.8B",
-        system="system",
-        user="user",
-        response_format="json",
-        max_tokens=50,
-    )
+    usage_events, token = start_llm_usage_collection()
+    try:
+        answer = await client.generate(
+            model="ai-sage/GigaChat3-10B-A1.8B",
+            system="system",
+            user="user",
+            response_format="json",
+            max_tokens=50,
+        )
+    finally:
+        reset_llm_usage_collection(token)
 
     assert answer == "OK"
+    assert usage_events[0]["model"] == "ai-sage/GigaChat3-10B-A1.8B"
+    assert usage_events[0]["total_tokens"] == 1
     headers = captured["headers"]
     assert isinstance(headers, httpx.Headers)
     assert headers["Authorization"] == "Bearer cloud-key"

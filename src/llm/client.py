@@ -8,6 +8,7 @@ import httpx
 from loguru import logger
 
 from src.config import get_settings
+from src.llm.usage import record_llm_usage
 
 
 class CloudRuLLMClient:
@@ -92,6 +93,7 @@ class CloudRuLLMClient:
         latency_ms = int((perf_counter() - started_at) * 1000)
         data = response.json()
         usage = data.get("usage")
+        record_llm_usage(model, latency_ms, usage)
         logger.info("cloud_ru_llm_response", model=model, latency_ms=latency_ms, usage=usage)
         try:
             return str(data["choices"][0]["message"]["content"])

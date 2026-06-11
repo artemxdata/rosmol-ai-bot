@@ -42,6 +42,8 @@ pytest
 - `CLOUD_RU_MODEL_SIMPLE` — модель для типовых простых вопросов, по умолчанию `ai-sage/GigaChat3-10B-A1.8B`.
 - `CLOUD_RU_MODEL_COMPLEX` — модель для нетиповых/сложных вопросов, по умолчанию `GigaChat/GigaChat-2-Max`.
 - `CLOUD_RU_MODEL_ANALYZER` и `CLOUD_RU_MODEL_JUDGE` — опциональные переопределения для анализатора и verifier judge.
+- `CLOUD_RU_MODEL_COMPLEX_INPUT_PRICE_RUB_PER_MILLION` и `CLOUD_RU_MODEL_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION` — тариф Max для trace-учёта стоимости, по умолчанию `569.34`.
+- `CLOUD_RU_MODEL_SIMPLE_INPUT_PRICE_RUB_PER_MILLION` и `CLOUD_RU_MODEL_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION` — тариф simple-модели; по умолчанию `0`, пока не зафиксирован коммерческий тариф.
 
 Перед Query Analyzer работает консервативный pre-routing: 10B выбирается только для явно типовых FAQ-сигналов вроде регистрации или подачи заявки. Неоднозначные, персональные, составные и неизвестные формулировки идут в complex-route и используют Max-модель, если задан `CLOUD_RU_MODEL_COMPLEX`.
 
@@ -52,6 +54,7 @@ OAuth flow и developers.sber.ru здесь не используются.
 
 ```bash
 python scripts/test_cloud_ru.py
+python scripts/test_cloud_ru.py --complex
 ```
 
 ## Архитектура

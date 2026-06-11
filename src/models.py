@@ -123,6 +123,11 @@ class TraceRecord(BaseModel):
     response_text: str | None = None
     was_escalated: bool = False
     escalation_reason: str | None = None
+    llm_usage: list[dict[str, Any]] = Field(default_factory=list)
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_total_tokens: int = 0
+    llm_estimated_cost_rub: float = 0.0
     total_latency_ms: int | None = None
     trace_events: list[TraceEvent] = Field(default_factory=list)
     prompt_version: str | None = None

@@ -909,6 +909,13 @@ CREATE TABLE request_traces (
     verifier_triggered BOOLEAN DEFAULT FALSE,
     verifier_result JSONB,         -- {has_hallucination, details}
     verification_latency_ms INT,
+
+    -- LLM usage accounting
+    llm_usage JSONB DEFAULT '[]'::jsonb,
+    llm_prompt_tokens INT DEFAULT 0,
+    llm_completion_tokens INT DEFAULT 0,
+    llm_total_tokens INT DEFAULT 0,
+    llm_estimated_cost_rub NUMERIC(12, 6) DEFAULT 0,
     
     -- Результат
     response_text TEXT,
