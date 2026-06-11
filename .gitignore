@@ -19,6 +19,7 @@ models/
 
 # runtime artifacts
 logs/
+eval/metrics*.json
 qdrant_storage/
 postgres_data/
 redis_data/

@@ -3,14 +3,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 from src.config import get_settings
 from src.rag.embedder import Embedder
 from src.rag.retriever import Retriever
+from src.rag.seed_retriever import SeedRetriever
 
 
 def compute_recall_at_k(results: list[dict[str, Any]]) -> float | None:
@@ -51,53 +55,123 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def run_eval(golden_path: Path, output_path: Path, top_k: int) -> dict[str, Any]:
+async def run_eval(
+    golden_path: Path,
+    output_path: Path,
+    top_k: int,
+    backend: str = "qdrant",
+    kb_seed_path: Path = Path("data/knowledge_base_seed.json"),
+    auto_smoke_cases: bool = False,
+    max_smoke_cases: int = 100,
+) -> dict[str, Any]:
     golden_raw = await asyncio.to_thread(_read_json, golden_path)
     cases = [_normalize_case(item) for item in golden_raw]
+    generated_smoke_cases = False
+    seed_records: list[dict[str, Any]] | None = None
+    if not cases and auto_smoke_cases:
+        seed_records = await asyncio.to_thread(_read_json, kb_seed_path)
+        cases = build_seed_smoke_cases(seed_records, max_cases=max_smoke_cases)
+        generated_smoke_cases = True
     if not cases:
         metrics = {
             "recall_at_k": None,
             "recall_at_5": None if top_k == 5 else None,
             "top_k": top_k,
+            "backend": backend,
             "cases_total": 0,
             "cases_scored": 0,
+            "generated_smoke_cases": False,
             "message": "golden_set is empty",
         }
         await asyncio.to_thread(_write_json, output_path, metrics)
         return metrics
 
-    settings = get_settings()
-    qdrant = AsyncQdrantClient(url=settings.qdrant_url)
-    retriever = Retriever(qdrant, Embedder())
     results: list[dict[str, Any]] = []
-    try:
+    if backend == "lexical":
+        if seed_records is None:
+            seed_records = await asyncio.to_thread(_read_json, kb_seed_path)
+        seed_retriever = SeedRetriever(seed_records)
         for case in cases:
-            chunks = await retriever.retrieve(case["query"], case["filters"], top_k=top_k)
-            retrieved_ids = [chunk.chunk_id for chunk in chunks]
-            results.append(
-                {
-                    "id": case["id"],
-                    "query": case["query"],
-                    "filters": case["filters"],
-                    "expected_chunk_ids": case["expected_chunk_ids"],
-                    "retrieved_chunk_ids": retrieved_ids,
-                    "hit": bool(set(retrieved_ids) & set(case["expected_chunk_ids"])),
-                }
-            )
-    finally:
-        await qdrant.close()
+            chunks = seed_retriever.retrieve(case["query"], case["filters"], top_k=top_k)
+            results.append(_case_result(case, [chunk.chunk_id for chunk in chunks]))
+    elif backend == "qdrant":
+        settings = get_settings()
+        qdrant = AsyncQdrantClient(url=settings.qdrant_url)
+        retriever = Retriever(qdrant, Embedder())
+        try:
+            for case in cases:
+                chunks = await retriever.retrieve(case["query"], case["filters"], top_k=top_k)
+                results.append(_case_result(case, [chunk.chunk_id for chunk in chunks]))
+        finally:
+            await qdrant.close()
+    else:
+        raise ValueError("backend must be qdrant or lexical")
 
     recall = compute_recall_at_k(results)
     metrics = {
         "recall_at_k": recall,
         "recall_at_5": recall if top_k == 5 else None,
         "top_k": top_k,
+        "backend": backend,
         "cases_total": len(cases),
         "cases_scored": sum(bool(item["expected_chunk_ids"]) for item in results),
+        "generated_smoke_cases": generated_smoke_cases,
         "results": results,
     }
     await asyncio.to_thread(_write_json, output_path, metrics)
     return metrics
+
+
+def build_seed_smoke_cases(
+    records: list[dict[str, Any]],
+    max_cases: int = 100,
+) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("status") != "published":
+            continue
+        query = _seed_smoke_query(record)
+        if not query:
+            continue
+        filters: dict[str, Any] = {}
+        if record.get("category"):
+            filters["category"] = record["category"]
+        if record.get("forum_normalized"):
+            filters["forum_normalized"] = record["forum_normalized"]
+        cases.append(
+            {
+                "id": f"seed_smoke::{record['chunk_id']}",
+                "query": query,
+                "filters": filters,
+                "expected_chunk_ids": [str(record["chunk_id"])],
+            }
+        )
+        if len(cases) >= max_cases:
+            break
+    return cases
+
+
+def _seed_smoke_query(record: dict[str, Any]) -> str:
+    examples = record.get("intent_examples") or []
+    if examples:
+        prefix = record.get("forum_normalized") or record.get("source_category") or ""
+        return " ".join(part for part in [str(prefix), str(examples[0])] if part).strip()
+    intent = record.get("intent_name")
+    if intent:
+        prefix = record.get("forum_normalized") or record.get("source_category") or ""
+        return " ".join(part for part in [str(prefix), str(intent)] if part).strip()
+    return str(record.get("text_clean") or "")[:160]
+
+
+def _case_result(case: dict[str, Any], retrieved_ids: list[str]) -> dict[str, Any]:
+    return {
+        "id": case["id"],
+        "query": case["query"],
+        "filters": case["filters"],
+        "expected_chunk_ids": case["expected_chunk_ids"],
+        "retrieved_chunk_ids": retrieved_ids,
+        "hit": bool(set(retrieved_ids) & set(case["expected_chunk_ids"])),
+    }
 
 
 def _read_json(path: Path) -> Any:
@@ -114,9 +188,23 @@ def main() -> None:
     parser.add_argument("--golden", default="data/golden_set.json")
     parser.add_argument("--output", default="eval/metrics.json")
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--backend", choices=["qdrant", "lexical"], default="qdrant")
+    parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
+    parser.add_argument("--auto-smoke-cases", action="store_true")
+    parser.add_argument("--max-smoke-cases", type=int, default=100)
     args = parser.parse_args()
 
-    metrics = asyncio.run(run_eval(Path(args.golden), Path(args.output), args.top_k))
+    metrics = asyncio.run(
+        run_eval(
+            Path(args.golden),
+            Path(args.output),
+            args.top_k,
+            backend=args.backend,
+            kb_seed_path=Path(args.kb_seed),
+            auto_smoke_cases=args.auto_smoke_cases,
+            max_smoke_cases=args.max_smoke_cases,
+        )
+    )
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
 
 
