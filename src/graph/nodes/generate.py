@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from time import perf_counter
 
+from src.config import get_settings
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
+from src.models import Complexity, QueryAnalysis, ScoredChunk
 
 
 async def generate(state: BotState) -> dict:
@@ -27,6 +29,24 @@ async def generate(state: BotState) -> dict:
             "generated_response": "",
             "generator_model": model,
             "cited_sources": [],
+        }
+
+    source_response = build_deterministic_source_response(
+        analysis,
+        chunks,
+        float(state.get("max_confidence") or 0),
+    )
+    if source_response is not None:
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                mode="source_chunk",
+            )
+        return {
+            "generated_response": source_response,
+            "generator_model": "source_chunk",
+            "cited_sources": [chunks[0].chunk_id],
         }
 
     try:
@@ -55,3 +75,22 @@ async def generate(state: BotState) -> dict:
             "escalation_reason": "generation_failed",
             "error": str(exc),
         }
+
+
+def build_deterministic_source_response(
+    analysis: QueryAnalysis,
+    chunks: list[ScoredChunk],
+    max_confidence: float,
+) -> str | None:
+    if analysis.complexity != Complexity.SIMPLE:
+        return None
+    if len(analysis.questions) != 1:
+        return None
+    if max_confidence < get_settings().reranker_threshold_high:
+        return None
+
+    chunk = chunks[0]
+    text = chunk.text.strip()
+    if not text:
+        return None
+    return f"{text} [src:{chunk.chunk_id}]"
