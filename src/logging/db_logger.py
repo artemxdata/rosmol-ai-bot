@@ -17,7 +17,7 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
     await pg_pool.execute(
         """
         INSERT INTO request_traces (
-            request_id, channel, user_id_hash, message_masked, query_analysis,
+            request_id, channel, user_id_hash, message_masked, routing_hint, query_analysis,
             metadata_filter, retrieved_chunks, reranker_scores, max_reranker_score,
             cache_hit, generator_model, cited_sources, verifier_triggered,
             verifier_result, response_text, was_escalated, escalation_reason,
@@ -25,18 +25,19 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
             llm_estimated_cost_rub, total_latency_ms, trace_events, prompt_version, error
         )
         VALUES (
-            $1, $2, $3, $4, $5::jsonb,
-            $6::jsonb, $7::jsonb, $8::jsonb, $9,
-            $10, $11, $12, $13,
-            $14::jsonb, $15, $16, $17,
-            $18::jsonb, $19, $20, $21,
-            $22, $23, $24::jsonb, $25, $26
+            $1, $2, $3, $4, $5::jsonb, $6::jsonb,
+            $7::jsonb, $8::jsonb, $9::jsonb, $10,
+            $11, $12, $13, $14,
+            $15::jsonb, $16, $17, $18,
+            $19::jsonb, $20, $21, $22,
+            $23, $24, $25::jsonb, $26, $27
         )
         """,
         state["request_id"],
         state.get("channel"),
         state.get("user_id_hash"),
         state.get("message_masked"),
+        json.dumps(state.get("routing_hint") or {}, ensure_ascii=False),
         json.dumps(analysis.model_dump(mode="json") if analysis else None, ensure_ascii=False),
         json.dumps(state.get("metadata_filter"), ensure_ascii=False),
         json.dumps(

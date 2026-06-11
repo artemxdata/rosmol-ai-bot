@@ -113,6 +113,7 @@ class TraceRecord(BaseModel):
     channel: Channel
     user_id_hash: str
     message_masked: str
+    routing_hint: dict[str, Any] = Field(default_factory=dict)
     query_analysis: dict[str, Any] | None = None
     retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
     reranker_scores: list[dict[str, Any]] = Field(default_factory=list)

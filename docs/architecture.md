@@ -881,6 +881,7 @@ CREATE TABLE request_traces (
     channel VARCHAR(10),
     user_id_hash VARCHAR(64),
     message_masked TEXT,
+    routing_hint JSONB DEFAULT '{}'::jsonb,
     
     -- Query Analyzer
     query_analysis JSONB,          -- {forum, questions, complexity, ...}

@@ -39,6 +39,7 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
             "channel": "api",
             "user_id_hash": "hash",
             "message_masked": "Регистрация на форум",
+            "routing_hint": {"complexity": "simple", "reason": "registration_faq"},
             "trace": tracer,
             "llm_usage": [{"model": "GigaChat/GigaChat-2-Max", "total_tokens": 42}],
             "llm_prompt_tokens": 30,
@@ -51,14 +52,17 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
 
     assert pool.query is not None
     assert "trace_events" in pool.query
+    assert "routing_hint" in pool.query
     assert "llm_usage" in pool.query
-    llm_usage = json.loads(pool.args[17])
+    routing_hint = json.loads(pool.args[4])
+    assert routing_hint["reason"] == "registration_faq"
+    llm_usage = json.loads(pool.args[18])
     assert llm_usage[0]["model"] == "GigaChat/GigaChat-2-Max"
-    assert pool.args[18] == 30
-    assert pool.args[19] == 12
-    assert pool.args[20] == 42
-    assert pool.args[21] == 0.023912
-    trace_events = json.loads(pool.args[23])
+    assert pool.args[19] == 30
+    assert pool.args[20] == 12
+    assert pool.args[21] == 42
+    assert pool.args[22] == 0.023912
+    trace_events = json.loads(pool.args[24])
     assert trace_events[0]["node"] == "analyze"
     assert trace_events[0]["metadata"] == {"model": "model-a"}
     assert trace_events[1]["node"] == "retrieve"
