@@ -15,14 +15,18 @@ class GigaChatClient:
         verify_ssl: bool | None = None,
         scope: str | None = None,
         timeout: float = 30.0,
+        base_url: str | None = None,
+        auth_url: str | None = None,
     ) -> None:
+        from gigachat.settings import AUTH_URL, BASE_URL
+
         settings = get_settings()
         self.api_key = self._normalize_secret(api_key or settings.gigachat_api_key)
         self.access_token = self._normalize_secret(settings.gigachat_access_token)
         self.verify_ssl = settings.gigachat_verify_ssl if verify_ssl is None else verify_ssl
         self.scope = scope or settings.gigachat_scope
-        self.base_url = settings.gigachat_base_url or None
-        self.auth_url = settings.gigachat_auth_url or None
+        self.base_url = self._normalize_url(base_url or settings.gigachat_base_url, BASE_URL)
+        self.auth_url = self._normalize_url(auth_url or settings.gigachat_auth_url, AUTH_URL)
         self.timeout = timeout
 
     async def generate(
@@ -111,6 +115,15 @@ class GigaChatClient:
         if value.lower().startswith("bearer "):
             return value[7:].strip()
         return value
+
+    @staticmethod
+    def _normalize_url(value: str | None, default: str) -> str:
+        normalized = (value or "").strip().strip('"').strip("'")
+        if not normalized:
+            return default
+        if not normalized.startswith(("http://", "https://")):
+            raise ValueError("GigaChat URL must start with http:// or https://")
+        return normalized
 
     @staticmethod
     def _looks_like_access_token(value: str) -> bool:
