@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from time import perf_counter
 
+from src.config import get_settings
 from src.graph.state import BotState
 from src.rag.errors import MLDependencyError
 
@@ -51,4 +52,7 @@ async def rerank(state: BotState) -> dict:
             "should_escalate": True,
             "escalation_reason": "no_relevant_chunks",
         }
-    return {"reranked_chunks": reranked, "max_confidence": max_confidence}
+    result = {"reranked_chunks": reranked, "max_confidence": max_confidence}
+    if max_confidence < get_settings().reranker_threshold_low:
+        result.update({"should_escalate": True, "escalation_reason": "low_confidence"})
+    return result
