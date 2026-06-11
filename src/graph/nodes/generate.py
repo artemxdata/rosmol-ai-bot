@@ -13,6 +13,22 @@ async def generate(state: BotState) -> dict:
     analysis = state["analysis"]
     model = select_generator_model(analysis.complexity)
     chunks = state.get("reranked_chunks", [])
+    if not chunks:
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                skipped=True,
+                reason="no_sources",
+            )
+        return {
+            "should_escalate": True,
+            "escalation_reason": "no_sources_for_generation",
+            "generated_response": "",
+            "generator_model": model,
+            "cited_sources": [],
+        }
+
     try:
         response = await state["llm_client"].generate(
             model=model,
