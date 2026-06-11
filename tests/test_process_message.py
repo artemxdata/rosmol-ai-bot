@@ -131,6 +131,18 @@ class LowConfidenceReranker:
         ]
 
 
+class HighConfidenceReranker:
+    def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+        chunk = chunks[0]
+        return [
+            ScoredChunk(
+                **chunk.model_dump(exclude={"score"}),
+                score=chunk.score,
+                reranker_score=0.91,
+            )
+        ]
+
+
 def _app(
     *,
     allowed: bool = True,
@@ -322,6 +334,29 @@ async def test_process_message_low_confidence_graph_path_escalates(
     assert "Передаю обращение специалисту" in response
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "low_confidence"
+
+
+@pytest.mark.asyncio
+async def test_process_message_high_confidence_returns_source_chunk(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(
+        graph=build_graph(),
+        llm_client=FakeAnalyzerLLM(),
+        retriever=FakeRetriever(),
+        reranker=HighConfidenceReranker(),
+    )
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text="Кто платит за дорогу?")
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Проезд участник оплачивает самостоятельно."
+    assert app.state.sessions.appended == [
+        ("Кто платит за дорогу?", "Проезд участник оплачивает самостоятельно.")
+    ]
+    assert captured_logs[0]["generator_model"] == "source_chunk"
+    assert captured_logs[0]["cited_sources"] == ["ctx_travel"]
 
 
 @pytest.mark.asyncio
