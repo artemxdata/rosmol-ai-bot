@@ -12,6 +12,8 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
     settings = get_settings()
     analysis = state.get("analysis")
     verification = state.get("verification")
+    trace = state.get("trace")
+    trace_events = trace.as_list() if trace else state.get("trace_events", [])
     await pg_pool.execute(
         """
         INSERT INTO request_traces (
@@ -19,14 +21,14 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
             metadata_filter, retrieved_chunks, reranker_scores, max_reranker_score,
             cache_hit, generator_model, cited_sources, verifier_triggered,
             verifier_result, response_text, was_escalated, escalation_reason,
-            total_latency_ms, prompt_version, error
+            total_latency_ms, trace_events, prompt_version, error
         )
         VALUES (
             $1, $2, $3, $4, $5::jsonb,
             $6::jsonb, $7::jsonb, $8::jsonb, $9,
             $10, $11, $12, $13,
             $14::jsonb, $15, $16, $17,
-            $18, $19, $20
+            $18, $19::jsonb, $20, $21
         )
         """,
         state["request_id"],
@@ -53,6 +55,7 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
         bool(state.get("should_escalate")),
         state.get("escalation_reason"),
         state.get("total_latency_ms"),
+        json.dumps(trace_events, ensure_ascii=False),
         settings.prompt_version,
         state.get("error"),
     )

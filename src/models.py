@@ -124,5 +124,6 @@ class TraceRecord(BaseModel):
     was_escalated: bool = False
     escalation_reason: str | None = None
     total_latency_ms: int | None = None
+    trace_events: list[TraceEvent] = Field(default_factory=list)
     prompt_version: str | None = None
     error: str | None = None

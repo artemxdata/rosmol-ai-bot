@@ -916,6 +916,7 @@ CREATE TABLE request_traces (
     
     -- Общее
     total_latency_ms INT,
+    trace_events JSONB DEFAULT '[]'::jsonb, -- события нод LangGraph: latency, metadata, error
     prompt_version VARCHAR(20),
     error TEXT
 );
