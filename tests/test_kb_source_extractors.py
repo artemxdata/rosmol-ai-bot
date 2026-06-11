@@ -24,6 +24,10 @@ def test_clean_bot_text_preserves_content_and_removes_markup() -> None:
     )
 
 
+def test_clean_bot_text_strips_export_quote_artifact() -> None:
+    assert clean_bot_text("Обращайтесь!😊'") == "Обращайтесь!😊"
+
+
 def test_read_xlsx_sheets_reads_inline_strings(tmp_path: Path) -> None:
     xlsx = tmp_path / "source.xlsx"
     _write_minimal_xlsx(xlsx)

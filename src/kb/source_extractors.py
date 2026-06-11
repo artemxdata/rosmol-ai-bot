@@ -414,7 +414,8 @@ def clean_bot_text(value: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = [_normalize_plain_text(line) for line in text.split("\n")]
-    return "\n".join(line for line in lines if line).strip()
+    cleaned = "\n".join(line for line in lines if line).strip()
+    return _strip_export_quote_artifact(cleaned)
 
 
 def infer_category(source_category: str, intent: str, text: str, sheet_name: str) -> str:
@@ -581,6 +582,12 @@ def _word_tag(local_name: str) -> str:
 
 def _normalize_plain_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _strip_export_quote_artifact(value: str) -> str:
+    if value.endswith("'") and not value.startswith("'"):
+        return value[:-1].rstrip()
+    return value
 
 
 def _normalize_for_match(value: str) -> str:
