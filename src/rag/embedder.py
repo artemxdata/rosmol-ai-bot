@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from src.rag.errors import MLDependencyError
+
 
 class Embedder:
     _instance: Embedder | None = None
@@ -19,7 +21,13 @@ class Embedder:
 
     def _load_model(self) -> Any:
         if self._model is None:
-            from FlagEmbedding import BGEM3FlagModel
+            try:
+                from FlagEmbedding import BGEM3FlagModel
+            except ImportError as exc:
+                raise MLDependencyError(
+                    "FlagEmbedding is not installed. Install project ML extras or rebuild "
+                    "Docker with INSTALL_ML=true to enable bge-m3 embeddings."
+                ) from exc
 
             self._model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=False)
         return self._model

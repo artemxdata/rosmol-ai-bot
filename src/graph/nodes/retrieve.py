@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.rag.errors import MLDependencyError
 
 
 async def retrieve(state: BotState) -> dict:
@@ -24,8 +25,29 @@ async def retrieve(state: BotState) -> dict:
             "forum_normalized": question.forum_normalized or filters.get("forum_normalized"),
             "category": question.category or filters.get("category"),
         }
-        found = await state["retriever"].retrieve(question.text, question_filters, top_k=10)
-        chunks.extend(found)
+        try:
+            found = await state["retriever"].retrieve(question.text, question_filters, top_k=10)
+            chunks.extend(found)
+        except MLDependencyError as exc:
+            if tracer:
+                tracer.add_error("retrieve", int((perf_counter() - started_at) * 1000), exc)
+            return {
+                "retrieved_chunks": [],
+                "metadata_filter": question_filters,
+                "should_escalate": True,
+                "escalation_reason": "ml_dependency_missing",
+                "error": str(exc),
+            }
+        except Exception as exc:
+            if tracer:
+                tracer.add_error("retrieve", int((perf_counter() - started_at) * 1000), exc)
+            return {
+                "retrieved_chunks": [],
+                "metadata_filter": question_filters,
+                "should_escalate": True,
+                "escalation_reason": "retrieval_failed",
+                "error": str(exc),
+            }
 
     deduped = {chunk.chunk_id: chunk for chunk in chunks}
     if tracer:

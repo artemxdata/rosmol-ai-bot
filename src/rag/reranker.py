@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.models import Chunk, ScoredChunk
+from src.rag.errors import MLDependencyError
 
 
 class Reranker:
@@ -11,7 +12,13 @@ class Reranker:
 
     def _load_model(self) -> Any:
         if self._model is None:
-            from FlagEmbedding import FlagReranker
+            try:
+                from FlagEmbedding import FlagReranker
+            except ImportError as exc:
+                raise MLDependencyError(
+                    "FlagEmbedding is not installed. Install project ML extras or rebuild "
+                    "Docker with INSTALL_ML=true to enable bge-reranker-v2-m3."
+                ) from exc
 
             self._model = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False)
         return self._model

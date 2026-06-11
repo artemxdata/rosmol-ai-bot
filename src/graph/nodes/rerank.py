@@ -4,14 +4,39 @@ import asyncio
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.rag.errors import MLDependencyError
 
 
 async def rerank(state: BotState) -> dict:
+    if state.get("should_escalate"):
+        return {}
+
     started_at = perf_counter()
     tracer = state.get("trace")
     chunks = state.get("retrieved_chunks", [])
     query = state.get("message_masked") or state.get("message") or ""
-    reranked = await asyncio.to_thread(state["reranker"].rerank, query, chunks, 4)
+    try:
+        reranked = await asyncio.to_thread(state["reranker"].rerank, query, chunks, 4)
+    except MLDependencyError as exc:
+        if tracer:
+            tracer.add_error("rerank", int((perf_counter() - started_at) * 1000), exc)
+        return {
+            "reranked_chunks": [],
+            "max_confidence": 0.0,
+            "should_escalate": True,
+            "escalation_reason": "ml_dependency_missing",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        if tracer:
+            tracer.add_error("rerank", int((perf_counter() - started_at) * 1000), exc)
+        return {
+            "reranked_chunks": [],
+            "max_confidence": 0.0,
+            "should_escalate": True,
+            "escalation_reason": "rerank_failed",
+            "error": str(exc),
+        }
     max_confidence = max((chunk.reranker_score for chunk in reranked), default=0.0)
     if tracer:
         tracer.add(
