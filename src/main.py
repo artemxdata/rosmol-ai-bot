@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from hmac import compare_digest
 from time import perf_counter
 from typing import Any
 
 import asyncpg
 from fastapi import FastAPI, HTTPException, Request
 from loguru import logger
+from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
@@ -65,6 +67,21 @@ max_adapter = MaxAdapter()
 hde_adapter = HDEAdapter()
 
 
+class AskPayload(BaseModel):
+    user_id: str = Field(default="local", min_length=1, max_length=200)
+    channel: Channel = Channel.API
+    text: str = Field(min_length=1, max_length=4000)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("user_id", "text")
+    @classmethod
+    def _strip_non_empty(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be empty")
+        return normalized
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -98,11 +115,13 @@ async def ready(request: Request) -> dict[str, Any]:
 
 
 @app.post("/ask")
-async def ask(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
+    _require_optional_secret(request, getattr(get_settings(), "api_auth_token", ""), "x-api-key")
     message = IncomingMessage(
-        user_id=str(payload.get("user_id", "local")),
-        channel=Channel(payload.get("channel", Channel.API)),
-        text=str(payload.get("text", "")),
+        user_id=payload.user_id,
+        channel=payload.channel,
+        text=payload.text,
+        attachments=payload.attachments,
     )
     response = await process_message(message, request.app)
     return {"request_id": str(message.request_id), "response": response}
@@ -110,6 +129,11 @@ async def ask(payload: dict[str, Any], request: Request) -> dict[str, Any]:
 
 @app.post("/webhook/vk")
 async def vk_webhook(request: Request) -> dict[str, bool]:
+    _require_optional_secret(
+        request,
+        getattr(get_settings(), "webhook_auth_token", ""),
+        "x-webhook-secret",
+    )
     message = vk_adapter.parse(await request.json())
     response = await process_message(message, request.app)
     await vk_adapter.send(message.user_id, response)
@@ -118,6 +142,11 @@ async def vk_webhook(request: Request) -> dict[str, bool]:
 
 @app.post("/webhook/max")
 async def max_webhook(request: Request) -> dict[str, bool]:
+    _require_optional_secret(
+        request,
+        getattr(get_settings(), "webhook_auth_token", ""),
+        "x-webhook-secret",
+    )
     message = max_adapter.parse(await request.json())
     response = await process_message(message, request.app)
     await max_adapter.send(message.user_id, response)
@@ -126,10 +155,34 @@ async def max_webhook(request: Request) -> dict[str, bool]:
 
 @app.post("/webhook/hde")
 async def hde_webhook(request: Request) -> dict[str, bool]:
+    _require_optional_secret(
+        request,
+        getattr(get_settings(), "webhook_auth_token", ""),
+        "x-webhook-secret",
+    )
     message = hde_adapter.parse(await request.json())
     response = await process_message(message, request.app)
     await hde_adapter.send(message.user_id, response)
     return {"ok": True}
+
+
+def _require_optional_secret(
+    request: Request,
+    expected_secret: str | None,
+    header_name: str,
+) -> None:
+    expected = (expected_secret or "").strip()
+    if not expected:
+        return
+
+    provided = (request.headers.get(header_name) or "").strip()
+    if not provided:
+        authorization = (request.headers.get("authorization") or "").strip()
+        if authorization.lower().startswith("bearer "):
+            provided = authorization[7:].strip()
+
+    if not provided or not compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str:

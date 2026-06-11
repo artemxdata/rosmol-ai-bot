@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     app_env: str = "local"
     log_level: str = "INFO"
+    api_auth_token: str = ""
+    webhook_auth_token: str = ""
 
     cloud_ru_api_key: str = ""
     cloud_ru_chat_completions_url: str = (

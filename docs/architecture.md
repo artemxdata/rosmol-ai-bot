@@ -868,6 +868,17 @@ Backend: те же FastAPI-эндпоинты (CRUD для чанков в Postg
 
 ---
 
+### Endpoint authentication
+
+Для production endpoint-ы поддерживают опциональные shared-secret токены:
+
+- `/ask`: `API_AUTH_TOKEN`, заголовок `X-API-Key` или `Authorization: Bearer ...`
+- `/webhook/*`: `WEBHOOK_AUTH_TOKEN`, заголовок `X-Webhook-Secret` или
+  `Authorization: Bearer ...`
+
+Если токен не задан, проверка отключена для локальной разработки. Секреты не логируются и не
+попадают в `request_traces`.
+
 ## 7. Observability: полный trace каждого запроса
 
 ### Модель данных (PostgreSQL)
