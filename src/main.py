@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from hmac import compare_digest
 from time import perf_counter
@@ -305,7 +306,18 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
 
     llm_usage_events, llm_usage_token = start_llm_usage_collection()
     try:
-        result = await fastapi_app.state.graph.ainvoke(state)
+        result = await asyncio.wait_for(
+            fastapi_app.state.graph.ainvoke(state),
+            timeout=float(getattr(settings, "request_timeout_seconds", 45.0)),
+        )
+    except TimeoutError:
+        result = {
+            **state,
+            "final_response": "Передаю обращение специалисту, чтобы не задерживать ответ.",
+            "should_escalate": True,
+            "escalation_reason": "request_timeout",
+            "error": "request_timeout",
+        }
     finally:
         reset_llm_usage_collection(llm_usage_token)
     result.update(summarize_llm_usage(llm_usage_events))

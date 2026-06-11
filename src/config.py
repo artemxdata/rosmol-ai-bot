@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     rate_limit_messages: int = Field(default=20, ge=1)
     rate_limit_window_seconds: int = Field(default=300, ge=10)
     memory_ttl_days: int = Field(default=30, ge=1)
+    request_timeout_seconds: float = Field(default=45.0, ge=1)
 
 
 @lru_cache

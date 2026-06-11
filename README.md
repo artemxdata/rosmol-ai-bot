@@ -46,6 +46,7 @@ pytest
 - `CLOUD_RU_MODEL_SIMPLE_INPUT_PRICE_RUB_PER_MILLION` и `CLOUD_RU_MODEL_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION` — тариф simple-модели; по умолчанию `0`, пока не зафиксирован коммерческий тариф.
 - `API_AUTH_TOKEN` — опциональный токен для `/ask`; если задан, клиент должен передать `X-API-Key` или `Authorization: Bearer ...`.
 - `WEBHOOK_AUTH_TOKEN` — опциональный токен для `/webhook/*`; если задан, webhook должен передать `X-Webhook-Secret` или `Authorization: Bearer ...`.
+- `REQUEST_TIMEOUT_SECONDS` — общий timeout выполнения графа ответа, по умолчанию `45`.
 
 Перед Query Analyzer работает консервативный pre-routing: 10B выбирается только для явно типовых FAQ-сигналов вроде регистрации или подачи заявки. Неоднозначные, персональные, составные и неизвестные формулировки идут в complex-route и используют Max-модель, если задан `CLOUD_RU_MODEL_COMPLEX`.
 

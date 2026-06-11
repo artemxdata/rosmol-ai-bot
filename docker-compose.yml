@@ -109,6 +109,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://rosmol:rosmol@postgres:5432/rosmol_ai_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-45}
     ports:
       - "8000:8000"
     depends_on:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -88,6 +89,12 @@ class CapturingGraph:
     async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
         self.seen_state = state
         return {**state, "final_response": self.response}
+
+
+class HangingGraph:
+    async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.sleep(1)
+        return {**state, "final_response": "too late"}
 
 
 class FakeAnalyzerLLM:
@@ -315,3 +322,25 @@ async def test_process_message_low_confidence_graph_path_escalates(
     assert "Передаю обращение специалисту" in response
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "low_confidence"
+
+
+@pytest.mark.asyncio
+async def test_process_message_escalates_on_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    settings = SimpleNamespace(
+        session_ttl_seconds=1800,
+        cloud_ru_api_key="configured",
+        request_timeout_seconds=0.01,
+    )
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    app = _app(graph=HangingGraph())
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text="Регистрация на форум")
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert "Передаю обращение специалисту" in response
+    assert app.state.sessions.appended
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "request_timeout"
