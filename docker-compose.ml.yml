@@ -1,0 +1,52 @@
+name: rosmol-ai-bot
+
+services:
+  ml-check:
+    profiles: ["ml"]
+    image: rosmol-ai-bot-ml:latest
+    build:
+      context: .
+      target: runtime
+      args:
+        INSTALL_ML: "true"
+    command: ["python", "scripts/check_ml_runtime.py"]
+    environment:
+      HF_HOME: /home/app/.cache/huggingface
+      TORCH_HOME: /home/app/.cache/torch
+    volumes:
+      - hf_cache:/home/app/.cache/huggingface
+      - torch_cache:/home/app/.cache/torch
+
+  index-kb:
+    profiles: ["ml"]
+    image: rosmol-ai-bot-ml:latest
+    build:
+      context: .
+      target: runtime
+      args:
+        INSTALL_ML: "true"
+    command:
+      [
+        "python",
+        "scripts/index_kb.py",
+        "--path",
+        "data/knowledge_base_seed.json",
+        "--collection",
+        "knowledge_base",
+      ]
+    environment:
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      HF_HOME: /home/app/.cache/huggingface
+      TORCH_HOME: /home/app/.cache/torch
+    volumes:
+      - hf_cache:/home/app/.cache/huggingface
+      - torch_cache:/home/app/.cache/torch
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      init-qdrant:
+        condition: service_completed_successfully
+
+volumes:
+  hf_cache:
+  torch_cache:

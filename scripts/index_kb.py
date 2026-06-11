@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.config import get_settings
 from src.rag.embedder import Embedder, sparse_to_indices_values
+from src.rag.errors import MLDependencyError
 
 
 class KBSeedRecord(BaseModel):
@@ -78,54 +79,63 @@ def validate_seed_items(raw_items: object) -> list[KBSeedRecord]:
     return records
 
 
-async def index_kb(path: Path, collection: str) -> None:
+async def index_kb(path: Path, collection: str, limit: int | None = None) -> None:
     settings = get_settings()
     client = AsyncQdrantClient(url=settings.qdrant_url)
-    if not await client.collection_exists(collection):
-        raise RuntimeError(
-            f"Qdrant collection '{collection}' does not exist. "
-            "Run: python scripts/init_qdrant.py"
-        )
-
-    embedder = Embedder()
-    raw_records = await asyncio.to_thread(path.read_text, encoding="utf-8")
-    raw_items = json.loads(raw_records)
-    records = validate_seed_items(raw_items)
-
-    started_at = perf_counter()
-    points: list[models.PointStruct] = []
-    indexed = 0
-    for record in records:
-        text = record.content
-        dense, sparse = await asyncio.to_thread(embedder.encode, text)
-        indices, values = sparse_to_indices_values(sparse)
-        payload = {
-            **record.model_dump(),
-            "text": text,
-            "status": record.status,
-        }
-        points.append(
-            models.PointStruct(
-                id=str(uuid5(NAMESPACE_URL, record.chunk_id)),
-                vector={
-                    "dense": dense.tolist(),
-                    "sparse": models.SparseVector(indices=indices, values=values),
-                },
-                payload=payload,
+    try:
+        if not await client.collection_exists(collection):
+            raise RuntimeError(
+                f"Qdrant collection '{collection}' does not exist. "
+                "Run: python scripts/init_qdrant.py"
             )
-        )
 
-        if len(points) >= 64:
+        embedder = Embedder()
+        raw_records = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        raw_items = json.loads(raw_records)
+        records = validate_seed_items(raw_items)
+        if limit is not None:
+            records = records[:limit]
+
+        started_at = perf_counter()
+        points: list[models.PointStruct] = []
+        indexed = 0
+        for record in records:
+            text = record.content
+            dense, sparse = await asyncio.to_thread(embedder.encode, text)
+            indices, values = sparse_to_indices_values(sparse)
+            payload = {
+                **record.model_dump(),
+                "text": text,
+                "status": record.status,
+            }
+            points.append(
+                models.PointStruct(
+                    id=str(uuid5(NAMESPACE_URL, record.chunk_id)),
+                    vector={
+                        "dense": dense.tolist(),
+                        "sparse": models.SparseVector(indices=indices, values=values),
+                    },
+                    payload=payload,
+                )
+            )
+
+            if len(points) >= 64:
+                await client.upsert(collection_name=collection, points=points)
+                indexed += len(points)
+                points.clear()
+
+        if points:
             await client.upsert(collection_name=collection, points=points)
             indexed += len(points)
-            points.clear()
 
-    if points:
-        await client.upsert(collection_name=collection, points=points)
-        indexed += len(points)
-
-    elapsed = perf_counter() - started_at
-    print(f"indexed={indexed} skipped=0 collection={collection} elapsed_sec={elapsed:.2f}")
+        elapsed = perf_counter() - started_at
+        limit_label = "all" if limit is None else str(limit)
+        print(
+            f"indexed={indexed} skipped=0 collection={collection} "
+            f"limit={limit_label} elapsed_sec={elapsed:.2f}"
+        )
+    finally:
+        await client.close()
 
 
 def validate_only(path: Path) -> None:
@@ -143,12 +153,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--path", default="data/knowledge_base_seed.json")
     parser.add_argument("--collection", default="knowledge_base")
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Index only the first N valid records. Useful for ML smoke tests.",
+    )
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main() -> None:
     args = parse_args()
     if args.validate_only:
         validate_only(Path(args.path))
     else:
-        asyncio.run(index_kb(Path(args.path), args.collection))
+        try:
+            asyncio.run(index_kb(Path(args.path), args.collection, args.limit))
+        except MLDependencyError as exc:
+            print(
+                "ML dependencies are required for indexing. "
+                "Use docker-compose.ml.yml or install .[ml]. "
+                f"Details: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
+
+
+if __name__ == "__main__":
+    main()

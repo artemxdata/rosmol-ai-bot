@@ -1136,6 +1136,22 @@ Disk: 100 GB SSD
 OS: Ubuntu 24
 ```
 
+### ML/indexing режим
+
+Обычный runtime-образ приложения собирается с `INSTALL_ML=false`: FastAPI, webhook-и, Cloud.ru LLM,
+PostgreSQL, Redis и Qdrant-клиент работают без локальных `torch`/`FlagEmbedding`. Это ускоряет
+обычную разработку и не заставляет API-контейнер загружать bge-модели при старте.
+
+Индексация KB выполняется отдельным Docker Compose override `docker-compose.ml.yml`:
+- отдельный image tag `rosmol-ai-bot-ml:latest`;
+- build arg `INSTALL_ML=true`;
+- сервис `ml-check` для проверки `FlagEmbedding`/`torch` и опциональной загрузки bge-моделей;
+- сервис `index-kb` для `scripts/index_kb.py`;
+- отдельные Docker volumes для HuggingFace/Torch cache.
+
+Так runtime и indexing остаются развязаны: если ML-зависимости отсутствуют, retrieval/rerank
+дают controlled escalation, а не ломают запуск API.
+
 ---
 
 ## 11. Стоимость (детализированная)

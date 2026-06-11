@@ -8,6 +8,8 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 logs/
+eval/metrics*.json
+/Новый бот Росмол .xlsx
 postgres_data/
 redis_data/
 qdrant_storage/

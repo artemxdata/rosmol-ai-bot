@@ -20,10 +20,32 @@ docker compose up -d
 
 По умолчанию Docker-образ собирается без тяжёлых локальных ML-зависимостей
 (`torch`, `FlagEmbedding`), чтобы dev-стек стартовал быстро. Для образа с локальными
-embedding/reranker-моделями:
+embedding/reranker-моделями используется отдельный compose-файл и отдельный image tag.
+Обычный `app` при этом остаётся лёгким:
 
 ```bash
-INSTALL_ML=true docker compose build app migrate init-qdrant
+docker compose -f docker-compose.yml -f docker-compose.ml.yml build index-kb
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm ml-check
+```
+
+Проверка с загрузкой моделей bge-m3 и bge-reranker-v2-m3:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm ml-check --load-models
+```
+
+Индексация базы знаний в Qdrant:
+
+```bash
+docker compose up -d qdrant
+docker compose run --rm init-qdrant
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb
+```
+
+Для короткого smoke-теста индексации можно временно переопределить команду:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb python scripts/index_kb.py --limit 20
 ```
 
 Проверки:
