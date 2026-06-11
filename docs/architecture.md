@@ -125,6 +125,20 @@
 
 Ответ всегда формируется из найденных фрагментов базы знаний. Модель никогда не отвечает «из головы».
 
+### LLM-провайдер
+
+В проекте используется **Cloud.ru Evolution Foundation Models**, а не прямой Sber GigaChat API
+(`developers.sber.ru`). Это архитектурное правило, чтобы не смешивать разные схемы авторизации и
+endpoint-ы.
+
+- Endpoint: `https://foundation-models.api.cloud.ru/v1/chat/completions`
+- Авторизация: `Authorization: Bearer <CLOUD_RU_API_KEY>`
+- Формат: OpenAI-compatible Chat Completions (`model`, `messages`, `max_tokens`, `temperature`)
+- Модель по умолчанию: `ai-sage/GigaChat3-10B-A1.8B`
+- Переменные окружения: `CLOUD_RU_API_KEY`, опционально `CLOUD_RU_CHAT_COMPLETIONS_URL`, `CLOUD_RU_MODEL`
+- Не используются: OAuth flow, `GIGACHAT_API_KEY`, `GIGACHAT_ACCESS_TOKEN`, `GIGACHAT_SCOPE`,
+  `developers.sber.ru`
+
 ### Полная схема
 
 ```
@@ -195,7 +209,7 @@
 │  └────┬─────┘                                           │
 │       ▼                                                 │
 │  ┌──────────────┐                                       │
-│  │ analyze_query │ ← GigaChat-2-Max / 10B              │
+│  │ analyze_query │ ← Cloud.ru Chat Completions         │
 │  └──────┬───────┘                                       │
 │         │                                               │
 │    ┌────┴────────────────────┐                           │
@@ -254,7 +268,7 @@
 │    "cited_sources": list[str],                          │
 │    "verification": VerifyResult | None,                 │
 │    "trace": list[TraceEvent],     ← observability       │
-│    "model_used": str,             ← каскад моделей      │
+│    "model_used": str,             ← Cloud.ru model id   │
 │    "should_escalate": bool,                             │
 │    "escalation_reason": str | None,                     │
 │    "final_response": str | None                         │
@@ -284,10 +298,10 @@
 ┌─────────────────────────────────────────────────────────┐
 │              QUERY ANALYZER                             │
 │                                                         │
-│  LLM-вызов: GigaChat-2-Max                              │
-│  Нетиповых обращений много — точный разбор критичен.    │
-│  Max лучше справляется с составными, путаными и          │
-│  нестандартными формулировками.                          │
+│  LLM-вызов: Cloud.ru Evolution Foundation Models         │
+│  Модель: ai-sage/GigaChat3-10B-A1.8B                     │
+│  Формат: OpenAI-compatible Chat Completions              │
+│  Авторизация: Bearer CLOUD_RU_API_KEY                    │
 │                                                         │
 │  Вход:                                                  │
 │  - masked_message (маскированный текст пользователя)     │
@@ -327,9 +341,9 @@
 │  4. Гранты → RAG по грантовой категории                  │
 │  5. Общее → RAG по общей категории                       │
 │                                                         │
-│  complexity определяет, какая модель будет генерировать: │
-│  simple → GigaChat3-10B (50× дешевле)                    │
-│  complex → GigaChat-2-Max                                │
+│  complexity влияет на промпт и детализацию ответа,       │
+│  но не переключает провайдера или схему авторизации.     │
+│  Базовая модель: ai-sage/GigaChat3-10B-A1.8B             │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -410,9 +424,10 @@
 ┌─────────────────────────────────────────────────────────┐
 │              RESPONSE GENERATOR                         │
 │                                                         │
-│  Каскад моделей:                                        │
-│  complexity == "simple" → GigaChat3-10B                  │
-│  complexity == "complex" → GigaChat-2-Max                │
+│  LLM-провайдер: Cloud.ru Evolution Foundation Models     │
+│  Endpoint: /v1/chat/completions                          │
+│  Модель: ai-sage/GigaChat3-10B-A1.8B                     │
+│  complexity управляет полнотой ответа, а не OAuth/SDK.   │
 │                                                         │
 │  System prompt:                                         │
 │  «Ты — помощник Росмолодёжи. Общайся на «ты».           │
@@ -474,7 +489,7 @@
 │    «Рекомендую уточнить у специалиста.»                  │
 │                                                         │
 │  Этап 3 — LLM-judge (если score < 0.7):                 │
-│  Вызов GigaChat3-10B:                                    │
+│  Вызов Cloud.ru Chat Completions:                         │
 │  «Есть ли в ответе утверждения, которых нет              │
 │  ни в одном из источников? Ответь JSON:                  │
 │  {"has_hallucination": bool, "details": str}»            │
@@ -873,7 +888,7 @@ CREATE TABLE request_traces (
     cache_hit BOOLEAN DEFAULT FALSE,
     
     -- Generation
-    generator_model VARCHAR(50),   -- "gigachat-2-max" | "gigachat3-10b"
+    generator_model VARCHAR(80),   -- Cloud.ru model id, например ai-sage/GigaChat3-10B-A1.8B
     cited_sources TEXT[],
     generation_latency_ms INT,
     
@@ -929,7 +944,7 @@ SELECT DATE(timestamp),
        COUNT(*) FILTER (WHERE cache_hit) * 100.0 / COUNT(*) as cache_hit_pct
 FROM request_traces GROUP BY DATE(timestamp);
 
--- Экономия от каскада моделей
+-- Использование LLM-моделей Cloud.ru
 SELECT generator_model, COUNT(*), 
        AVG(generation_latency_ms) as avg_latency
 FROM request_traces GROUP BY generator_model;
@@ -1043,8 +1058,8 @@ jobs:
 |---|---|---|
 | Backend | **FastAPI** | Async, webhook-ы, команда знает Python |
 | Оркестрация | **LangGraph** | Граф состояний, checkpoint, replay, расширяемость |
-| LLM основная | **GigaChat-2-Max** (Cloud.ru) | Лучший русский, 152-ФЗ, function calling |
-| LLM экономичная | **GigaChat3-10B** (Cloud.ru) | Каскад: simple-запросы + LLM-judge |
+| LLM API | **Cloud.ru Evolution Foundation Models** | OpenAI-compatible `/v1/chat/completions`, Bearer API key, без Sber OAuth |
+| LLM модель | **ai-sage/GigaChat3-10B-A1.8B** | Русскоязычная модель через Cloud.ru, единый endpoint для analyzer/generator/judge |
 | Embedding + Sparse | **bge-m3** | Dense + sparse из одной модели, хороший русский, локально |
 | Reranker | **bge-reranker-v2-m3** | Локально, без API, хороший русский |
 | Векторная БД | **Qdrant** | Hybrid search, metadata filtering, lightweight |
@@ -1069,24 +1084,25 @@ OS: Ubuntu 24
 
 ## 11. Стоимость (детализированная)
 
-При ~1200 тикетов/мес, cache hit rate 35%, каскад моделей (60% simple → 10B, 40% complex → Max).
+При ~1200 тикетов/мес, cache hit rate 35%, единая LLM-модель через Cloud.ru
+`ai-sage/GigaChat3-10B-A1.8B`.
+
+Тариф Cloud.ru Evolution Foundation Models фиксируется отдельно в коммерческой части проекта.
+В архитектуре важно правило интеграции: OpenAI-compatible endpoint + Bearer `CLOUD_RU_API_KEY`,
+без OAuth и без `GIGACHAT_*` переменных.
 
 | Статья | Расчёт | Сумма/мес |
 |---|---|---|
-| **GigaChat-2-Max** | | |
-| — Query Analyzer (все 780 uncached) | 780 × ~1500 токенов | ~420 ₽ |
-| — Generator (40% complex = 312 запросов) | 312 × ~3000 токенов | ~340 ₽ |
-| **GigaChat-Pro / 10B** | | |
-| — Generator (60% simple = 468 запросов) | 468 × ~3000 токенов | ~3 ₽ |
-| — LLM-judge (~15% = 117 запросов) | 117 × ~1000 токенов | ~0.3 ₽ |
+| **Cloud.ru LLM API** | Analyzer + Generator + LLM-judge через `ai-sage/GigaChat3-10B-A1.8B` | зависит от фактического тарифа и токенов |
 | **Embedding (bge-m3)** | Локально | 0 ₽ |
 | **Reranker (bge-reranker)** | Локально | 0 ₽ |
 | **Сервер Selectel** | 4 vCPU, 16 GB RAM, 100 GB SSD | ~3000 ₽ |
 | **Резервное копирование** | | ~300 ₽ |
 | **Мониторинг** | | ~200 ₽ |
-| **Итого** | | **~4300-5000 ₽** |
+| **Итого без LLM API** | Инфраструктура без переменной стоимости токенов | **~3500 ₽ + Cloud.ru usage** |
 
-Analyzer на Max — потому что нетиповых обращений много и точный разбор критичен. Каскад моделей экономит на Generator: простые запросы генерируются через Pro.
+Экономия достигается не переключением на другой Sber/OAuth-провайдер, а за счёт semantic cache,
+RAG-фильтрации, коротких промптов, отказа от LLM при низкой уверенности и локальных bge-моделей.
 
 ---
 
@@ -1113,7 +1129,7 @@ Analyzer на Max — потому что нетиповых обращений 
 
 **Неделя 3:**
 - LangGraph: граф с нодами analyze → retrieve → rerank → generate → verify → respond
-- Response Generator + system prompt + каскад моделей
+- Response Generator + system prompt + Cloud.ru LLM client
 - Verifier (regex + confidence + LLM-judge)
 - Семантический кэш
 
