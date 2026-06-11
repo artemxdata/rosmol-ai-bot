@@ -273,6 +273,7 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         "session": session,
         "trace": tracer,
         "llm_client": fastapi_app.state.llm_client,
+        "embedder": getattr(fastapi_app.state, "embedder", None),
         "retriever": fastapi_app.state.retriever,
         "reranker": fastapi_app.state.reranker,
         "cache_hit": False,

@@ -44,3 +44,6 @@ class Reranker:
             )
             for chunk, score in ranked[:top_k]
         ]
+
+    def unload(self) -> None:
+        self._model = None

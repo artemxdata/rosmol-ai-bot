@@ -1157,6 +1157,11 @@ PostgreSQL, Redis и Qdrant-клиент работают без локальн�
 `intent_examples`. Пользователю возвращается исходный `text_clean`; дополнительные поля нужны
 только для поиска и диагностики RAG.
 
+Для локального e2e `/ask` есть отдельный profile-сервис `app-ml` на порту 8001. Он использует
+тот же ML image и cache volumes, но включает `ML_UNLOAD_AFTER_USE=true`, чтобы в ограниченной
+памяти Docker Desktop не держать bge-m3 и reranker одновременно. Обычный `app` на 8080 остаётся
+лёгким и сохраняет controlled escalation при отсутствии ML-зависимостей.
+
 Так runtime и indexing остаются развязаны: если ML-зависимости отсутствуют, retrieval/rerank
 дают controlled escalation, а не ломают запуск API.
 

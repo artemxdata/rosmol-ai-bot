@@ -34,5 +34,6 @@ class BotState(TypedDict, total=False):
     error: str
     trace: Tracer
     llm_client: Any
+    embedder: Any
     retriever: Any
     reranker: Any

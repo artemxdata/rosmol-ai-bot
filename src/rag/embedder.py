@@ -40,6 +40,9 @@ class Embedder:
         sparse = {str(key): float(value) for key, value in sparse_raw.items()}
         return dense, sparse
 
+    def unload(self) -> None:
+        self._model = None
+
 
 def sparse_to_indices_values(sparse: dict[str, float]) -> tuple[list[int], list[float]]:
     pairs = sorted((int(token_id), float(weight)) for token_id, weight in sparse.items())

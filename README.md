@@ -49,6 +49,16 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run -
 Для поиска индексируется расширенный `embedding_text`: исходный ответ плюс intent/topic/forum
 и примеры пользовательских формулировок. В ответах пользователю сохраняется исходный `text_clean`.
 
+Локальный `/ask` с реальными bge-моделями можно поднять отдельным ML runtime на порту 8001:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml up -d app-ml
+curl http://localhost:8001/ready
+```
+
+`app-ml` использует тот же Qdrant/PostgreSQL/Redis, но включает `ML_UNLOAD_AFTER_USE=true`,
+чтобы на локальном Docker Desktop не держать bge-m3 и reranker одновременно в памяти.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
