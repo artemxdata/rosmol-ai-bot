@@ -9,7 +9,9 @@ services:
       target: runtime
       args:
         INSTALL_ML: "true"
-    command: ["python", "scripts/check_ml_runtime.py"]
+    user: root
+    entrypoint: ["python", "scripts/check_ml_runtime.py"]
+    command: []
     environment:
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
@@ -25,14 +27,12 @@ services:
       target: runtime
       args:
         INSTALL_ML: "true"
+    user: root
     command:
       [
-        "python",
-        "scripts/index_kb.py",
-        "--path",
-        "data/knowledge_base_seed.json",
-        "--collection",
-        "knowledge_base",
+        "sh",
+        "-c",
+        "python scripts/init_qdrant.py && python scripts/index_kb.py --path data/knowledge_base_seed.json --collection knowledge_base",
       ]
     environment:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
@@ -44,8 +44,6 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      init-qdrant:
-        condition: service_completed_successfully
 
 volumes:
   hf_cache:

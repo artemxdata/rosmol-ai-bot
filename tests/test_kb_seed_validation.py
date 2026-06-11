@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scripts.index_kb import validate_only, validate_seed_items
+from scripts.index_kb import build_embedding_text, validate_only, validate_seed_items
 
 
 def test_validate_seed_items_accepts_valid_records() -> None:
@@ -62,3 +62,27 @@ def test_validate_only_prints_record_count(tmp_path, capsys: pytest.CaptureFixtu
     validate_only(path)
 
     assert "valid_records=1" in capsys.readouterr().out
+
+
+def test_build_embedding_text_includes_intent_examples_without_changing_answer() -> None:
+    record = validate_seed_items(
+        [
+            {
+                "chunk_id": "travel",
+                "text_clean": "Билеты до Пятигорска оплачиваются самостоятельно.",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Машук",
+                "topic": "oplata_proezda",
+                "intent_name": "Оплата проезда",
+                "intent_examples": ["кто оплачивает проезд", "финансируют ли дорогу"],
+            }
+        ]
+    )[0]
+
+    embedding_text = build_embedding_text(record)
+
+    assert "кто оплачивает проезд" in embedding_text
+    assert "Интент: Оплата проезда" in embedding_text
+    assert "Ответ:\nБилеты до Пятигорска оплачиваются самостоятельно." in embedding_text
+    assert record.content == "Билеты до Пятигорска оплачиваются самостоятельно."

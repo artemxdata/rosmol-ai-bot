@@ -25,6 +25,9 @@ class KBSeedRecord(BaseModel):
     forum_normalized: str | None = None
     category: str | None = None
     topic: str | None = None
+    intent_name: str | None = None
+    intent_examples: list[str] | None = None
+    source_category: str | None = None
     status: str = Field(default="published")
 
     model_config = {"extra": "allow"}
@@ -79,6 +82,33 @@ def validate_seed_items(raw_items: object) -> list[KBSeedRecord]:
     return records
 
 
+def build_embedding_text(record: KBSeedRecord) -> str:
+    metadata_parts = []
+    for label, value in (
+        ("Интент", record.intent_name),
+        ("Тема", record.topic),
+        ("Форум", record.forum_normalized),
+        ("Категория", record.category),
+        ("Раздел", record.source_category),
+    ):
+        if value:
+            metadata_parts.append(f"{label}: {value.strip()}")
+
+    examples = [
+        example.strip()
+        for example in record.intent_examples or []
+        if isinstance(example, str) and example.strip()
+    ]
+
+    parts = []
+    if examples:
+        parts.append("Примеры вопросов пользователей:\n" + "\n".join(examples[:30]))
+    if metadata_parts:
+        parts.append("Метаданные:\n" + "\n".join(metadata_parts))
+    parts.append("Ответ:\n" + record.content)
+    return "\n\n".join(parts)
+
+
 async def index_kb(path: Path, collection: str, limit: int | None = None) -> None:
     settings = get_settings()
     client = AsyncQdrantClient(url=settings.qdrant_url)
@@ -101,11 +131,13 @@ async def index_kb(path: Path, collection: str, limit: int | None = None) -> Non
         indexed = 0
         for record in records:
             text = record.content
-            dense, sparse = await asyncio.to_thread(embedder.encode, text)
+            embedding_text = build_embedding_text(record)
+            dense, sparse = await asyncio.to_thread(embedder.encode, embedding_text)
             indices, values = sparse_to_indices_values(sparse)
             payload = {
                 **record.model_dump(),
                 "text": text,
+                "embedding_text": embedding_text,
                 "status": record.status,
             }
             points.append(

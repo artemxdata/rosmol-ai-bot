@@ -20,8 +20,11 @@ docker compose up -d
 
 По умолчанию Docker-образ собирается без тяжёлых локальных ML-зависимостей
 (`torch`, `FlagEmbedding`), чтобы dev-стек стартовал быстро. Для образа с локальными
-embedding/reranker-моделями используется отдельный compose-файл и отдельный image tag.
+embedding/reranker-моделями используется отдельный compose-файл, CPU-only PyTorch 2.6+
+wheel и отдельный image tag.
 Обычный `app` при этом остаётся лёгким:
+ML one-shot сервисы запускаются от root только для записи в Docker named volumes с
+HuggingFace/Torch cache; обычный `app` runtime остаётся под пользователем `app`.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.ml.yml build index-kb
@@ -31,6 +34,8 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run -
 Проверка с загрузкой моделей bge-m3 и bge-reranker-v2-m3:
 
 ```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm ml-check --load-embedder
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm ml-check --load-reranker
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm ml-check --load-models
 ```
 
@@ -38,14 +43,16 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run -
 
 ```bash
 docker compose up -d qdrant
-docker compose run --rm init-qdrant
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb
 ```
+
+Для поиска индексируется расширенный `embedding_text`: исходный ответ плюс intent/topic/forum
+и примеры пользовательских формулировок. В ответах пользователю сохраняется исходный `text_clean`.
 
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb python scripts/index_kb.py --limit 20
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb sh -c "python scripts/init_qdrant.py && python scripts/index_kb.py --limit 20"
 ```
 
 Проверки:

@@ -12,9 +12,15 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 ARG INSTALL_ML=false
+ARG TORCH_CPU_VERSION=2.6.0+cpu
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && if [ "$INSTALL_ML" = "true" ]; then /opt/venv/bin/pip install ".[ml]"; else /opt/venv/bin/pip install "."; fi
+    && if [ "$INSTALL_ML" = "true" ]; then \
+        /opt/venv/bin/pip install --extra-index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_CPU_VERSION}" \
+        && /opt/venv/bin/pip install ".[ml]"; \
+    else \
+        /opt/venv/bin/pip install "."; \
+    fi
 
 FROM python:3.11-slim AS runtime
 

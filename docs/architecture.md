@@ -1145,9 +1145,17 @@ PostgreSQL, Redis и Qdrant-клиент работают без локальн�
 Индексация KB выполняется отдельным Docker Compose override `docker-compose.ml.yml`:
 - отдельный image tag `rosmol-ai-bot-ml:latest`;
 - build arg `INSTALL_ML=true`;
+- CPU-only PyTorch wheel версии 2.6+ ставится отдельно до `FlagEmbedding`, без CUDA-зависимостей
+  и с безопасной загрузкой весов для актуального `transformers`;
 - сервис `ml-check` для проверки `FlagEmbedding`/`torch` и опциональной загрузки bge-моделей;
-- сервис `index-kb` для `scripts/index_kb.py`;
-- отдельные Docker volumes для HuggingFace/Torch cache.
+- сервис `index-kb` сначала выполняет `scripts/init_qdrant.py`, затем `scripts/index_kb.py`;
+- отдельные Docker volumes для HuggingFace/Torch cache; одноразовые ML jobs запускаются от root
+  только для записи в named volumes, обычный `app` runtime остаётся под пользователем `app`.
+
+Для embedding индексируется не только `text_clean`, а `embedding_text`: исходный ответ плюс
+`intent_name`, `topic`, `forum_normalized`, `category`, `source_category` и примеры
+`intent_examples`. Пользователю возвращается исходный `text_clean`; дополнительные поля нужны
+только для поиска и диагностики RAG.
 
 Так runtime и indexing остаются развязаны: если ML-зависимости отсутствуют, retrieval/rerank
 дают controlled escalation, а не ломают запуск API.
