@@ -42,6 +42,8 @@ pytest
 - `CLOUD_RU_MODEL_COMPLEX` — модель для нетиповых/сложных вопросов. Укажи Cloud.ru model id Max, когда он подтверждён в кабинете.
 - `CLOUD_RU_MODEL_ANALYZER` и `CLOUD_RU_MODEL_JUDGE` — опциональные переопределения для анализатора и verifier judge.
 
+Перед Query Analyzer работает консервативный pre-routing: 10B выбирается только для явно типовых FAQ-сигналов вроде регистрации или подачи заявки. Неоднозначные, персональные, составные и неизвестные формулировки идут в complex-route и используют Max-модель, если задан `CLOUD_RU_MODEL_COMPLEX`.
+
 OAuth flow и developers.sber.ru здесь не используются.
 Проверка доступа:
 

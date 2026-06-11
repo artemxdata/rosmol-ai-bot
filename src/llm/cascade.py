@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from src.config import get_settings
 from src.models import Complexity
 
@@ -21,9 +23,28 @@ def _complex_model() -> str:
     return _configured(settings.cloud_ru_model_complex) or _simple_model()
 
 
-def select_analyzer_model() -> str:
+def _complexity_from_hint(complexity_hint: Any | None) -> Complexity | None:
+    if isinstance(complexity_hint, Complexity):
+        return complexity_hint
+    if isinstance(complexity_hint, str):
+        try:
+            return Complexity(complexity_hint)
+        except ValueError:
+            return None
+    if isinstance(complexity_hint, dict):
+        return _complexity_from_hint(complexity_hint.get("complexity"))
+    if hasattr(complexity_hint, "complexity"):
+        return _complexity_from_hint(complexity_hint.complexity)
+    return None
+
+
+def select_analyzer_model(complexity_hint: Any | None = None) -> str:
     settings = get_settings()
-    return _configured(settings.cloud_ru_model_analyzer) or _complex_model()
+    if configured_model := _configured(settings.cloud_ru_model_analyzer):
+        return configured_model
+    if _complexity_from_hint(complexity_hint) == Complexity.SIMPLE:
+        return _simple_model()
+    return _complex_model()
 
 
 def select_generator_model(complexity: str | Complexity) -> str:

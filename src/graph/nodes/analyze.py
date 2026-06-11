@@ -14,11 +14,17 @@ async def analyze_query(state: BotState) -> dict:
     tracer = state.get("trace")
     try:
         llm = state["llm_client"]
-        model = select_analyzer_model()
+        routing_hint = state.get("routing_hint")
+        model = select_analyzer_model(routing_hint)
         content = await llm.generate(
             model=model,
             system=QUERY_ANALYZER_SYSTEM,
-            user=build_analyzer_user(state["message_masked"], state.get("session"), None),
+            user=build_analyzer_user(
+                state["message_masked"],
+                state.get("session"),
+                None,
+                routing_hint,
+            ),
             response_format="json",
         )
         analysis = QueryAnalysis.model_validate(parse_llm_json(content))

@@ -27,11 +27,17 @@ LLM_JUDGE_SYSTEM = """
 """.strip()
 
 
-def build_analyzer_user(message: str, session: Session | None, memory: Any | None) -> str:
+def build_analyzer_user(
+    message: str,
+    session: Session | None,
+    memory: Any | None,
+    routing_hint: dict[str, Any] | None = None,
+) -> str:
     return "\n".join(
         [
             f"Версия промпта: {get_settings().prompt_version}",
             f"Сообщение: {message}",
+            f"Предварительная маршрутизация: {routing_hint or {}}",
             f"Сессия: {session.model_dump_json() if session else '{}'}",
             f"Долгосрочная память: {memory.model_dump_json() if memory else '{}'}",
         ]

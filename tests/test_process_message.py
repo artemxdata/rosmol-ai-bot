@@ -257,6 +257,23 @@ async def test_process_message_masks_pii_before_graph_and_logs_trace(
 
 
 @pytest.mark.asyncio
+async def test_process_message_adds_routing_hint_to_graph_state(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Ответ про регистрацию")
+    app = _app(graph=graph)
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text="Регистрация на форум")
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Ответ про регистрацию"
+    assert graph.seen_state is not None
+    assert graph.seen_state["routing_hint"]["complexity"] == "simple"
+    assert graph.seen_state["routing_hint"]["reason"] == "registration_faq"
+
+
+@pytest.mark.asyncio
 async def test_http_ask_uses_mocked_app_state(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],

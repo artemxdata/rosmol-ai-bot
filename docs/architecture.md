@@ -302,6 +302,12 @@ endpoint-ы.
 ┌─────────────────────────────────────────────────────────┐
 │              QUERY ANALYZER                             │
 │                                                         │
+│  Перед analyzer: deterministic pre-routing              │
+│  - simple только для очевидных FAQ-сигналов              │
+│    (регистрация, подача заявки, срок регистрации)        │
+│  - complex по умолчанию для нетиповых, персональных,     │
+│    составных и неоднозначных запросов                    │
+│                                                         │
 │  LLM-вызов: Cloud.ru Evolution Foundation Models         │
 │  Модель: CLOUD_RU_MODEL_ANALYZER или CLOUD_RU_MODEL_COMPLEX│
 │  Формат: OpenAI-compatible Chat Completions              │
@@ -348,6 +354,7 @@ endpoint-ы.
 │  complexity влияет на маршрутизацию модели:              │
 │  simple → CLOUD_RU_MODEL_SIMPLE (10B)                    │
 │  complex/нетиповой → CLOUD_RU_MODEL_COMPLEX (Max)        │
+│  Если pre-routing не уверен, маршрут всегда complex.     │
 └─────────────────────────────────────────────────────────┘
 ```
 

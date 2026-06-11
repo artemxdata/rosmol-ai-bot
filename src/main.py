@@ -16,6 +16,7 @@ from src.channels.vk import VKAdapter
 from src.config import get_settings
 from src.graph.graph import build_graph
 from src.llm.client import CloudRuLLMClient
+from src.llm.routing import estimate_routing_hint
 from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
 from src.models import Channel, IncomingMessage
@@ -199,6 +200,7 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         )
 
     session = await fastapi_app.state.sessions.get_or_create(message.channel.value, message.user_id)
+    routing_hint = estimate_routing_hint(masked_text)
 
     tracer = Tracer()
     state = {
@@ -208,6 +210,7 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         "user_id_hash": user_id_hash,
         "message": message.text,
         "message_masked": masked_text,
+        "routing_hint": routing_hint.model_dump(),
         "session": session,
         "trace": tracer,
         "llm_client": fastapi_app.state.llm_client,

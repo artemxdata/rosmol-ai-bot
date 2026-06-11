@@ -31,7 +31,7 @@ def test_llm_cascade_defaults_to_simple_model(monkeypatch) -> None:
     assert select_judge_model() == DEFAULT_CLOUD_RU_SIMPLE_MODEL
 
 
-def test_llm_cascade_routes_simple_and_judge_to_10b(monkeypatch) -> None:
+def test_llm_cascade_routes_simple_analyzer_and_judge_to_10b(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.llm.cascade.get_settings",
         lambda: _settings(
@@ -40,6 +40,7 @@ def test_llm_cascade_routes_simple_and_judge_to_10b(monkeypatch) -> None:
         ),
     )
 
+    assert select_analyzer_model({"complexity": "simple"}) == "ai-sage/GigaChat3-10B-A1.8B"
     assert select_generator_model("simple") == "ai-sage/GigaChat3-10B-A1.8B"
     assert select_judge_model() == "ai-sage/GigaChat3-10B-A1.8B"
 
@@ -54,7 +55,7 @@ def test_llm_cascade_routes_complex_and_analyzer_to_max(monkeypatch) -> None:
     )
 
     assert select_generator_model("complex") == "cloud-ru-max-model"
-    assert select_analyzer_model() == "cloud-ru-max-model"
+    assert select_analyzer_model({"complexity": "complex"}) == "cloud-ru-max-model"
 
 
 def test_llm_cascade_allows_explicit_analyzer_and_judge_models(monkeypatch) -> None:
