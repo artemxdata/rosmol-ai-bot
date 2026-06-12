@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import asyncpg
@@ -92,6 +93,7 @@ async def run_eval(
     request_timeout: float = 120.0,
     api_key_env: str | None = "API_AUTH_TOKEN",
     trace_lookup: bool = True,
+    trace_dsn: str | None = None,
     kb_seed_path: Path = Path("data/knowledge_base_seed.json"),
     auto_smoke_cases: bool = False,
     max_smoke_cases: int = 50,
@@ -114,15 +116,19 @@ async def run_eval(
     trace_pool: asyncpg.Pool | None = None
     trace_lookup_error: str | None = None
     if trace_lookup:
-        try:
-            settings = get_settings()
-            trace_pool = await asyncpg.create_pool(
-                settings.postgres_dsn,
-                min_size=1,
-                max_size=max(1, min(concurrency, 5)),
-            )
-        except Exception as exc:
-            trace_lookup_error = f"{type(exc).__name__}: {exc}"
+        errors: list[str] = []
+        for candidate in _trace_dsn_candidates(trace_dsn):
+            try:
+                trace_pool = await asyncpg.create_pool(
+                    candidate,
+                    min_size=1,
+                    max_size=max(1, min(concurrency, 5)),
+                )
+                break
+            except Exception as exc:
+                errors.append(f"{type(exc).__name__}: {exc}")
+        if trace_pool is None and errors:
+            trace_lookup_error = "; ".join(errors)
 
     headers = _auth_headers(api_key_env)
     semaphore = asyncio.Semaphore(max(1, concurrency))
@@ -436,6 +442,33 @@ def _auth_headers(api_key_env: str | None) -> dict[str, str]:
     return headers
 
 
+def _trace_dsn_candidates(trace_dsn: str | None = None) -> list[str]:
+    primary = (
+        (trace_dsn or "").strip()
+        or (os.getenv("ASK_EVAL_POSTGRES_DSN") or "").strip()
+        or get_settings().postgres_dsn
+    )
+    candidates = [primary]
+    fallback = _docker_postgres_host_to_localhost(primary)
+    if fallback and fallback not in candidates:
+        candidates.append(fallback)
+    return candidates
+
+
+def _docker_postgres_host_to_localhost(dsn: str) -> str | None:
+    try:
+        parsed = urlsplit(dsn)
+    except ValueError:
+        return None
+    if parsed.hostname != "postgres":
+        return None
+    replaced = dsn.replace("@postgres:", "@localhost:", 1)
+    replaced = replaced.replace("@postgres/", "@localhost/", 1)
+    replaced = replaced.replace("//postgres:", "//localhost:", 1)
+    replaced = replaced.replace("//postgres/", "//localhost/", 1)
+    return replaced if replaced != dsn else None
+
+
 def _seed_smoke_query(record: dict[str, Any]) -> str:
     examples = record.get("intent_examples") or []
     if examples:
@@ -559,6 +592,14 @@ def _json_safe(value: Any) -> Any:
         return float(value)
     if isinstance(value, UUID):
         return str(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("[", "{")):
+            try:
+                return _json_safe(json.loads(stripped))
+            except json.JSONDecodeError:
+                return value
+        return value
     if isinstance(value, list):
         return [_json_safe(item) for item in value]
     if isinstance(value, dict):
@@ -577,6 +618,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--api-key-env", default="API_AUTH_TOKEN")
     parser.add_argument("--no-db-traces", action="store_true")
+    parser.add_argument("--trace-dsn", default="")
     parser.add_argument("--auto-smoke-cases", action="store_true")
     parser.add_argument("--max-smoke-cases", type=int, default=50)
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
@@ -596,6 +638,7 @@ def main() -> None:
             request_timeout=args.timeout,
             api_key_env=args.api_key_env,
             trace_lookup=not args.no_db_traces,
+            trace_dsn=args.trace_dsn or None,
             kb_seed_path=Path(args.kb_seed),
             auto_smoke_cases=args.auto_smoke_cases,
             max_smoke_cases=args.max_smoke_cases,

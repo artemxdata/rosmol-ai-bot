@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src.config import get_settings
 from src.rag.embedder import Embedder, sparse_to_indices_values
 from src.rag.errors import MLDependencyError
+from src.rag.filter_keys import build_filter_key_payload
 
 
 class KBSeedRecord(BaseModel):
@@ -136,6 +137,7 @@ async def index_kb(path: Path, collection: str, limit: int | None = None) -> Non
             indices, values = sparse_to_indices_values(sparse)
             payload = {
                 **record.model_dump(),
+                **build_filter_key_payload(record.model_dump()),
                 "text": text,
                 "embedding_text": embedding_text,
                 "status": record.status,

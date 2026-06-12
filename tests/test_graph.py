@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from src.graph.edges import route_after_analyze, route_after_rerank, route_after_verify
+from src.graph.nodes.analyze import _coerce_analysis_payload
 from src.graph.nodes.generate import generate
+from src.graph.nodes.retrieve import retrieve
 from src.models import Complexity, QueryAnalysis, Question, ScoredChunk, VerificationResult
 
 
@@ -23,6 +25,15 @@ class CapturingLLM:
         return "LLM answer [src:ctx_1]"
 
 
+class CapturingRetriever:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def retrieve(self, query: str, filters: dict, top_k: int):
+        self.calls.append((query, filters, top_k))
+        return []
+
+
 def test_route_after_analyze_clarifies() -> None:
     state = {"analysis": QueryAnalysis(needs_clarification=True)}
     assert route_after_analyze(state) == "clarify"
@@ -35,6 +46,33 @@ def test_route_after_rerank_escalates_on_low_score() -> None:
 def test_route_after_verify_escalates_on_hallucination() -> None:
     state = {"verification": VerificationResult(has_hallucination=True)}
     assert route_after_verify(state) == "escalate"
+
+
+def test_coerce_analysis_payload_accepts_topic_objects() -> None:
+    payload = _coerce_analysis_payload({"topics": [{"title": "Подать заявку"}, "гранты"]})
+
+    assert payload["topics"] == ["Подать заявку", "гранты"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> None:
+    retriever = CapturingRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(category="гранты"),
+            "message_masked": "Гранты для физических лиц Подать заявку на участие",
+            "retriever": retriever,
+        }
+    )
+
+    assert result["retrieved_chunks"] == []
+    assert retriever.calls == [
+        (
+            "Гранты для физических лиц Подать заявку на участие",
+            {"forum_normalized": None, "category": "гранты", "topic": None},
+            10,
+        )
+    ]
 
 
 @pytest.mark.asyncio

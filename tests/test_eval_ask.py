@@ -7,7 +7,9 @@ import httpx
 import pytest
 
 from eval.run_ask import (
+    _json_safe,
     _normalize_case,
+    _trace_dsn_candidates,
     build_seed_ask_cases,
     run_eval,
     score_case,
@@ -74,6 +76,23 @@ def test_build_seed_ask_cases_uses_intent_examples() -> None:
             "tags": ["seed_smoke"],
         }
     ]
+
+
+def test_trace_dsn_candidates_add_localhost_fallback() -> None:
+    candidates = _trace_dsn_candidates(
+        "postgresql://rosmol:rosmol@postgres:5432/rosmol_ai_bot"
+    )
+
+    assert candidates == [
+        "postgresql://rosmol:rosmol@postgres:5432/rosmol_ai_bot",
+        "postgresql://rosmol:rosmol@localhost:5432/rosmol_ai_bot",
+    ]
+
+
+def test_json_safe_decodes_asyncpg_json_strings() -> None:
+    value = _json_safe('[{"chunk_id": "travel", "score": 0.9}]')
+
+    assert value == [{"chunk_id": "travel", "score": 0.9}]
 
 
 def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:

@@ -22,6 +22,8 @@ docker compose up -d
 (`torch`, `FlagEmbedding`), чтобы dev-стек стартовал быстро. Для образа с локальными
 embedding/reranker-моделями используется отдельный compose-файл, CPU-only PyTorch 2.6+
 wheel и отдельный image tag.
+ML extra дополнительно фиксирует `transformers<5`, потому что текущий `FlagEmbedding`
+несовместим с major-версией 5.x для bge-reranker.
 Обычный `app` при этом остаётся лёгким:
 ML one-shot сервисы запускаются от root только для записи в Docker named volumes с
 HuggingFace/Torch cache; обычный `app` runtime остаётся под пользователем `app`.
@@ -67,12 +69,20 @@ python eval/run_ask.py --target http://localhost:8001/ask --auto-smoke-cases --m
 
 Скрипт пишет JSON/Markdown отчёты в `reports/`, читает trace из PostgreSQL и считает pass rate,
 expected chunk hit rate, escalation/cache/source-chunk rate, latency, LLM tokens и оценочную стоимость.
-Для ручного golden-set можно передать `--cases path/to/ask_eval_set.json`.
+Если `.env` содержит Docker-host `postgres`, eval автоматически пробует локальный fallback `localhost`.
+Для ручного golden-set можно передать `--cases path/to/ask_eval_set.json`, а DSN trace-БД переопределить через
+`--trace-dsn` или `ASK_EVAL_POSTGRES_DSN`.
 
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb sh -c "python scripts/init_qdrant.py && python scripts/index_kb.py --limit 20"
+```
+
+Если в уже существующую Qdrant-коллекцию нужно добавить ASCII filter keys без полного пересчёта embeddings:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml exec app-ml python scripts/backfill_qdrant_filter_keys.py
 ```
 
 Проверки:

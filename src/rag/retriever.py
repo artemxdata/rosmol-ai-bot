@@ -8,6 +8,7 @@ from qdrant_client import AsyncQdrantClient, models
 
 from src.models import Chunk
 from src.rag.embedder import Embedder, sparse_to_indices_values
+from src.rag.filter_keys import category_filter_key, stable_text_filter_key
 
 
 class Retriever:
@@ -23,19 +24,26 @@ class Retriever:
     ) -> list[Chunk]:
         dense, sparse = await asyncio.to_thread(self.embedder.encode, query)
         indices, values = sparse_to_indices_values(sparse)
+        query_filter = build_filter(filters or {})
 
         result = await self.qdrant.query_points(
             collection_name="knowledge_base",
             prefetch=[
-                models.Prefetch(query=dense.tolist(), using="dense", limit=top_k),
+                models.Prefetch(
+                    query=dense.tolist(),
+                    using="dense",
+                    filter=query_filter,
+                    limit=top_k,
+                ),
                 models.Prefetch(
                     query=models.SparseVector(indices=indices, values=values),
                     using="sparse",
+                    filter=query_filter,
                     limit=top_k,
                 ),
             ],
             query=models.FusionQuery(fusion=models.Fusion.RRF),
-            query_filter=build_filter(filters or {}),
+            query_filter=query_filter,
             limit=top_k,
             with_payload=True,
         )
@@ -59,7 +67,34 @@ def build_filter(filters: dict[str, Any]) -> models.Filter:
         models.FieldCondition(key="status", match=models.MatchValue(value="published"))
     ]
 
-    for key in ("forum_normalized", "category", "topic"):
+    forum = filters.get("forum_normalized")
+    if forum:
+        must.append(
+            models.FieldCondition(
+                key="forum_key",
+                match=models.MatchValue(value=stable_text_filter_key(forum)),
+            )
+        )
+
+    category = filters.get("category")
+    if category:
+        must.append(
+            models.FieldCondition(
+                key="category_key",
+                match=models.MatchValue(value=category_filter_key(category)),
+            )
+        )
+
+    topic = filters.get("topic")
+    if topic:
+        must.append(
+            models.FieldCondition(
+                key="topic_key",
+                match=models.MatchValue(value=stable_text_filter_key(topic)),
+            )
+        )
+
+    for key in ("forum_key", "category_key", "topic_key"):
         value = filters.get(key)
         if value:
             must.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))

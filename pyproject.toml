@@ -24,6 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 ml = [
     "FlagEmbedding>=1.2.10,<1.5",
+    "transformers>=4.44,<5",
 ]
 dev = [
     "mypy>=1.10.1",

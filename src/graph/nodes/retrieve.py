@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.models import Question
 from src.rag.errors import MLDependencyError
 
 
@@ -17,8 +18,20 @@ async def retrieve(state: BotState) -> dict:
         "forum_normalized": analysis.forum_normalized,
         "category": analysis.category,
     }
+    questions = list(analysis.questions)
+    if not questions:
+        query = state.get("message_masked") or state.get("message") or ""
+        if query:
+            questions = [
+                Question(
+                    text=query,
+                    forum_normalized=analysis.forum_normalized,
+                    category=analysis.category,
+                )
+            ]
+
     chunks = []
-    for question in analysis.questions:
+    for question in questions:
         question_filters = {
             **filters,
             "topic": question.topic,

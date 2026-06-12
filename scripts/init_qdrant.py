@@ -34,7 +34,15 @@ async def ensure_collections(recreate: bool = False) -> None:
             },
         )
 
-    for field in ("forum_normalized", "category", "topic", "status"):
+    for field in (
+        "forum_normalized",
+        "category",
+        "topic",
+        "forum_key",
+        "category_key",
+        "topic_key",
+        "status",
+    ):
         await create_payload_index_if_missing(
             client,
             collection_name="knowledge_base",
