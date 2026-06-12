@@ -59,6 +59,16 @@ curl http://localhost:8001/ready
 `app-ml` использует тот же Qdrant/PostgreSQL/Redis, но включает `ML_UNLOAD_AFTER_USE=true`,
 чтобы на локальном Docker Desktop не держать bge-m3 и reranker одновременно в памяти.
 
+Количественный eval `/ask` для локальной проверки качества:
+
+```bash
+python eval/run_ask.py --target http://localhost:8001/ask --auto-smoke-cases --max-smoke-cases 50
+```
+
+Скрипт пишет JSON/Markdown отчёты в `reports/`, читает trace из PostgreSQL и считает pass rate,
+expected chunk hit rate, escalation/cache/source-chunk rate, latency, LLM tokens и оценочную стоимость.
+Для ручного golden-set можно передать `--cases path/to/ask_eval_set.json`.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
