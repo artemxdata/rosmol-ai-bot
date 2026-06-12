@@ -20,6 +20,7 @@ import httpx
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from eval.ask_cases import build_seed_ask_cases
 from src.config import get_settings
 
 
@@ -50,38 +51,6 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         "expected_generator_model": raw.get("expected_generator_model"),
         "tags": _string_list(raw.get("tags") or []),
     }
-
-
-def build_seed_ask_cases(
-    records: list[dict[str, Any]],
-    max_cases: int = 50,
-    user_prefix: str = "ask-eval",
-) -> list[dict[str, Any]]:
-    cases: list[dict[str, Any]] = []
-    for record in records:
-        if record.get("status") != "published":
-            continue
-        query = _seed_smoke_query(record)
-        if not query:
-            continue
-        chunk_id = str(record["chunk_id"])
-        cases.append(
-            {
-                "id": f"seed_smoke::{chunk_id}",
-                "query": query,
-                "user_id": f"{user_prefix}-{len(cases) + 1}",
-                "channel": "api",
-                "expected_chunk_ids": [chunk_id],
-                "expected_answer_contains": [],
-                "expected_escalated": None,
-                "expected_escalation_reason": None,
-                "expected_generator_model": None,
-                "tags": ["seed_smoke"],
-            }
-        )
-        if len(cases) >= max_cases:
-            break
-    return cases
 
 
 async def run_eval(
@@ -467,18 +436,6 @@ def _docker_postgres_host_to_localhost(dsn: str) -> str | None:
     replaced = replaced.replace("//postgres:", "//localhost:", 1)
     replaced = replaced.replace("//postgres/", "//localhost/", 1)
     return replaced if replaced != dsn else None
-
-
-def _seed_smoke_query(record: dict[str, Any]) -> str:
-    examples = record.get("intent_examples") or []
-    if examples:
-        prefix = record.get("forum_normalized") or record.get("source_category") or ""
-        return " ".join(part for part in [str(prefix), str(examples[0])] if part).strip()
-    intent = record.get("intent_name")
-    if intent:
-        prefix = record.get("forum_normalized") or record.get("source_category") or ""
-        return " ".join(part for part in [str(prefix), str(intent)] if part).strip()
-    return str(record.get("text_clean") or "")[:160]
 
 
 def _safe_response_json(response: httpx.Response) -> Any:

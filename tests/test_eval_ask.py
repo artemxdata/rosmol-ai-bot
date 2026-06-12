@@ -50,6 +50,7 @@ def test_build_seed_ask_cases_uses_intent_examples() -> None:
             {
                 "chunk_id": "travel",
                 "status": "published",
+                "category": "форумы",
                 "forum_normalized": "Машук",
                 "intent_examples": ["кто платит за дорогу"],
             },
@@ -64,7 +65,7 @@ def test_build_seed_ask_cases_uses_intent_examples() -> None:
 
     assert cases == [
         {
-            "id": "seed_smoke::travel",
+            "id": "seed_balanced::travel",
             "query": "Машук кто платит за дорогу",
             "user_id": "local-1",
             "channel": "api",
@@ -73,7 +74,7 @@ def test_build_seed_ask_cases_uses_intent_examples() -> None:
             "expected_escalated": None,
             "expected_escalation_reason": None,
             "expected_generator_model": None,
-            "tags": ["seed_smoke"],
+            "tags": ["seed_balanced", "category:форумы", "forum:Машук"],
         }
     ]
 
