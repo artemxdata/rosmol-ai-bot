@@ -44,7 +44,53 @@ async def analyze_query(state: BotState) -> dict:
 def _coerce_analysis_payload(payload: dict) -> dict:
     normalized = dict(payload)
     normalized["topics"] = _coerce_string_list(normalized.get("topics"))
+    normalized["category"] = _normalize_category(normalized.get("category"))
+    if normalized.get("forum") and not normalized.get("forum_normalized"):
+        normalized["forum_normalized"] = normalized["forum"]
+    normalized["questions"] = _coerce_questions(normalized.get("questions"))
     return normalized
+
+
+def _coerce_questions(value: object) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        value = [value]
+
+    result: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            item = {"text": str(item)}
+        question = dict(item)
+        question["category"] = _normalize_category(question.get("category"))
+        if question.get("forum_normalized") is None and question.get("forum"):
+            question["forum_normalized"] = question["forum"]
+        result.append(question)
+    return result
+
+
+def _normalize_category(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.casefold().replace("ё", "е").replace("_", " ")
+
+    if any(word in normalized for word in ("форум", "мероприят", "событи")):
+        return "форумы"
+    if "грант" in normalized:
+        return "гранты"
+    if any(word in normalized for word in ("тех", "ошиб", "баг", "поддерж")):
+        return "техподдержка"
+    if any(word in normalized for word in ("фгаис", "платформ", "аккаунт", "кабинет", "регистрац")):
+        return "платформа_фгаис"
+    if any(
+        word in normalized
+        for word in ("навигац", "оператор", "обратн", "жалоб", "привет", "прощ")
+    ):
+        return "навигация"
+    if any(word in normalized for word in ("общ", "другое", "прочее")):
+        return "общее"
+    return text
 
 
 def _coerce_string_list(value: object) -> list[str]:

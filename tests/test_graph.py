@@ -54,6 +54,32 @@ def test_coerce_analysis_payload_accepts_topic_objects() -> None:
     assert payload["topics"] == ["Подать заявку", "гранты"]
 
 
+def test_coerce_analysis_payload_normalizes_taxonomy_aliases() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": "Территория смыслов",
+            "category": "мероприятия и форумы",
+            "questions": [
+                {
+                    "text": "Как зарегистрироваться?",
+                    "category": "регистрация",
+                    "forum": "Машук",
+                },
+                {
+                    "text": "Где найти id?",
+                    "category": "технические проблемы",
+                },
+            ],
+        }
+    )
+
+    assert payload["category"] == "форумы"
+    assert payload["forum_normalized"] == "Территория смыслов"
+    assert payload["questions"][0]["category"] == "платформа_фгаис"
+    assert payload["questions"][0]["forum_normalized"] == "Машук"
+    assert payload["questions"][1]["category"] == "техподдержка"
+
+
 @pytest.mark.asyncio
 async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> None:
     retriever = CapturingRetriever()
