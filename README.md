@@ -77,6 +77,29 @@ expected chunk hit rate, escalation/cache/source-chunk rate, latency, LLM tokens
 Для ручного golden-set можно передать `--cases path/to/ask_eval_set.json`, а DSN trace-БД переопределить через
 `--trace-dsn` или `ASK_EVAL_POSTGRES_DSN`.
 
+Ручная проверка сложных вопросов с видимым RAG/trace-разбором:
+
+```bash
+python scripts/manual_ask.py ^
+  --text "Мне 17 лет, я из другого региона и хочу поехать на форум. Пустят ли меня, кто оплачивает дорогу и где я буду жить?" ^
+  --target http://localhost:8001/ask
+```
+
+Batch-прогон подготовленного набора:
+
+```bash
+python scripts/manual_ask.py ^
+  --file data/manual_complex_queries.json ^
+  --target http://localhost:8001/ask ^
+  --output reports/manual_complex_queries.json
+```
+
+Скрипт печатает в терминал ответ, `request_id`, masked text, cache hit, escalation reason,
+top retrieved/reranked chunks, reranker score, LLM usage/cost и события графа по узлам.
+Это инструмент для ручной инспекции качества, а не замена `golden_set.json`.
+Если запрос попал в semantic cache, в отчёте будет `cache_hit=True`, а graph events/chunks могут быть пустыми;
+для просмотра полного RAG-пути измени формулировку вопроса или используй новый запрос.
+
 Сбалансированный ask-eval набор из KB seed можно подготовить без Docker:
 
 ```bash

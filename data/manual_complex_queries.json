@@ -1,0 +1,42 @@
+[
+  {
+    "id": "forum_age_travel_combo",
+    "query": "Мне 17 лет, я из другого региона и хочу поехать на форум. Пустят ли меня, кто оплачивает дорогу и где я буду жить?",
+    "tags": ["manual", "complex", "forum", "age", "travel"]
+  },
+  {
+    "id": "registration_profile_email",
+    "query": "Я подал заявку на форум, но письмо не пришло, в профиле ошибка в данных и я не понимаю, где найти ID профиля. Что делать по шагам?",
+    "tags": ["manual", "complex", "registration", "profile"]
+  },
+  {
+    "id": "grant_return_funds",
+    "query": "Я выиграл грант, но понял, что не смогу реализовать проект в срок. Как вернуть средства и куда писать?",
+    "tags": ["manual", "complex", "grant", "escalation"]
+  },
+  {
+    "id": "russian_north_documents",
+    "query": "Хочу на Российский Север: какие документы нужны, есть ли трансфер, питание и ограничения по возрасту?",
+    "tags": ["manual", "complex", "forum", "russian_north"]
+  },
+  {
+    "id": "more_than_travel_conditions",
+    "query": "Расскажи про фестиваль Больше, чем путешествие: регистрация, возраст участников, проживание и дорога оплачиваются?",
+    "tags": ["manual", "complex", "forum", "travel_festival"]
+  },
+  {
+    "id": "status_operator_needed",
+    "query": "Мне нужен оператор: статус заявки непонятный, письмо не пришло, а форум уже скоро. Куда обращаться?",
+    "tags": ["manual", "complex", "operator", "status"]
+  },
+  {
+    "id": "two_forums_compare",
+    "query": "Чем отличаются Машук и Территория смыслов по регистрации, проживанию и оплате проезда? Куда мне лучше подаваться?",
+    "tags": ["manual", "complex", "compare", "forums"]
+  },
+  {
+    "id": "technical_login_and_application",
+    "query": "Не могу войти в аккаунт, кнопка подачи заявки не работает, а дедлайн сегодня. Как восстановить доступ и успеть зарегистрироваться?",
+    "tags": ["manual", "complex", "technical", "deadline"]
+  }
+]
