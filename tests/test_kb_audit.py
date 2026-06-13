@@ -67,6 +67,43 @@ def test_audit_seed_records_detects_errors_and_warnings() -> None:
     } <= codes
 
 
+def test_audit_seed_records_includes_quality_summary() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "forum",
+                "text_clean": "Forum answer",
+                "category": "forums",
+                "forum_normalized": "Forum A",
+                "topic": "travel",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+                "status": "published",
+                "char_count": 12,
+            },
+            {
+                "chunk_id": "generic",
+                "text_clean": "Generic answer text",
+                "category": "general",
+                "topic": "fallback",
+                "source_type": "docx",
+                "source_file": "source.docx",
+                "status": "draft",
+            },
+        ]
+    )
+
+    summary = report["summary"]
+    assert summary["category_counts"] == {"forums": 1, "general": 1}
+    assert summary["status_counts"] == {"published": 1, "draft": 1}
+    assert summary["source_type_counts"] == {"xlsx": 1, "docx": 1}
+    assert summary["forum_counts_top"] == {"Forum A": 1}
+    assert summary["forums_total"] == 1
+    assert summary["generic_records_count"] == 1
+    assert summary["char_count"]["min"] == 12
+    assert summary["char_count"]["max"] == len("Generic answer text")
+
+
 def test_audit_kb_seed_can_fail_on_errors(tmp_path: Path) -> None:
     path = tmp_path / "knowledge_base_seed.json"
     path.write_text(

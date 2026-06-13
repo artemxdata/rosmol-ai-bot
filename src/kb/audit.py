@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
 
 REQUIRED_METADATA = ("category", "topic", "source_type", "source_file")
@@ -21,7 +21,43 @@ def audit_seed_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "records_total": len(records),
         "errors": errors,
         "warnings": warnings,
+        "summary": _summarize_records(records),
         "findings": findings,
+    }
+
+
+def _summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
+    category_counts: Counter[str] = Counter()
+    forum_counts: Counter[str] = Counter()
+    source_type_counts: Counter[str] = Counter()
+    source_file_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    generic_records = 0
+    char_counts: list[int] = []
+
+    for record in records:
+        category_counts[_field_or_missing(record, "category")] += 1
+        source_type_counts[_field_or_missing(record, "source_type")] += 1
+        source_file_counts[_field_or_missing(record, "source_file")] += 1
+        status_counts[_field_or_missing(record, "status")] += 1
+
+        forum = str(record.get("forum_normalized") or record.get("forum") or "").strip()
+        if forum:
+            forum_counts[forum] += 1
+        else:
+            generic_records += 1
+
+        char_counts.append(_record_char_count(record))
+
+    return {
+        "category_counts": dict(category_counts.most_common()),
+        "status_counts": dict(status_counts.most_common()),
+        "source_type_counts": dict(source_type_counts.most_common()),
+        "source_file_counts_top": dict(source_file_counts.most_common(20)),
+        "forum_counts_top": dict(forum_counts.most_common(20)),
+        "forums_total": len(forum_counts),
+        "generic_records_count": generic_records,
+        "char_count": _char_count_summary(char_counts),
     }
 
 
@@ -124,3 +160,35 @@ def _find_duplicate_texts(records: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.casefold().replace("ё", "е")).strip()
+
+
+def _field_or_missing(record: dict[str, Any], field: str) -> str:
+    value = str(record.get(field) or "").strip()
+    return value or "missing"
+
+
+def _record_char_count(record: dict[str, Any]) -> int:
+    explicit = record.get("char_count")
+    if isinstance(explicit, int) and explicit >= 0:
+        return explicit
+    return len(str(record.get("text_clean") or record.get("text") or ""))
+
+
+def _char_count_summary(values: list[int]) -> dict[str, int | float | None]:
+    if not values:
+        return {"min": None, "p50": None, "p95": None, "max": None, "avg": None}
+    sorted_values = sorted(values)
+    return {
+        "min": sorted_values[0],
+        "p50": _percentile(sorted_values, 0.50),
+        "p95": _percentile(sorted_values, 0.95),
+        "max": sorted_values[-1],
+        "avg": round(sum(sorted_values) / len(sorted_values), 2),
+    }
+
+
+def _percentile(sorted_values: list[int], percentile: float) -> int:
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    index = round((len(sorted_values) - 1) * percentile)
+    return sorted_values[index]
