@@ -84,6 +84,18 @@ python eval/build_ask_eval_set.py --max-cases 100
 python eval/run_ask.py --cases reports/ask_eval_set.generated.json --target http://localhost:8001/ask
 ```
 
+Перед полноценным golden-set прогоном проверь качество набора:
+
+```bash
+python eval/validate_golden_set.py \
+  --golden data/golden_set.json \
+  --kb-seed data/knowledge_base_seed.json \
+  --min-cases 50
+```
+
+Валидатор проверяет JSON-массив, уникальные `id`, непустой вопрос, ожидаемые chunk IDs,
+существование chunk IDs в KB seed и распределение по категориям/форумам/сложности.
+
 Рекомендации по RAG-порогам из готового ask-eval отчёта:
 
 ```bash
