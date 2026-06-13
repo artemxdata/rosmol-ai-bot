@@ -69,6 +69,10 @@ python eval/run_ask.py --target http://localhost:8001/ask --auto-smoke-cases --m
 
 Скрипт пишет JSON/Markdown отчёты в `reports/`, читает trace из PostgreSQL и считает pass rate,
 expected chunk hit rate, escalation/cache/source-chunk rate, latency, LLM tokens и оценочную стоимость.
+Для калибровки RAG-порогов дополнительно выводятся `reranker_score` и
+`low_confidence_expected_chunk_hits`: если ожидаемый чанк найден, но ответ ушёл в `low_confidence`,
+это сигнал к настройке `RERANKER_THRESHOLD_LOW/HIGH` на golden set, а не к ручному снижению порогов
+по одному запросу.
 Если `.env` содержит Docker-host `postgres`, eval автоматически пробует локальный fallback `localhost`.
 Для ручного golden-set можно передать `--cases path/to/ask_eval_set.json`, а DSN trace-БД переопределить через
 `--trace-dsn` или `ASK_EVAL_POSTGRES_DSN`.
