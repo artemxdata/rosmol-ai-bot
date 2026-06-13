@@ -11,6 +11,7 @@ from qdrant_client import AsyncQdrantClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from eval.ask_cases import select_balanced_records
 from src.config import get_settings
 from src.rag.embedder import Embedder
 from src.rag.retriever import Retriever
@@ -127,12 +128,9 @@ def build_seed_smoke_cases(
     max_cases: int = 100,
 ) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
-    for record in records:
-        if record.get("status") != "published":
-            continue
+    selected = select_balanced_records(records, max_cases=max_cases, per_forum_limit=3)
+    for record in selected:
         query = _seed_smoke_query(record)
-        if not query:
-            continue
         filters: dict[str, Any] = {}
         if record.get("category"):
             filters["category"] = record["category"]
@@ -146,8 +144,6 @@ def build_seed_smoke_cases(
                 "expected_chunk_ids": [str(record["chunk_id"])],
             }
         )
-        if len(cases) >= max_cases:
-            break
     return cases
 
 

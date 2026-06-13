@@ -74,6 +74,37 @@ def test_build_seed_smoke_cases_uses_intent_examples() -> None:
     ]
 
 
+def test_build_seed_smoke_cases_balances_categories_and_forums() -> None:
+    records = [
+        {
+            "chunk_id": f"grant_{index}",
+            "status": "published",
+            "category": "grants",
+            "intent_name": f"Grant topic {index}",
+        }
+        for index in range(1, 7)
+    ] + [
+        {
+            "chunk_id": f"forum_a_{index}",
+            "status": "published",
+            "category": "forums",
+            "forum_normalized": "Forum A",
+            "intent_name": f"Forum topic {index}",
+        }
+        for index in range(1, 7)
+    ]
+
+    cases = build_seed_smoke_cases(records, max_cases=6)
+
+    category_counts = {
+        category: sum(case["filters"].get("category") == category for case in cases)
+        for category in ("forums", "grants")
+    }
+    forum_a_count = sum(case["filters"].get("forum_normalized") == "Forum A" for case in cases)
+    assert category_counts == {"forums": 3, "grants": 3}
+    assert forum_a_count == 3
+
+
 @pytest.mark.asyncio
 async def test_run_eval_with_lexical_backend(tmp_path: Path) -> None:
     golden = tmp_path / "golden.json"
