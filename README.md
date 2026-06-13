@@ -93,6 +93,18 @@ python eval/suggest_rag_thresholds.py --metrics reports/ask_eval.json
 Скрипт не меняет `.env`; он показывает таблицу low-threshold candidates и безопасную рекомендацию,
 которую нужно подтверждать на согласованном golden set.
 
+Итоговый quality gate по готовым JSON-отчётам:
+
+```bash
+python eval/check_quality_gate.py \
+  --retrieval-metrics reports/retrieval_eval.json \
+  --ask-metrics reports/ask_eval.json \
+  --threshold-suggestions reports/rag_threshold_suggestions.json
+```
+
+Gate падает ненулевым кодом при провале core-метрик и оставляет warnings для калибровочных решений,
+которые нельзя принимать без расширенного golden set.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
