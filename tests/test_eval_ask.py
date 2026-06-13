@@ -144,6 +144,7 @@ def test_summarize_results_counts_core_metrics() -> None:
                 "was_escalated": False,
                 "cache_hit": False,
                 "generator_model": "source_chunk",
+                "max_reranker_score": 0.9,
                 "latency_ms": 100,
                 "trace_total_latency_ms": 90,
                 "llm_prompt_tokens": 0,
@@ -156,12 +157,14 @@ def test_summarize_results_counts_core_metrics() -> None:
                 "passed": False,
                 "http_success": True,
                 "expected_chunk_ids": ["b"],
-                "expected_chunk_hit": False,
+                "expected_chunk_hit": True,
                 "expected_answer_contains": [],
                 "trace_found": True,
                 "was_escalated": True,
+                "escalation_reason": "low_confidence",
                 "cache_hit": False,
                 "generator_model": None,
+                "max_reranker_score": 0.05,
                 "latency_ms": 300,
                 "trace_total_latency_ms": 250,
                 "llm_prompt_tokens": 10,
@@ -177,9 +180,12 @@ def test_summarize_results_counts_core_metrics() -> None:
 
     assert metrics["cases_total"] == 2
     assert metrics["pass_rate"] == 0.5
-    assert metrics["expected_chunk_hit_rate"] == 0.5
+    assert metrics["expected_chunk_hit_rate"] == 1.0
     assert metrics["escalation_rate"] == 0.5
     assert metrics["source_chunk_rate"] == 0.5
+    assert metrics["low_confidence_expected_chunk_hits"] == 1
+    assert metrics["low_confidence_expected_chunk_hit_rate"] == 0.5
+    assert metrics["reranker_score"] == {"avg": 0.475, "p50": 0.05, "p95": 0.9, "max": 0.9}
     assert metrics["latency_ms"]["p95"] == 300
     assert metrics["llm_total_tokens"] == 15
     assert metrics["llm_estimated_cost_rub"] == 0.01

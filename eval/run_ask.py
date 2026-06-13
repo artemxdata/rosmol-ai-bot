@@ -149,6 +149,13 @@ def summarize_results(
     answer_scored = [item for item in results if item.get("expected_answer_contains")]
     trace_scored = [item for item in results if item.get("trace_found")]
     usage_events = [event for item in results for event in item.get("llm_usage", [])]
+    reranker_scores = _numeric_values(results, "max_reranker_score")
+    low_confidence_chunk_hits = [
+        item
+        for item in chunk_scored
+        if item.get("expected_chunk_hit") is True
+        and item.get("escalation_reason") == "low_confidence"
+    ]
 
     metrics: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -165,6 +172,11 @@ def summarize_results(
         "escalation_rate": _bool_rate(trace_scored, "was_escalated"),
         "cache_hit_rate": _bool_rate(trace_scored, "cache_hit"),
         "source_chunk_rate": _value_rate(trace_scored, "generator_model", "source_chunk"),
+        "reranker_score": _number_summary(reranker_scores),
+        "low_confidence_expected_chunk_hits": len(low_confidence_chunk_hits),
+        "low_confidence_expected_chunk_hit_rate": (
+            len(low_confidence_chunk_hits) / len(chunk_scored) if chunk_scored else None
+        ),
         "latency_ms": {
             "avg": _average(latencies),
             "p50": _percentile(latencies, 50),
@@ -475,6 +487,10 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"- Expected chunk hit rate: `{_format_rate(metrics.get('expected_chunk_hit_rate'))}`",
         f"- Escalation rate: `{_format_rate(metrics.get('escalation_rate'))}`",
         f"- Cache hit rate: `{_format_rate(metrics.get('cache_hit_rate'))}`",
+        f"- Source chunk rate: `{_format_rate(metrics.get('source_chunk_rate'))}`",
+        "- Low-confidence chunk hits: "
+        f"`{metrics.get('low_confidence_expected_chunk_hits')}` "
+        f"(`{_format_rate(metrics.get('low_confidence_expected_chunk_hit_rate'))}`)",
         f"- LLM cost, RUB: `{metrics.get('llm_estimated_cost_rub')}`",
         "",
         "## Latency",
@@ -486,6 +502,19 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
     trace_latency = metrics.get("trace_total_latency_ms") or {}
     for key in ("avg", "p50", "p95", "max"):
         lines.append(f"| {key} | {latency.get(key)} | {trace_latency.get(key)} |")
+
+    scores = metrics.get("reranker_score") or {}
+    lines.extend(
+        [
+            "",
+            "## Reranker Score",
+            "",
+            "| Metric | Score |",
+            "|---|---:|",
+        ]
+    )
+    for key in ("avg", "p50", "p95", "max"):
+        lines.append(f"| {key} | {scores.get(key)} |")
 
     failed = [item for item in metrics.get("results", []) if not item.get("passed")]
     if failed:
@@ -530,7 +559,47 @@ def _average(values: list[int]) -> float | None:
     return round(sum(values) / len(values), 2)
 
 
+def _numeric_values(items: list[dict[str, Any]], key: str) -> list[float]:
+    values: list[float] = []
+    for item in items:
+        value = item.get(key)
+        if value is None:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            values.append(numeric)
+    return values
+
+
+def _number_summary(values: list[float]) -> dict[str, float | None]:
+    return {
+        "avg": _rounded_average(values),
+        "p50": _rounded_percentile(values, 50),
+        "p95": _rounded_percentile(values, 95),
+        "max": round(max(values), 6) if values else None,
+    }
+
+
+def _rounded_average(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 6)
+
+
+def _rounded_percentile(values: list[float], percentile: int) -> float | None:
+    value = _percentile_number(values, percentile)
+    return round(value, 6) if value is not None else None
+
+
 def _percentile(values: list[int], percentile: int) -> int | None:
+    value = _percentile_number(values, percentile)
+    return int(value) if value is not None else None
+
+
+def _percentile_number(values: list[int] | list[float], percentile: int) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
