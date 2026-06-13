@@ -84,6 +84,15 @@ python eval/build_ask_eval_set.py --max-cases 100
 python eval/run_ask.py --cases reports/ask_eval_set.generated.json --target http://localhost:8001/ask
 ```
 
+Рекомендации по RAG-порогам из готового ask-eval отчёта:
+
+```bash
+python eval/suggest_rag_thresholds.py --metrics reports/ask_eval.json
+```
+
+Скрипт не меняет `.env`; он показывает таблицу low-threshold candidates и безопасную рекомендацию,
+которую нужно подтверждать на согласованном golden set.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
