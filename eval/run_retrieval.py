@@ -11,7 +11,7 @@ from qdrant_client import AsyncQdrantClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from eval.ask_cases import select_balanced_records
+from eval.ask_cases import seed_smoke_query, select_balanced_records
 from src.config import get_settings
 from src.rag.embedder import Embedder
 from src.rag.retriever import Retriever
@@ -135,7 +135,7 @@ def build_seed_smoke_cases(
     cases: list[dict[str, Any]] = []
     selected = select_balanced_records(records, max_cases=max_cases, per_forum_limit=3)
     for record in selected:
-        query = _seed_smoke_query(record)
+        query = seed_smoke_query(record)
         filters: dict[str, Any] = {}
         if record.get("category"):
             filters["category"] = record["category"]
@@ -150,18 +150,6 @@ def build_seed_smoke_cases(
             }
         )
     return cases
-
-
-def _seed_smoke_query(record: dict[str, Any]) -> str:
-    examples = record.get("intent_examples") or []
-    if examples:
-        prefix = record.get("forum_normalized") or record.get("source_category") or ""
-        return " ".join(part for part in [str(prefix), str(examples[0])] if part).strip()
-    intent = record.get("intent_name")
-    if intent:
-        prefix = record.get("forum_normalized") or record.get("source_category") or ""
-        return " ".join(part for part in [str(prefix), str(intent)] if part).strip()
-    return str(record.get("text_clean") or "")[:160]
 
 
 def _case_result(case: dict[str, Any], retrieved_ids: list[str]) -> dict[str, Any]:

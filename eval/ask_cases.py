@@ -5,6 +5,8 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any
 
+IGNORED_SOURCE_CATEGORY_PREFIXES = {"fallback", "fallback_condition"}
+
 
 def build_seed_ask_cases(
     records: list[dict[str, Any]],
@@ -109,7 +111,7 @@ def _case_from_record(record: dict[str, Any], index: int, user_prefix: str) -> d
 
     return {
         "id": f"seed_balanced::{chunk_id}",
-        "query": _seed_smoke_query(record),
+        "query": seed_smoke_query(record),
         "user_id": f"{user_prefix}-{index}",
         "channel": "api",
         "expected_chunk_ids": [chunk_id],
@@ -144,16 +146,31 @@ def _pop_next_allowed_record(
 
 
 def _is_eligible(record: dict[str, Any]) -> bool:
-    return record.get("status") == "published" and bool(_seed_smoke_query(record))
+    return record.get("status") == "published" and bool(seed_smoke_query(record))
 
 
-def _seed_smoke_query(record: dict[str, Any]) -> str:
+def seed_smoke_query(record: dict[str, Any]) -> str:
     examples = record.get("intent_examples") or []
     if examples:
-        prefix = record.get("forum_normalized") or record.get("source_category") or ""
+        prefix = _seed_query_prefix(record)
         return " ".join(part for part in [str(prefix), str(examples[0])] if part).strip()
     intent = record.get("intent_name")
     if intent:
-        prefix = record.get("forum_normalized") or record.get("source_category") or ""
+        prefix = _seed_query_prefix(record)
         return " ".join(part for part in [str(prefix), str(intent)] if part).strip()
     return str(record.get("text_clean") or "")[:160]
+
+
+def _seed_query_prefix(record: dict[str, Any]) -> str:
+    forum = _clean_optional(record.get("forum_normalized"))
+    if forum:
+        return forum
+
+    source_category = _clean_optional(record.get("source_category"))
+    if source_category.casefold() in IGNORED_SOURCE_CATEGORY_PREFIXES:
+        return ""
+    return source_category
+
+
+def _clean_optional(value: object) -> str:
+    return str(value or "").strip()

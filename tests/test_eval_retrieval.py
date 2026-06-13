@@ -74,6 +74,22 @@ def test_build_seed_smoke_cases_uses_intent_examples() -> None:
     ]
 
 
+def test_build_seed_smoke_cases_ignores_fallback_source_category_prefix() -> None:
+    cases = build_seed_smoke_cases(
+        [
+            {
+                "chunk_id": "fallback_1",
+                "status": "published",
+                "category": "навигация",
+                "source_category": "fallback",
+                "intent_examples": ["id not visible"],
+            }
+        ]
+    )
+
+    assert cases[0]["query"] == "id not visible"
+
+
 def test_build_seed_smoke_cases_balances_categories_and_forums() -> None:
     records = [
         {

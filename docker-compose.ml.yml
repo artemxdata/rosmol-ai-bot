@@ -31,7 +31,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://rosmol:rosmol@postgres:5432/rosmol_ai_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-45}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-90}
       ML_UNLOAD_AFTER_USE: "true"
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch

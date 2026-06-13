@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from eval.ask_cases import build_seed_ask_cases, select_balanced_records, summarize_cases
+from eval.ask_cases import (
+    build_seed_ask_cases,
+    seed_smoke_query,
+    select_balanced_records,
+    summarize_cases,
+)
 
 
 def _record(
@@ -58,6 +63,13 @@ def test_build_seed_ask_cases_adds_expected_chunk_and_tags() -> None:
             "tags": ["seed_balanced", "category:гранты"],
         }
     ]
+
+
+def test_seed_smoke_query_ignores_fallback_source_category_prefix() -> None:
+    record = _record("fallback_1", "навигация", example="id not visible")
+    record["source_category"] = "fallback"
+
+    assert seed_smoke_query(record) == "id not visible"
 
 
 def test_summarize_cases_counts_categories_and_forums() -> None:
