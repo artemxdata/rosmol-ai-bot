@@ -80,6 +80,35 @@ def test_coerce_analysis_payload_normalizes_taxonomy_aliases() -> None:
     assert payload["questions"][1]["category"] == "техподдержка"
 
 
+def test_coerce_analysis_payload_drops_boolean_optional_strings() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": True,
+            "forum_normalized": True,
+            "category": False,
+            "topics": [True, "регистрация"],
+            "questions": [
+                {
+                    "text": "Кто оплачивает дорогу?",
+                    "topic": True,
+                    "forum": True,
+                    "forum_normalized": False,
+                    "category": True,
+                }
+            ],
+        }
+    )
+
+    assert payload["forum"] is None
+    assert payload["forum_normalized"] is None
+    assert payload["category"] is None
+    assert payload["topics"] == ["регистрация"]
+    assert payload["questions"][0]["topic"] is None
+    assert payload["questions"][0]["forum"] is None
+    assert payload["questions"][0]["forum_normalized"] is None
+    assert payload["questions"][0]["category"] is None
+
+
 @pytest.mark.asyncio
 async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> None:
     retriever = CapturingRetriever()

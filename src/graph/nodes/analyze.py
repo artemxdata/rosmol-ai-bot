@@ -43,6 +43,8 @@ async def analyze_query(state: BotState) -> dict:
 
 def _coerce_analysis_payload(payload: dict) -> dict:
     normalized = dict(payload)
+    normalized["forum"] = _coerce_optional_string(normalized.get("forum"))
+    normalized["forum_normalized"] = _coerce_optional_string(normalized.get("forum_normalized"))
     normalized["topics"] = _coerce_string_list(normalized.get("topics"))
     normalized["category"] = _normalize_category(normalized.get("category"))
     if normalized.get("forum") and not normalized.get("forum_normalized"):
@@ -62,6 +64,9 @@ def _coerce_questions(value: object) -> list[dict]:
         if not isinstance(item, dict):
             item = {"text": str(item)}
         question = dict(item)
+        question["topic"] = _coerce_optional_string(question.get("topic"))
+        question["forum"] = _coerce_optional_string(question.get("forum"))
+        question["forum_normalized"] = _coerce_optional_string(question.get("forum_normalized"))
         question["category"] = _normalize_category(question.get("category"))
         if question.get("forum_normalized") is None and question.get("forum"):
             question["forum_normalized"] = question["forum"]
@@ -70,6 +75,8 @@ def _coerce_questions(value: object) -> list[dict]:
 
 
 def _normalize_category(value: object) -> str | None:
+    if isinstance(value, bool):
+        return None
     text = str(value or "").strip()
     if not text:
         return None
@@ -93,6 +100,13 @@ def _normalize_category(value: object) -> str | None:
     return text
 
 
+def _coerce_optional_string(value: object) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _coerce_string_list(value: object) -> list[str]:
     if value is None:
         return []
@@ -101,7 +115,9 @@ def _coerce_string_list(value: object) -> list[str]:
 
     result: list[str] = []
     for item in value:
-        if isinstance(item, str):
+        if isinstance(item, bool):
+            text = ""
+        elif isinstance(item, str):
             text = item
         elif isinstance(item, dict):
             text = next(
