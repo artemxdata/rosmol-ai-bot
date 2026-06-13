@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from src.models import Chunk
 from src.rag.embedder import Embedder
 from src.rag.errors import MLDependencyError
 from src.rag.reranker import Reranker
@@ -34,15 +35,42 @@ async def check_models(load_embedder: bool, load_reranker: bool) -> None:
     parts = ["ml_runtime=ok", "imports=ok"]
     if load_embedder:
         embedder = Embedder()
-        dense, sparse = await asyncio.to_thread(embedder.encode, "Проверка bge-m3")
+        try:
+            dense, sparse = await asyncio.to_thread(embedder.encode, "Проверка bge-m3")
+        except Exception as exc:
+            raise MLDependencyError(
+                "Embedder runtime smoke test failed. Check FlagEmbedding/bge-m3 "
+                "installation and model cache."
+            ) from exc
         parts.append(f"embedder_loaded=true dense_dim={len(dense)} sparse_terms={len(sparse)}")
         if load_reranker:
             embedder._model = None
             del dense, sparse
             gc.collect()
     if load_reranker:
-        await asyncio.to_thread(Reranker()._load_model)
-        parts.append("reranker_loaded=true")
+        smoke_chunk = Chunk(
+            chunk_id="ml-runtime-reranker-smoke",
+            text="Подать заявку на форум можно через платформу Росмолодежь.",
+            metadata={},
+            score=1.0,
+        )
+        try:
+            reranked = await asyncio.to_thread(
+                Reranker().rerank,
+                "Как подать заявку на форум?",
+                [smoke_chunk],
+                1,
+            )
+        except Exception as exc:
+            raise MLDependencyError(
+                "Reranker runtime smoke test failed. Check FlagEmbedding/transformers "
+                "compatibility for bge-reranker-v2-m3."
+            ) from exc
+        score = reranked[0].reranker_score if reranked else None
+        if score is None:
+            parts.append("reranker_loaded=true reranker_smoke=empty")
+        else:
+            parts.append(f"reranker_loaded=true reranker_score={score:.6f}")
 
     print(" ".join(parts))
 
