@@ -105,6 +105,20 @@ python eval/check_quality_gate.py \
 Gate падает ненулевым кодом при провале core-метрик и оставляет warnings для калибровочных решений,
 которые нельзя принимать без расширенного golden set.
 
+One-command локальный quality suite, который сам запускает retrieval eval, ask eval, threshold suggestions
+и quality gate:
+
+```bash
+python eval/run_quality_suite.py \
+  --auto-smoke-cases \
+  --max-smoke-cases 20 \
+  --target http://localhost:8001/ask \
+  --output-dir reports/quality_suite_smoke \
+  --no-fail
+```
+
+Для полноценного golden-set запуска убери `--auto-smoke-cases` и передай `--golden`/`--ask-cases`.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
