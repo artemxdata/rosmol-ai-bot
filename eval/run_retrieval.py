@@ -64,6 +64,7 @@ async def run_eval(
     kb_seed_path: Path = Path("data/knowledge_base_seed.json"),
     auto_smoke_cases: bool = False,
     max_smoke_cases: int = 100,
+    markdown_path: Path | None = None,
 ) -> dict[str, Any]:
     golden_raw = await asyncio.to_thread(_read_json, golden_path)
     cases = [_normalize_case(item) for item in golden_raw]
@@ -85,6 +86,8 @@ async def run_eval(
             "message": "golden_set is empty",
         }
         await asyncio.to_thread(_write_json, output_path, metrics)
+        if markdown_path:
+            await asyncio.to_thread(_write_markdown, markdown_path, metrics)
         return metrics
 
     results: list[dict[str, Any]] = []
@@ -120,6 +123,8 @@ async def run_eval(
         "results": results,
     }
     await asyncio.to_thread(_write_json, output_path, metrics)
+    if markdown_path:
+        await asyncio.to_thread(_write_markdown, markdown_path, metrics)
     return metrics
 
 
@@ -179,10 +184,44 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    top_k = metrics.get("top_k")
+    recall = metrics.get("recall_at_k")
+    lines = [
+        "# Retrieval Eval Report",
+        "",
+        f"- Backend: `{metrics.get('backend')}`",
+        f"- Cases: `{metrics.get('cases_total')}`",
+        f"- Scored cases: `{metrics.get('cases_scored')}`",
+        f"- Recall@{top_k}: `{_format_rate(recall)}`",
+        f"- Generated smoke cases: `{metrics.get('generated_smoke_cases')}`",
+    ]
+
+    misses = [item for item in metrics.get("results", []) if not item.get("hit")]
+    if misses:
+        lines.extend(["", "## Missed Cases", ""])
+        for item in misses[:20]:
+            expected = ", ".join(item.get("expected_chunk_ids") or [])
+            retrieved = ", ".join(item.get("retrieved_chunk_ids") or [])
+            lines.append(
+                f"- `{item.get('id')}` expected=`{expected}` retrieved=`{retrieved}`"
+            )
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _format_rate(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.1f}%"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--golden", default="data/golden_set.json")
     parser.add_argument("--output", default="eval/metrics.json")
+    parser.add_argument("--markdown", default="")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--backend", choices=["qdrant", "lexical"], default="qdrant")
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
@@ -199,9 +238,16 @@ def main() -> None:
             kb_seed_path=Path(args.kb_seed),
             auto_smoke_cases=args.auto_smoke_cases,
             max_smoke_cases=args.max_smoke_cases,
+            markdown_path=Path(args.markdown) if args.markdown else None,
         )
     )
-    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {key: value for key, value in metrics.items() if key != "results"},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

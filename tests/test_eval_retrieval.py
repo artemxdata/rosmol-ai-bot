@@ -109,6 +109,7 @@ def test_build_seed_smoke_cases_balances_categories_and_forums() -> None:
 async def test_run_eval_with_lexical_backend(tmp_path: Path) -> None:
     golden = tmp_path / "golden.json"
     output = tmp_path / "metrics.json"
+    markdown = tmp_path / "metrics.md"
     kb_seed = tmp_path / "kb.json"
     kb_seed.write_text(
         json.dumps(
@@ -141,11 +142,19 @@ async def test_run_eval_with_lexical_backend(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    metrics = await run_eval(golden, output, top_k=5, backend="lexical", kb_seed_path=kb_seed)
+    metrics = await run_eval(
+        golden,
+        output,
+        top_k=5,
+        backend="lexical",
+        kb_seed_path=kb_seed,
+        markdown_path=markdown,
+    )
 
     assert metrics["backend"] == "lexical"
     assert metrics["recall_at_5"] == 1.0
     assert json.loads(output.read_text(encoding="utf-8"))["results"][0]["hit"] is True
+    assert "Retrieval Eval Report" in markdown.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
