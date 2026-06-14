@@ -168,6 +168,32 @@ python scripts/analyze_ticket_dataset.py \
 `golden_set_candidates.json`, `reranker_calibration_pairs.jsonl`, `intent_taxonomy.csv`,
 `top_questions.md` и `kb_gap_report.md`. Папка `data/private/` игнорируется Git.
 
+Подготовка приватных eval-наборов из ticket analysis:
+
+```bash
+python scripts/prepare_ticket_eval_sets.py \
+  --candidates data/private/tickets/analysis/golden_set_candidates.json \
+  --kb-seed data/knowledge_base_seed.json \
+  --out-dir data/private/tickets/eval
+```
+
+Скрипт создаёт `ticket_ask_eval_candidates.json`, `ticket_ask_eval_smoke.json`,
+`ticket_retrieval_golden_candidates.json`, `ticket_manual_review_sample.csv` и отчёт.
+Автоматические chunk labels считаются weak labels и требуют ручной проверки перед переносом
+в публичный `data/golden_set.json`.
+
+Калибровка reranker на ticket pairs запускается в ML runtime:
+
+```bash
+python scripts/calibrate_reranker_pairs.py \
+  --pairs data/private/tickets/analysis/reranker_calibration_pairs.jsonl \
+  --output data/private/tickets/eval/reranker_calibration_report.json \
+  --limit 200
+```
+
+Этот скрипт использует `FlagEmbedding`/`bge-reranker-v2-m3`; в обычной лёгкой `.venv`
+он честно завершится с диагностикой отсутствующей ML-зависимости.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
