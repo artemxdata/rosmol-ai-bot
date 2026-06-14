@@ -154,6 +154,20 @@ python eval/run_quality_suite.py \
 
 Для полноценного golden-set запуска убери `--auto-smoke-cases` и передай `--golden`/`--ask-cases`.
 
+Анализ приватной выгрузки тикетов для подготовки golden set и калибровки RAG:
+
+```bash
+python scripts/analyze_ticket_dataset.py \
+  --input data/private/tickets/RAG_Dataset.xlsx \
+  --out-dir data/private/tickets/analysis \
+  --max-golden 800 \
+  --max-pairs 1000
+```
+
+Скрипт пишет только локальные приватные артефакты: `tickets_normalized.jsonl`,
+`golden_set_candidates.json`, `reranker_calibration_pairs.jsonl`, `intent_taxonomy.csv`,
+`top_questions.md` и `kb_gap_report.md`. Папка `data/private/` игнорируется Git.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
