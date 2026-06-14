@@ -41,6 +41,21 @@ BOILERPLATE_PHRASES = [
     "если у вас есть к нам вопросы",
 ]
 
+LOW_SIGNAL_TITLE_MARKERS = [
+    "личное сообщение",
+    "входящий вызов",
+    "служба заботы",
+    "обращение",
+    "без темы",
+    "image-",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    "re:",
+    "fw:",
+    "fwd:",
+]
+
 PROFANITY_MARKERS = [
     "хер",
     "пизд",
@@ -290,7 +305,7 @@ def is_boilerplate(text: str) -> bool:
 
 
 def choose_question_candidate(title: str, segments: list[str]) -> str:
-    if 8 <= len(title) <= 500:
+    if 8 <= len(title) <= 500 and not is_low_signal_title(title):
         return title
     question_segments = [
         segment
@@ -304,6 +319,16 @@ def choose_question_candidate(title: str, segments: list[str]) -> str:
     if question_segments:
         return max(question_segments[:5], key=len)[:1000]
     return max(segments[:5], key=len, default="")[:1000]
+
+
+def is_low_signal_title(title: str) -> bool:
+    normalized = normalize_for_match(title)
+    if not normalized:
+        return True
+    if any(marker in normalized for marker in LOW_SIGNAL_TITLE_MARKERS):
+        return True
+    words = re.findall(r"[a-zа-я0-9]{3,}", normalized)
+    return len(words) <= 1
 
 
 def choose_answer_candidate(segments: list[str], question: str) -> str:

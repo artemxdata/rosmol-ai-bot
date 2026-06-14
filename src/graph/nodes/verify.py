@@ -11,6 +11,10 @@ from src.llm.prompts import LLM_JUDGE_SYSTEM, build_judge_user
 from src.models import VerificationResult
 
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
+NO_QUESTION_RE = re.compile(
+    r"(пока\s+нет\s+вопрос|задайте\s+(?:ваш\s+)?вопрос|готов\s+помочь.*задайте)",
+    flags=re.IGNORECASE,
+)
 
 
 async def verify(state: BotState) -> dict:
@@ -18,6 +22,16 @@ async def verify(state: BotState) -> dict:
     tracer = state.get("trace")
     response = state.get("generated_response") or ""
     chunks = state.get("reranked_chunks", [])
+    if _contradicts_present_question(response, state):
+        result = VerificationResult(
+            has_hallucination=True,
+            confidence=0.0,
+            details="Response asks for a question although the user already asked one.",
+        )
+        if tracer:
+            tracer.add("verify", int((perf_counter() - started_at) * 1000), guard=True)
+        return {"verification": result, "verifier_triggered": False}
+
     cited = set(SOURCE_RE.findall(response))
     known = {chunk.chunk_id for chunk in chunks}
     unknown_sources = cited - known
@@ -58,3 +72,13 @@ async def verify(state: BotState) -> dict:
     if tracer:
         tracer.add("verify", int((perf_counter() - started_at) * 1000), judge=True)
     return {"verification": result, "verifier_triggered": True}
+
+
+def _contradicts_present_question(response: str, state: BotState) -> bool:
+    if not response or not NO_QUESTION_RE.search(response):
+        return False
+    message = str(state.get("message_masked") or state.get("message") or "").strip()
+    if "?" in message:
+        return True
+    analysis = state.get("analysis")
+    return bool(getattr(analysis, "questions", None))

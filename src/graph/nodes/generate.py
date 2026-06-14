@@ -3,16 +3,18 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.question_utils import build_effective_questions
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
-from src.models import Complexity, QueryAnalysis, ScoredChunk
+from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
 
 
 async def generate(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     analysis = state["analysis"]
+    questions = effective_questions(state, analysis)
     model = select_generator_model(analysis.complexity)
     chunks = state.get("reranked_chunks", [])
     if not chunks:
@@ -33,6 +35,7 @@ async def generate(state: BotState) -> dict:
 
     source_response = build_deterministic_source_response(
         analysis,
+        questions,
         chunks,
         float(state.get("max_confidence") or 0),
     )
@@ -54,7 +57,7 @@ async def generate(state: BotState) -> dict:
             model=model,
             system=RESPONSE_GENERATOR_SYSTEM,
             user=build_generator_user(
-                analysis.questions,
+                questions,
                 chunks,
                 state.get("session"),
                 analysis.extracted_params,
@@ -79,12 +82,13 @@ async def generate(state: BotState) -> dict:
 
 def build_deterministic_source_response(
     analysis: QueryAnalysis,
+    questions: list[Question],
     chunks: list[ScoredChunk],
     max_confidence: float,
 ) -> str | None:
     if analysis.complexity != Complexity.SIMPLE:
         return None
-    if len(analysis.questions) != 1:
+    if len(questions) != 1:
         return None
     if max_confidence < get_settings().reranker_threshold_high:
         return None
@@ -94,3 +98,10 @@ def build_deterministic_source_response(
     if not text:
         return None
     return f"{text} [src:{chunk.chunk_id}]"
+
+
+def effective_questions(state: BotState, analysis: QueryAnalysis) -> list[Question]:
+    return build_effective_questions(
+        analysis,
+        state.get("message_masked") or state.get("message"),
+    )

@@ -466,7 +466,7 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

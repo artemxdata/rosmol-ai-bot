@@ -8,6 +8,7 @@ from scripts.analyze_ticket_dataset import (
     classify_escalation,
     classify_topic,
     detect_forum,
+    is_low_signal_title,
     mask_pii,
     normalize_ticket,
     split_message_segments,
@@ -31,6 +32,27 @@ def test_split_message_segments_uses_dialog_separator() -> None:
         "Ответ оператора",
         "Спасибо",
     ]
+
+
+def test_low_signal_title_is_not_used_as_question_candidate() -> None:
+    record = normalize_ticket(
+        {
+            "id": "1",
+            "title": "Личное сообщение VKontakte",
+            "messages": (
+                "Здравствуйте, где посмотреть статус заявки на форум Машук? --- "
+                "Статус заявки отображается в личном кабинете."
+            ),
+            "status": "closed",
+            "typical_atypical": "Типовой",
+        },
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+
+    assert is_low_signal_title("Личное сообщение VKontakte") is True
+    assert record["question_candidate"] == (
+        "Здравствуйте, где посмотреть статус заявки на форум Машук?"
+    )
 
 
 def test_classification_detects_forum_registration_and_technical_escalation() -> None:
