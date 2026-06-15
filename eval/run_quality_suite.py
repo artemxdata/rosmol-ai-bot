@@ -134,7 +134,14 @@ async def run_quality_suite(
         "passed": gate_report["passed"],
         "retrieval": _summary_subset(
             retrieval_metrics,
-            ("backend", "cases_total", "cases_scored", "recall_at_5", "recall_at_k"),
+            (
+                "backend",
+                "cases_total",
+                "cases_scored",
+                "recall_at_5",
+                "recall_at_10",
+                "recall_at_k",
+            ),
         ),
         "ask": _summary_subset(
             ask_metrics,
@@ -214,7 +221,7 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         (
             f"| Retrieval | {summary['retrieval'].get('cases_total')} | "
             f"recall@5 `{_format_rate(summary['retrieval'].get('recall_at_5'))}` | "
-            f"scored `{summary['retrieval'].get('cases_scored')}` |"
+            f"recall@10 `{_format_rate(summary['retrieval'].get('recall_at_10'))}` |"
         ),
         (
             f"| Ask | {summary['ask'].get('cases_total')} | "

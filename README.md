@@ -185,12 +185,18 @@ One-command локальный quality suite, который сам запуск
 python eval/run_quality_suite.py \
   --auto-smoke-cases \
   --max-smoke-cases 20 \
+  --top-k 10 \
   --forum-smoke \
   --min-forums-total 29 \
   --target http://localhost:8001/ask \
   --output-dir reports/quality_suite_smoke \
   --no-fail
 ```
+
+Для production-like retrieval диагностики используй `--top-k 10`: граф подаёт в reranker
+расширенный candidate pool, а отчёт всё равно считает строгий `recall_at_5` и общий
+`recall_at_10`. `recall_at_5` показывает качество раннего ранжирования, `recall_at_10`
+показывает, попадает ли правильный chunk в кандидаты до reranker.
 
 Для полноценного golden-set запуска убери `--auto-smoke-cases` и передай `--golden`/`--ask-cases`.
 Флаг `--forum-smoke` дополнительно строит по одному smoke-кейсу на каждый форум из KB,

@@ -8,6 +8,7 @@ import pytest
 from eval.run_retrieval import (
     _normalize_case,
     build_seed_smoke_cases,
+    compute_recall,
     compute_recall_at_k,
     run_eval,
 )
@@ -25,6 +26,18 @@ def test_compute_recall_at_k_counts_cases_with_expected_chunks() -> None:
 
 def test_compute_recall_at_k_returns_none_without_scored_cases() -> None:
     assert compute_recall_at_k([{"expected_chunk_ids": [], "retrieved_chunk_ids": ["a"]}]) is None
+
+
+def test_compute_recall_supports_cutoffs() -> None:
+    results = [
+        {"expected_chunk_ids": ["c"], "retrieved_chunk_ids": ["a", "b", "c"]},
+        {"expected_chunk_ids": ["d"], "retrieved_chunk_ids": ["d", "e", "f"]},
+    ]
+
+    assert compute_recall(results, cutoff=1) == 0.5
+    assert compute_recall(results, cutoff=2) == 0.5
+    assert compute_recall(results, cutoff=3) == 1.0
+    assert compute_recall(results) == 1.0
 
 
 def test_normalize_case_accepts_common_golden_fields() -> None:

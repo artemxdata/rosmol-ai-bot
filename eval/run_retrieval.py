@@ -19,11 +19,15 @@ from src.rag.seed_retriever import SeedRetriever
 
 
 def compute_recall_at_k(results: list[dict[str, Any]]) -> float | None:
+    return compute_recall(results)
+
+
+def compute_recall(results: list[dict[str, Any]], cutoff: int | None = None) -> float | None:
     scored = [item for item in results if item["expected_chunk_ids"]]
     if not scored:
         return None
     hits = sum(
-        bool(set(item["retrieved_chunk_ids"]) & set(item["expected_chunk_ids"]))
+        bool(set(_retrieved_for_cutoff(item, cutoff)) & set(item["expected_chunk_ids"]))
         for item in scored
     )
     return hits / len(scored)
@@ -77,7 +81,10 @@ async def run_eval(
     if not cases:
         metrics = {
             "recall_at_k": None,
-            "recall_at_5": None if top_k == 5 else None,
+            "recall_at_1": None,
+            "recall_at_3": None,
+            "recall_at_5": None,
+            "recall_at_10": None,
             "top_k": top_k,
             "backend": backend,
             "cases_total": 0,
@@ -112,9 +119,15 @@ async def run_eval(
         raise ValueError("backend must be qdrant or lexical")
 
     recall = compute_recall_at_k(results)
+    recall_cutoffs = {
+        f"recall_at_{cutoff}": compute_recall(results, cutoff)
+        for cutoff in (1, 3, 5, 10)
+        if top_k >= cutoff
+    }
     metrics = {
         "recall_at_k": recall,
-        "recall_at_5": recall if top_k == 5 else None,
+        "recall_at_5": recall_cutoffs.get("recall_at_5"),
+        "recall_at_10": recall_cutoffs.get("recall_at_10"),
         "top_k": top_k,
         "backend": backend,
         "cases_total": len(cases),
@@ -122,6 +135,7 @@ async def run_eval(
         "generated_smoke_cases": generated_smoke_cases,
         "results": results,
     }
+    metrics.update(recall_cutoffs)
     await asyncio.to_thread(_write_json, output_path, metrics)
     if markdown_path:
         await asyncio.to_thread(_write_markdown, markdown_path, metrics)
@@ -163,6 +177,13 @@ def _case_result(case: dict[str, Any], retrieved_ids: list[str]) -> dict[str, An
     }
 
 
+def _retrieved_for_cutoff(item: dict[str, Any], cutoff: int | None) -> list[str]:
+    retrieved = item["retrieved_chunk_ids"]
+    if cutoff is None:
+        return retrieved
+    return retrieved[:cutoff]
+
+
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -183,6 +204,8 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"- Cases: `{metrics.get('cases_total')}`",
         f"- Scored cases: `{metrics.get('cases_scored')}`",
         f"- Recall@{top_k}: `{_format_rate(recall)}`",
+        f"- Recall@5: `{_format_rate(metrics.get('recall_at_5'))}`",
+        f"- Recall@10: `{_format_rate(metrics.get('recall_at_10'))}`",
         f"- Generated smoke cases: `{metrics.get('generated_smoke_cases')}`",
     ]
 
