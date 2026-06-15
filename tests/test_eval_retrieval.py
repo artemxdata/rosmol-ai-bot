@@ -10,6 +10,7 @@ from eval.run_retrieval import (
     build_seed_smoke_cases,
     compute_recall,
     compute_recall_at_k,
+    rank_summary,
     run_eval,
 )
 
@@ -38,6 +39,22 @@ def test_compute_recall_supports_cutoffs() -> None:
     assert compute_recall(results, cutoff=2) == 0.5
     assert compute_recall(results, cutoff=3) == 1.0
     assert compute_recall(results) == 1.0
+
+
+def test_rank_summary_counts_expected_positions() -> None:
+    results = [
+        {"expected_chunk_ids": ["c"], "retrieved_chunk_ids": ["a", "b", "c"], "expected_rank": 3},
+        {"expected_chunk_ids": ["d"], "retrieved_chunk_ids": ["d", "e"], "expected_rank": 1},
+        {"expected_chunk_ids": ["x"], "retrieved_chunk_ids": ["y"], "expected_rank": None},
+    ]
+
+    summary = rank_summary(results)
+
+    assert summary["hits"] == 2
+    assert summary["misses"] == 1
+    assert summary["mrr"] == 0.666667
+    assert summary["avg_expected_rank"] == 2.0
+    assert summary["expected_rank_histogram"] == {"1": 1, "3": 1}
 
 
 def test_normalize_case_accepts_common_golden_fields() -> None:
@@ -182,7 +199,10 @@ async def test_run_eval_with_lexical_backend(tmp_path: Path) -> None:
 
     assert metrics["backend"] == "lexical"
     assert metrics["recall_at_5"] == 1.0
-    assert json.loads(output.read_text(encoding="utf-8"))["results"][0]["hit"] is True
+    result = json.loads(output.read_text(encoding="utf-8"))["results"][0]
+    assert result["hit"] is True
+    assert result["expected_rank"] == 1
+    assert metrics["mrr"] == 1.0
     assert "Retrieval Eval Report" in markdown.read_text(encoding="utf-8")
 
 

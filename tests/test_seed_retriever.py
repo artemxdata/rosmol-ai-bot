@@ -65,3 +65,35 @@ def test_seed_retriever_boosts_intent_examples() -> None:
     chunks = retriever.retrieve("как добраться на трансфере", {"category": "форумы"}, top_k=1)
 
     assert chunks[0].chunk_id == "transfer"
+
+
+def test_seed_retriever_boosts_exact_intent_metadata() -> None:
+    retriever = SeedRetriever(
+        [
+            {
+                "chunk_id": "children_registration",
+                "status": "published",
+                "text_clean": (
+                    "Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ СѓС‡Р°СЃС‚РЅРёРєР° "
+                    "РјРѕР¶РЅРѕ РЅР° СЃР°Р№С‚Рµ."
+                ),
+                "category": "С„РѕСЂСѓРјС‹",
+                "intent_name": "Р РµРіРёСЃС‚СЂР°С†РёСЏ РґРµС‚РµР№",
+            },
+            {
+                "chunk_id": "event_registration",
+                "status": "published",
+                "text_clean": "Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊСЃСЏ РјРѕР¶РЅРѕ РЅР° СЃР°Р№С‚Рµ.",
+                "category": "С„РѕСЂСѓРјС‹",
+                "intent_name": "Р РµРіРёСЃС‚СЂР°С†РёСЏ РЅР° РјРµСЂРѕРїСЂРёСЏС‚РёРµ",
+            },
+        ]
+    )
+
+    chunks = retriever.retrieve(
+        "Р РµРіРёСЃС‚СЂР°С†РёСЏ РЅР° РјРµСЂРѕРїСЂРёСЏС‚РёРµ",
+        {"category": "С„РѕСЂСѓРјС‹"},
+        top_k=1,
+    )
+
+    assert chunks[0].chunk_id == "event_registration"

@@ -197,6 +197,8 @@ python eval/run_quality_suite.py \
 расширенный candidate pool, а отчёт всё равно считает строгий `recall_at_5` и общий
 `recall_at_10`. `recall_at_5` показывает качество раннего ранжирования, `recall_at_10`
 показывает, попадает ли правильный chunk в кандидаты до reranker.
+Retrieval-отчёт также пишет `mrr`, `avg_expected_rank` и гистограмму рангов, чтобы
+отделять проблемы покрытия KB от проблем ранжирования.
 
 Для полноценного golden-set запуска убери `--auto-smoke-cases` и передай `--golden`/`--ask-cases`.
 Флаг `--forum-smoke` дополнительно строит по одному smoke-кейсу на каждый форум из KB,

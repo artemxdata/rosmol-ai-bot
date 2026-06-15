@@ -28,6 +28,8 @@ async def test_run_quality_suite_writes_all_reports(
             "recall_at_5": 1.0,
             "recall_at_10": 1.0,
             "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "avg_expected_rank": 1.0,
             "generated_smoke_cases": True,
         }
 
@@ -71,6 +73,7 @@ async def test_run_quality_suite_writes_all_reports(
     assert summary["passed"] is True
     assert summary["retrieval"]["backend"] == "lexical"
     assert summary["retrieval"]["recall_at_10"] == 1.0
+    assert summary["retrieval"]["mrr"] == 1.0
     assert summary["ask"]["llm_estimated_cost_rub"] == 0.01
     assert json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))["passed"] is True
     assert (tmp_path / "retrieval_eval.md").exists()
@@ -99,6 +102,8 @@ async def test_run_quality_suite_can_include_forum_smoke(
             "recall_at_5": 1.0,
             "recall_at_10": 1.0,
             "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "avg_expected_rank": 1.0,
         }
 
     ask_calls: list[Path] = []

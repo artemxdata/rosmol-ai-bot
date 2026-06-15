@@ -18,6 +18,10 @@ class SeedDocument:
     record: dict[str, Any]
     tokens: list[str]
     term_counts: Counter[str]
+    intent_tokens: set[str]
+    topic_tokens: set[str]
+    example_tokens: set[str]
+    source_tokens: set[str]
 
 
 class SeedRetriever:
@@ -67,17 +71,32 @@ class SeedRetriever:
         ]
 
     def _build_document(self, record: dict[str, Any]) -> SeedDocument:
+        intent_text = str(record.get("intent_name") or "")
+        topic_text = str(record.get("topic") or "").replace("_", " ")
+        examples_text = " ".join(str(item) for item in record.get("intent_examples") or [])
+        source_text = " ".join(
+            str(record.get(key) or "")
+            for key in ("source_category", "category", "forum_normalized")
+        )
         text_parts = [
             str(record.get("text_clean") or record.get("text") or ""),
-            _repeat(record.get("intent_name"), 4),
+            _repeat(intent_text, 4),
             _repeat(record.get("forum_normalized"), 4),
             _repeat(record.get("source_category"), 2),
             _repeat(record.get("category"), 2),
-            _repeat(record.get("topic"), 2),
-            _repeat(" ".join(str(item) for item in record.get("intent_examples") or []), 2),
+            _repeat(topic_text, 2),
+            _repeat(examples_text, 2),
         ]
         tokens = tokenize(" ".join(part for part in text_parts if part))
-        return SeedDocument(record=record, tokens=tokens, term_counts=Counter(tokens))
+        return SeedDocument(
+            record=record,
+            tokens=tokens,
+            term_counts=Counter(tokens),
+            intent_tokens=set(tokenize(intent_text)),
+            topic_tokens=set(tokenize(topic_text)),
+            example_tokens=set(tokenize(examples_text)),
+            source_tokens=set(tokenize(source_text)),
+        )
 
     def _score(self, query_tokens: list[str], document: SeedDocument) -> float:
         k1 = 1.5
@@ -93,7 +112,7 @@ class SeedRetriever:
                 continue
             denominator = term_frequency + k1 * (1 - b + b * doc_len / self.avg_doc_len)
             score += self.idf.get(token, 0.0) * (term_frequency * (k1 + 1)) / denominator
-        return score
+        return score + _field_bonus(set(query_tokens), document)
 
     @staticmethod
     def _compute_idf(documents: list[SeedDocument]) -> dict[str, float]:
@@ -131,3 +150,18 @@ def _repeat(value: Any, times: int) -> str:
     if not value:
         return ""
     return " ".join([str(value)] * times)
+
+
+def _field_bonus(query_tokens: set[str], document: SeedDocument) -> float:
+    return (
+        3.0 * _coverage(query_tokens, document.intent_tokens)
+        + 2.0 * _coverage(query_tokens, document.topic_tokens)
+        + 1.5 * _coverage(query_tokens, document.example_tokens)
+        + 0.5 * _coverage(query_tokens, document.source_tokens)
+    )
+
+
+def _coverage(query_tokens: set[str], field_tokens: set[str]) -> float:
+    if not query_tokens or not field_tokens:
+        return 0.0
+    return len(query_tokens & field_tokens) / len(query_tokens)

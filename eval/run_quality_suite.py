@@ -141,6 +141,8 @@ async def run_quality_suite(
                 "recall_at_5",
                 "recall_at_10",
                 "recall_at_k",
+                "mrr",
+                "avg_expected_rank",
             ),
         ),
         "ask": _summary_subset(

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,22 @@ def compute_recall(results: list[dict[str, Any]], cutoff: int | None = None) -> 
         for item in scored
     )
     return hits / len(scored)
+
+
+def rank_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    scored = [item for item in results if item["expected_chunk_ids"]]
+    ranks = [item["expected_rank"] for item in scored if item.get("expected_rank") is not None]
+    reciprocal_ranks = [1 / int(rank) for rank in ranks]
+    rank_counts = Counter(int(rank) for rank in ranks)
+    return {
+        "hits": len(ranks),
+        "misses": len(scored) - len(ranks),
+        "mrr": _average(reciprocal_ranks),
+        "avg_expected_rank": _average([float(rank) for rank in ranks]),
+        "expected_rank_histogram": {
+            str(rank): rank_counts[rank] for rank in sorted(rank_counts)
+        },
+    }
 
 
 def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
@@ -136,6 +153,7 @@ async def run_eval(
         "results": results,
     }
     metrics.update(recall_cutoffs)
+    metrics.update(rank_summary(results))
     await asyncio.to_thread(_write_json, output_path, metrics)
     if markdown_path:
         await asyncio.to_thread(_write_markdown, markdown_path, metrics)
@@ -167,14 +185,24 @@ def build_seed_smoke_cases(
 
 
 def _case_result(case: dict[str, Any], retrieved_ids: list[str]) -> dict[str, Any]:
+    expected_rank = _expected_rank(retrieved_ids, case["expected_chunk_ids"])
     return {
         "id": case["id"],
         "query": case["query"],
         "filters": case["filters"],
         "expected_chunk_ids": case["expected_chunk_ids"],
         "retrieved_chunk_ids": retrieved_ids,
+        "expected_rank": expected_rank,
         "hit": bool(set(retrieved_ids) & set(case["expected_chunk_ids"])),
     }
+
+
+def _expected_rank(retrieved_ids: list[str], expected_ids: list[str]) -> int | None:
+    expected = set(expected_ids)
+    for index, chunk_id in enumerate(retrieved_ids, start=1):
+        if chunk_id in expected:
+            return index
+    return None
 
 
 def _retrieved_for_cutoff(item: dict[str, Any], cutoff: int | None) -> list[str]:
@@ -206,6 +234,8 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"- Recall@{top_k}: `{_format_rate(recall)}`",
         f"- Recall@5: `{_format_rate(metrics.get('recall_at_5'))}`",
         f"- Recall@10: `{_format_rate(metrics.get('recall_at_10'))}`",
+        f"- MRR: `{_format_float(metrics.get('mrr'))}`",
+        f"- Avg expected rank: `{_format_float(metrics.get('avg_expected_rank'))}`",
         f"- Generated smoke cases: `{metrics.get('generated_smoke_cases')}`",
     ]
 
@@ -226,6 +256,18 @@ def _format_rate(value: Any) -> str:
     if value is None:
         return "n/a"
     return f"{float(value) * 100:.1f}%"
+
+
+def _format_float(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.4f}"
+
+
+def _average(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 6)
 
 
 def main() -> None:
