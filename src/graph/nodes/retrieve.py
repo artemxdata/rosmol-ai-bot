@@ -6,6 +6,8 @@ from src.graph.question_utils import build_effective_questions
 from src.graph.state import BotState
 from src.rag.errors import MLDependencyError
 
+RETRIEVAL_TOP_K = 10
+
 
 async def retrieve(state: BotState) -> dict:
     started_at = perf_counter()
@@ -34,14 +36,15 @@ async def retrieve(state: BotState) -> dict:
         }
         try:
             found = []
-            for candidate_filters in _filter_attempts(question_filters):
+            for attempt_index, candidate_filters in enumerate(_filter_attempts(question_filters)):
                 used_filters.append(candidate_filters)
-                found = await state["retriever"].retrieve(
+                attempt_chunks = await state["retriever"].retrieve(
                     question.text,
                     candidate_filters,
-                    top_k=10,
+                    top_k=RETRIEVAL_TOP_K,
                 )
-                if found:
+                found.extend(attempt_chunks)
+                if attempt_chunks and not _should_continue_filter_attempts(attempt_index):
                     break
             chunks.extend(found)
         except MLDependencyError as exc:
@@ -84,9 +87,18 @@ async def retrieve(state: BotState) -> dict:
 def _filter_attempts(filters: dict) -> list[dict]:
     attempts = [_compact_filter(filters)]
     forum = filters.get("forum_normalized")
+    category = filters.get("category")
     if forum:
         attempts.append(_compact_filter({**filters, "category": None, "topic": None}))
+    if category:
+        attempts.append(_compact_filter({"category": category}))
+    if attempts[0]:
+        attempts.append({})
     return _dedupe_filters(attempts)
+
+
+def _should_continue_filter_attempts(attempt_index: int) -> bool:
+    return attempt_index == 0
 
 
 def _compact_filter(filters: dict) -> dict:

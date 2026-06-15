@@ -284,7 +284,11 @@ def build_excel_answer_records(
 
         original_category = current_source_category or sheet_category or ""
         category = infer_category(original_category, intent, text_clean, row.sheet_name)
-        forum = infer_forum(original_category, intent, text_clean, registry)
+        forum = (
+            None
+            if sheet_category == "fallback" or row.sheet_name == "FALLBACK"
+            else infer_forum(original_category, intent, text_clean, registry)
+        )
         examples = intent_examples.get(intent, [])[:EXAMPLE_LIMIT]
         topic = slugify(intent)
         chunk_id = f"xlsx_{slugify(row.sheet_name)}_r{row.row_number:04d}_{topic}"

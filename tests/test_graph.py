@@ -65,6 +65,33 @@ class ForumFallbackRetriever:
         return []
 
 
+class BroadeningRetriever:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def retrieve(self, query: str, filters: dict, top_k: int):
+        self.calls.append((query, filters, top_k))
+        if filters == {"forum_normalized": "Forum A", "category": "forums"}:
+            return [
+                Chunk(
+                    chunk_id="strict_generic",
+                    text="Generic forum answer.",
+                    metadata={"chunk_id": "strict_generic"},
+                    score=0.4,
+                )
+            ]
+        if filters == {"forum_normalized": "Forum A"}:
+            return [
+                Chunk(
+                    chunk_id="forum_specific",
+                    text="Specific forum answer.",
+                    metadata={"chunk_id": "forum_specific"},
+                    score=0.7,
+                )
+            ]
+        return []
+
+
 class QuestionAwareReranker:
     def __init__(self) -> None:
         self.calls = []
@@ -301,7 +328,12 @@ async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> 
             "Гранты для физических лиц Подать заявку на участие",
             {"category": "гранты"},
             10,
-        )
+        ),
+        (
+            "Гранты для физических лиц Подать заявку на участие",
+            {},
+            10,
+        ),
     ]
 
 
@@ -331,6 +363,30 @@ async def test_retrieve_retries_forum_without_category_when_strict_filter_is_emp
             {"forum_normalized": "Российский Север"},
             10,
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_adds_one_broader_candidate_layer_after_strict_hit() -> None:
+    retriever = BroadeningRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[Question(text="Where is the schedule?")],
+            ),
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "strict_generic",
+        "forum_specific",
+    ]
+    assert retriever.calls == [
+        ("Where is the schedule?", {"forum_normalized": "Forum A", "category": "forums"}, 10),
+        ("Where is the schedule?", {"forum_normalized": "Forum A"}, 10),
     ]
 
 

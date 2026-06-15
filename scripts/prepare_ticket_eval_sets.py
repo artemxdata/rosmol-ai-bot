@@ -276,11 +276,16 @@ def retrieval_filters(item: dict[str, Any]) -> dict[str, Any]:
         for match in item.get("candidate_chunk_matches") or []
         if match.get("chunk_id") in expected
     ]
-    first_match = expected_matches[0] if expected_matches else {}
+    if expected_matches:
+        for key in ("forum_normalized", "category"):
+            value = expected_matches[0].get(key)
+            if value:
+                filters[key] = value
+        return filters
+
     for key in ("forum_normalized", "category"):
-        value = first_match.get(key) or item.get(key)
-        if value:
-            filters[key] = value
+        if item.get(key):
+            filters[key] = item[key]
     return filters
 
 

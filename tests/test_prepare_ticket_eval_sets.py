@@ -118,6 +118,25 @@ def test_retrieval_case_contains_filters_and_expected_chunks() -> None:
     }
 
 
+def test_retrieval_case_uses_expected_chunk_metadata_without_ticket_forum_fallback() -> None:
+    item = {
+        "id": "case",
+        "query": "Р’РѕРїСЂРѕСЃ",
+        "forum_normalized": "РњР°С€СѓРє",
+        "category": "РѕР±С‰РµРµ",
+        "expected_chunk_ids": ["fallback"],
+        "candidate_chunk_matches": [
+            {
+                "chunk_id": "fallback",
+                "forum_normalized": None,
+                "category": "РѕР±С‰РµРµ",
+            }
+        ],
+    }
+
+    assert retrieval_case(item)["filters"] == {"category": "РѕР±С‰РµРµ"}
+
+
 def test_select_balanced_cases_round_robins_groups() -> None:
     cases = [
         {"id": "a", "category": "форумы", "difficulty": "simple", "expected_escalated": False},

@@ -78,6 +78,34 @@ def test_build_excel_records_carries_category_and_attaches_examples() -> None:
     assert records[0]["chunk_id"].startswith("xlsx_category_r0007_")
 
 
+def test_fallback_excel_records_do_not_inherit_forum_metadata() -> None:
+    rows = [
+        SpreadsheetRow(
+            "FALLBACK",
+            21,
+            (
+                "Машук",
+                "Возможности бота / abilities",
+                "Я отвечаю только по базе знаний Росмолодёжи и могу подсказать по форумам.",
+            ),
+        )
+    ]
+    registry = [{"name": "Машук", "normalized": "Машук", "aliases": ["Машук"]}]
+
+    records = build_excel_answer_records(
+        rows=rows,
+        sheet_category="fallback",
+        source_file="Новый бот Росмол .xlsx",
+        intent_examples={},
+        registry=registry,
+        extraction_date=date(2026, 6, 11),
+    )
+
+    assert records[0]["category"] == "общее"
+    assert records[0]["source_category"] == "Машук"
+    assert records[0]["forum_normalized"] is None
+
+
 def test_parse_docx_intent_blocks_keeps_mult_paragraph_answer(tmp_path: Path) -> None:
     docx = tmp_path / "Форум «Российский Север» интенты.docx"
     _write_minimal_docx(
