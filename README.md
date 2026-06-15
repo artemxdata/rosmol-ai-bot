@@ -242,6 +242,23 @@ python scripts/analyze_ticket_dataset.py \
 После формирования такого набора сырые выгрузки и производные приватные файлы в
 `data/private/tickets/` нужно удалить из рабочей копии.
 
+Сборка приватного обезличенного банка сильных ответов из тикетов:
+
+```bash
+python scripts/build_ticket_answer_bank.py \
+  --tickets data/private/tickets/analysis/tickets_normalized.jsonl \
+  --kb-seed data/knowledge_base_seed.json \
+  --output data/private/tickets/curation/ideal_answer_bank_candidates.json \
+  --limit 300 \
+  --min-quality-score 9
+```
+
+Скрипт выбирает содержательные неэскалационные ответы специалистов, маскирует PII, отбрасывает
+личные письма/жалобы/подписи и пишет приватные артефакты `ideal_answer_bank_candidates.json`
+и `ideal_answer_bank_candidates.md`. Это не `golden_set`: банк нужен для расширения RAG.
+После ревизии подтверждённые записи переносятся в `knowledge_base_seed.json` как `draft`,
+затем проходят редакторскую проверку, публикацию и переиндексацию.
+
 Подготовка приватных eval-наборов из ticket analysis:
 
 ```bash
