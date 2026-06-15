@@ -77,11 +77,17 @@ async def rerank(state: BotState) -> dict:
             await _unload_model_owner(state.get("reranker"))
 
     max_confidence = max((chunk.reranker_score for chunk in reranked), default=0.0)
+    confidence_source = "reranker"
+    retrieval_confidence_floor = _retrieval_confidence_floor(state, chunks)
+    if retrieval_confidence_floor > max_confidence:
+        max_confidence = retrieval_confidence_floor
+        confidence_source = "retrieval_forum_exact"
     if tracer:
         tracer.add(
             "rerank",
             int((perf_counter() - started_at) * 1000),
             max_confidence=max_confidence,
+            confidence_source=confidence_source,
         )
     if max_confidence <= 0:
         return {
@@ -250,3 +256,22 @@ def _should_unload_model(settings: Any, field_name: str) -> bool:
     if explicit_value is not None:
         return bool(explicit_value)
     return bool(getattr(settings, "ml_unload_after_use", False))
+
+
+def _retrieval_confidence_floor(state: BotState, chunks: list[Chunk]) -> float:
+    analysis = state.get("analysis")
+    forum = getattr(analysis, "forum_normalized", None) if analysis else None
+    if not forum or not chunks:
+        return 0.0
+
+    top_chunk = max(chunks, key=lambda chunk: float(chunk.score or 0.0))
+    metadata = top_chunk.metadata or {}
+    if metadata.get("forum_normalized") != forum:
+        return 0.0
+    top_score = float(top_chunk.score or 0.0)
+    if top_score < 0.8:
+        return 0.0
+    settings = get_settings()
+    if top_score >= 0.95:
+        return float(settings.reranker_threshold_high)
+    return float(settings.reranker_threshold_low)

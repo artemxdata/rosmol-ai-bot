@@ -107,6 +107,22 @@ top retrieved/reranked chunks, reranker score, LLM usage/cost и события 
 Если запрос попал в semantic cache, в отчёте будет `cache_hit=True`, а graph events/chunks могут быть пустыми;
 для просмотра полного RAG-пути измени формулировку вопроса или используй новый запрос.
 
+Глобальный smoke-прогон по всем форумам из KB:
+
+```powershell
+python eval/build_forum_smoke_set.py --per-forum 1 --output reports/forum_smoke_set.json
+python eval/run_ask.py ^
+  --cases reports/forum_smoke_set.json ^
+  --target http://localhost:8001/ask ^
+  --output reports/forum_ask_eval.json
+python eval/summarize_forum_ask.py ^
+  --ask-metrics reports/forum_ask_eval.json ^
+  --output reports/forum_ask_summary.json
+```
+
+Итоговая Markdown-таблица будет в `reports/forum_ask_summary.md`: pass/chunk hit/latency по
+каждому форуму и флаг, если RAG увидел чанки другого форума.
+
 Сбалансированный ask-eval набор из KB seed можно подготовить без Docker:
 
 ```bash

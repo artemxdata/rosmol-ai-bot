@@ -29,7 +29,10 @@ async def analyze_query(state: BotState) -> dict:
             response_format="json",
         )
         payload = _coerce_analysis_payload(parse_llm_json(content))
-        _apply_deterministic_forum(payload, state["message_masked"])
+        _apply_deterministic_forum(
+            payload,
+            state.get("message") or state["message_masked"],
+        )
         analysis = QueryAnalysis.model_validate(payload)
         if tracer:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
@@ -62,24 +65,60 @@ def _apply_deterministic_forum(payload: dict, message: str) -> None:
     if not detected_forum:
         return
 
-    if not payload.get("forum"):
-        payload["forum"] = detected_forum
-    if not payload.get("forum_normalized"):
-        payload["forum_normalized"] = detected_forum
+    payload["forum"] = detected_forum
+    payload["forum_normalized"] = detected_forum
+    force_forum_category = _should_force_forum_category(detected_forum, message)
+    if force_forum_category:
+        payload["category"] = "форумы"
     if not payload.get("category"):
         payload["category"] = "форумы"
-    _propagate_question_defaults(payload)
+    _propagate_question_defaults(
+        payload,
+        override_forum=True,
+        override_category=force_forum_category,
+    )
 
 
-def _propagate_question_defaults(payload: dict) -> None:
+def _propagate_question_defaults(
+    payload: dict,
+    *,
+    override_forum: bool = False,
+    override_category: bool = False,
+) -> None:
     forum = payload.get("forum_normalized")
     category = payload.get("category")
     questions = payload.get("questions") or []
     for question in questions:
-        if forum and not question.get("forum_normalized"):
+        if forum and (override_forum or not question.get("forum_normalized")):
             question["forum_normalized"] = forum
-        if category and not question.get("category"):
+        if category and (override_category or not question.get("category")):
             question["category"] = category
+
+
+def _should_force_forum_category(detected_forum: str, message: str) -> bool:
+    if "грант" in detected_forum.casefold():
+        return False
+    normalized = message.casefold().replace("ё", "е")
+    markers = (
+        "положение",
+        "документ",
+        "трансфер",
+        "питани",
+        "возраст",
+        "проезд",
+        "прожив",
+        "сертификат",
+        "чат",
+        "куратор",
+        "заявк",
+        "резерв",
+        "отбор",
+        "даты",
+        "место",
+        "программ",
+        "участ",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _coerce_questions(value: object) -> list[dict]:

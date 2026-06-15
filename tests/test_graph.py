@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from src.graph.edges import route_after_analyze, route_after_rerank, route_after_verify
-from src.graph.nodes.analyze import _apply_deterministic_forum, _coerce_analysis_payload
+from src.graph.nodes.analyze import (
+    _apply_deterministic_forum,
+    _coerce_analysis_payload,
+    analyze_query,
+)
 from src.graph.nodes.generate import generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
@@ -27,6 +31,11 @@ class CapturingLLM:
         self.calls += 1
         self.kwargs.append(kwargs)
         return "LLM answer [src:ctx_1]"
+
+
+class EmptyAnalysisLLM:
+    async def generate(self, **kwargs):
+        return '{"forum": null, "forum_normalized": null, "category": "техподдержка"}'
 
 
 class CapturingRetriever:
@@ -90,6 +99,18 @@ class BatchQuestionAwareReranker(QuestionAwareReranker):
     ) -> list[list[ScoredChunk]]:
         self.group_calls.append(groups)
         return [self.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
+
+
+class LowScoreReranker:
+    def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+        return [
+            ScoredChunk(
+                **chunk.model_dump(exclude={"score"}),
+                score=chunk.score,
+                reranker_score=0.001,
+            )
+            for chunk in chunks[:top_k]
+        ]
 
 
 def test_route_after_analyze_clarifies() -> None:
@@ -202,6 +223,65 @@ def test_apply_deterministic_forum_uses_registry_alias() -> None:
     assert payload["category"] == "форумы"
     assert payload["questions"][0]["forum_normalized"] == "Российский Север"
     assert payload["questions"][0]["category"] == "форумы"
+
+
+def test_apply_deterministic_forum_overrides_non_registry_llm_forum() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": "Личный кабинет",
+            "forum_normalized": "Личный кабинет",
+            "category": "техподдержка",
+            "questions": [],
+        }
+    )
+
+    _apply_deterministic_forum(
+        payload,
+        "Амур Вышлите пожалуйста положение",
+    )
+
+    assert payload["forum"] == "Амур"
+    assert payload["forum_normalized"] == "Амур"
+    assert payload["category"] == "форумы"
+
+
+def test_apply_deterministic_forum_overrides_question_forum() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": "Арктика. Лёд тронулся",
+            "forum_normalized": "Арктика. Лёд тронулся",
+            "category": "форумы",
+            "questions": [
+                {
+                    "text": "Как принять участие?",
+                    "category": "форумы",
+                    "forum_normalized": "Арктика",
+                }
+            ],
+        }
+    )
+
+    _apply_deterministic_forum(
+        payload,
+        "Арктика. Лёд тронулся Хотели бы поучаствовать в акции",
+    )
+
+    assert payload["questions"][0]["forum_normalized"] == "Арктика. Лёд тронулся"
+
+
+@pytest.mark.asyncio
+async def test_analyze_detects_forum_from_original_message_after_pii_masking() -> None:
+    result = await analyze_query(
+        {
+            "message": "Амур Вышлите пожалуйста положение",
+            "message_masked": "[ИМЯ] Вышлите пожалуйста положение",
+            "llm_client": EmptyAnalysisLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert analysis.forum_normalized == "Амур"
+    assert analysis.category == "форумы"
 
 
 @pytest.mark.asyncio
@@ -386,6 +466,70 @@ async def test_rerank_uses_fallback_questions_when_analyzer_returns_none(
         "travel",
         "age",
     ]
+
+
+@pytest.mark.asyncio
+async def test_rerank_uses_retrieval_confidence_floor_for_exact_forum_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="docs",
+            text="Положение форума доступно в личном кабинете.",
+            metadata={"forum_normalized": "Машук", "intent_name": "Документы мероприятия"},
+            score=1.0,
+        )
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "[ИМЯ] Вышлите положение",
+            "analysis": QueryAnalysis(forum_normalized="Машук", category="техподдержка"),
+            "retrieved_chunks": chunks,
+            "reranker": LowScoreReranker(),
+        }
+    )
+
+    assert result.get("should_escalate") is not True
+    assert result["max_confidence"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_does_not_use_retrieval_floor_without_exact_forum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="docs",
+            text="Положение форума доступно в личном кабинете.",
+            metadata={"forum_normalized": "Утро", "intent_name": "Документы мероприятия"},
+            score=1.0,
+        )
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "[ИМЯ] Вышлите положение",
+            "analysis": QueryAnalysis(forum_normalized="Машук", category="техподдержка"),
+            "retrieved_chunks": chunks,
+            "reranker": LowScoreReranker(),
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "low_confidence"
 
 
 @pytest.mark.asyncio

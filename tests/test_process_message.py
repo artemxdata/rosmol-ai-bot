@@ -63,8 +63,10 @@ class FakeSessions:
 class FakeSemanticCache:
     def __init__(self, response: str | None = None) -> None:
         self.response = response
+        self.check_calls: list[tuple[str, str | None]] = []
 
     async def check(self, query: str, forum: str | None) -> str | None:
+        self.check_calls.append((query, forum))
         return self.response
 
     async def save(self, query: str, forum: str | None, response: str) -> None:
@@ -229,6 +231,26 @@ async def test_process_message_returns_semantic_cache_hit(
     assert response == "Ответ из кэша"
     assert app.state.sessions.appended == [("Кто платит за дорогу?", "Ответ из кэша")]
     assert captured_logs[0]["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_message_scopes_cache_by_detected_forum_before_graph(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(cached_response="Ответ из кэша", masked_text="[ИМЯ] Вышлите положение")
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.API,
+        text="Амур Вышлите положение",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Ответ из кэша"
+    assert app.state.semantic_cache.check_calls == [
+        ("[ИМЯ] Вышлите положение", "Амур")
+    ]
 
 
 @pytest.mark.asyncio

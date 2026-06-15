@@ -18,6 +18,7 @@ from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
 from src.config import get_settings
 from src.graph.graph import build_graph
+from src.kb.forum_registry import detect_forum_from_text
 from src.llm.client import CloudRuLLMClient
 from src.llm.routing import estimate_routing_hint
 from src.llm.usage import (
@@ -260,6 +261,7 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
 
     session = await fastapi_app.state.sessions.get_or_create(message.channel.value, message.user_id)
     routing_hint = estimate_routing_hint(masked_text)
+    detected_forum = detect_forum_from_text(message.text)
 
     tracer = Tracer()
     state = {
@@ -279,7 +281,11 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         "cache_hit": False,
     }
 
-    cached_response = await _check_cache(fastapi_app, masked_text, session.forum_context)
+    cached_response = await _check_cache(
+        fastapi_app,
+        masked_text,
+        detected_forum or session.forum_context,
+    )
     if cached_response:
         state.update(
             {
