@@ -42,6 +42,8 @@ services:
       MEMORY_TTL_DAYS: ${MEMORY_TTL_DAYS:-30}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-90}
       ML_UNLOAD_AFTER_USE: ${ML_UNLOAD_AFTER_USE:-true}
+      ML_UNLOAD_EMBEDDER_AFTER_USE: ${ML_UNLOAD_EMBEDDER_AFTER_USE:-true}
+      ML_UNLOAD_RERANKER_AFTER_USE: ${ML_UNLOAD_RERANKER_AFTER_USE:-false}
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     ports:

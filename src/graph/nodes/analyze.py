@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.kb.forum_registry import detect_forum_from_text
 from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
@@ -27,7 +28,9 @@ async def analyze_query(state: BotState) -> dict:
             ),
             response_format="json",
         )
-        analysis = QueryAnalysis.model_validate(_coerce_analysis_payload(parse_llm_json(content)))
+        payload = _coerce_analysis_payload(parse_llm_json(content))
+        _apply_deterministic_forum(payload, state["message_masked"])
+        analysis = QueryAnalysis.model_validate(payload)
         if tracer:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
         return {"analysis": analysis}
@@ -50,7 +53,33 @@ def _coerce_analysis_payload(payload: dict) -> dict:
     if normalized.get("forum") and not normalized.get("forum_normalized"):
         normalized["forum_normalized"] = normalized["forum"]
     normalized["questions"] = _coerce_questions(normalized.get("questions"))
+    _propagate_question_defaults(normalized)
     return normalized
+
+
+def _apply_deterministic_forum(payload: dict, message: str) -> None:
+    detected_forum = detect_forum_from_text(message)
+    if not detected_forum:
+        return
+
+    if not payload.get("forum"):
+        payload["forum"] = detected_forum
+    if not payload.get("forum_normalized"):
+        payload["forum_normalized"] = detected_forum
+    if not payload.get("category"):
+        payload["category"] = "форумы"
+    _propagate_question_defaults(payload)
+
+
+def _propagate_question_defaults(payload: dict) -> None:
+    forum = payload.get("forum_normalized")
+    category = payload.get("category")
+    questions = payload.get("questions") or []
+    for question in questions:
+        if forum and not question.get("forum_normalized"):
+            question["forum_normalized"] = forum
+        if category and not question.get("category"):
+            question["category"] = category
 
 
 def _coerce_questions(value: object) -> list[dict]:

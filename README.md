@@ -58,8 +58,15 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml up -d
 curl http://localhost:8001/ready
 ```
 
-`app-ml` использует тот же Qdrant/PostgreSQL/Redis, но включает `ML_UNLOAD_AFTER_USE=true`,
-чтобы на локальном Docker Desktop не держать bge-m3 и reranker одновременно в памяти.
+`app-ml` использует тот же Qdrant/PostgreSQL/Redis. Для локального Docker Desktop он
+выгружает bge-m3 embedder после retrieval (`ML_UNLOAD_EMBEDDER_AFTER_USE=true`), но держит
+reranker прогретым между запросами (`ML_UNLOAD_RERANKER_AFTER_USE=false`). Это снижает
+latency сложных `/ask`-запросов без одновременного удержания двух тяжёлых моделей в памяти.
+Старый `ML_UNLOAD_AFTER_USE` остаётся fallback-настройкой, если раздельные флаги не заданы.
+Analyzer дополнительно страхуется локальным `data/forums_registry.json`: если пользователь явно
+назвал форум, RAG фильтруется по этому форуму даже при пустом `forum_normalized` от LLM.
+Для multi-question запросов reranker получает компактный source-preserving набор кандидатов,
+чтобы не смешивать форумы и не прогонять лишние пары `query x chunk` на CPU.
 
 Количественный eval `/ask` для локальной проверки качества:
 

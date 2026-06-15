@@ -13,7 +13,8 @@ from src.models import Chunk, ScoredChunk
 from src.rag.errors import MLDependencyError
 
 MAX_RERANKED_CHUNKS = 8
-QUESTION_CANDIDATE_LIMIT = 5
+QUESTION_CANDIDATE_LIMIT = 3
+QUERY_CANDIDATE_LIMIT = 3
 TOKEN_PATTERN = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
 STOPWORDS = {
     "для",
@@ -40,7 +41,7 @@ async def rerank(state: BotState) -> dict:
     chunks = state.get("retrieved_chunks", [])
     query = state.get("message_masked") or state.get("message") or ""
     settings = get_settings()
-    if getattr(settings, "ml_unload_after_use", False):
+    if _should_unload_model(settings, "ml_unload_embedder_after_use"):
         await _unload_model_owner(state.get("embedder"))
 
     try:
@@ -72,7 +73,7 @@ async def rerank(state: BotState) -> dict:
             "error": str(exc),
         }
     finally:
-        if getattr(settings, "ml_unload_after_use", False):
+        if _should_unload_model(settings, "ml_unload_reranker_after_use"):
             await _unload_model_owner(state.get("reranker"))
 
     max_confidence = max((chunk.reranker_score for chunk in reranked), default=0.0)
@@ -117,23 +118,40 @@ def _rerank_for_state(
     selected: list[ScoredChunk] = []
     seen: set[str] = set()
     per_question_limit = 2 if len(questions) <= 3 else 1
+    group_specs: list[tuple[str, list[Chunk], int]] = []
 
     for question in questions:
         candidates = _candidate_chunks_for_question(question, chunks, QUESTION_CANDIDATE_LIMIT)
         if candidates:
             _append_chunk(selected, seen, _source_candidate(candidates[0]))
-        for chunk in reranker.rerank(question, candidates, per_question_limit):
+        group_specs.append((question, candidates, per_question_limit))
+
+    target_size = max(4, min(MAX_RERANKED_CHUNKS, len(questions)))
+    query_candidates = _candidate_chunks_for_question(query, chunks, QUERY_CANDIDATE_LIMIT)
+    group_specs.append((query, query_candidates, 4))
+    group_results = _rerank_groups(reranker, group_specs)
+
+    for ranked_chunks in group_results[:-1]:
+        for chunk in ranked_chunks:
             if _append_chunk(selected, seen, chunk):
                 break
 
-    target_size = max(4, min(MAX_RERANKED_CHUNKS, len(questions)))
-    query_candidates = _candidate_chunks_for_question(query, chunks, QUESTION_CANDIDATE_LIMIT + 1)
-    for chunk in reranker.rerank(query, query_candidates, 4):
+    for chunk in group_results[-1]:
         _append_chunk(selected, seen, chunk)
         if len(selected) >= target_size:
             break
 
     return selected[:MAX_RERANKED_CHUNKS]
+
+
+def _rerank_groups(
+    reranker: Any,
+    groups: list[tuple[str, list[Chunk], int]],
+) -> list[list[ScoredChunk]]:
+    rerank_groups = getattr(reranker, "rerank_groups", None)
+    if callable(rerank_groups):
+        return rerank_groups(groups)
+    return [reranker.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
 
 
 def _candidate_chunks_for_question(
@@ -148,17 +166,23 @@ def _candidate_chunks_for_question(
     scored = []
     for index, chunk in enumerate(chunks):
         metadata = chunk.metadata or {}
-        haystack = " ".join(
+        metadata_haystack = " ".join(
             str(value or "")
             for value in (
                 metadata.get("intent_name"),
                 metadata.get("topic"),
                 metadata.get("source_category"),
-                chunk.text[:500],
             )
         )
+        text_haystack = chunk.text[:500]
+        haystack = f"{metadata_haystack} {text_haystack}"
         overlap = len(question_tokens & _tokens(haystack))
-        score = _marker_bonus(question, haystack) + overlap + float(chunk.score or 0)
+        score = (
+            _marker_bonus(question, metadata_haystack, weight=20.0)
+            + _marker_bonus(question, text_haystack, weight=8.0)
+            + overlap
+            + float(chunk.score or 0)
+        )
         scored.append((score, -index, chunk))
 
     ranked = [chunk for score, _, chunk in sorted(scored, reverse=True) if score > 0]
@@ -175,7 +199,7 @@ def _tokens(text: str) -> set[str]:
     }
 
 
-def _marker_bonus(question: str, haystack: str) -> float:
+def _marker_bonus(question: str, haystack: str, *, weight: float) -> float:
     question_normalized = question.casefold().replace("ё", "е")
     haystack_normalized = haystack.casefold().replace("ё", "е")
     bonus = 0.0
@@ -183,7 +207,7 @@ def _marker_bonus(question: str, haystack: str) -> float:
         if not any(marker in question_normalized for marker in markers):
             continue
         if any(marker in haystack_normalized for marker in markers):
-            bonus += 10.0
+            bonus += weight
     return bonus
 
 
@@ -219,3 +243,10 @@ async def _unload_model_owner(owner: Any) -> None:
         return
     await asyncio.to_thread(unload)
     gc.collect()
+
+
+def _should_unload_model(settings: Any, field_name: str) -> bool:
+    explicit_value = getattr(settings, field_name, None)
+    if explicit_value is not None:
+        return bool(explicit_value)
+    return bool(getattr(settings, "ml_unload_after_use", False))

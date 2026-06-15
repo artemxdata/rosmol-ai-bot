@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     memory_ttl_days: int = Field(default=30, ge=1)
     request_timeout_seconds: float = Field(default=45.0, ge=1)
     ml_unload_after_use: bool = False
+    ml_unload_embedder_after_use: bool | None = None
+    ml_unload_reranker_after_use: bool | None = None
 
 
 @lru_cache

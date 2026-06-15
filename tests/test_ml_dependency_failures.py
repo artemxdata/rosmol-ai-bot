@@ -106,6 +106,34 @@ async def test_rerank_unloads_ml_models_when_configured(
 
 
 @pytest.mark.asyncio
+async def test_rerank_can_keep_reranker_warm_with_split_unload_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_chunks,
+) -> None:
+    settings = SimpleNamespace(
+        ml_unload_after_use=True,
+        ml_unload_embedder_after_use=True,
+        ml_unload_reranker_after_use=False,
+        reranker_threshold_low=0.4,
+    )
+    monkeypatch.setattr("src.graph.nodes.rerank.get_settings", lambda: settings)
+    embedder = UnloadableEmbedder()
+    reranker = UnloadableReranker()
+    state = {
+        "message_masked": "Кто платит за дорогу?",
+        "retrieved_chunks": sample_chunks,
+        "embedder": embedder,
+        "reranker": reranker,
+    }
+
+    result = await rerank(state)
+
+    assert result["max_confidence"] == 0.9
+    assert embedder.unloaded is True
+    assert reranker.unloaded is False
+
+
+@pytest.mark.asyncio
 async def test_rerank_escalates_when_ml_dependency_is_missing(sample_chunks) -> None:
     state = {
         "message_masked": "Кто платит за дорогу?",

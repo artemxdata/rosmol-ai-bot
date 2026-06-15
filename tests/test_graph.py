@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.graph.edges import route_after_analyze, route_after_rerank, route_after_verify
-from src.graph.nodes.analyze import _coerce_analysis_payload
+from src.graph.nodes.analyze import _apply_deterministic_forum, _coerce_analysis_payload
 from src.graph.nodes.generate import generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
@@ -77,6 +77,19 @@ class QuestionAwareReranker:
             )
             for chunk in ranked[:top_k]
         ]
+
+
+class BatchQuestionAwareReranker(QuestionAwareReranker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.group_calls = []
+
+    def rerank_groups(
+        self,
+        groups: list[tuple[str, list[Chunk], int]],
+    ) -> list[list[ScoredChunk]]:
+        self.group_calls.append(groups)
+        return [self.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
 
 
 def test_route_after_analyze_clarifies() -> None:
@@ -168,6 +181,27 @@ def test_coerce_analysis_payload_drops_boolean_optional_strings() -> None:
     assert payload["questions"][0]["forum"] is None
     assert payload["questions"][0]["forum_normalized"] is None
     assert payload["questions"][0]["category"] is None
+
+
+def test_apply_deterministic_forum_uses_registry_alias() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": None,
+            "forum_normalized": None,
+            "category": None,
+            "questions": [{"text": "Какие документы нужны?"}],
+        }
+    )
+
+    _apply_deterministic_forum(
+        payload,
+        "Хочу на Российский Север: какие документы нужны?",
+    )
+
+    assert payload["forum_normalized"] == "Российский Север"
+    assert payload["category"] == "форумы"
+    assert payload["questions"][0]["forum_normalized"] == "Российский Север"
+    assert payload["questions"][0]["category"] == "форумы"
 
 
 @pytest.mark.asyncio
@@ -288,6 +322,27 @@ def test_rerank_candidate_prefilter_prioritizes_domain_marker() -> None:
     assert [chunk.chunk_id for chunk in candidates] == ["docs", "transfer"]
 
 
+def test_rerank_candidate_prefilter_prioritizes_intent_marker() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="logistics",
+            text="Проживание и питание на время форума оплачивает организатор.",
+            metadata={"intent_name": "Оплата проезда, проживания и чартер"},
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="food",
+            text="На площадке будут точки питания и кулеры с питьевой водой.",
+            metadata={"intent_name": "Условия питания"},
+            score=0.1,
+        ),
+    ]
+
+    candidates = _candidate_chunks_for_question("Есть ли питание?", chunks, limit=2)
+
+    assert [chunk.chunk_id for chunk in candidates] == ["food", "logistics"]
+
+
 @pytest.mark.asyncio
 async def test_rerank_uses_fallback_questions_when_analyzer_returns_none(
     monkeypatch: pytest.MonkeyPatch,
@@ -330,6 +385,42 @@ async def test_rerank_uses_fallback_questions_when_analyzer_returns_none(
         "docs",
         "travel",
         "age",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rerank_uses_batched_group_api_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
+    )
+    reranker = BatchQuestionAwareReranker()
+    chunks = [
+        Chunk(chunk_id="docs", text="Паспорт.", metadata={"intent_name": "Документы"}),
+        Chunk(chunk_id="age", text="От 14 до 35 лет.", metadata={"intent_name": "Возраст"}),
+    ]
+
+    await rerank(
+        {
+            "message_masked": "Документы и возраст?",
+            "analysis": QueryAnalysis(
+                questions=[
+                    Question(text="Какие документы нужны?"),
+                    Question(text="Какие возрастные ограничения?"),
+                ]
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": reranker,
+        }
+    )
+
+    assert len(reranker.group_calls) == 1
+    assert [group[0] for group in reranker.group_calls[0]] == [
+        "Какие документы нужны?",
+        "Какие возрастные ограничения?",
+        "Документы и возраст?",
     ]
 
 
