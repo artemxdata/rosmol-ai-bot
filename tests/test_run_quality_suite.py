@@ -75,6 +75,7 @@ async def test_run_quality_suite_writes_all_reports(
     assert (tmp_path / "ask_eval.md").exists()
     assert (tmp_path / "rag_threshold_suggestions.json").exists()
     assert (tmp_path / "quality_gate.json").exists()
+    assert "Quality Suite Summary" in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -164,3 +165,4 @@ async def test_run_quality_suite_can_include_forum_smoke(
     assert ask_calls == [tmp_path / "ask_eval.json", tmp_path / "forum_ask_eval.json"]
     assert (tmp_path / "forum_smoke_set.json").exists()
     assert (tmp_path / "forum_ask_summary.json").exists()
+    assert "Forum smoke" in (tmp_path / "summary.md").read_text(encoding="utf-8")

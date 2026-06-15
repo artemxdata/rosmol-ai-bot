@@ -171,6 +171,7 @@ async def run_quality_suite(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    await asyncio.to_thread(_write_summary_markdown, paths["summary_md"], summary)
     return summary
 
 
@@ -190,11 +191,55 @@ def _suite_paths(output_dir: Path) -> dict[str, Path]:
         "gate_json": output_dir / "quality_gate.json",
         "gate_md": output_dir / "quality_gate.md",
         "summary_json": output_dir / "summary.json",
+        "summary_md": output_dir / "summary.md",
     }
 
 
 def _summary_subset(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: payload.get(key) for key in keys}
+
+
+def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Quality Suite Summary",
+        "",
+        f"- Generated: `{summary.get('generated_at')}`",
+        f"- Passed: `{summary.get('passed')}`",
+        f"- Failed checks: `{summary['quality_gate'].get('failed_checks')}`",
+        f"- Warning checks: `{summary['quality_gate'].get('warning_checks')}`",
+        "",
+        "| Area | Cases | Main metric | Secondary metric |",
+        "|---|---:|---:|---:|",
+        (
+            f"| Retrieval | {summary['retrieval'].get('cases_total')} | "
+            f"recall@5 `{_format_rate(summary['retrieval'].get('recall_at_5'))}` | "
+            f"scored `{summary['retrieval'].get('cases_scored')}` |"
+        ),
+        (
+            f"| Ask | {summary['ask'].get('cases_total')} | "
+            f"pass `{_format_rate(summary['ask'].get('pass_rate'))}` | "
+            f"chunk hit `{_format_rate(summary['ask'].get('expected_chunk_hit_rate'))}` |"
+        ),
+    ]
+    forum = summary.get("forum_smoke")
+    if forum:
+        lines.append(
+            f"| Forum smoke | {forum.get('cases_total')} | "
+            f"pass `{_format_rate(forum.get('pass_rate'))}` | "
+            f"forums `{forum.get('forums_total')}` |"
+        )
+
+    lines.extend(["", "## Report Files", ""])
+    for key, value in summary.get("paths", {}).items():
+        lines.append(f"- `{key}`: `{value}`")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _format_rate(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.1f}%"
 
 
 def main() -> None:

@@ -181,6 +181,7 @@ python eval/run_quality_suite.py \
 Флаг `--forum-smoke` дополнительно строит по одному smoke-кейсу на каждый форум из KB,
 прогоняет их через `/ask`, пишет `forum_ask_summary.*` и добавляет проверки в quality gate:
 pass rate, expected chunk hit rate, число проблемных форумов и минимальное покрытие форумов.
+Главный обзорный файл после запуска: `reports/quality_suite_smoke/summary.md`.
 
 Анализ приватной выгрузки тикетов для подготовки golden set и калибровки RAG:
 
