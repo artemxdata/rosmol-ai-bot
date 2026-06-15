@@ -63,6 +63,58 @@ def test_quality_gate_fails_missing_or_bad_core_metrics() -> None:
     assert "ask_low_confidence_expected_chunk_hit_rate" in failed
 
 
+def test_quality_gate_checks_forum_smoke_summary_when_provided() -> None:
+    report = build_quality_gate_report(
+        retrieval_metrics={"recall_at_5": 1.0, "cases_scored": 1},
+        ask_metrics={
+            "pass_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "http_success_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+            "low_confidence_expected_chunk_hit_rate": 0.0,
+        },
+        forum_metrics={
+            "cases_total": 29,
+            "forums_total": 29,
+            "pass_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "problem_forums": [],
+        },
+        config=GateConfig(min_forums_total=29),
+    )
+
+    checks = {item["name"]: item for item in report["checks"]}
+    assert report["passed"] is True
+    assert checks["forum_smoke_pass_rate"]["status"] == "pass"
+    assert checks["forum_smoke_expected_chunk_hit_rate"]["status"] == "pass"
+    assert checks["forum_smoke_problem_forums"]["status"] == "pass"
+    assert checks["forum_smoke_forums_total"]["status"] == "pass"
+
+
+def test_quality_gate_fails_forum_smoke_problem_forums() -> None:
+    report = build_quality_gate_report(
+        retrieval_metrics={"recall_at_5": 1.0, "cases_scored": 1},
+        ask_metrics={
+            "pass_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "http_success_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+            "low_confidence_expected_chunk_hit_rate": 0.0,
+        },
+        forum_metrics={
+            "cases_total": 2,
+            "forums_total": 2,
+            "pass_rate": 0.5,
+            "expected_chunk_hit_rate": 1.0,
+            "problem_forums": [{"forum": "Утро"}],
+        },
+    )
+
+    failed = {item["name"] for item in report["checks"] if item["status"] == "fail"}
+    assert "forum_smoke_pass_rate" in failed
+    assert "forum_smoke_problem_forums" in failed
+
+
 def test_quality_gate_writes_json_and_markdown(tmp_path: Path) -> None:
     report = build_quality_gate_report(
         retrieval_metrics={"recall_at_5": 1.0, "cases_scored": 1},

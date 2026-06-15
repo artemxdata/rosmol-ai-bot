@@ -18,6 +18,10 @@ class GateConfig:
     max_low_confidence_hit_rate: float = 0.1
     max_latency_p95_ms: int | None = None
     max_llm_cost_rub: float | None = None
+    min_forum_pass_rate: float = 1.0
+    min_forum_expected_chunk_hit_rate: float = 1.0
+    max_problem_forums: int = 0
+    min_forums_total: int | None = None
 
 
 def build_quality_gate_report(
@@ -25,6 +29,7 @@ def build_quality_gate_report(
     retrieval_metrics: dict[str, Any] | None,
     ask_metrics: dict[str, Any] | None,
     threshold_suggestions: dict[str, Any] | None = None,
+    forum_metrics: dict[str, Any] | None = None,
     config: GateConfig | None = None,
 ) -> dict[str, Any]:
     config = config or GateConfig()
@@ -99,6 +104,37 @@ def build_quality_gate_report(
                 )
             )
 
+    if forum_metrics is not None:
+        checks.extend(
+            [
+                _min_check(
+                    "forum_smoke_pass_rate",
+                    forum_metrics.get("pass_rate"),
+                    config.min_forum_pass_rate,
+                ),
+                _min_check(
+                    "forum_smoke_expected_chunk_hit_rate",
+                    forum_metrics.get("expected_chunk_hit_rate"),
+                    config.min_forum_expected_chunk_hit_rate,
+                ),
+                _max_check(
+                    "forum_smoke_problem_forums",
+                    len(forum_metrics.get("problem_forums") or []),
+                    config.max_problem_forums,
+                    integer=True,
+                ),
+            ]
+        )
+        if config.min_forums_total is not None:
+            checks.append(
+                _min_check(
+                    "forum_smoke_forums_total",
+                    forum_metrics.get("forums_total"),
+                    config.min_forums_total,
+                    integer=True,
+                )
+            )
+
     if threshold_suggestions is None:
         checks.append(
             _check(
@@ -148,6 +184,8 @@ def build_quality_gate_report(
         "inputs": {
             "retrieval_cases": (retrieval_metrics or {}).get("cases_total"),
             "ask_cases": (ask_metrics or {}).get("cases_total"),
+            "forum_cases": (forum_metrics or {}).get("cases_total"),
+            "forum_count": (forum_metrics or {}).get("forums_total"),
             "generated_smoke_cases": {
                 "retrieval": (retrieval_metrics or {}).get("generated_smoke_cases"),
                 "ask": (ask_metrics or {}).get("generated_smoke_cases"),
@@ -248,6 +286,7 @@ def main() -> None:
     parser.add_argument("--retrieval-metrics", default="reports/retrieval_eval.json")
     parser.add_argument("--ask-metrics", default="reports/ask_eval.json")
     parser.add_argument("--threshold-suggestions", default="")
+    parser.add_argument("--forum-summary", default="")
     parser.add_argument("--output", default="reports/quality_gate.json")
     parser.add_argument("--markdown", default="")
     parser.add_argument("--min-recall-at-5", type=float, default=0.85)
@@ -258,6 +297,10 @@ def main() -> None:
     parser.add_argument("--max-low-confidence-hit-rate", type=float, default=0.1)
     parser.add_argument("--max-latency-p95-ms", type=int, default=None)
     parser.add_argument("--max-llm-cost-rub", type=float, default=None)
+    parser.add_argument("--min-forum-pass-rate", type=float, default=1.0)
+    parser.add_argument("--min-forum-expected-chunk-hit-rate", type=float, default=1.0)
+    parser.add_argument("--max-problem-forums", type=int, default=0)
+    parser.add_argument("--min-forums-total", type=int, default=None)
     parser.add_argument("--no-fail", action="store_true")
     args = parser.parse_args()
 
@@ -270,12 +313,18 @@ def main() -> None:
         max_low_confidence_hit_rate=args.max_low_confidence_hit_rate,
         max_latency_p95_ms=args.max_latency_p95_ms,
         max_llm_cost_rub=args.max_llm_cost_rub,
+        min_forum_pass_rate=args.min_forum_pass_rate,
+        min_forum_expected_chunk_hit_rate=args.min_forum_expected_chunk_hit_rate,
+        max_problem_forums=args.max_problem_forums,
+        min_forums_total=args.min_forums_total,
     )
     threshold_path = Path(args.threshold_suggestions) if args.threshold_suggestions else None
+    forum_path = Path(args.forum_summary) if args.forum_summary else None
     report = build_quality_gate_report(
         retrieval_metrics=_read_json_if_exists(Path(args.retrieval_metrics)),
         ask_metrics=_read_json_if_exists(Path(args.ask_metrics)),
         threshold_suggestions=_read_json_if_exists(threshold_path) if threshold_path else None,
+        forum_metrics=_read_json_if_exists(forum_path) if forum_path else None,
         config=config,
     )
     output_path = Path(args.output)

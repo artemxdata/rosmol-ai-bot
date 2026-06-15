@@ -170,12 +170,17 @@ One-command локальный quality suite, который сам запуск
 python eval/run_quality_suite.py \
   --auto-smoke-cases \
   --max-smoke-cases 20 \
+  --forum-smoke \
+  --min-forums-total 29 \
   --target http://localhost:8001/ask \
   --output-dir reports/quality_suite_smoke \
   --no-fail
 ```
 
 Для полноценного golden-set запуска убери `--auto-smoke-cases` и передай `--golden`/`--ask-cases`.
+Флаг `--forum-smoke` дополнительно строит по одному smoke-кейсу на каждый форум из KB,
+прогоняет их через `/ask`, пишет `forum_ask_summary.*` и добавляет проверки в quality gate:
+pass rate, expected chunk hit rate, число проблемных форумов и минимальное покрытие форумов.
 
 Анализ приватной выгрузки тикетов для подготовки golden set и калибровки RAG:
 

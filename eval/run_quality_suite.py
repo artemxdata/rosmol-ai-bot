@@ -10,6 +10,7 @@ from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from eval.build_forum_smoke_set import build_forum_smoke_set
 from eval.check_quality_gate import (
     GateConfig,
     build_quality_gate_report,
@@ -31,6 +32,7 @@ from eval.suggest_rag_thresholds import (
 from eval.suggest_rag_thresholds import (
     write_report as write_threshold_report,
 )
+from eval.summarize_forum_ask import summarize_forum_ask
 
 
 async def run_quality_suite(
@@ -51,6 +53,8 @@ async def run_quality_suite(
     current_low: float = 0.4,
     current_high: float = 0.7,
     target_hit_retention: float = 0.9,
+    forum_smoke: bool = False,
+    forum_smoke_per_forum: int = 1,
     gate_config: GateConfig | None = None,
 ) -> dict[str, Any]:
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
@@ -88,10 +92,38 @@ async def run_quality_suite(
     write_threshold_report(paths["threshold_json"], threshold_report)
     write_threshold_markdown(paths["threshold_md"], threshold_report)
 
+    forum_summary: dict[str, Any] | None = None
+    if forum_smoke:
+        await asyncio.to_thread(
+            build_forum_smoke_set,
+            kb_seed_path,
+            paths["forum_cases_json"],
+            per_forum=forum_smoke_per_forum,
+        )
+        await run_ask_eval(
+            cases_path=paths["forum_cases_json"],
+            output_path=paths["forum_ask_json"],
+            target=target,
+            concurrency=ask_concurrency,
+            request_timeout=ask_timeout,
+            trace_lookup=trace_lookup,
+            trace_dsn=trace_dsn,
+            kb_seed_path=kb_seed_path,
+            markdown_path=paths["forum_ask_md"],
+        )
+        forum_summary = await asyncio.to_thread(
+            summarize_forum_ask,
+            paths["forum_ask_json"],
+            kb_seed_path,
+            paths["forum_summary_json"],
+            paths["forum_summary_md"],
+        )
+
     gate_report = build_quality_gate_report(
         retrieval_metrics=retrieval_metrics,
         ask_metrics=ask_metrics,
         threshold_suggestions=threshold_report,
+        forum_metrics=forum_summary,
         config=gate_config,
     )
     write_gate_report(paths["gate_json"], gate_report)
@@ -118,6 +150,20 @@ async def run_quality_suite(
             "failed_checks": gate_report["failed_checks"],
             "warning_checks": gate_report["warning_checks"],
         },
+        "forum_smoke": (
+            _summary_subset(
+                forum_summary or {},
+                (
+                    "cases_total",
+                    "forums_total",
+                    "pass_rate",
+                    "expected_chunk_hit_rate",
+                    "escalation_rate",
+                ),
+            )
+            if forum_smoke
+            else None
+        ),
         "paths": {key: str(value) for key, value in paths.items()},
     }
     await asyncio.to_thread(
@@ -136,6 +182,11 @@ def _suite_paths(output_dir: Path) -> dict[str, Path]:
         "ask_md": output_dir / "ask_eval.md",
         "threshold_json": output_dir / "rag_threshold_suggestions.json",
         "threshold_md": output_dir / "rag_threshold_suggestions.md",
+        "forum_cases_json": output_dir / "forum_smoke_set.json",
+        "forum_ask_json": output_dir / "forum_ask_eval.json",
+        "forum_ask_md": output_dir / "forum_ask_eval.md",
+        "forum_summary_json": output_dir / "forum_ask_summary.json",
+        "forum_summary_md": output_dir / "forum_ask_summary.md",
         "gate_json": output_dir / "quality_gate.json",
         "gate_md": output_dir / "quality_gate.md",
         "summary_json": output_dir / "summary.json",
@@ -164,6 +215,8 @@ def main() -> None:
     parser.add_argument("--current-low", type=float, default=0.4)
     parser.add_argument("--current-high", type=float, default=0.7)
     parser.add_argument("--target-hit-retention", type=float, default=0.9)
+    parser.add_argument("--forum-smoke", action="store_true")
+    parser.add_argument("--forum-smoke-per-forum", type=int, default=1)
     parser.add_argument("--min-recall-at-5", type=float, default=0.85)
     parser.add_argument("--min-ask-pass-rate", type=float, default=0.9)
     parser.add_argument("--min-expected-chunk-hit-rate", type=float, default=0.85)
@@ -172,6 +225,10 @@ def main() -> None:
     parser.add_argument("--max-low-confidence-hit-rate", type=float, default=0.1)
     parser.add_argument("--max-latency-p95-ms", type=int, default=None)
     parser.add_argument("--max-llm-cost-rub", type=float, default=None)
+    parser.add_argument("--min-forum-pass-rate", type=float, default=1.0)
+    parser.add_argument("--min-forum-expected-chunk-hit-rate", type=float, default=1.0)
+    parser.add_argument("--max-problem-forums", type=int, default=0)
+    parser.add_argument("--min-forums-total", type=int, default=None)
     parser.add_argument("--no-fail", action="store_true")
     args = parser.parse_args()
 
@@ -184,6 +241,10 @@ def main() -> None:
         max_low_confidence_hit_rate=args.max_low_confidence_hit_rate,
         max_latency_p95_ms=args.max_latency_p95_ms,
         max_llm_cost_rub=args.max_llm_cost_rub,
+        min_forum_pass_rate=args.min_forum_pass_rate,
+        min_forum_expected_chunk_hit_rate=args.min_forum_expected_chunk_hit_rate,
+        max_problem_forums=args.max_problem_forums,
+        min_forums_total=args.min_forums_total,
     )
     summary = asyncio.run(
         run_quality_suite(
@@ -203,6 +264,8 @@ def main() -> None:
             current_low=args.current_low,
             current_high=args.current_high,
             target_hit_retention=args.target_hit_retention,
+            forum_smoke=args.forum_smoke,
+            forum_smoke_per_forum=args.forum_smoke_per_forum,
             gate_config=gate_config,
         )
     )
