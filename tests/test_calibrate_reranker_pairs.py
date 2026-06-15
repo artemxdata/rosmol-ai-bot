@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts.calibrate_reranker_pairs import (
     analyze_scored_pairs,
+    calibrate_pairs,
+    calibration_quality_warnings,
     positive_rank,
+    rank_histogram,
+    read_jsonl_lines,
     recommend_threshold,
     score_margin,
     score_pair,
@@ -105,4 +111,56 @@ def test_analyze_scored_pairs_builds_summary() -> None:
     assert report["positive_at_1_rate"] == 0.5
     assert report["positive_scores"]["min"] == 0.05
     assert report["negative_scores"]["max"] == 0.2
+    assert report["positive_rank_histogram"] == {"1": 1, "2": 1}
+    assert report["negative_beats_positive_rate"] == 0.5
+    assert report["margin_summary"]["min"] == -0.05
     assert report["recommended_threshold"] is not None
+    assert "many_hard_negatives_beat_positive" in report["quality_warnings"]
+
+
+def test_rank_histogram_sorts_numeric_ranks() -> None:
+    assert rank_histogram([10, 2, 1, 2]) == {"1": 1, "2": 2, "10": 1}
+
+
+def test_calibration_quality_warnings_flag_unsafe_threshold() -> None:
+    warnings = calibration_quality_warnings(
+        {
+            "positive_at_1_rate": 0.2,
+            "negative_beats_positive_rate": 0.8,
+            "recommended_threshold": 0.3,
+            "threshold_candidates": [
+                {
+                    "threshold": 0.3,
+                    "precision_if_answered": 0.25,
+                }
+            ],
+        }
+    )
+
+    assert warnings == [
+        "low_positive_at_1_rate_review_pairs_or_reranker",
+        "many_hard_negatives_beat_positive",
+        "recommended_threshold_has_low_precision",
+    ]
+
+
+def test_read_jsonl_lines_rejects_non_object() -> None:
+    with pytest.raises(ValueError, match="must be an object"):
+        read_jsonl_lines(['["not-object"]'])
+
+
+@pytest.mark.asyncio
+async def test_calibrate_pairs_can_skip_output_files(tmp_path) -> None:
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text(
+        (
+            '{"query":"q","positive_text":"p",'
+            '"hard_negative_texts":["n1","n2"],"category":"forums"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    report = await calibrate_pairs(pairs, Path("-"), scorer=FakeScorer())
+
+    assert report["pairs_total"] == 1
+    assert not (tmp_path / "-").exists()

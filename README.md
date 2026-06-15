@@ -254,6 +254,21 @@ python scripts/calibrate_reranker_pairs.py \
 Этот скрипт использует `FlagEmbedding`/`bge-reranker-v2-m3`; в обычной лёгкой `.venv`
 он честно завершится с диагностикой отсутствующей ML-зависимости.
 
+Если ML-зависимости подняты только в Docker, приватные ticket pairs нужно передавать в контейнер
+через stdin. Так сырая выгрузка и производные приватные пары не попадают в Docker image и не
+записываются в файловую систему контейнера:
+
+```powershell
+Get-Content data\private\tickets\analysis\reranker_calibration_pairs.jsonl -TotalCount 20 |
+  docker compose -f docker-compose.yml -f docker-compose.ml.yml run --rm -T --no-deps app-ml python scripts/calibrate_reranker_pairs.py --pairs - --output - --limit 20
+```
+
+При `--output -` скрипт печатает только агрегированный JSON-отчёт без `worst_positive_cases`,
+исходных текстов тикетов и `source_ticket_id`. Если в отчёте есть `quality_warnings`
+(`low_positive_at_1_rate_review_pairs_or_reranker`, `many_hard_negatives_beat_positive`,
+`recommended_threshold_has_low_precision`), рекомендованный threshold нельзя переносить в `.env`
+без ручной проверки пар или повторной калибровки на подтверждённом golden set.
+
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash

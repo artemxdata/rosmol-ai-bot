@@ -7,6 +7,7 @@ import asyncio
 import json
 import math
 import sys
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -81,8 +82,9 @@ async def calibrate_pairs(
         target_positive_retention=target_positive_retention,
         source_path=pairs_path,
     )
-    write_json(output_path, report)
-    write_markdown(output_path.with_suffix(".md"), report)
+    if not is_stdio_path(output_path):
+        write_json(output_path, report)
+        write_markdown(output_path.with_suffix(".md"), report)
     return report
 
 
@@ -125,23 +127,39 @@ def analyze_scored_pairs(
         if score is not None
     ]
     positive_at_1 = sum(1 for item in scored_pairs if item.get("positive_rank") == 1)
+    positive_ranks = [
+        int(item["positive_rank"])
+        for item in scored_pairs
+        if item.get("positive_rank") is not None
+    ]
+    margins = [
+        float(item["margin"])
+        for item in scored_pairs
+        if item.get("margin") is not None and math.isfinite(float(item["margin"]))
+    ]
+    negative_beats_positive = sum(1 for rank in positive_ranks if rank > 1)
     rows = [
         threshold_row(threshold, positive_scores, negative_scores)
         for threshold in THRESHOLD_CANDIDATES
     ]
     recommended = recommend_threshold(rows, target_positive_retention)
-    return {
+    report = {
         "generated_at": datetime.now(UTC).isoformat(),
         "source_path": str(source_path) if source_path else None,
         "pairs_total": len(scored_pairs),
         "positive_scores": score_summary(positive_scores),
         "negative_scores": score_summary(negative_scores),
         "positive_at_1_rate": rate(positive_at_1, len(scored_pairs)),
+        "positive_rank_histogram": rank_histogram(positive_ranks),
+        "negative_beats_positive_rate": rate(negative_beats_positive, len(scored_pairs)),
+        "margin_summary": score_summary(margins),
         "target_positive_retention": target_positive_retention,
         "recommended_threshold": recommended,
         "threshold_candidates": rows,
         "worst_positive_cases": worst_positive_cases(scored_pairs),
     }
+    report["quality_warnings"] = calibration_quality_warnings(report)
+    return report
 
 
 def threshold_row(
@@ -210,6 +228,33 @@ def score_summary(values: list[float]) -> dict[str, float | None]:
     }
 
 
+def rank_histogram(ranks: list[int]) -> dict[str, int]:
+    counts = Counter(ranks)
+    return {str(rank): counts[rank] for rank in sorted(counts)}
+
+
+def calibration_quality_warnings(report: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    positive_at_1 = report.get("positive_at_1_rate")
+    if positive_at_1 is not None and float(positive_at_1) < 0.6:
+        warnings.append("low_positive_at_1_rate_review_pairs_or_reranker")
+    negative_beats = report.get("negative_beats_positive_rate")
+    if negative_beats is not None and float(negative_beats) > 0.3:
+        warnings.append("many_hard_negatives_beat_positive")
+
+    recommended = report.get("recommended_threshold")
+    threshold_rows = report.get("threshold_candidates") or []
+    selected_row = next(
+        (row for row in threshold_rows if row.get("threshold") == recommended),
+        None,
+    )
+    if selected_row and (selected_row.get("precision_if_answered") or 0.0) < 0.5:
+        warnings.append("recommended_threshold_has_low_precision")
+    if recommended is None:
+        warnings.append("no_threshold_meets_target_positive_retention")
+    return warnings
+
+
 def worst_positive_cases(
     scored_pairs: list[dict[str, Any]],
     limit: int = 20,
@@ -252,17 +297,27 @@ def rate(count: int, total: int) -> float | None:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+    if is_stdio_path(path):
+        return read_jsonl_lines(sys.stdin)
     with path.open("r", encoding="utf-8") as file:
-        for line_number, line in enumerate(file, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            value = json.loads(stripped)
-            if not isinstance(value, dict):
-                raise ValueError(f"JSONL line {line_number} must be an object")
-            records.append(value)
+        return read_jsonl_lines(file)
+
+
+def read_jsonl_lines(lines: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        value = json.loads(stripped)
+        if not isinstance(value, dict):
+            raise ValueError(f"JSONL line {line_number} must be an object")
+        records.append(value)
     return records
+
+
+def is_stdio_path(path: Path) -> bool:
+    return str(path) == "-"
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -276,8 +331,10 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         "",
         f"- Pairs: `{report['pairs_total']}`",
         f"- Positive@1 rate: `{format_rate(report['positive_at_1_rate'])}`",
+        f"- Negative beats positive rate: `{format_rate(report['negative_beats_positive_rate'])}`",
         f"- Recommended threshold: `{report['recommended_threshold']}`",
         f"- Target positive retention: `{format_rate(report['target_positive_retention'])}`",
+        f"- Quality warnings: `{', '.join(report.get('quality_warnings') or []) or 'none'}`",
         "",
         "## Score Summary",
         "",
@@ -285,6 +342,16 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         "|---|---:|---:|---:|---:|---:|",
         summary_row("Positive", report["positive_scores"]),
         summary_row("Negative", report["negative_scores"]),
+        summary_row("Margin", report["margin_summary"]),
+        "",
+        "## Positive Rank Histogram",
+        "",
+        "| Rank | Count |",
+        "|---:|---:|",
+        *[
+            f"| {rank} | {count} |"
+            for rank, count in report.get("positive_rank_histogram", {}).items()
+        ],
         "",
         "## Threshold Candidates",
         "",
@@ -320,8 +387,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Calibrate bge-reranker threshold on private ticket query/chunk pairs."
     )
-    parser.add_argument("--pairs", type=Path, default=DEFAULT_PAIRS)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--pairs",
+        type=Path,
+        default=DEFAULT_PAIRS,
+        help="JSONL path or '-' for stdin.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="JSON report path or '-' to skip file writes and print aggregate stdout only.",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--target-positive-retention", type=float, default=0.9)
     return parser.parse_args()
