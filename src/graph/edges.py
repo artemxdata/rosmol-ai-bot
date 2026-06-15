@@ -21,6 +21,8 @@ def route_after_rerank(state: BotState) -> str:
 
 
 def route_after_verify(state: BotState) -> str:
+    if state.get("should_escalate"):
+        return "escalate"
     verification = state.get("verification")
     if verification and verification.has_hallucination:
         return "escalate"

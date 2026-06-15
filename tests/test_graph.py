@@ -158,6 +158,14 @@ def test_route_after_verify_escalates_on_hallucination() -> None:
     assert route_after_verify(state) == "escalate"
 
 
+def test_route_after_verify_preserves_previous_escalation() -> None:
+    state = {
+        "should_escalate": True,
+        "verification": VerificationResult(has_hallucination=False),
+    }
+    assert route_after_verify(state) == "escalate"
+
+
 @pytest.mark.asyncio
 async def test_respond_does_not_append_specialist_note_for_valid_lowish_confidence() -> None:
     result = await respond(

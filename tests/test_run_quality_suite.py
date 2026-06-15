@@ -57,8 +57,20 @@ async def test_run_quality_suite_writes_all_reports(
             ],
         }
 
+    def fake_generation_eval(cases_path, output_path, markdown_path):
+        output_path.write_text("{}", encoding="utf-8")
+        markdown_path.write_text("# generation\n", encoding="utf-8")
+        return {
+            "cases_total": 2,
+            "pass_rate": 1.0,
+            "source_context_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "verifier_hallucination_rate": 0.0,
+        }
+
     monkeypatch.setattr(suite, "run_retrieval_eval", fake_retrieval_eval)
     monkeypatch.setattr(suite, "run_ask_eval", fake_ask_eval)
+    monkeypatch.setattr(suite, "run_generation_eval", fake_generation_eval)
 
     summary = await suite.run_quality_suite(
         output_dir=tmp_path,
@@ -75,9 +87,11 @@ async def test_run_quality_suite_writes_all_reports(
     assert summary["retrieval"]["recall_at_10"] == 1.0
     assert summary["retrieval"]["mrr"] == 1.0
     assert summary["ask"]["llm_estimated_cost_rub"] == 0.01
+    assert summary["generation"]["pass_rate"] == 1.0
     assert json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))["passed"] is True
     assert (tmp_path / "retrieval_eval.md").exists()
     assert (tmp_path / "ask_eval.md").exists()
+    assert (tmp_path / "generation_eval.md").exists()
     assert (tmp_path / "rag_threshold_suggestions.json").exists()
     assert (tmp_path / "quality_gate.json").exists()
     assert "Quality Suite Summary" in (tmp_path / "summary.md").read_text(encoding="utf-8")
@@ -127,6 +141,17 @@ async def test_run_quality_suite_can_include_forum_smoke(
             "results": [],
         }
 
+    def fake_generation_eval(cases_path, output_path, markdown_path):
+        output_path.write_text("{}", encoding="utf-8")
+        markdown_path.write_text("# generation\n", encoding="utf-8")
+        return {
+            "cases_total": 1,
+            "pass_rate": 1.0,
+            "source_context_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "verifier_hallucination_rate": 0.0,
+        }
+
     def fake_build_forum_smoke_set(
         kb_seed_path,
         output_path,
@@ -154,6 +179,7 @@ async def test_run_quality_suite_can_include_forum_smoke(
 
     monkeypatch.setattr(suite, "run_retrieval_eval", fake_retrieval_eval)
     monkeypatch.setattr(suite, "run_ask_eval", fake_ask_eval)
+    monkeypatch.setattr(suite, "run_generation_eval", fake_generation_eval)
     monkeypatch.setattr(suite, "build_forum_smoke_set", fake_build_forum_smoke_set)
     monkeypatch.setattr(suite, "summarize_forum_ask", fake_summarize_forum_ask)
 

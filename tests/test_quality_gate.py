@@ -32,6 +32,12 @@ def test_quality_gate_passes_core_metrics_and_warns_on_threshold_calibration() -
             "current_low_threshold": 0.4,
             "recommended_low_threshold": 0.05,
         },
+        generation_metrics={
+            "cases_total": 50,
+            "pass_rate": 0.96,
+            "source_context_rate": 0.98,
+            "verifier_hallucination_rate": 0.0,
+        },
     )
 
     assert report["passed"] is True
@@ -39,6 +45,7 @@ def test_quality_gate_passes_core_metrics_and_warns_on_threshold_calibration() -
     assert report["warning_checks"] == 1
     checks = {item["name"]: item for item in report["checks"]}
     assert checks["retrieval_recall_at_5"]["status"] == "pass"
+    assert checks["generation_pass_rate"]["status"] == "pass"
     assert checks["rag_low_threshold_calibration"]["status"] == "warn"
 
 
@@ -89,6 +96,29 @@ def test_quality_gate_checks_forum_smoke_summary_when_provided() -> None:
     assert checks["forum_smoke_expected_chunk_hit_rate"]["status"] == "pass"
     assert checks["forum_smoke_problem_forums"]["status"] == "pass"
     assert checks["forum_smoke_forums_total"]["status"] == "pass"
+
+
+def test_quality_gate_fails_bad_generation_metrics() -> None:
+    report = build_quality_gate_report(
+        retrieval_metrics={"recall_at_5": 1.0, "cases_scored": 1},
+        ask_metrics={
+            "pass_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "http_success_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+            "low_confidence_expected_chunk_hit_rate": 0.0,
+        },
+        generation_metrics={
+            "pass_rate": 0.5,
+            "source_context_rate": 0.4,
+            "verifier_hallucination_rate": 0.2,
+        },
+    )
+
+    failed = {item["name"] for item in report["checks"] if item["status"] == "fail"}
+    assert "generation_pass_rate" in failed
+    assert "generation_source_context_rate" in failed
+    assert "generation_verifier_hallucination_rate" in failed
 
 
 def test_quality_gate_fails_forum_smoke_problem_forums() -> None:

@@ -166,20 +166,34 @@ python eval/suggest_rag_thresholds.py --metrics reports/ask_eval.json
 Скрипт не меняет `.env`; он показывает таблицу low-threshold candidates и безопасную рекомендацию,
 которую нужно подтверждать на согласованном golden set.
 
+Офлайн-проверка grounded generation по готовому ask-eval отчёту:
+
+```bash
+python eval/run_generation.py \
+  --cases reports/ask_eval.json \
+  --output reports/generation_eval.json \
+  --markdown reports/generation_eval.md
+```
+
+Отчёт не вызывает LLM и не копирует тексты вопросов/ответов в результат: он сохраняет только
+case id, статусы проверок и агрегаты. Проверяются source context, expected chunk hit,
+unknown source markers, hallucination flags от verifier и forbidden phrases.
+
 Итоговый quality gate по готовым JSON-отчётам:
 
 ```bash
 python eval/check_quality_gate.py \
   --retrieval-metrics reports/retrieval_eval.json \
   --ask-metrics reports/ask_eval.json \
+  --generation-metrics reports/generation_eval.json \
   --threshold-suggestions reports/rag_threshold_suggestions.json
 ```
 
 Gate падает ненулевым кодом при провале core-метрик и оставляет warnings для калибровочных решений,
 которые нельзя принимать без расширенного golden set.
 
-One-command локальный quality suite, который сам запускает retrieval eval, ask eval, threshold suggestions
-и quality gate:
+One-command локальный quality suite, который сам запускает retrieval eval, ask eval, grounded
+generation eval, threshold suggestions и quality gate:
 
 ```bash
 python eval/run_quality_suite.py \

@@ -22,6 +22,9 @@ class GateConfig:
     min_forum_expected_chunk_hit_rate: float = 1.0
     max_problem_forums: int = 0
     min_forums_total: int | None = None
+    min_generation_pass_rate: float = 0.9
+    min_generation_source_context_rate: float = 0.9
+    max_generation_hallucination_rate: float = 0.0
 
 
 def build_quality_gate_report(
@@ -30,6 +33,7 @@ def build_quality_gate_report(
     ask_metrics: dict[str, Any] | None,
     threshold_suggestions: dict[str, Any] | None = None,
     forum_metrics: dict[str, Any] | None = None,
+    generation_metrics: dict[str, Any] | None = None,
     config: GateConfig | None = None,
 ) -> dict[str, Any]:
     config = config or GateConfig()
@@ -103,6 +107,27 @@ def build_quality_gate_report(
                     config.max_llm_cost_rub,
                 )
             )
+
+    if generation_metrics is not None:
+        checks.extend(
+            [
+                _min_check(
+                    "generation_pass_rate",
+                    generation_metrics.get("pass_rate"),
+                    config.min_generation_pass_rate,
+                ),
+                _min_check(
+                    "generation_source_context_rate",
+                    generation_metrics.get("source_context_rate"),
+                    config.min_generation_source_context_rate,
+                ),
+                _max_check(
+                    "generation_verifier_hallucination_rate",
+                    generation_metrics.get("verifier_hallucination_rate"),
+                    config.max_generation_hallucination_rate,
+                ),
+            ]
+        )
 
     if forum_metrics is not None:
         checks.extend(
@@ -184,6 +209,7 @@ def build_quality_gate_report(
         "inputs": {
             "retrieval_cases": (retrieval_metrics or {}).get("cases_total"),
             "ask_cases": (ask_metrics or {}).get("cases_total"),
+            "generation_cases": (generation_metrics or {}).get("cases_total"),
             "forum_cases": (forum_metrics or {}).get("cases_total"),
             "forum_count": (forum_metrics or {}).get("forums_total"),
             "generated_smoke_cases": {
@@ -285,6 +311,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--retrieval-metrics", default="reports/retrieval_eval.json")
     parser.add_argument("--ask-metrics", default="reports/ask_eval.json")
+    parser.add_argument("--generation-metrics", default="")
     parser.add_argument("--threshold-suggestions", default="")
     parser.add_argument("--forum-summary", default="")
     parser.add_argument("--output", default="reports/quality_gate.json")
@@ -301,6 +328,9 @@ def main() -> None:
     parser.add_argument("--min-forum-expected-chunk-hit-rate", type=float, default=1.0)
     parser.add_argument("--max-problem-forums", type=int, default=0)
     parser.add_argument("--min-forums-total", type=int, default=None)
+    parser.add_argument("--min-generation-pass-rate", type=float, default=0.9)
+    parser.add_argument("--min-generation-source-context-rate", type=float, default=0.9)
+    parser.add_argument("--max-generation-hallucination-rate", type=float, default=0.0)
     parser.add_argument("--no-fail", action="store_true")
     args = parser.parse_args()
 
@@ -317,14 +347,21 @@ def main() -> None:
         min_forum_expected_chunk_hit_rate=args.min_forum_expected_chunk_hit_rate,
         max_problem_forums=args.max_problem_forums,
         min_forums_total=args.min_forums_total,
+        min_generation_pass_rate=args.min_generation_pass_rate,
+        min_generation_source_context_rate=args.min_generation_source_context_rate,
+        max_generation_hallucination_rate=args.max_generation_hallucination_rate,
     )
     threshold_path = Path(args.threshold_suggestions) if args.threshold_suggestions else None
     forum_path = Path(args.forum_summary) if args.forum_summary else None
+    generation_path = Path(args.generation_metrics) if args.generation_metrics else None
     report = build_quality_gate_report(
         retrieval_metrics=_read_json_if_exists(Path(args.retrieval_metrics)),
         ask_metrics=_read_json_if_exists(Path(args.ask_metrics)),
         threshold_suggestions=_read_json_if_exists(threshold_path) if threshold_path else None,
         forum_metrics=_read_json_if_exists(forum_path) if forum_path else None,
+        generation_metrics=(
+            _read_json_if_exists(generation_path) if generation_path else None
+        ),
         config=config,
     )
     output_path = Path(args.output)

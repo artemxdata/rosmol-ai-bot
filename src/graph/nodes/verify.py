@@ -44,7 +44,7 @@ async def verify(state: BotState) -> dict:
         return {"verification": result, "verifier_triggered": False}
 
     confidence = float(state.get("max_confidence") or 0)
-    if confidence >= get_settings().reranker_threshold_high:
+    if _can_skip_llm_judge(state, confidence):
         result = VerificationResult(has_hallucination=False, confidence=confidence)
         if tracer:
             tracer.add("verify", int((perf_counter() - started_at) * 1000), judge=False)
@@ -82,3 +82,9 @@ def _contradicts_present_question(response: str, state: BotState) -> bool:
         return True
     analysis = state.get("analysis")
     return bool(getattr(analysis, "questions", None))
+
+
+def _can_skip_llm_judge(state: BotState, confidence: float) -> bool:
+    if state.get("generator_model") != "source_chunk":
+        return False
+    return confidence >= get_settings().reranker_threshold_high

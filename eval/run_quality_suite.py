@@ -22,6 +22,7 @@ from eval.check_quality_gate import (
     write_report as write_gate_report,
 )
 from eval.run_ask import run_eval as run_ask_eval
+from eval.run_generation import run_generation_eval
 from eval.run_retrieval import run_eval as run_retrieval_eval
 from eval.suggest_rag_thresholds import (
     analyze_thresholds,
@@ -91,6 +92,12 @@ async def run_quality_suite(
     )
     write_threshold_report(paths["threshold_json"], threshold_report)
     write_threshold_markdown(paths["threshold_md"], threshold_report)
+    generation_metrics = await asyncio.to_thread(
+        run_generation_eval,
+        paths["ask_json"],
+        paths["generation_json"],
+        paths["generation_md"],
+    )
 
     forum_summary: dict[str, Any] | None = None
     if forum_smoke:
@@ -124,6 +131,7 @@ async def run_quality_suite(
         ask_metrics=ask_metrics,
         threshold_suggestions=threshold_report,
         forum_metrics=forum_summary,
+        generation_metrics=generation_metrics,
         config=gate_config,
     )
     write_gate_report(paths["gate_json"], gate_report)
@@ -153,6 +161,16 @@ async def run_quality_suite(
                 "expected_chunk_hit_rate",
                 "low_confidence_expected_chunk_hit_rate",
                 "llm_estimated_cost_rub",
+            ),
+        ),
+        "generation": _summary_subset(
+            generation_metrics,
+            (
+                "cases_total",
+                "pass_rate",
+                "source_context_rate",
+                "expected_chunk_hit_rate",
+                "verifier_hallucination_rate",
             ),
         ),
         "quality_gate": {
@@ -190,6 +208,8 @@ def _suite_paths(output_dir: Path) -> dict[str, Path]:
         "retrieval_md": output_dir / "retrieval_eval.md",
         "ask_json": output_dir / "ask_eval.json",
         "ask_md": output_dir / "ask_eval.md",
+        "generation_json": output_dir / "generation_eval.json",
+        "generation_md": output_dir / "generation_eval.md",
         "threshold_json": output_dir / "rag_threshold_suggestions.json",
         "threshold_md": output_dir / "rag_threshold_suggestions.md",
         "forum_cases_json": output_dir / "forum_smoke_set.json",
@@ -229,6 +249,11 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"| Ask | {summary['ask'].get('cases_total')} | "
             f"pass `{_format_rate(summary['ask'].get('pass_rate'))}` | "
             f"chunk hit `{_format_rate(summary['ask'].get('expected_chunk_hit_rate'))}` |"
+        ),
+        (
+            f"| Generation | {summary['generation'].get('cases_total')} | "
+            f"pass `{_format_rate(summary['generation'].get('pass_rate'))}` | "
+            f"grounded `{_format_rate(summary['generation'].get('source_context_rate'))}` |"
         ),
     ]
     forum = summary.get("forum_smoke")
@@ -283,6 +308,9 @@ def main() -> None:
     parser.add_argument("--min-forum-expected-chunk-hit-rate", type=float, default=1.0)
     parser.add_argument("--max-problem-forums", type=int, default=0)
     parser.add_argument("--min-forums-total", type=int, default=None)
+    parser.add_argument("--min-generation-pass-rate", type=float, default=0.9)
+    parser.add_argument("--min-generation-source-context-rate", type=float, default=0.9)
+    parser.add_argument("--max-generation-hallucination-rate", type=float, default=0.0)
     parser.add_argument("--no-fail", action="store_true")
     args = parser.parse_args()
 
@@ -299,6 +327,9 @@ def main() -> None:
         min_forum_expected_chunk_hit_rate=args.min_forum_expected_chunk_hit_rate,
         max_problem_forums=args.max_problem_forums,
         min_forums_total=args.min_forums_total,
+        min_generation_pass_rate=args.min_generation_pass_rate,
+        min_generation_source_context_rate=args.min_generation_source_context_rate,
+        max_generation_hallucination_rate=args.max_generation_hallucination_rate,
     )
     summary = asyncio.run(
         run_quality_suite(
