@@ -142,6 +142,21 @@ python eval/validate_golden_set.py \
 Валидатор проверяет JSON-массив, уникальные `id`, непустой вопрос, ожидаемые chunk IDs,
 существование chunk IDs в KB seed и распределение по категориям/форумам/сложности.
 
+Аудит покрытия и чистоты KB seed:
+
+```powershell
+python scripts/audit_kb_seed.py ^
+  --path data/knowledge_base_seed.json ^
+  --forums-registry data/forums_registry.json ^
+  --min-forum-chunks 5 ^
+  --min-forum-topics 3 ^
+  --output reports/kb_audit_coverage.json ^
+  --markdown reports/kb_audit_coverage.md
+```
+
+Отчёт показывает ошибки metadata, template artifacts, дубли ответов, форумы из registry без
+published chunks и форумы/темы с низким покрытием.
+
 Рекомендации по RAG-порогам из готового ask-eval отчёта:
 
 ```bash

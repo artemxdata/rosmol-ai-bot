@@ -104,6 +104,46 @@ def test_audit_seed_records_includes_quality_summary() -> None:
     assert summary["char_count"]["max"] == len("Generic answer text")
 
 
+def test_audit_seed_records_detects_forum_registry_coverage_gaps() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "forum_a_1",
+                "text_clean": "Answer",
+                "category": "forums",
+                "forum_normalized": "Forum A",
+                "topic": "documents",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+                "status": "published",
+            },
+            {
+                "chunk_id": "forum_c_1",
+                "text_clean": "Another answer",
+                "category": "forums",
+                "forum_normalized": "Forum C",
+                "topic": "transfer",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+                "status": "published",
+            },
+        ],
+        forum_registry=[
+            {"name": "Forum A", "normalized": "Forum A"},
+            {"name": "Forum B", "normalized": "Forum B"},
+        ],
+        min_forum_chunks=2,
+        min_forum_topics=2,
+    )
+
+    findings = {finding["code"]: finding for finding in report["findings"]}
+    assert report["warnings"] == 4
+    assert findings["registry_forum_without_published_chunks"]["forums"] == ["Forum B"]
+    assert findings["forum_not_in_registry"]["forums"] == ["Forum C"]
+    assert findings["low_forum_chunk_coverage"]["count"] == 2
+    assert findings["low_forum_topic_coverage"]["count"] == 2
+
+
 def test_audit_kb_seed_can_fail_on_errors(tmp_path: Path) -> None:
     path = tmp_path / "knowledge_base_seed.json"
     path.write_text(
@@ -130,6 +170,7 @@ def test_audit_kb_seed_can_fail_on_errors(tmp_path: Path) -> None:
 def test_audit_kb_seed_writes_report(tmp_path: Path) -> None:
     path = tmp_path / "knowledge_base_seed.json"
     output = tmp_path / "report.json"
+    markdown = tmp_path / "report.md"
     path.write_text(
         json.dumps(
             [
@@ -147,6 +188,54 @@ def test_audit_kb_seed_writes_report(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    audit_kb_seed(path, output, None)
+    audit_kb_seed(path, output, None, markdown_path=markdown)
 
     assert json.loads(output.read_text(encoding="utf-8"))["records_total"] == 1
+    assert "KB Seed Audit" in markdown.read_text(encoding="utf-8")
+
+
+def test_audit_kb_seed_reads_forum_registry_for_coverage(tmp_path: Path) -> None:
+    path = tmp_path / "knowledge_base_seed.json"
+    registry = tmp_path / "forums_registry.json"
+    output = tmp_path / "report.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "forum_a_1",
+                    "text_clean": "Answer",
+                    "category": "forums",
+                    "forum_normalized": "Forum A",
+                    "topic": "documents",
+                    "source_type": "xlsx",
+                    "source_file": "source.xlsx",
+                    "status": "published",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    registry.write_text(
+        json.dumps(
+            [
+                {"name": "Forum A", "normalized": "Forum A"},
+                {"name": "Forum B", "normalized": "Forum B"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = audit_kb_seed(
+        path,
+        output,
+        None,
+        forums_registry_path=registry,
+        min_forum_chunks=2,
+        min_forum_topics=1,
+    )
+
+    codes = {finding["code"] for finding in report["findings"]}
+    assert {"registry_forum_without_published_chunks", "low_forum_chunk_coverage"} <= codes
+    assert json.loads(output.read_text(encoding="utf-8"))["warnings"] == 2

@@ -7,13 +7,25 @@ from typing import Any
 REQUIRED_METADATA = ("category", "topic", "source_type", "source_file")
 
 
-def audit_seed_records(records: list[dict[str, Any]]) -> dict[str, Any]:
+def audit_seed_records(
+    records: list[dict[str, Any]],
+    *,
+    forum_registry: list[dict[str, Any]] | None = None,
+    min_forum_chunks: int = 0,
+    min_forum_topics: int = 0,
+) -> dict[str, Any]:
     findings = [
         *_find_trailing_export_quotes(records),
         *_find_template_artifacts(records),
         *_find_missing_metadata(records),
         *_find_grant_records_with_forum(records),
         *_find_duplicate_texts(records),
+        *_find_forum_coverage_findings(
+            records,
+            forum_registry=forum_registry,
+            min_forum_chunks=min_forum_chunks,
+            min_forum_topics=min_forum_topics,
+        ),
     ]
     errors = sum(1 for finding in findings if finding["severity"] == "error")
     warnings = sum(1 for finding in findings if finding["severity"] == "warning")
@@ -59,6 +71,108 @@ def _summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "generic_records_count": generic_records,
         "char_count": _char_count_summary(char_counts),
     }
+
+
+def _find_forum_coverage_findings(
+    records: list[dict[str, Any]],
+    *,
+    forum_registry: list[dict[str, Any]] | None,
+    min_forum_chunks: int,
+    min_forum_topics: int,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    stats = _forum_coverage_stats(records)
+    registry_forums = _registry_forums(forum_registry or [])
+
+    if registry_forums:
+        missing = sorted(registry_forums - set(stats))
+        if missing:
+            findings.append(
+                {
+                    "code": "registry_forum_without_published_chunks",
+                    "severity": "warning",
+                    "message": "forum is present in registry but has no published KB chunks",
+                    "count": len(missing),
+                    "forums": missing,
+                }
+            )
+
+        extra = sorted(set(stats) - registry_forums)
+        if extra:
+            findings.append(
+                {
+                    "code": "forum_not_in_registry",
+                    "severity": "warning",
+                    "message": "published KB chunks use a forum missing from forums_registry",
+                    "count": len(extra),
+                    "forums": extra,
+                }
+            )
+
+    if min_forum_chunks > 0:
+        low_chunks = [
+            {"forum": forum, "chunks": data["chunks"]}
+            for forum, data in sorted(stats.items())
+            if data["chunks"] < min_forum_chunks
+        ]
+        if low_chunks:
+            findings.append(
+                {
+                    "code": "low_forum_chunk_coverage",
+                    "severity": "warning",
+                    "message": "forum has fewer published chunks than the configured threshold",
+                    "threshold": min_forum_chunks,
+                    "count": len(low_chunks),
+                    "forums": low_chunks[:50],
+                }
+            )
+
+    if min_forum_topics > 0:
+        low_topics = [
+            {"forum": forum, "topics": len(data["topics"])}
+            for forum, data in sorted(stats.items())
+            if len(data["topics"]) < min_forum_topics
+        ]
+        if low_topics:
+            findings.append(
+                {
+                    "code": "low_forum_topic_coverage",
+                    "severity": "warning",
+                    "message": "forum has fewer published topics than the configured threshold",
+                    "threshold": min_forum_topics,
+                    "count": len(low_topics),
+                    "forums": low_topics[:50],
+                }
+            )
+
+    return findings
+
+
+def _forum_coverage_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    stats: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if str(record.get("status") or "published") != "published":
+            continue
+        forum = str(record.get("forum_normalized") or record.get("forum") or "").strip()
+        if not forum:
+            continue
+        data = stats.setdefault(forum, {"chunks": 0, "topics": set()})
+        data["chunks"] += 1
+        topic = str(record.get("topic") or "").strip()
+        if topic:
+            data["topics"].add(topic)
+    return stats
+
+
+def _registry_forums(forum_registry: list[dict[str, Any]]) -> set[str]:
+    forums: set[str] = set()
+    for item in forum_registry:
+        if not isinstance(item, dict):
+            continue
+        forum = str(item.get("normalized") or item.get("name") or "").strip()
+        if forum:
+            forums.add(forum)
+    return forums
 
 
 def _find_trailing_export_quotes(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
