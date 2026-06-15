@@ -522,11 +522,13 @@ def build_golden_candidates(
     *,
     max_items: int,
 ) -> list[dict[str, Any]]:
-    scored = []
+    scored: list[tuple[int, dict[str, Any]]] = []
     for item in records:
         query = item.get("question_candidate") or ""
         answer = item.get("answer_candidate") or ""
         if len(query) < 8:
+            continue
+        if not item["should_escalate"] and not (item["answerable_by_kb"] and len(answer) >= 40):
             continue
         score = 0
         if item["answerable_by_kb"] and len(answer) >= 40:
@@ -545,7 +547,7 @@ def build_golden_candidates(
 
     selected: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
-    for _, item in sorted(scored, key=lambda pair: pair[0], reverse=True):
+    for item in balanced_scored_records(scored):
         dedupe_key = normalize_question_key(item["question_candidate"])
         if dedupe_key in seen_keys:
             continue
@@ -573,6 +575,42 @@ def build_golden_candidates(
         if len(selected) >= max_items:
             break
     return selected
+
+
+def balanced_scored_records(scored: list[tuple[int, dict[str, Any]]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, bool], list[tuple[int, int, dict[str, Any]]]] = defaultdict(list)
+    for index, (score, item) in enumerate(scored):
+        groups[golden_group_key(item)].append((score, index, item))
+
+    for rows in groups.values():
+        rows.sort(key=lambda pair: (-pair[0], pair[1]))
+
+    ordered_keys = sorted(
+        groups,
+        key=lambda key: (
+            max(score for score, _index, _item in groups[key]),
+            key[0],
+            key[1],
+            key[2],
+        ),
+        reverse=True,
+    )
+    ordered: list[dict[str, Any]] = []
+    while any(groups.values()):
+        for key in ordered_keys:
+            if not groups[key]:
+                continue
+            _score, _index, item = groups[key].pop(0)
+            ordered.append(item)
+    return ordered
+
+
+def golden_group_key(item: dict[str, Any]) -> tuple[str, str, bool]:
+    return (
+        str(item.get("category") or "unknown"),
+        str(item.get("difficulty") or "unknown"),
+        bool(item.get("should_escalate")),
+    )
 
 
 def build_reranker_pairs(
@@ -692,6 +730,11 @@ def build_summary(
     pairs: list[dict[str, Any]],
     output_dir: Path,
 ) -> str:
+    golden_difficulty = Counter(item.get("difficulty") or "unknown" for item in golden)
+    golden_category = Counter(item.get("category") or "unknown" for item in golden)
+    golden_escalation = Counter(
+        "escalated" if item.get("expected_escalated") else "answerable" for item in golden
+    )
     return "\n".join(
         [
             "# Ticket Dataset Analysis Summary",
@@ -703,6 +746,18 @@ def build_summary(
             f"- Answerable by KB candidates: `{profile['answerable_by_kb_count']}`",
             f"- Escalation candidates: `{profile['should_escalate_count']}`",
             f"- Tickets with detected PII: `{profile['has_pii_count']}`",
+            "",
+            "## Golden Candidate Mix",
+            "",
+            *_counter_lines(dict(golden_difficulty.most_common())),
+            "",
+            "## Golden Candidate Categories",
+            "",
+            *_counter_lines(dict(golden_category.most_common())),
+            "",
+            "## Golden Candidate Expected Routing",
+            "",
+            *_counter_lines(dict(golden_escalation.most_common())),
             "",
             "## Generated Files",
             "",
