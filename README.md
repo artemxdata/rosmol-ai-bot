@@ -280,10 +280,16 @@ Qdrant-коллекцию и временно направить туда `/ask`
 Дефолт остаётся `knowledge_base`; этот режим не предназначен для production.
 
 ```bash
+python scripts/promote_answer_bank_to_kb.py \
+  --include-candidates \
+  --publish-for-sandbox \
+  --limit 300 \
+  --output data/private/tickets/curation/kb_sandbox_answer_bank.json \
+  --merged-output data/private/tickets/curation/knowledge_base_seed_answer_bank_sandbox.json
 python scripts/init_qdrant.py --knowledge-collection knowledge_base_answer_bank_sandbox
 python scripts/index_kb.py \
   --collection knowledge_base_answer_bank_sandbox \
-  --path data/private/tickets/curation/knowledge_base_seed_with_answer_bank_drafts.json
+  --path data/private/tickets/curation/knowledge_base_seed_answer_bank_sandbox.json
 ```
 
 Подготовка приватных eval-наборов из ticket analysis:

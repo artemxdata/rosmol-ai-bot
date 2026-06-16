@@ -46,6 +46,7 @@ def promote_answer_bank(
     base_kb_path: Path | None = None,
     merged_output_path: Path | None = None,
     include_candidates: bool = False,
+    publish_for_sandbox: bool = False,
     limit: int | None = None,
 ) -> dict[str, Any]:
     answer_bank = read_json_array(answer_bank_path)
@@ -57,7 +58,12 @@ def promote_answer_bank(
     if limit is not None:
         selected = selected[:limit]
     draft_chunks = [
-        build_draft_chunk(candidate, index=index, existing_chunk_ids=existing_chunk_ids)
+        build_draft_chunk(
+            candidate,
+            index=index,
+            existing_chunk_ids=existing_chunk_ids,
+            publish_for_sandbox=publish_for_sandbox,
+        )
         for index, candidate in enumerate(selected, start=1)
     ]
     validate_seed_items(draft_chunks)
@@ -72,6 +78,7 @@ def promote_answer_bank(
             answer_bank_path=answer_bank_path,
             base_kb_path=base_kb_path,
             include_candidates=include_candidates,
+            publish_for_sandbox=publish_for_sandbox,
         ),
         encoding="utf-8",
     )
@@ -90,6 +97,7 @@ def promote_answer_bank(
         "base_kb": str(base_kb_path) if base_kb_path else None,
         "merged_output": str(merged_output_path) if merged_output_path else None,
         "include_candidates": include_candidates,
+        "publish_for_sandbox": publish_for_sandbox,
         "answer_bank_total": len(answer_bank),
         "promoted_chunks": len(draft_chunks),
         "status_counts": status_counts(answer_bank),
@@ -122,6 +130,7 @@ def build_draft_chunk(
     *,
     index: int,
     existing_chunk_ids: set[str],
+    publish_for_sandbox: bool = False,
 ) -> dict[str, Any]:
     text = clean_required(candidate.get("answer"), "answer")
     query = clean_required(candidate.get("query"), "query")
@@ -137,7 +146,7 @@ def build_draft_chunk(
         "chunk_id": chunk_id,
         "text_raw": text,
         "text_clean": text,
-        "status": "draft",
+        "status": "published" if publish_for_sandbox else "draft",
         "category": category,
         "forum": forum,
         "forum_normalized": forum,
@@ -170,6 +179,7 @@ def build_draft_chunk(
         "answer_bank_quality_reasons": list(candidate.get("quality_reasons") or []),
         "answer_bank_candidate_chunk_ids": list(candidate.get("candidate_chunk_ids") or []),
         "answer_bank_tags": list(candidate.get("tags") or []),
+        "sandbox_published": publish_for_sandbox,
         "promotion_notes": candidate.get("notes") or "",
     }
 
@@ -199,6 +209,7 @@ def build_report(
     answer_bank_path: Path,
     base_kb_path: Path | None,
     include_candidates: bool,
+    publish_for_sandbox: bool,
 ) -> str:
     lines = [
         "# KB Drafts From Ticket Answer Bank",
@@ -207,6 +218,7 @@ def build_report(
         f"- Answer bank: `{answer_bank_path}`",
         f"- Base KB: `{base_kb_path or 'not used'}`",
         f"- Include candidates: `{include_candidates}`",
+        f"- Publish for sandbox: `{publish_for_sandbox}`",
         f"- Draft chunks: `{len(draft_chunks)}`",
         "",
         "## Review Protocol",
@@ -290,6 +302,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Promote review_status=candidate records as draft chunks for private review.",
     )
+    parser.add_argument(
+        "--publish-for-sandbox",
+        action="store_true",
+        help=(
+            "Write promoted answer-bank records as status=published for private local "
+            "sandbox retrieval only. Do not copy this output into the main KB."
+        ),
+    )
     parser.add_argument("--limit", type=int, default=None)
     return parser.parse_args()
 
@@ -304,6 +324,7 @@ def main() -> None:
         base_kb_path=args.base_kb,
         merged_output_path=args.merged_output,
         include_candidates=args.include_candidates,
+        publish_for_sandbox=args.publish_for_sandbox,
         limit=args.limit,
     )
 

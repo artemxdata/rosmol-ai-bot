@@ -74,6 +74,19 @@ def test_build_draft_chunk_outputs_valid_kb_seed_record() -> None:
     assert "reference_answer" not in record
 
 
+def test_build_draft_chunk_can_publish_for_private_sandbox() -> None:
+    record = build_draft_chunk(
+        _candidate(),
+        index=1,
+        existing_chunk_ids=set(),
+        publish_for_sandbox=True,
+    )
+
+    validate_seed_items([record])
+    assert record["status"] == "published"
+    assert record["sandbox_published"] is True
+
+
 def test_build_draft_chunk_makes_unique_chunk_id_against_base_kb() -> None:
     record = build_draft_chunk(
         _candidate(),
