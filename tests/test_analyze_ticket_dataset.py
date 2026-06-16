@@ -4,6 +4,7 @@ from scripts.analyze_ticket_dataset import (
     ForumAlias,
     build_golden_candidates,
     build_reranker_pairs,
+    choose_answer_candidate,
     classify_category,
     classify_escalation,
     classify_topic,
@@ -119,6 +120,37 @@ def test_low_signal_title_is_not_used_as_question_candidate() -> None:
     assert record["question_candidate"] == (
         "Здравствуйте, где посмотреть статус заявки на форум Машук?"
     )
+
+
+def test_choose_answer_candidate_prefers_support_reply_over_later_user_fragment() -> None:
+    answer = choose_answer_candidate(
+        [
+            "Как подать заявку на форум Машук?",
+            (
+                "Подать заявку можно через личный кабинет Росмолодёжи. "
+                "Необходимо выбрать мероприятие, заполнить профиль и отправить заявку."
+            ),
+            (
+                "Не успела подать заявку, можете пожалуйста открыть регистрацию? "
+                "Очень хочу принять участие и буду ждать ответа."
+            ),
+        ],
+        "Как подать заявку на форум Машук?",
+    )
+
+    assert answer.startswith("Подать заявку можно")
+
+
+def test_choose_answer_candidate_rejects_thread_artifact_user_fragments() -> None:
+    answer = choose_answer_candidate(
+        [
+            "Служба Заботы Росмолодёжи: 2025 г., 10:12. Запрос отправлял по гранту.",
+            "Прошу открыть подачу заявки, потому что не успел отправить проект.",
+        ],
+        "Можно ли открыть подачу заявки повторно?",
+    )
+
+    assert answer == ""
 
 
 def test_classification_detects_forum_registration_and_technical_escalation() -> None:

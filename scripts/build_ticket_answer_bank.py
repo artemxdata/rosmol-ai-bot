@@ -61,9 +61,65 @@ GOOD_ANSWER_MARKERS = (
     "обрати внимание",
     "если",
 )
-SENSITIVE_PLACEHOLDERS = ("[EMAIL]", "[ТЕЛЕФОН]", "[ДОКУМЕНТ]", "[ИМЯ]")
+SENSITIVE_PLACEHOLDERS = ("[EMAIL]", "[ТЕЛЕФОН]", "[ДОКУМЕНТ]", "[ДАТА]", "[ИМЯ]")
+UNSAFE_PLACEHOLDERS = (*SENSITIVE_PLACEHOLDERS, "[ID]", "[URL]")
 DOCUMENT_NUMBER_RE = re.compile(r"\b\d{4}\s?\d{6}\b")
+UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+ID_LABEL_RE = re.compile(r"\bID\s*[:№#-]?\s*[A-Za-zА-Яа-я0-9_-]{6,}\b", re.IGNORECASE)
 LONG_ID_RE = re.compile(r"\b\d{7,}\b")
+ANSWER_FIRST_PERSON_RE = re.compile(
+    r"\b(я|мне|меня|мой|моя|моё|мои|помогите|подскажите)\b",
+    re.IGNORECASE,
+)
+PRIVATE_REQUEST_RE = re.compile(
+    r"\b("
+    r"прошу|"
+    r"возможно\s+ли|"
+    r"очень\s+хочу|"
+    r"можете\s+пожалуйста|"
+    r"пожалуйста\s+открыть|"
+    r"не\s+успел[аи]?|"
+    r"не\s+смог[уы]?|"
+    r"приболел[аи]?|"
+    r"почта\s+та\s+же|"
+    r"не\s+копируется|"
+    r"возник(?:ла|ли|ший|шую|шее)?\s+(?:техническая\s+)?(?:неполадка|вопрос|проблема)|"
+    r"почему\s+|"
+    r"не\s+хватило|"
+    r"не\s+вижу|"
+    r"личн(?:ые|ым|ыми)\s+обстоятельств"
+    r")",
+    re.IGNORECASE,
+)
+LATIN_ALPHA_RE = re.compile(r"[A-Za-z]")
+LATIN_NOISE_RE = re.compile(r"\bcommented\b|\u200b|\u200c|\u200d", re.IGNORECASE)
+THREAD_ARTIFACT_RE = re.compile(
+    r"служб[аы]\s+заботы\s+росмолод[ёе]жи\s*:|"
+    r"запрос\s+отправлял[аи]?|"
+    r"отправлено\s+из|"
+    r"\b\d{4}\s*г\.\s*,?\s*\d{1,2}:\d{2}\b",
+    re.IGNORECASE,
+)
+USER_FRAGMENT_START_RE = re.compile(
+    r"^\s*(?:"
+    r"\(|"
+    r"и\s+|"
+    r"а\s+|"
+    r"не\s+могу|"
+    r"не\s+успел[аи]?|"
+    r"не\s+получил[аи]?|"
+    r"к\s+сожалению,\s+не\s+смогу|"
+    r"возник(?:ла|ли|ший|шую|шее)?\s+|"
+    r"подскажите|"
+    r"прошу|"
+    r"хочу|"
+    r"можете\s+пожалуйста"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def build_answer_bank(
@@ -145,7 +201,11 @@ def build_candidate(
     answer = sanitize_text(str(ticket.get("answer_candidate") or ""), masker)
     if not question or not answer:
         return None
-    if has_disallowed_markers(question, answer):
+    if (
+        has_disallowed_markers(question, answer)
+        or has_unsafe_question_shape(question)
+        or has_unsafe_answer_shape(answer)
+    ):
         return None
 
     score, reasons = quality_score(ticket, question, answer)
@@ -180,9 +240,12 @@ def sanitize_text(text: str, masker: PIIMasker) -> str:
         return ""
     masked, _mapping = masker.mask(cleaned)
     masked = DOCUMENT_NUMBER_RE.sub("[ДОКУМЕНТ]", masked)
+    masked = UUID_RE.sub("[ID]", masked)
+    masked = ID_LABEL_RE.sub("ID [ID]", masked)
     masked = LONG_ID_RE.sub("[ID]", masked)
     masked = mask_name_phrases(masked)
     masked = strip_signature(masked)
+    masked = strip_greeting(masked)
     return compact(masked)
 
 
@@ -205,11 +268,63 @@ def strip_signature(text: str) -> str:
     return re.split(r"\s+С\s+уважением[,:\s]", text, maxsplit=1, flags=re.IGNORECASE)[0]
 
 
+def strip_greeting(text: str) -> str:
+    return re.sub(
+        r"^\s*(здравствуйте|добрый\s+день|добрый\s+вечер|доброе\s+утро)"
+        r"(?:,\s*\[ИМЯ\])?[!.,:\s-]*",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def has_disallowed_markers(question: str, answer: str) -> bool:
-    combined = normalize(f"{question} {answer}")
+    combined_text = f"{question} {answer}"
+    combined = normalize(combined_text)
+    if THREAD_ARTIFACT_RE.search(combined_text):
+        return True
     return any(
         marker in combined
         for marker in (*PERSONAL_LETTER_MARKERS, *ESCALATION_MARKERS, *LOW_VALUE_MARKERS)
+    )
+
+
+def has_unsafe_answer_shape(answer: str) -> bool:
+    normalized = normalize(answer)
+    folded = answer.casefold()
+    has_placeholder = any(
+        placeholder.casefold() in answer.casefold() for placeholder in UNSAFE_PLACEHOLDERS
+    )
+    has_raw_id = bool(UUID_RE.search(answer) or ID_LABEL_RE.search(answer))
+    latin_alpha_count = len(LATIN_ALPHA_RE.findall(answer))
+    has_latin_noise = latin_alpha_count > max(40, int(len(answer) * 0.2)) or bool(
+        LATIN_NOISE_RE.search(answer)
+    )
+    return (
+        has_placeholder
+        or has_raw_id
+        or "?" in answer
+        or has_latin_noise
+        or bool(THREAD_ARTIFACT_RE.search(folded))
+        or bool(USER_FRAGMENT_START_RE.search(folded))
+        or bool(
+            ANSWER_FIRST_PERSON_RE.search(normalized)
+            or ANSWER_FIRST_PERSON_RE.search(folded)
+            or PRIVATE_REQUEST_RE.search(normalized)
+            or PRIVATE_REQUEST_RE.search(folded)
+        )
+    )
+
+
+def has_unsafe_question_shape(question: str) -> bool:
+    folded = question.casefold()
+    if any(placeholder.casefold() in folded for placeholder in UNSAFE_PLACEHOLDERS):
+        return True
+    return bool(
+        UUID_RE.search(question)
+        or ID_LABEL_RE.search(question)
+        or THREAD_ARTIFACT_RE.search(question)
     )
 
 
@@ -258,8 +373,14 @@ def quality_score(ticket: dict[str, Any], question: str, answer: str) -> tuple[i
 
     placeholders = sum(answer.count(placeholder) for placeholder in SENSITIVE_PLACEHOLDERS)
     if placeholders:
-        score -= min(3, placeholders)
+        score -= 8
         reasons.append("contains_masked_sensitive_tokens")
+    if has_unsafe_answer_shape(answer):
+        score -= 8
+        reasons.append("unsafe_answer_shape")
+    if has_unsafe_question_shape(question):
+        score -= 8
+        reasons.append("unsafe_question_shape")
 
     if any(marker in normalized_answer for marker in PERSONAL_LETTER_MARKERS):
         score -= 6

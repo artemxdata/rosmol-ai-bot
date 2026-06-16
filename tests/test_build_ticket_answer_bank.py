@@ -5,9 +5,12 @@ from scripts.build_ticket_answer_bank import (
     assign_candidate_ids,
     build_candidate,
     has_disallowed_markers,
+    has_unsafe_answer_shape,
+    has_unsafe_question_shape,
     quality_score,
     sanitize_text,
     select_balanced,
+    strip_greeting,
 )
 from src.security.pii_masker import PIIMasker
 
@@ -46,7 +49,25 @@ def test_quality_score_rejects_personal_letter_answer() -> None:
     assert "looks_like_user_letter" in reasons
 
 
-def test_build_candidate_masks_pii_and_strips_signature() -> None:
+def test_sanitize_text_masks_pii_and_strips_signature() -> None:
+    sanitized = sanitize_text(
+        (
+            "Добрый день, Иван! Восстановить доступ можно через форму сброса пароля. "
+            "Если код не приходит на ivan@example.ru или телефон +7 999 123 45 67, "
+            "проверьте папку спам и повторите запрос. С уважением, поддержка"
+        ),
+        PIIMasker(),
+    )
+
+    assert "ivan@example.ru" not in sanitized
+    assert "+7 999 123 45 67" not in sanitized
+    assert "С уважением" not in sanitized
+    assert "[EMAIL]" in sanitized
+    assert "[ТЕЛЕФОН]" in sanitized
+    assert not sanitized.startswith("Добрый день")
+
+
+def test_build_candidate_rejects_answer_with_sensitive_placeholders() -> None:
     candidate = build_candidate(
         _ticket(
             question_candidate="Здравствуйте, Иван, как восстановить доступ?",
@@ -65,12 +86,7 @@ def test_build_candidate_masks_pii_and_strips_signature() -> None:
         top_matches=3,
     )
 
-    assert candidate is not None
-    assert "ivan@example.ru" not in candidate["answer"]
-    assert "+7 999 123 45 67" not in candidate["answer"]
-    assert "С уважением" not in candidate["answer"]
-    assert "[EMAIL]" in candidate["answer"]
-    assert "[ТЕЛЕФОН]" in candidate["answer"]
+    assert candidate is None
 
 
 def test_build_candidate_skips_escalation_ticket() -> None:
@@ -140,7 +156,7 @@ def test_sanitize_text_masks_name_phrase() -> None:
             "Меня зовут Иван Иванов, телефон 89991234567, id 123456789",
             PIIMasker(),
         )
-        == "Меня зовут [ИМЯ], телефон [ТЕЛЕФОН], id [ID]"
+        == "Меня зовут [ИМЯ], телефон [ТЕЛЕФОН], ID [ID]"
     )
 
 
@@ -153,4 +169,47 @@ def test_regex_only_masker_keeps_batch_mode_fast_without_natasha() -> None:
 
 def test_has_disallowed_markers_detects_private_letter_fragments() -> None:
     assert has_disallowed_markers("Во вложении письмо", "Ответ") is True
+    assert (
+        has_disallowed_markers(
+            "Служба Заботы Росмолодёжи: 2025 г., 10:12. Как подать заявку?",
+            "Подать заявку можно через личный кабинет.",
+        )
+        is True
+    )
     assert has_disallowed_markers("Как подать заявку?", "Заявку можно подать в профиле") is False
+
+
+def test_has_unsafe_answer_shape_rejects_placeholders_and_first_person() -> None:
+    assert has_unsafe_answer_shape("Напишите нам на [EMAIL]") is True
+    assert has_unsafe_answer_shape("Проверьте заявку с ID [ID]") is True
+    assert has_unsafe_answer_shape("Мне пришло письмо, помогите подтвердить заявку") is True
+    assert has_unsafe_answer_shape("Прошу оказать содействие в данном вопросе") is True
+    assert has_unsafe_answer_shape("Возможно ли продлить подачу заявки?") is True
+    assert has_unsafe_answer_shape("ID: 825b4722-4c56-4c6e-b343-d05fc0b8df52") is True
+    assert has_unsafe_answer_shape("Не успела подать заявку, можете пожалуйста открыть?") is True
+    assert has_unsafe_answer_shape("К сожалению, не смогу быть на форуме, почта та же") is True
+    assert has_unsafe_answer_shape("Julia Sushkova commented " * 5) is True
+    assert (
+        has_unsafe_answer_shape(
+            "Служба Заботы Росмолодёжи: 2025 г., 10:12. Запрос отправлял по гранту"
+        )
+        is True
+    )
+    assert has_unsafe_answer_shape("(не черновик, именно проект) со всеми документами") is True
+    assert has_unsafe_answer_shape("и не получила обратную связь по проекту") is True
+    assert has_unsafe_answer_shape("Не могу подать заявку на грант") is True
+    assert has_unsafe_answer_shape("Заявку можно подать через личный кабинет") is False
+
+
+def test_has_unsafe_question_shape_rejects_placeholders_but_allows_first_person() -> None:
+    assert has_unsafe_question_shape("Не могу войти в аккаунт [EMAIL]") is True
+    assert has_unsafe_question_shape("Где найти ID: 825b4722-4c56-4c6e-b343-d05fc0b8df52?") is True
+    assert has_unsafe_question_shape("Служба Заботы Росмолодёжи: как подать заявку?") is True
+    assert has_unsafe_question_shape("Мне не пришло письмо, что делать?") is False
+
+
+def test_strip_greeting_removes_support_salutation() -> None:
+    assert (
+        strip_greeting("Добрый день, [ИМЯ]! Заявку можно подать через личный кабинет.")
+        == "Заявку можно подать через личный кабинет."
+    )

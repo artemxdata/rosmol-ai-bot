@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.index_kb import validate_seed_items
 from scripts.promote_answer_bank_to_kb import (
     build_draft_chunk,
+    is_safe_answer_text,
     promote_answer_bank,
     select_promotable,
 )
@@ -55,6 +56,46 @@ def test_select_promotable_can_include_candidates_for_private_review() -> None:
     )
 
     assert selected[0]["review_status"] == "candidate"
+
+
+def test_select_promotable_rejects_unsafe_answer_text() -> None:
+    selected = select_promotable(
+        [
+            _candidate(id="safe"),
+            _candidate(id="unsafe_query", query="Не пришло письмо на [EMAIL]"),
+            _candidate(
+                id="unsafe_thread_query",
+                query="Служба Заботы Росмолодёжи: 2025 г., 10:12. Как подать заявку?",
+            ),
+            _candidate(id="unsafe_email", answer="Напишите нам на [EMAIL]"),
+            _candidate(id="unsafe_first_person", answer="Мне пришло письмо, помогите"),
+            _candidate(id="unsafe_private_request", answer="Прошу оказать содействие"),
+            _candidate(
+                id="unsafe_id",
+                answer="ID: 825b4722-4c56-4c6e-b343-d05fc0b8df52",
+            ),
+            _candidate(
+                id="unsafe_question_mark",
+                answer="Не успела подать заявку, можете пожалуйста открыть?",
+            ),
+            _candidate(id="unsafe_latin_noise", answer="Julia Sushkova commented " * 5),
+            _candidate(
+                id="unsafe_thread_artifact",
+                answer="Служба Заботы Росмолодёжи: 2025 г., 10:12. Запрос отправлял по гранту",
+            ),
+            _candidate(id="unsafe_fragment_start", answer="(не черновик, именно проект)"),
+            _candidate(id="unsafe_lowercase_start", answer="и не получила обратную связь"),
+        ],
+        include_candidates=True,
+    )
+
+    assert [item["id"] for item in selected] == ["safe"]
+
+
+def test_is_safe_answer_text_rejects_private_ticket_artifacts() -> None:
+    assert is_safe_answer_text("Заявку можно подать через личный кабинет") is True
+    assert is_safe_answer_text("Укажите ID [ID]") is False
+    assert is_safe_answer_text("Мне пришло письмо, подскажите что делать") is False
 
 
 def test_build_draft_chunk_outputs_valid_kb_seed_record() -> None:

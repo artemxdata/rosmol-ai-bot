@@ -41,6 +41,58 @@ BOILERPLATE_PHRASES = [
     "если у вас есть к нам вопросы",
 ]
 
+SUPPORT_ANSWER_MARKERS = [
+    "можно",
+    "необходимо",
+    "нужно",
+    "для этого",
+    "для того",
+    "чтобы",
+    "перейдите",
+    "проверьте",
+    "обратитесь",
+    "подать заяв",
+    "подается",
+    "подаётся",
+    "регистрация",
+    "личный кабинет",
+    "поступил ответ",
+    "обрати внимание",
+    "если",
+]
+
+USER_REQUEST_MARKERS = [
+    " я ",
+    " мне ",
+    " меня ",
+    " мой ",
+    " моя ",
+    " мои ",
+    "прошу",
+    "подскажите",
+    "помогите",
+    "не могу",
+    "не успел",
+    "не пришло",
+    "не получил",
+    "почему",
+    "можете пожалуйста",
+    "хочу",
+    "возник",
+    "буду ждать",
+]
+
+THREAD_ARTIFACT_MARKERS = [
+    "commented",
+    "служба заботы росмолодёжи:",
+    "служба заботы росмолодежи:",
+    "запрос отправлял",
+    "запрос отправляла",
+    "отправлено из",
+    "с уважением",
+]
+THREAD_TIMESTAMP_RE = re.compile(r"\b\d{4}\s*г\.\s*,?\s*\d{1,2}:\d{2}\b", re.IGNORECASE)
+
 LOW_SIGNAL_TITLE_MARKERS = [
     "личное сообщение",
     "входящий вызов",
@@ -332,18 +384,37 @@ def is_low_signal_title(title: str) -> bool:
 
 
 def choose_answer_candidate(segments: list[str], question: str) -> str:
-    candidates = []
+    candidates: list[tuple[int, int, str]] = []
     question_norm = normalize_for_match(question)
-    for segment in segments:
+    for index, segment in enumerate(segments):
         norm = normalize_for_match(segment)
         if norm == question_norm or is_boilerplate(segment):
             continue
         if len(segment) < 50:
             continue
-        candidates.append(segment)
+        score = score_answer_segment(segment)
+        if score > 0:
+            candidates.append((score, index, segment))
     if not candidates:
         return ""
-    return candidates[-1][:2000]
+    best = max(candidates, key=lambda item: (item[0], item[1]))
+    return best[2][:2000]
+
+
+def score_answer_segment(segment: str) -> int:
+    normalized = f" {normalize_for_match(segment)} "
+    score = min(4, len(segment) // 180)
+    score += 4 * sum(marker in normalized for marker in SUPPORT_ANSWER_MARKERS)
+    score -= 6 * sum(marker in normalized for marker in USER_REQUEST_MARKERS)
+    score -= 8 * sum(marker in normalized for marker in THREAD_ARTIFACT_MARKERS)
+    if THREAD_TIMESTAMP_RE.search(normalized):
+        score -= 8
+    if "?" in segment:
+        score -= 4
+    user_fragment_start = r"^\s*(?:\(|и\s+|а\s+|не\s+могу|не\s+успел|прошу|подскажите|хочу)"
+    if re.match(user_fragment_start, segment, re.IGNORECASE):
+        score -= 5
+    return score
 
 
 def classify_category(text: str) -> str:

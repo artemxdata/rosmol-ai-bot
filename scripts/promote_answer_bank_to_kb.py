@@ -37,6 +37,62 @@ SAFE_SOURCE_FIELDS = {
     "notes",
 }
 CONDITIONAL_RE = re.compile(r"\bесли\b|в\s+случае|при\s+условии", re.IGNORECASE)
+UNSAFE_PLACEHOLDERS = ("[EMAIL]", "[ТЕЛЕФОН]", "[ДОКУМЕНТ]", "[ДАТА]", "[ИМЯ]", "[ID]", "[URL]")
+UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+ID_LABEL_RE = re.compile(r"\bID\s*[:№#-]?\s*[A-Za-zА-Яа-я0-9_-]{6,}\b", re.IGNORECASE)
+ANSWER_FIRST_PERSON_RE = re.compile(
+    r"\b(я|мне|меня|мой|моя|моё|мои|помогите|подскажите)\b",
+    re.IGNORECASE,
+)
+PRIVATE_REQUEST_RE = re.compile(
+    r"\b("
+    r"прошу|"
+    r"возможно\s+ли|"
+    r"очень\s+хочу|"
+    r"можете\s+пожалуйста|"
+    r"пожалуйста\s+открыть|"
+    r"не\s+успел[аи]?|"
+    r"не\s+смог[уы]?|"
+    r"приболел[аи]?|"
+    r"почта\s+та\s+же|"
+    r"не\s+копируется|"
+    r"возник(?:ла|ли|ший|шую|шее)?\s+(?:техническая\s+)?(?:неполадка|вопрос|проблема)|"
+    r"почему\s+|"
+    r"не\s+хватило|"
+    r"не\s+вижу|"
+    r"личн(?:ые|ым|ыми)\s+обстоятельств"
+    r")",
+    re.IGNORECASE,
+)
+LATIN_ALPHA_RE = re.compile(r"[A-Za-z]")
+LATIN_NOISE_RE = re.compile(r"\bcommented\b|\u200b|\u200c|\u200d", re.IGNORECASE)
+THREAD_ARTIFACT_RE = re.compile(
+    r"служб[аы]\s+заботы\s+росмолод[ёе]жи\s*:|"
+    r"запрос\s+отправлял[аи]?|"
+    r"отправлено\s+из|"
+    r"\b\d{4}\s*г\.\s*,?\s*\d{1,2}:\d{2}\b",
+    re.IGNORECASE,
+)
+USER_FRAGMENT_START_RE = re.compile(
+    r"^\s*(?:"
+    r"\(|"
+    r"и\s+|"
+    r"а\s+|"
+    r"не\s+могу|"
+    r"не\s+успел[аи]?|"
+    r"не\s+получил[аи]?|"
+    r"к\s+сожалению,\s+не\s+смогу|"
+    r"возник(?:ла|ли|ший|шую|шее)?\s+|"
+    r"подскажите|"
+    r"прошу|"
+    r"хочу|"
+    r"можете\s+пожалуйста"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def promote_answer_bank(
@@ -118,11 +174,57 @@ def select_promotable(
         sanitize_candidate(candidate)
         for candidate in answer_bank
         if str(candidate.get("review_status") or "").strip() in allowed
+        and is_safe_candidate_texts(
+            query=str(candidate.get("query") or ""),
+            answer=str(candidate.get("answer") or ""),
+        )
     ]
 
 
 def sanitize_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     return {key: candidate.get(key) for key in SAFE_SOURCE_FIELDS if key in candidate}
+
+
+def is_safe_answer_text(text: str) -> bool:
+    normalized = clean_optional(text)
+    if not normalized:
+        return False
+    folded = normalized.casefold()
+    if any(placeholder.casefold() in folded for placeholder in UNSAFE_PLACEHOLDERS):
+        return False
+    if UUID_RE.search(folded) or ID_LABEL_RE.search(folded):
+        return False
+    latin_alpha_count = len(LATIN_ALPHA_RE.findall(normalized))
+    if "?" in normalized or latin_alpha_count > max(40, int(len(normalized) * 0.2)):
+        return False
+    if LATIN_NOISE_RE.search(normalized):
+        return False
+    if THREAD_ARTIFACT_RE.search(folded):
+        return False
+    if USER_FRAGMENT_START_RE.search(folded):
+        return False
+    return (
+        ANSWER_FIRST_PERSON_RE.search(folded) is None
+        and PRIVATE_REQUEST_RE.search(folded) is None
+    )
+
+
+def is_safe_query_text(text: str) -> bool:
+    normalized = clean_optional(text)
+    if not normalized:
+        return False
+    folded = normalized.casefold()
+    if any(placeholder.casefold() in folded for placeholder in UNSAFE_PLACEHOLDERS):
+        return False
+    return (
+        UUID_RE.search(folded) is None
+        and ID_LABEL_RE.search(folded) is None
+        and THREAD_ARTIFACT_RE.search(folded) is None
+    )
+
+
+def is_safe_candidate_texts(*, query: str, answer: str) -> bool:
+    return is_safe_query_text(query) and is_safe_answer_text(answer)
 
 
 def build_draft_chunk(
