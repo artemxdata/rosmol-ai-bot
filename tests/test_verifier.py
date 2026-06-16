@@ -85,3 +85,52 @@ async def test_verifier_rejects_no_question_response_when_user_asked_question() 
 
     assert result["verification"].has_hallucination is True
     assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_when_answer_admits_sources_are_insufficient() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "В предоставленных источниках нет информации о возврате средств. "
+                "Рекомендую направить ваш вопрос специалисту службы поддержки."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.7)
+            ],
+            "max_confidence": 0.7,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_support_instruction_when_sources_are_sufficient() -> None:
+    llm = JudgeLLM('{"has_hallucination": false, "confidence": 0.9, "details": "grounded"}')
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Если проблема сохраняется, обратитесь в службу поддержки с описанием ошибки."
+            ),
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="ctx_1",
+                    text="При технической ошибке обратитесь в службу поддержки.",
+                    metadata={},
+                    reranker_score=0.7,
+                )
+            ],
+            "max_confidence": 0.7,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert llm.calls == 1

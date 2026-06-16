@@ -15,6 +15,19 @@ NO_QUESTION_RE = re.compile(
     r"(пока\s+нет\s+вопрос|задайте\s+(?:ваш\s+)?вопрос|готов\s+помочь.*задайте)",
     flags=re.IGNORECASE,
 )
+INSUFFICIENT_SOURCE_RE = re.compile(
+    r"(в\s+(?:предоставленных\s+)?источниках\s+нет\s+информации|"
+    r"источники\s+не\s+(?:содержат|подтверждают)|"
+    r"информации\s+(?:в\s+источниках\s+)?нет|"
+    r"нет\s+информации\s+о)",
+    flags=re.IGNORECASE,
+)
+SPECIALIST_REDIRECT_RE = re.compile(
+    r"(переда(?:ю|ем|ём|ть)\s+обращение\s+специалист|"
+    r"обратитесь\s+.*(?:служб[ау]\s+поддержк|специалист)|"
+    r"рекомендую\s+направить\s+.*(?:специалист|служб[ау]\s+поддержк))",
+    flags=re.IGNORECASE,
+)
 
 
 async def verify(state: BotState) -> dict:
@@ -44,6 +57,21 @@ async def verify(state: BotState) -> dict:
         return {"verification": result, "verifier_triggered": False}
 
     confidence = float(state.get("max_confidence") or 0)
+    if _signals_insufficient_source_escalation(response):
+        result = VerificationResult(
+            has_hallucination=False,
+            confidence=confidence,
+            details="Response says the sources are insufficient and redirects to a specialist.",
+        )
+        if tracer:
+            tracer.add("verify", int((perf_counter() - started_at) * 1000), guard=True)
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "insufficient_sources",
+        }
+
     if _can_skip_llm_judge(state, confidence):
         result = VerificationResult(has_hallucination=False, confidence=confidence)
         if tracer:
@@ -82,6 +110,19 @@ def _contradicts_present_question(response: str, state: BotState) -> bool:
         return True
     analysis = state.get("analysis")
     return bool(getattr(analysis, "questions", None))
+
+
+def _signals_insufficient_source_escalation(response: str) -> bool:
+    if not response:
+        return False
+    normalized = response.casefold().replace("ё", "е")
+    explicit_escalation = "передаю обращение специалисту, чтобы не дать неточный ответ"
+    if explicit_escalation in normalized:
+        return True
+    return bool(
+        INSUFFICIENT_SOURCE_RE.search(normalized)
+        and SPECIALIST_REDIRECT_RE.search(normalized)
+    )
 
 
 def _can_skip_llm_judge(state: BotState, confidence: float) -> bool:
