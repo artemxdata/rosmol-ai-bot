@@ -31,6 +31,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://rosmol:rosmol@postgres:5432/rosmol_ai_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
       RERANKER_THRESHOLD_LOW: ${RERANKER_THRESHOLD_LOW:-0.4}
       RERANKER_THRESHOLD_HIGH: ${RERANKER_THRESHOLD_HIGH:-0.7}
       CACHE_SIMILARITY_THRESHOLD: ${CACHE_SIMILARITY_THRESHOLD:-0.95}
@@ -99,10 +100,11 @@ services:
       [
         "sh",
         "-c",
-        "python scripts/init_qdrant.py && python scripts/index_kb.py --path data/knowledge_base_seed.json --collection knowledge_base",
+        "python scripts/init_qdrant.py && python scripts/index_kb.py --path data/knowledge_base_seed.json",
       ]
     environment:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     volumes:

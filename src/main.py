@@ -52,7 +52,11 @@ async def lifespan(app: FastAPI):
     app.state.pii_masker = PIIMasker()
     app.state.llm_client = CloudRuLLMClient()
     app.state.embedder = Embedder()
-    app.state.retriever = Retriever(app.state.qdrant, app.state.embedder)
+    app.state.retriever = Retriever(
+        app.state.qdrant,
+        app.state.embedder,
+        collection_name=settings.qdrant_knowledge_collection,
+    )
     app.state.reranker = Reranker()
     app.state.semantic_cache = SemanticCache(app.state.qdrant, app.state.embedder)
     app.state.graph = build_graph()

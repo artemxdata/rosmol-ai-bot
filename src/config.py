@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     postgres_dsn: str = "postgresql://rosmol:rosmol@localhost:5432/rosmol_ai_bot"
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
+    qdrant_knowledge_collection: str = "knowledge_base"
 
     reranker_threshold_low: float = Field(default=0.4, ge=0, le=1)
     reranker_threshold_high: float = Field(default=0.7, ge=0, le=1)

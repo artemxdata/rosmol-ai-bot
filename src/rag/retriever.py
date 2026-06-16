@@ -12,9 +12,15 @@ from src.rag.filter_keys import category_filter_key, stable_text_filter_key
 
 
 class Retriever:
-    def __init__(self, qdrant_client: AsyncQdrantClient, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        qdrant_client: AsyncQdrantClient,
+        embedder: Embedder,
+        collection_name: str = "knowledge_base",
+    ) -> None:
         self.qdrant = qdrant_client
         self.embedder = embedder
+        self.collection_name = collection_name
 
     async def retrieve(
         self,
@@ -27,7 +33,7 @@ class Retriever:
         query_filter = build_filter(filters or {})
 
         result = await self.qdrant.query_points(
-            collection_name="knowledge_base",
+            collection_name=self.collection_name,
             prefetch=[
                 models.Prefetch(
                     query=dense.tolist(),

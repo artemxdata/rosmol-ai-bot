@@ -275,6 +275,17 @@ python scripts/index_kb.py \
 Все записи остаются `status=draft`; перенос в `data/knowledge_base_seed.json` выполняется
 только после ручной проверки актуальности и отсутствия персональных данных.
 
+Для локального sandbox-теста можно проиндексировать приватный merged-кандидат в отдельную
+Qdrant-коллекцию и временно направить туда `/ask` через `QDRANT_KNOWLEDGE_COLLECTION`.
+Дефолт остаётся `knowledge_base`; этот режим не предназначен для production.
+
+```bash
+python scripts/init_qdrant.py --knowledge-collection knowledge_base_answer_bank_sandbox
+python scripts/index_kb.py \
+  --collection knowledge_base_answer_bank_sandbox \
+  --path data/private/tickets/curation/knowledge_base_seed_with_answer_bank_drafts.json
+```
+
 Подготовка приватных eval-наборов из ticket analysis:
 
 ```bash

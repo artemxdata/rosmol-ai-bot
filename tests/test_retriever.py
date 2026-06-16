@@ -38,11 +38,16 @@ class FakeQdrant:
 @pytest.mark.asyncio
 async def test_retriever_applies_filter_to_prefetches() -> None:
     qdrant = FakeQdrant()
-    retriever = Retriever(qdrant, FakeEmbedder())  # type: ignore[arg-type]
+    retriever = Retriever(
+        qdrant,
+        FakeEmbedder(),  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
 
     await retriever.retrieve("гранты", {"category": "гранты"}, top_k=5)
 
     assert qdrant.kwargs is not None
+    assert qdrant.kwargs["collection_name"] == "knowledge_base_sandbox"
     query_filter = qdrant.kwargs["query_filter"]
     assert qdrant.kwargs["prefetch"][0].filter == query_filter
     assert qdrant.kwargs["prefetch"][1].filter == query_filter

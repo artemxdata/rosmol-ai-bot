@@ -183,9 +183,10 @@ def _read_json(path: Path) -> object:
 
 
 def parse_args() -> argparse.Namespace:
+    settings = get_settings()
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", default="data/knowledge_base_seed.json")
-    parser.add_argument("--collection", default="knowledge_base")
+    parser.add_argument("--collection", default=settings.qdrant_knowledge_collection)
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument(
         "--limit",

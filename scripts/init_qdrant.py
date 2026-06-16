@@ -12,18 +12,22 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src.config import get_settings
 
 
-async def ensure_collections(recreate: bool = False) -> None:
+async def ensure_collections(
+    recreate: bool = False,
+    knowledge_collection: str | None = None,
+) -> None:
     settings = get_settings()
+    knowledge_collection = knowledge_collection or settings.qdrant_knowledge_collection
     client = AsyncQdrantClient(url=settings.qdrant_url)
 
-    if recreate and await client.collection_exists("knowledge_base"):
-        await client.delete_collection("knowledge_base")
+    if recreate and await client.collection_exists(knowledge_collection):
+        await client.delete_collection(knowledge_collection)
     if recreate and await client.collection_exists("response_cache"):
         await client.delete_collection("response_cache")
 
-    if not await client.collection_exists("knowledge_base"):
+    if not await client.collection_exists(knowledge_collection):
         await client.create_collection(
-            collection_name="knowledge_base",
+            collection_name=knowledge_collection,
             vectors_config={
                 "dense": models.VectorParams(size=1024, distance=models.Distance.COSINE),
             },
@@ -45,7 +49,7 @@ async def ensure_collections(recreate: bool = False) -> None:
     ):
         await create_payload_index_if_missing(
             client,
-            collection_name="knowledge_base",
+            collection_name=knowledge_collection,
             field_name=field,
             field_schema=models.PayloadSchemaType.KEYWORD,
         )
@@ -97,9 +101,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Delete and recreate Qdrant collections. Destructive.",
     )
+    parser.add_argument(
+        "--knowledge-collection",
+        default=None,
+        help="Qdrant collection for KB chunks. Defaults to QDRANT_KNOWLEDGE_COLLECTION.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    asyncio.run(ensure_collections(recreate=args.recreate))
+    asyncio.run(
+        ensure_collections(
+            recreate=args.recreate,
+            knowledge_collection=args.knowledge_collection,
+        )
+    )
