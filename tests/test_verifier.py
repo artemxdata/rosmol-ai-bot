@@ -147,6 +147,44 @@ async def test_verifier_escalates_when_answer_says_info_absent_and_redirects() -
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_missing_concrete_info_with_care_service_redirect() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "В предоставленных источниках нет конкретной информации о возврате средств. "
+                "Рекомендую обратиться напрямую в Службу Заботы Росмолодёжи."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.7)
+            ],
+            "max_confidence": 0.7,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_missing_precise_info_with_support_redirect() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "На данный момент точной информации о различиях между форумами нет. "
+                "Рекомендуем обратиться непосредственно в службу поддержки Росмолодёжи."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.8)
+            ],
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_support_instruction_when_sources_are_sufficient() -> None:
     llm = JudgeLLM('{"has_hallucination": false, "confidence": 0.9, "details": "grounded"}')
 
