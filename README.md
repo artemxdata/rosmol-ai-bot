@@ -259,6 +259,22 @@ python scripts/build_ticket_answer_bank.py \
 После ревизии подтверждённые записи переносятся в `knowledge_base_seed.json` как `draft`,
 затем проходят редакторскую проверку, публикацию и переиндексацию.
 
+Промоутинг answer bank в KB-совместимые черновики без изменения основной базы:
+
+```bash
+python scripts/promote_answer_bank_to_kb.py \
+  --include-candidates \
+  --limit 300 \
+  --merged-output data/private/tickets/curation/knowledge_base_seed_with_answer_bank_drafts.json
+python scripts/index_kb.py \
+  --path data/private/tickets/curation/kb_draft_answer_bank.json \
+  --validate-only
+```
+
+Скрипт пишет только приватные review-артефакты `kb_draft_answer_bank.json/.md`.
+Все записи остаются `status=draft`; перенос в `data/knowledge_base_seed.json` выполняется
+только после ручной проверки актуальности и отсутствия персональных данных.
+
 Подготовка приватных eval-наборов из ticket analysis:
 
 ```bash
