@@ -109,6 +109,44 @@ async def test_verifier_escalates_when_answer_admits_sources_are_insufficient() 
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_polite_specialist_handoff_for_missing_facts() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "В предоставленных источниках нет информации о порядке обращения. "
+                "Пожалуйста, передайте ваш вопрос специалисту для получения точной консультации."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.7)
+            ],
+            "max_confidence": 0.7,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_when_answer_says_info_absent_and_redirects() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "Из представленных источников невозможно ответить на вопрос. "
+                "Информация об условиях отсутствует. Рекомендую обратиться к специалистам."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.8)
+            ],
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_support_instruction_when_sources_are_sufficient() -> None:
     llm = JudgeLLM('{"has_hallucination": false, "confidence": 0.9, "details": "grounded"}')
 
