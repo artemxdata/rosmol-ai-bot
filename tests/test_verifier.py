@@ -185,6 +185,25 @@ async def test_verifier_escalates_missing_precise_info_with_support_redirect() -
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_missing_info_with_direct_handoff() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "Точная информация о различиях между форумами отсутствует. "
+                "Передам ваш запрос специалисту для уточнения деталей."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.8)
+            ],
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_support_instruction_when_sources_are_sufficient() -> None:
     llm = JudgeLLM('{"has_hallucination": false, "confidence": 0.9, "details": "grounded"}')
 
