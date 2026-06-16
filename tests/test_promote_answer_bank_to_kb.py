@@ -83,6 +83,10 @@ def test_select_promotable_rejects_unsafe_answer_text() -> None:
                 id="unsafe_thread_artifact",
                 answer="Служба Заботы Росмолодёжи: 2025 г., 10:12. Запрос отправлял по гранту",
             ),
+            _candidate(
+                id="unsafe_name_prefix",
+                answer="Анастасия, поскольку аккаунт верифицирован через ЕСИА, измените данные.",
+            ),
             _candidate(id="unsafe_fragment_start", answer="(не черновик, именно проект)"),
             _candidate(id="unsafe_lowercase_start", answer="и не получила обратную связь"),
         ],

@@ -70,6 +70,9 @@ UUID_RE = re.compile(
 )
 ID_LABEL_RE = re.compile(r"\bID\s*[:№#-]?\s*[A-Za-zА-Яа-я0-9_-]{6,}\b", re.IGNORECASE)
 LONG_ID_RE = re.compile(r"\b\d{7,}\b")
+LEADING_ADDRESSEE_RE = re.compile(
+    r"^\s*[А-ЯЁ][а-яё]{2,}(?:\s+[А-ЯЁ][а-яё]{2,}){0,2},\s+"
+)
 ANSWER_FIRST_PERSON_RE = re.compile(
     r"\b(я|мне|меня|мой|моя|моё|мои|помогите|подскажите)\b",
     re.IGNORECASE,
@@ -246,6 +249,7 @@ def sanitize_text(text: str, masker: PIIMasker) -> str:
     masked = mask_name_phrases(masked)
     masked = strip_signature(masked)
     masked = strip_greeting(masked)
+    masked = strip_leading_addressee(masked)
     return compact(masked)
 
 
@@ -277,6 +281,10 @@ def strip_greeting(text: str) -> str:
         count=1,
         flags=re.IGNORECASE,
     )
+
+
+def strip_leading_addressee(text: str) -> str:
+    return LEADING_ADDRESSEE_RE.sub("", text, count=1)
 
 
 def has_disallowed_markers(question: str, answer: str) -> bool:

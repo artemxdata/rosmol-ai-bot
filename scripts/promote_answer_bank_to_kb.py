@@ -43,6 +43,9 @@ UUID_RE = re.compile(
     re.IGNORECASE,
 )
 ID_LABEL_RE = re.compile(r"\bID\s*[:№#-]?\s*[A-Za-zА-Яа-я0-9_-]{6,}\b", re.IGNORECASE)
+LEADING_ADDRESSEE_RE = re.compile(
+    r"^\s*[А-ЯЁ][а-яё]{2,}(?:\s+[А-ЯЁ][а-яё]{2,}){0,2},\s+"
+)
 ANSWER_FIRST_PERSON_RE = re.compile(
     r"\b(я|мне|меня|мой|моя|моё|мои|помогите|подскажите)\b",
     re.IGNORECASE,
@@ -200,6 +203,8 @@ def is_safe_answer_text(text: str) -> bool:
     if LATIN_NOISE_RE.search(normalized):
         return False
     if THREAD_ARTIFACT_RE.search(folded):
+        return False
+    if LEADING_ADDRESSEE_RE.search(normalized):
         return False
     if USER_FRAGMENT_START_RE.search(folded):
         return False

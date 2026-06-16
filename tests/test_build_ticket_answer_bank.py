@@ -11,6 +11,7 @@ from scripts.build_ticket_answer_bank import (
     sanitize_text,
     select_balanced,
     strip_greeting,
+    strip_leading_addressee,
 )
 from src.security.pii_masker import PIIMasker
 
@@ -212,4 +213,13 @@ def test_strip_greeting_removes_support_salutation() -> None:
     assert (
         strip_greeting("Добрый день, [ИМЯ]! Заявку можно подать через личный кабинет.")
         == "Заявку можно подать через личный кабинет."
+    )
+
+
+def test_strip_leading_addressee_removes_name_prefix() -> None:
+    assert (
+        strip_leading_addressee(
+            "Анастасия, поскольку аккаунт верифицирован через ЕСИА, измените данные на Госуслугах."
+        )
+        == "поскольку аккаунт верифицирован через ЕСИА, измените данные на Госуслугах."
     )
