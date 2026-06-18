@@ -92,6 +92,36 @@ class BroadeningRetriever:
         return []
 
 
+class MultiForumRetriever:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def retrieve(self, query: str, filters: dict, top_k: int):
+        self.calls.append((query, filters, top_k))
+        forum = filters.get("forum_normalized")
+        if filters.get("category") != "форумы" or not forum:
+            return []
+        if "подать заявку" in query.casefold():
+            return [
+                Chunk(
+                    chunk_id=f"{forum}_registration",
+                    text=f"Регистрация на {forum}.",
+                    metadata={"chunk_id": f"{forum}_registration", "forum_normalized": forum},
+                    score=0.5,
+                )
+            ]
+        if "проезд" in query.casefold():
+            return [
+                Chunk(
+                    chunk_id=f"{forum}_travel",
+                    text=f"Проезд на {forum}.",
+                    metadata={"chunk_id": f"{forum}_travel", "forum_normalized": forum},
+                    score=0.5,
+                )
+            ]
+        return []
+
+
 class QuestionAwareReranker:
     def __init__(self) -> None:
         self.calls = []
@@ -304,6 +334,30 @@ def test_apply_deterministic_forum_overrides_question_forum() -> None:
     assert payload["questions"][0]["forum_normalized"] == "Арктика. Лёд тронулся"
 
 
+def test_apply_deterministic_forum_preserves_multiple_detected_forums() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": None,
+            "forum_normalized": None,
+            "category": None,
+            "questions": [{"text": "Чем отличаются по регистрации и проезду?"}],
+        }
+    )
+
+    _apply_deterministic_forum(
+        payload,
+        "Чем отличаются Машук и Территория смыслов по регистрации и проезду?",
+    )
+
+    assert payload["forum_normalized"] is None
+    assert payload["category"] == "форумы"
+    assert payload["extracted_params"]["detected_forums"] == [
+        "Территория смыслов",
+        "Машук",
+    ]
+    assert payload["questions"][0]["forum_normalized"] is None
+
+
 @pytest.mark.asyncio
 async def test_analyze_detects_forum_from_original_message_after_pii_masking() -> None:
     result = await analyze_query(
@@ -396,6 +450,45 @@ async def test_retrieve_adds_one_broader_candidate_layer_after_strict_hit() -> N
         ("Where is the schedule?", {"forum_normalized": "Forum A", "category": "forums"}, 10),
         ("Where is the schedule?", {"forum_normalized": "Forum A"}, 10),
     ]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_expands_multi_forum_fallback_questions() -> None:
+    retriever = MultiForumRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                extracted_params={"detected_forums": ["Машук", "Территория смыслов"]},
+            ),
+            "message_masked": (
+                "Чем отличаются Машук и Территория смыслов по регистрации, "
+                "проживанию и оплате проезда?"
+            ),
+            "retriever": retriever,
+        }
+    )
+
+    chunk_ids = {chunk.chunk_id for chunk in result["retrieved_chunks"]}
+    assert {
+        "Машук_registration",
+        "Территория смыслов_registration",
+        "Машук_travel",
+        "Территория смыслов_travel",
+    } <= chunk_ids
+    strict_calls = [
+        (query, filters)
+        for query, filters, _top_k in retriever.calls
+        if filters.get("category") == "форумы"
+    ]
+    assert (
+        "Машук: Как подать заявку или зарегистрироваться?",
+        {"forum_normalized": "Машук", "category": "форумы"},
+    ) in strict_calls
+    assert (
+        "Территория смыслов: Кто оплачивает проезд?",
+        {"forum_normalized": "Территория смыслов", "category": "форумы"},
+    ) in strict_calls
 
 
 @pytest.mark.asyncio

@@ -11,14 +11,24 @@ NON_WORD_PATTERN = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
 
 
 def detect_forum_from_text(text: str, registry_path: Path = REGISTRY_PATH) -> str | None:
+    forums = detect_forums_from_text(text, registry_path)
+    return forums[0] if forums else None
+
+
+def detect_forums_from_text(text: str, registry_path: Path = REGISTRY_PATH) -> list[str]:
     normalized_text = f" {_normalize_for_match(text)} "
     if not normalized_text.strip():
-        return None
+        return []
 
+    detected: list[str] = []
+    seen: set[str] = set()
     for alias, normalized_forum in _forum_aliases(registry_path):
         if f" {alias} " in normalized_text:
-            return normalized_forum
-    return None
+            if normalized_forum in seen:
+                continue
+            detected.append(normalized_forum)
+            seen.add(normalized_forum)
+    return detected
 
 
 @lru_cache(maxsize=8)

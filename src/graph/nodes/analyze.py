@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.graph.state import BotState
-from src.kb.forum_registry import detect_forum_from_text
+from src.kb.forum_registry import detect_forums_from_text
 from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
@@ -53,6 +53,8 @@ def _coerce_analysis_payload(payload: dict) -> dict:
     normalized["forum_normalized"] = _coerce_optional_string(normalized.get("forum_normalized"))
     normalized["topics"] = _coerce_string_list(normalized.get("topics"))
     normalized["category"] = _normalize_category(normalized.get("category"))
+    if not isinstance(normalized.get("extracted_params"), dict):
+        normalized["extracted_params"] = {}
     if normalized.get("forum") and not normalized.get("forum_normalized"):
         normalized["forum_normalized"] = normalized["forum"]
     normalized["questions"] = _coerce_questions(normalized.get("questions"))
@@ -61,7 +63,18 @@ def _coerce_analysis_payload(payload: dict) -> dict:
 
 
 def _apply_deterministic_forum(payload: dict, message: str) -> None:
-    detected_forum = detect_forum_from_text(message)
+    detected_forums = detect_forums_from_text(message)
+    if len(detected_forums) > 1:
+        extracted_params = payload.get("extracted_params")
+        if not isinstance(extracted_params, dict):
+            extracted_params = {}
+        extracted_params["detected_forums"] = detected_forums
+        payload["extracted_params"] = extracted_params
+        if not payload.get("category"):
+            payload["category"] = "форумы"
+        return
+
+    detected_forum = detected_forums[0] if detected_forums else None
     if not detected_forum:
         return
 
