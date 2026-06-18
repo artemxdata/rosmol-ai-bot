@@ -28,6 +28,20 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("сертификат",),
     ("чат", "куратор"),
 )
+FORUM_SPECIFIC_MARKERS = (
+    "дата",
+    "даты",
+    "мероприят",
+    "заезд",
+    "выезд",
+    "приех",
+    "трансфер",
+    "аэропорт",
+    "вокзал",
+    "площадк",
+    "кемеров",
+    "новокузнец",
+)
 INSUFFICIENT_SOURCE_RE = re.compile(
     r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
     r"из\s+(?:представленных|переданных)\s+источников\s+невозможно\s+ответить|"
@@ -35,6 +49,7 @@ INSUFFICIENT_SOURCE_RE = re.compile(
     r"информации\s+(?:в\s+источниках\s+)?нет|"
     r"нет\s+информации\s+о|"
     r"источник(?:е|ах)\s+отсутств|"
+    r"не\s+указан[аоы]?\s+в\s+(?:предоставленных\s+)?источниках|"
     r"(?:точной|конкретной)\s+информации[^.!?]{0,160}\s+нет|"
     r"информаци[яи][^.!?]{0,160}отсутств)",
     flags=re.IGNORECASE,
@@ -89,6 +104,27 @@ async def verify(state: BotState) -> dict:
             "verifier_triggered": False,
             "should_escalate": True,
             "escalation_reason": "insufficient_sources",
+        }
+
+    ambiguous_forums = _ambiguous_forum_context(state, chunks)
+    if ambiguous_forums:
+        result = VerificationResult(
+            has_hallucination=False,
+            confidence=confidence,
+            details="Ambiguous forum-specific sources: " + ", ".join(ambiguous_forums),
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                guard=True,
+                ambiguous_forums=ambiguous_forums,
+            )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "ambiguous_forum_context",
         }
 
     missing_coverage = _missing_source_coverage(state, chunks)
@@ -160,6 +196,29 @@ def _signals_insufficient_source_escalation(response: str) -> bool:
     if explicit_escalation in normalized:
         return True
     return bool(INSUFFICIENT_SOURCE_RE.search(normalized))
+
+
+def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list[str]:
+    analysis = state.get("analysis")
+    if getattr(analysis, "forum_normalized", None):
+        return []
+    if analysis and _detected_forums_for_coverage(analysis.extracted_params):
+        return []
+
+    message = _normalize(str(state.get("message_masked") or state.get("message") or ""))
+    if not any(marker in message for marker in FORUM_SPECIFIC_MARKERS):
+        return []
+
+    cited_sources = set(state.get("cited_sources") or [])
+    source_chunks = [
+        chunk for chunk in chunks if not cited_sources or chunk.chunk_id in cited_sources
+    ]
+    forums = {
+        forum
+        for chunk in source_chunks
+        if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
+    }
+    return sorted(forums) if len(forums) > 1 else []
 
 
 def _missing_source_coverage(state: BotState, chunks: list[ScoredChunk]) -> list[str]:

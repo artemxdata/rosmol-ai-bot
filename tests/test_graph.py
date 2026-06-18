@@ -171,6 +171,18 @@ class LowScoreReranker:
         ]
 
 
+class InputOrderReranker:
+    def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+        return [
+            ScoredChunk(
+                **chunk.model_dump(exclude={"score"}),
+                score=chunk.score,
+                reranker_score=1.0 - index * 0.1,
+            )
+            for index, chunk in enumerate(chunks[:top_k])
+        ]
+
+
 def test_route_after_analyze_clarifies() -> None:
     state = {"analysis": QueryAnalysis(needs_clarification=True)}
     assert route_after_analyze(state) == "clarify"
@@ -223,6 +235,16 @@ async def test_escalate_preserves_partial_answer_for_partial_source_coverage() -
     assert result["final_response"].startswith("Подтверждённая часть ответа.")
     assert "[src:" not in result["final_response"]
     assert "нет достаточных подтверждённых данных" in result["final_response"]
+
+
+@pytest.mark.asyncio
+async def test_escalate_asks_for_forum_when_context_is_ambiguous() -> None:
+    result = await escalate({"escalation_reason": "ambiguous_forum_context"})
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert "Уточните" in result["final_response"]
+    assert "название форума" in result["final_response"]
 
 
 def test_coerce_analysis_payload_accepts_topic_objects() -> None:
@@ -595,6 +617,41 @@ def test_rerank_candidate_prefilter_prioritizes_intent_marker() -> None:
     candidates = _candidate_chunks_for_question("Есть ли питание?", chunks, limit=2)
 
     assert [chunk.chunk_id for chunk in candidates] == ["food", "logistics"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_single_question_prefilter_prioritizes_selection_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="decline",
+            text="Если решишь отказаться от участия, сообщи организаторам.",
+            metadata={"intent_name": "Отказ от участия"},
+            score=0.9,
+        ),
+        Chunk(
+            chunk_id="results",
+            text="Результаты конкурсного отбора придут на электронную почту.",
+            metadata={"intent_name": "Результаты РМ"},
+            score=0.7,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Когда будут известны результаты конкурсного отбора?",
+            "analysis": QueryAnalysis(category="форумы"),
+            "retrieved_chunks": chunks,
+            "reranker": InputOrderReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "results"
 
 
 @pytest.mark.asyncio

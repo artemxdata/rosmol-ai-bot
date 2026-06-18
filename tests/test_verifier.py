@@ -185,6 +185,25 @@ async def test_verifier_escalates_absent_info_even_without_redirect() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_fact_not_specified_in_sources() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "Точная дата проведения мероприятия не указана в предоставленных источниках. "
+                "Трансфер организован от аэропорта."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.5)
+            ],
+            "max_confidence": 0.5,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
 async def test_verifier_escalates_missing_concrete_info_with_care_service_redirect() -> None:
     result = await verify(
         {
@@ -345,6 +364,70 @@ async def test_verifier_escalates_multi_forum_partial_source_coverage() -> None:
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "partial_source_coverage"
     assert "Машук" in result["verification"].details
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_ambiguous_forum_specific_sources() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Можно приехать в Кемерово вечером и будет ли трансфер до площадки?"
+            ),
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": "Можно приехать, трансфер будет. [src:morning] [src:sheregesh]",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="morning",
+                    text="Информация о форуме Утро.",
+                    metadata={"forum_normalized": "Утро"},
+                    reranker_score=0.6,
+                ),
+                ScoredChunk(
+                    chunk_id="sheregesh",
+                    text="Трансфер от Кемерово до Шерегеша.",
+                    metadata={"forum_normalized": "Шерегеш"},
+                    reranker_score=0.5,
+                ),
+            ],
+            "cited_sources": ["morning", "sheregesh"],
+            "max_confidence": 0.6,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert "Утро" in result["verification"].details
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_generic_multi_forum_sources_without_forum_specific_query() -> None:
+    result = await verify(
+        {
+            "message_masked": "Можно ли получить письмо-вызов?",
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": "Письмо-вызов можно получить по запросу. [src:a] [src:b]",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="a",
+                    text="Письмо-вызов можно получить по запросу.",
+                    metadata={"forum_normalized": "Утро"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="b",
+                    text="Письмо-вызов можно получить по запросу.",
+                    metadata={"forum_normalized": "Машук"},
+                    reranker_score=0.9,
+                ),
+            ],
+            "cited_sources": ["a", "b"],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert "should_escalate" not in result
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,11 @@ PARTIAL_COVERAGE_NOTE = (
     "По части вопроса в базе знаний нет достаточных подтверждённых данных. "
     "Передаю обращение специалисту, чтобы не дать неточный ответ."
 )
+AMBIGUOUS_FORUM_NOTE = (
+    "Уточните, пожалуйста, название форума или мероприятия. "
+    "По вашему вопросу найдены похожие источники по разным событиям, "
+    "и я не хочу смешать условия."
+)
 
 
 async def escalate(state: BotState) -> dict:
@@ -26,6 +31,8 @@ async def escalate(state: BotState) -> dict:
 
 
 def _escalation_response(state: BotState, reason: str) -> str:
+    if reason == "ambiguous_forum_context":
+        return AMBIGUOUS_FORUM_NOTE
     if reason != "partial_source_coverage":
         return "Передаю обращение специалисту, чтобы не дать неточный ответ."
 

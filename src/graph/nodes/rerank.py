@@ -119,7 +119,13 @@ def _rerank_for_state(
         else []
     )
     if len(questions) <= 1:
-        return reranker.rerank(query, chunks, 4)
+        rerank_query = questions[0] if questions else query
+        candidates = _candidate_chunks_for_question(
+            rerank_query,
+            chunks,
+            min(MAX_RERANKED_CHUNKS, max(4, len(chunks))),
+        )
+        return reranker.rerank(rerank_query, candidates, 4)
 
     selected: list[ScoredChunk] = []
     seen: set[str] = set()
