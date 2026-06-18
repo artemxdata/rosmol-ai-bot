@@ -10,6 +10,7 @@ from src.graph.nodes.analyze import (
     _coerce_analysis_payload,
     analyze_query,
 )
+from src.graph.nodes.escalate import escalate
 from src.graph.nodes.generate import generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
@@ -206,6 +207,22 @@ async def test_respond_does_not_append_specialist_note_for_valid_lowish_confiden
     )
 
     assert result["final_response"] == "Ответ по источнику"
+
+
+@pytest.mark.asyncio
+async def test_escalate_preserves_partial_answer_for_partial_source_coverage() -> None:
+    result = await escalate(
+        {
+            "generated_response": "Подтверждённая часть ответа. [src:ctx_1]",
+            "escalation_reason": "partial_source_coverage",
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "partial_source_coverage"
+    assert result["final_response"].startswith("Подтверждённая часть ответа.")
+    assert "[src:" not in result["final_response"]
+    assert "нет достаточных подтверждённых данных" in result["final_response"]
 
 
 def test_coerce_analysis_payload_accepts_topic_objects() -> None:

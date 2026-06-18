@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.graph.nodes.verify import verify
-from src.models import ScoredChunk
+from src.models import QueryAnalysis, ScoredChunk
 
 
 class JudgeLLM:
@@ -248,3 +248,101 @@ async def test_verifier_allows_support_instruction_when_sources_are_sufficient()
     assert result["verification"].has_hallucination is False
     assert "should_escalate" not in result
     assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_multi_forum_partial_source_coverage() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Чем отличаются Машук и Территория смыслов по регистрации, "
+                "проживанию и оплате проезда?"
+            ),
+            "analysis": QueryAnalysis(
+                category="форумы",
+                extracted_params={"detected_forums": ["Машук", "Территория смыслов"]},
+            ),
+            "generated_response": "По Территории смыслов есть регистрация, по Машуку есть проезд.",
+            "generator_model": "source_chunk",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="territory_registration",
+                    text="Чтобы подать заявку на Территорию смыслов, зарегистрируйтесь в ФГАИС.",
+                    metadata={
+                        "forum_normalized": "Территория смыслов",
+                        "intent_name": "Регистрация",
+                    },
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="territory_lodging",
+                    text="Проживание на форуме Территория смыслов организовано на площадке.",
+                    metadata={
+                        "forum_normalized": "Территория смыслов",
+                        "intent_name": "Проживание",
+                    },
+                    reranker_score=0.8,
+                ),
+                ScoredChunk(
+                    chunk_id="territory_travel",
+                    text="Проезд до площадки Территории смыслов от Москвы оплачивают организаторы.",
+                    metadata={
+                        "forum_normalized": "Территория смыслов",
+                        "intent_name": "Оплата проезда",
+                    },
+                    reranker_score=0.8,
+                ),
+                ScoredChunk(
+                    chunk_id="mashuk_travel",
+                    text="Билеты до Пятигорска на форум Машук участник оплачивает самостоятельно.",
+                    metadata={"forum_normalized": "Машук", "intent_name": "Оплата проезда"},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "partial_source_coverage"
+    assert "Машук" in result["verification"].details
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_multi_forum_answer_when_sources_cover_each_forum() -> None:
+    result = await verify(
+        {
+            "message_masked": "Кто оплачивает проезд на Машук и Территорию смыслов?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                extracted_params={"detected_forums": ["Машук", "Территория смыслов"]},
+            ),
+            "generated_response": (
+                "Проезд отличается по форумам [src:mashuk_travel] [src:territory_travel]"
+            ),
+            "generator_model": "source_chunk",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="mashuk_travel",
+                    text="Билеты до Пятигорска на форум Машук участник оплачивает самостоятельно.",
+                    metadata={"forum_normalized": "Машук", "intent_name": "Оплата проезда"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="territory_travel",
+                    text="Проезд до площадки Территории смыслов от Москвы оплачивают организаторы.",
+                    metadata={
+                        "forum_normalized": "Территория смыслов",
+                        "intent_name": "Оплата проезда",
+                    },
+                    reranker_score=0.9,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
