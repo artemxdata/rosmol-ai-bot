@@ -147,6 +147,44 @@ async def test_verifier_escalates_when_answer_says_info_absent_and_redirects() -
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_when_answer_says_source_has_no_info() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "В источнике нет информации по вашему вопросу. "
+                "Рекомендую обратиться к специалисту для получения детальных сведений."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.5)
+            ],
+            "max_confidence": 0.5,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_absent_info_even_without_redirect() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "Информация по запросу «Госстарт.Стажировки - Федеральный этап» "
+                "в источниках отсутствует."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.5)
+            ],
+            "max_confidence": 0.5,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
 async def test_verifier_escalates_missing_concrete_info_with_care_service_redirect() -> None:
     result = await verify(
         {

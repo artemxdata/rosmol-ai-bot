@@ -29,11 +29,12 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("чат", "куратор"),
 )
 INSUFFICIENT_SOURCE_RE = re.compile(
-    r"(в\s+(?:предоставленных\s+)?источниках\s+нет\s+(?:конкретной\s+)?информации|"
+    r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
     r"из\s+(?:представленных|переданных)\s+источников\s+невозможно\s+ответить|"
     r"источники\s+не\s+(?:содержат|подтверждают)|"
     r"информации\s+(?:в\s+источниках\s+)?нет|"
     r"нет\s+информации\s+о|"
+    r"источник(?:е|ах)\s+отсутств|"
     r"(?:точной|конкретной)\s+информации[^.!?]{0,160}\s+нет|"
     r"информаци[яи][^.!?]{0,160}отсутств)",
     flags=re.IGNORECASE,
@@ -158,10 +159,7 @@ def _signals_insufficient_source_escalation(response: str) -> bool:
     explicit_escalation = "передаю обращение специалисту, чтобы не дать неточный ответ"
     if explicit_escalation in normalized:
         return True
-    return bool(
-        INSUFFICIENT_SOURCE_RE.search(normalized)
-        and SPECIALIST_REDIRECT_RE.search(normalized)
-    )
+    return bool(INSUFFICIENT_SOURCE_RE.search(normalized))
 
 
 def _missing_source_coverage(state: BotState, chunks: list[ScoredChunk]) -> list[str]:
