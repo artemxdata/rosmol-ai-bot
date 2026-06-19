@@ -15,6 +15,7 @@ from src.graph.nodes.generate import generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
 from src.graph.nodes.retrieve import retrieve
+from src.graph.question_utils import build_effective_questions
 from src.models import Chunk, Complexity, QueryAnalysis, Question, ScoredChunk, VerificationResult
 
 
@@ -238,6 +239,23 @@ async def test_escalate_preserves_partial_answer_for_partial_source_coverage() -
 
 
 @pytest.mark.asyncio
+async def test_escalate_removes_full_coverage_claim_for_partial_source_coverage() -> None:
+    result = await escalate(
+        {
+            "generated_response": (
+                "Подтверждённая часть ответа.\n\n"
+                "Источники полностью покрывают твои вопросы. [src:ctx_1]"
+            ),
+            "escalation_reason": "partial_source_coverage",
+        }
+    )
+
+    assert "Подтверждённая часть ответа." in result["final_response"]
+    assert "Источники полностью покрывают" not in result["final_response"]
+    assert "нет достаточных подтверждённых данных" in result["final_response"]
+
+
+@pytest.mark.asyncio
 async def test_escalate_asks_for_forum_when_context_is_ambiguous() -> None:
     result = await escalate({"escalation_reason": "ambiguous_forum_context"})
 
@@ -279,6 +297,29 @@ def test_coerce_analysis_payload_normalizes_taxonomy_aliases() -> None:
     assert payload["questions"][1]["category"] == "техподдержка"
 
 
+def test_coerce_analysis_payload_normalizes_grant_project_aliases() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": "Гранты для физических лиц",
+            "forum_normalized": "Гранты для физических лиц",
+            "category": "реализация проекта",
+            "questions": [
+                {
+                    "text": "Как вернуть средства?",
+                    "category": "отчётность и средства",
+                    "forum_normalized": "Гранты для физических лиц",
+                }
+            ],
+        }
+    )
+
+    assert payload["category"] == "гранты"
+    assert payload["forum"] is None
+    assert payload["forum_normalized"] is None
+    assert payload["questions"][0]["category"] == "гранты"
+    assert payload["questions"][0]["forum_normalized"] is None
+
+
 def test_coerce_analysis_payload_drops_boolean_optional_strings() -> None:
     payload = _coerce_analysis_payload(
         {
@@ -308,6 +349,29 @@ def test_coerce_analysis_payload_drops_boolean_optional_strings() -> None:
     assert payload["questions"][0]["category"] is None
 
 
+def test_fallback_questions_keep_reporting_deadline_in_grant_context() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="гранты"),
+        "Проект по гранту сорвался, нужно вернуть деньги и понять сроки отчётности.",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как вернуть грантовые средства?",
+        "Как оформить отчётность по гранту?",
+    ]
+
+
+def test_fallback_questions_do_not_match_hotel_marker_inside_wanted_word() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Арктика. Лёд тронулся"),
+        "Арктика. Лёд тронулся Хотели бы поучаствовать в акции",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как подать заявку или зарегистрироваться?"
+    ]
+
+
 def test_apply_deterministic_forum_uses_registry_alias() -> None:
     payload = _coerce_analysis_payload(
         {
@@ -327,6 +391,33 @@ def test_apply_deterministic_forum_uses_registry_alias() -> None:
     assert payload["category"] == "форумы"
     assert payload["questions"][0]["forum_normalized"] == "Российский Север"
     assert payload["questions"][0]["category"] == "форумы"
+
+
+def test_apply_deterministic_forum_treats_grants_as_category_not_forum() -> None:
+    payload = _coerce_analysis_payload(
+        {
+            "forum": "Гранты для физических лиц",
+            "forum_normalized": "Гранты для физических лиц",
+            "category": "реализация проекта",
+            "questions": [
+                {
+                    "text": "Как вернуть средства?",
+                    "forum_normalized": "Гранты для физических лиц",
+                }
+            ],
+        }
+    )
+
+    _apply_deterministic_forum(
+        payload,
+        "Гранты для физических лиц: проект сорвался, как вернуть грантовые средства?",
+    )
+
+    assert payload["category"] == "гранты"
+    assert payload["forum"] is None
+    assert payload["forum_normalized"] is None
+    assert payload["questions"][0]["category"] == "гранты"
+    assert payload["questions"][0]["forum_normalized"] is None
 
 
 def test_apply_deterministic_forum_overrides_non_registry_llm_forum() -> None:
@@ -426,12 +517,12 @@ async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> 
     assert result["retrieved_chunks"] == []
     assert retriever.calls == [
         (
-            "Гранты для физических лиц Подать заявку на участие",
+            "Как подать заявку или зарегистрироваться?",
             {"category": "гранты"},
             10,
         ),
         (
-            "Гранты для физических лиц Подать заявку на участие",
+            "Как подать заявку или зарегистрироваться?",
             {},
             10,
         ),
@@ -598,6 +689,27 @@ def test_rerank_candidate_prefilter_prioritizes_domain_marker() -> None:
     assert [chunk.chunk_id for chunk in candidates] == ["docs", "transfer"]
 
 
+def test_rerank_candidate_prefilter_prioritizes_participation_action_wording() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="dates",
+            text="Актуальные даты проведения форума будут объявлены позже.",
+            metadata={"intent_name": "Даты начала мероприятия"},
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="application",
+            text="Заявки принимаются до 17 июня включительно. Присоединяйся к акции.",
+            metadata={"intent_name": "Подача заявки на проект"},
+            score=0.1,
+        ),
+    ]
+
+    candidates = _candidate_chunks_for_question("Хотели бы поучаствовать в акции", chunks, 2)
+
+    assert [chunk.chunk_id for chunk in candidates] == ["application", "dates"]
+
+
 def test_rerank_candidate_prefilter_prioritizes_intent_marker() -> None:
     chunks = [
         Chunk(
@@ -617,6 +729,69 @@ def test_rerank_candidate_prefilter_prioritizes_intent_marker() -> None:
     candidates = _candidate_chunks_for_question("Есть ли питание?", chunks, limit=2)
 
     assert [chunk.chunk_id for chunk in candidates] == ["food", "logistics"]
+
+
+def test_rerank_candidate_prefilter_prioritizes_travel_to_venue_wording() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="docs",
+            text="Паспорт и справка нужны при заезде.",
+            metadata={"intent_name": "Документы"},
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="travel",
+            text="Логистика: дорога до Москвы самостоятельно, далее чартер до Салехарда.",
+            metadata={"intent_name": "Оплата проезда, проживания и чартер"},
+            score=0.1,
+        ),
+    ]
+
+    candidates = _candidate_chunks_for_question("Как ехать до площадки?", chunks, 2)
+
+    assert [chunk.chunk_id for chunk in candidates] == ["travel", "docs"]
+
+
+def test_rerank_candidate_prefilter_prioritizes_regional_invitation_letter() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="travel",
+            text="Проезд и проживание оплачиваются организаторами.",
+            metadata={"intent_name": "Оплата проезда"},
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="invitation",
+            text="Письмо-вызов можно запросить через орган молодёжной политики региона.",
+            metadata={"intent_name": "Письмо-вызов"},
+            score=0.2,
+        ),
+    ]
+
+    candidates = _candidate_chunks_for_question("Хотел бы запросить письмо на регион", chunks, 2)
+
+    assert [chunk.chunk_id for chunk in candidates] == ["invitation", "travel"]
+
+
+def test_rerank_candidate_prefilter_prioritizes_grant_return_intent() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="generic_grant",
+            text="На форуме можно подать заявку на грантовый конкурс.",
+            metadata={"intent_name": "Росмолодёжь.Гранты"},
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="grant_return",
+            text="Вернуть грантовые средства можно через почту reportgrant2024@fadm.gov.ru.",
+            metadata={"intent_name": "Вернуть денежные средства"},
+            score=0.1,
+        ),
+    ]
+
+    candidates = _candidate_chunks_for_question("Как вернуть грантовые средства?", chunks, 2)
+
+    assert [chunk.chunk_id for chunk in candidates] == ["grant_return", "generic_grant"]
 
 
 @pytest.mark.asyncio
@@ -734,6 +909,40 @@ async def test_rerank_uses_retrieval_confidence_floor_for_exact_forum_hit(
 
 
 @pytest.mark.asyncio
+async def test_rerank_uses_retrieval_confidence_floor_for_exact_category_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="grant_return",
+            text="Для возврата грантовых средств напишите на почту отчётности.",
+            metadata={"category": "гранты", "intent_name": "Вернуть денежные средства"},
+            score=0.7,
+        )
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Как вернуть грантовые средства?",
+            "analysis": QueryAnalysis(category="гранты"),
+            "retrieved_chunks": chunks,
+            "reranker": LowScoreReranker(),
+        }
+    )
+
+    assert result.get("should_escalate") is not True
+    assert result["max_confidence"] == 0.4
+
+
+@pytest.mark.asyncio
 async def test_rerank_does_not_use_retrieval_floor_without_exact_forum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -822,7 +1031,7 @@ async def test_generate_returns_source_chunk_for_simple_high_confidence(
 ) -> None:
     monkeypatch.setattr(
         "src.graph.nodes.generate.get_settings",
-        lambda: SimpleNamespace(reranker_threshold_high=0.7),
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
     )
     chunk = ScoredChunk(
         chunk_id="ctx_1",
@@ -846,6 +1055,41 @@ async def test_generate_returns_source_chunk_for_simple_high_confidence(
     assert result["generated_response"] == "Исходный ответ из базы. [src:ctx_1]"
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["ctx_1"]
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_source_chunk_for_simple_intent_match_at_low_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="letter",
+        text="Письмо-вызов можно запросить через орган молодёжной политики региона.",
+        metadata={"intent_name": "Письмо-вызов"},
+        score=0.7,
+        reranker_score=0.48,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                questions=[Question(text="Как получить письмо-вызов?")],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.48,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generated_response"] == (
+        "Письмо-вызов можно запросить через орган молодёжной политики региона. "
+        "[src:letter]"
+    )
+    assert result["generator_model"] == "source_chunk"
 
 
 @pytest.mark.asyncio

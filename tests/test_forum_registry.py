@@ -22,3 +22,14 @@ def test_detect_forums_from_text_returns_all_registry_matches_once() -> None:
     assert "Машук" in forums
     assert "Территория смыслов" in forums
     assert len(forums) == len(set(forums))
+
+
+def test_detect_forums_prefers_long_alias_over_nested_short_alias() -> None:
+    assert detect_forums_from_text("Истоки Школа Вышлите положение") == ["Истоки Школа"]
+
+
+def test_detect_forums_keeps_short_alias_when_mentioned_separately() -> None:
+    assert detect_forums_from_text("Чем отличаются Истоки Школа и Истоки?") == [
+        "Истоки Школа",
+        "Истоки",
+    ]

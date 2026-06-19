@@ -22,12 +22,20 @@ def detect_forums_from_text(text: str, registry_path: Path = REGISTRY_PATH) -> l
 
     detected: list[str] = []
     seen: set[str] = set()
+    matched_spans: list[tuple[int, int]] = []
     for alias, normalized_forum in _forum_aliases(registry_path):
-        if f" {alias} " in normalized_text:
-            if normalized_forum in seen:
-                continue
-            detected.append(normalized_forum)
-            seen.add(normalized_forum)
+        spans = [
+            span
+            for span in _alias_spans(normalized_text, alias)
+            if not _span_is_contained(span, matched_spans)
+        ]
+        if not spans:
+            continue
+        matched_spans.extend(spans)
+        if normalized_forum in seen:
+            continue
+        detected.append(normalized_forum)
+        seen.add(normalized_forum)
     return detected
 
 
@@ -50,6 +58,27 @@ def _raw_aliases(item: dict[str, Any]) -> list[str]:
     values = [str(item.get("normalized") or ""), str(item.get("name") or "")]
     values.extend(str(alias) for alias in item.get("aliases") or [])
     return values
+
+
+def _alias_spans(normalized_text: str, alias: str) -> list[tuple[int, int]]:
+    pattern = f" {alias} "
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        index = normalized_text.find(pattern, start)
+        if index < 0:
+            return spans
+        alias_start = index + 1
+        spans.append((alias_start, alias_start + len(alias)))
+        start = index + len(pattern) - 1
+
+
+def _span_is_contained(span: tuple[int, int], containers: list[tuple[int, int]]) -> bool:
+    start, end = span
+    return any(
+        container_start <= start and end <= container_end
+        for container_start, container_end in containers
+    )
 
 
 def _normalize_for_match(text: str) -> str:

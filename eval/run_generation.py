@@ -167,6 +167,7 @@ def response_text(raw: dict[str, Any]) -> str:
 
 def source_context_ids(raw: dict[str, Any]) -> set[str]:
     ids = set(string_list(raw.get("cited_sources") or raw.get("cited_source_ids")))
+    ids.update(string_list(raw.get("observed_chunk_ids")))
     for field in ("sources", "source_chunks", "reranked_chunks", "retrieved_chunks"):
         for item in raw.get(field) or []:
             if isinstance(item, dict):

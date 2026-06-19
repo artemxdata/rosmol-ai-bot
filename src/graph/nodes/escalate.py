@@ -6,6 +6,9 @@ from time import perf_counter
 from src.graph.state import BotState
 
 SOURCE_RE = re.compile(r"\s*\[src:[^\]]+\]\s*")
+FULL_COVERAGE_CLAIM_RE = re.compile(
+    r"(?im)^\s*источники\s+полностью\s+покрывают[^\n]*(?:\n|$)"
+)
 PARTIAL_COVERAGE_NOTE = (
     "По части вопроса в базе знаний нет достаточных подтверждённых данных. "
     "Передаю обращение специалисту, чтобы не дать неточный ответ."
@@ -36,7 +39,13 @@ def _escalation_response(state: BotState, reason: str) -> str:
     if reason != "partial_source_coverage":
         return "Передаю обращение специалисту, чтобы не дать неточный ответ."
 
-    partial_response = SOURCE_RE.sub(" ", state.get("generated_response") or "").strip()
+    partial_response = _clean_partial_response(state.get("generated_response") or "")
     if not partial_response:
         return PARTIAL_COVERAGE_NOTE
     return f"{partial_response}\n\n{PARTIAL_COVERAGE_NOTE}"
+
+
+def _clean_partial_response(response: str) -> str:
+    without_sources = SOURCE_RE.sub(" ", response)
+    without_claims = FULL_COVERAGE_CLAIM_RE.sub("", without_sources)
+    return without_claims.strip()

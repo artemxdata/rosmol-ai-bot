@@ -53,17 +53,29 @@ def _coerce_analysis_payload(payload: dict) -> dict:
     normalized["forum_normalized"] = _coerce_optional_string(normalized.get("forum_normalized"))
     normalized["topics"] = _coerce_string_list(normalized.get("topics"))
     normalized["category"] = _normalize_category(normalized.get("category"))
+    _drop_pseudo_forum_for_category(normalized)
     if not isinstance(normalized.get("extracted_params"), dict):
         normalized["extracted_params"] = {}
     if normalized.get("forum") and not normalized.get("forum_normalized"):
         normalized["forum_normalized"] = normalized["forum"]
     normalized["questions"] = _coerce_questions(normalized.get("questions"))
     _propagate_question_defaults(normalized)
+    _drop_pseudo_forums(normalized)
     return normalized
 
 
 def _apply_deterministic_forum(payload: dict, message: str) -> None:
     detected_forums = detect_forums_from_text(message)
+    grant_pseudo_detected = any(_is_grant_pseudo_forum(forum) for forum in detected_forums)
+    detected_forums = [
+        forum for forum in detected_forums if not _is_grant_pseudo_forum(forum)
+    ]
+    if grant_pseudo_detected and not detected_forums:
+        payload["category"] = "гранты"
+        _propagate_question_defaults(payload, override_category=True)
+        _drop_pseudo_forums(payload)
+        return
+
     if len(detected_forums) > 1:
         extracted_params = payload.get("extracted_params")
         if not isinstance(extracted_params, dict):
@@ -151,6 +163,7 @@ def _coerce_questions(value: object) -> list[dict]:
         question["category"] = _normalize_category(question.get("category"))
         if question.get("forum_normalized") is None and question.get("forum"):
             question["forum_normalized"] = question["forum"]
+        _drop_pseudo_forum_for_category(question)
         result.append(question)
     return result
 
@@ -167,6 +180,12 @@ def _normalize_category(value: object) -> str | None:
         return "форумы"
     if "грант" in normalized:
         return "гранты"
+    if any(word in normalized for word in ("средств", "финанс", "отчет", "отчетност")):
+        return "гранты"
+    if "проект" in normalized and any(
+        word in normalized for word in ("реализац", "эксперт", "оцен", "поддерж")
+    ):
+        return "гранты"
     if any(word in normalized for word in ("тех", "ошиб", "баг", "поддерж")):
         return "техподдержка"
     if any(word in normalized for word in ("фгаис", "платформ", "аккаунт", "кабинет", "регистрац")):
@@ -179,6 +198,27 @@ def _normalize_category(value: object) -> str | None:
     if any(word in normalized for word in ("общ", "другое", "прочее")):
         return "общее"
     return text
+
+
+def _drop_pseudo_forum_for_category(payload: dict) -> None:
+    category = payload.get("category")
+    forum = str(payload.get("forum_normalized") or payload.get("forum") or "")
+    if category != "гранты" or not _is_grant_pseudo_forum(forum):
+        return
+    payload["forum"] = None
+    payload["forum_normalized"] = None
+
+
+def _drop_pseudo_forums(payload: dict) -> None:
+    _drop_pseudo_forum_for_category(payload)
+    for question in payload.get("questions") or []:
+        if isinstance(question, dict):
+            _drop_pseudo_forum_for_category(question)
+
+
+def _is_grant_pseudo_forum(value: str | None) -> bool:
+    normalized = str(value or "").casefold().replace("ё", "е")
+    return "грант" in normalized and "физичес" in normalized
 
 
 def _coerce_optional_string(value: object) -> str | None:

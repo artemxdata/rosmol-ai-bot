@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.config import get_settings
-from src.graph.question_utils import build_effective_questions
+from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
@@ -90,7 +90,11 @@ def build_deterministic_source_response(
         return None
     if len(questions) != 1:
         return None
-    if max_confidence < get_settings().reranker_threshold_high:
+    settings = get_settings()
+    if max_confidence < settings.reranker_threshold_high and not (
+        max_confidence >= settings.reranker_threshold_low
+        and _source_chunk_covers_question(questions[0], chunks[0])
+    ):
         return None
 
     chunk = chunks[0]
@@ -98,6 +102,31 @@ def build_deterministic_source_response(
     if not text:
         return None
     return f"{text} [src:{chunk.chunk_id}]"
+
+
+def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> bool:
+    question_normalized = _normalize(question.text)
+    metadata = chunk.metadata or {}
+    haystack = _normalize(
+        " ".join(
+            str(value or "")
+            for value in (
+                metadata.get("intent_name"),
+                metadata.get("topic"),
+                metadata.get("source_category"),
+                chunk.text,
+            )
+        )
+    )
+    for markers, _question_text in FALLBACK_QUESTION_MARKERS:
+        if not any(marker in question_normalized for marker in markers):
+            continue
+        return any(marker in haystack for marker in markers)
+    return False
+
+
+def _normalize(text: str) -> str:
+    return text.casefold().replace("ё", "е")
 
 
 def effective_questions(state: BotState, analysis: QueryAnalysis) -> list[Question]:

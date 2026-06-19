@@ -47,6 +47,23 @@ def test_score_generation_case_fails_unknown_source_and_forbidden_text() -> None
     assert result["checks"]["verifier_passed"] is False
 
 
+def test_score_generation_case_uses_observed_chunk_ids_from_ask_eval() -> None:
+    result = score_generation_case(
+        {
+            "id": "ask-eval-case",
+            "response": "Ответ без src-маркера, но trace содержит источник.",
+            "observed_chunk_ids": ["chunk_1"],
+            "expected_chunk_ids": ["chunk_1"],
+            "was_escalated": False,
+        }
+    )
+
+    assert result["source_context_present"] is True
+    assert result["source_context_ids"] == ["chunk_1"]
+    assert result["expected_chunk_hit"] is True
+    assert result["checks"]["source_context_present"] is True
+
+
 def test_load_generation_cases_accepts_ask_eval_results(tmp_path: Path) -> None:
     path = tmp_path / "ask_eval.json"
     path.write_text(
