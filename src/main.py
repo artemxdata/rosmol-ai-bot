@@ -129,7 +129,10 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
         text=payload.text,
         attachments=payload.attachments,
     )
-    response = await process_message(message, request.app)
+    if _should_bypass_cache(request):
+        response = await process_message(message, request.app, bypass_cache=True)
+    else:
+        response = await process_message(message, request.app)
     return {"request_id": str(message.request_id), "response": response}
 
 
@@ -191,7 +194,19 @@ def _require_optional_secret(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str:
+def _should_bypass_cache(request: Request) -> bool:
+    requested = (request.headers.get("x-bypass-cache") or "").strip().casefold()
+    if requested not in {"1", "true", "yes"}:
+        return False
+    return get_settings().app_env == "local"
+
+
+async def process_message(
+    message: IncomingMessage,
+    fastapi_app: FastAPI,
+    *,
+    bypass_cache: bool = False,
+) -> str:
     started_at = perf_counter()
     settings = get_settings()
     user_id_hash = hash_user_id(message.channel.value, message.user_id)
@@ -285,11 +300,13 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
         "cache_hit": False,
     }
 
-    cached_response = await _check_cache(
-        fastapi_app,
-        masked_text,
-        detected_forum or session.forum_context,
-    )
+    cached_response = None
+    if not bypass_cache:
+        cached_response = await _check_cache(
+            fastapi_app,
+            masked_text,
+            detected_forum or session.forum_context,
+        )
     if cached_response:
         state.update(
             {
@@ -336,7 +353,8 @@ async def process_message(message: IncomingMessage, fastapi_app: FastAPI) -> str
     await fastapi_app.state.sessions.append_turn(session, masked_text, response)
     result["total_latency_ms"] = int((perf_counter() - started_at) * 1000)
     await _update_memory(fastapi_app, user_id_hash, message.channel.value, result)
-    await _save_cache(fastapi_app, masked_text, response, result)
+    if not bypass_cache:
+        await _save_cache(fastapi_app, masked_text, response, result)
     await _safe_log(fastapi_app, result)
     return response
 

@@ -64,12 +64,14 @@ class FakeSemanticCache:
     def __init__(self, response: str | None = None) -> None:
         self.response = response
         self.check_calls: list[tuple[str, str | None]] = []
+        self.save_calls: list[tuple[str, str | None, str]] = []
 
     async def check(self, query: str, forum: str | None) -> str | None:
         self.check_calls.append((query, forum))
         return self.response
 
     async def save(self, query: str, forum: str | None, response: str) -> None:
+        self.save_calls.append((query, forum, response))
         return None
 
 
@@ -231,6 +233,23 @@ async def test_process_message_returns_semantic_cache_hit(
     assert response == "Ответ из кэша"
     assert app.state.sessions.appended == [("Кто платит за дорогу?", "Ответ из кэша")]
     assert captured_logs[0]["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_message_bypass_cache_runs_graph_without_cache_read_or_write(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Ответ из graph")
+    app = _app(cached_response="Ответ из кэша", graph=graph)
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text="Кто платит за дорогу?")
+
+    response = await process_message(message, app, bypass_cache=True)  # type: ignore[arg-type]
+
+    assert response == "Ответ из graph"
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+    assert captured_logs[0]["cache_hit"] is False
 
 
 @pytest.mark.asyncio

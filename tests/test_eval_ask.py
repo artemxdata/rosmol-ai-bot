@@ -235,3 +235,36 @@ async def test_run_eval_writes_json_and_markdown_without_db(tmp_path: Path) -> N
     assert metrics["pass_rate"] == 1.0
     assert json.loads(output.read_text(encoding="utf-8"))["results"][0]["passed"] is True
     assert "Ask Eval Report" in markdown.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_run_eval_can_send_bypass_cache_header(tmp_path: Path) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps([{"id": "hello", "query": "Привет"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["X-Bypass-Cache"] == "1"
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "Здравствуйте!",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases,
+        output_path=output,
+        target="http://test/ask",
+        trace_lookup=False,
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+    )
+
+    assert metrics["cases_total"] == 1
+    assert metrics["http_success_rate"] == 1.0

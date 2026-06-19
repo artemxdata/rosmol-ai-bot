@@ -34,6 +34,7 @@ async def test_run_quality_suite_writes_all_reports(
         }
 
     async def fake_ask_eval(**kwargs):
+        assert kwargs["bypass_cache"] is True
         await asyncio.to_thread(
             kwargs["markdown_path"].write_text,
             "# ask\n",
@@ -123,6 +124,7 @@ async def test_run_quality_suite_can_include_forum_smoke(
     ask_calls: list[Path] = []
 
     async def fake_ask_eval(**kwargs):
+        assert kwargs["bypass_cache"] is True
         ask_calls.append(kwargs["output_path"])
         await asyncio.to_thread(kwargs["output_path"].write_text, "{}", encoding="utf-8")
         await asyncio.to_thread(

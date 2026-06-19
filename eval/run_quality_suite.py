@@ -56,6 +56,7 @@ async def run_quality_suite(
     target_hit_retention: float = 0.9,
     forum_smoke: bool = False,
     forum_smoke_per_forum: int = 1,
+    bypass_cache: bool = True,
     gate_config: GateConfig | None = None,
 ) -> dict[str, Any]:
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
@@ -83,6 +84,7 @@ async def run_quality_suite(
         auto_smoke_cases=auto_smoke_cases,
         max_smoke_cases=max_smoke_cases,
         markdown_path=paths["ask_md"],
+        bypass_cache=bypass_cache,
     )
     threshold_report = analyze_thresholds(
         ask_metrics,
@@ -117,6 +119,7 @@ async def run_quality_suite(
             trace_dsn=trace_dsn,
             kb_seed_path=kb_seed_path,
             markdown_path=paths["forum_ask_md"],
+            bypass_cache=bypass_cache,
         )
         forum_summary = await asyncio.to_thread(
             summarize_forum_ask,
@@ -296,6 +299,7 @@ def main() -> None:
     parser.add_argument("--target-hit-retention", type=float, default=0.9)
     parser.add_argument("--forum-smoke", action="store_true")
     parser.add_argument("--forum-smoke-per-forum", type=int, default=1)
+    parser.add_argument("--use-cache", action="store_true")
     parser.add_argument("--min-recall-at-5", type=float, default=0.85)
     parser.add_argument("--min-ask-pass-rate", type=float, default=0.9)
     parser.add_argument("--min-expected-chunk-hit-rate", type=float, default=0.85)
@@ -351,6 +355,7 @@ def main() -> None:
             target_hit_retention=args.target_hit_retention,
             forum_smoke=args.forum_smoke,
             forum_smoke_per_forum=args.forum_smoke_per_forum,
+            bypass_cache=not args.use_cache,
             gate_config=gate_config,
         )
     )

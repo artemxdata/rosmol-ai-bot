@@ -68,6 +68,7 @@ async def run_eval(
     max_smoke_cases: int = 50,
     markdown_path: Path | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    bypass_cache: bool = False,
 ) -> dict[str, Any]:
     cases, generated_smoke_cases = await _load_cases(
         cases_path=cases_path,
@@ -100,6 +101,8 @@ async def run_eval(
             trace_lookup_error = "; ".join(errors)
 
     headers = _auth_headers(api_key_env)
+    if bypass_cache:
+        headers["X-Bypass-Cache"] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
     async with httpx.AsyncClient(transport=transport, timeout=request_timeout) as client:
         tasks = [
@@ -648,6 +651,7 @@ def main() -> None:
     parser.add_argument("--auto-smoke-cases", action="store_true")
     parser.add_argument("--max-smoke-cases", type=int, default=50)
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
+    parser.add_argument("--bypass-cache", action="store_true")
     args = parser.parse_args()
 
     output_path = Path(args.output)
@@ -669,6 +673,7 @@ def main() -> None:
             auto_smoke_cases=args.auto_smoke_cases,
             max_smoke_cases=args.max_smoke_cases,
             markdown_path=markdown_path,
+            bypass_cache=args.bypass_cache,
         )
     )
     print(
