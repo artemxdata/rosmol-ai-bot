@@ -51,3 +51,39 @@ def test_build_forum_smoke_set_covers_each_forum(tmp_path: Path) -> None:
     ]
     assert cases[0]["query"] == "Машук какие документы нужны"
     assert cases[0]["expected_escalated"] is False
+
+
+def test_build_forum_smoke_set_prefers_text_supported_examples(tmp_path: Path) -> None:
+    kb_seed = tmp_path / "kb.json"
+    output = tmp_path / "forum_cases.json"
+    kb_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "forum_bad_docs",
+                    "status": "published",
+                    "category": "форумы",
+                    "forum_normalized": "Студенческий спецназ",
+                    "topic": "documents",
+                    "intent_examples": ["Вышлите положение"],
+                    "text_clean": "Итоговая программа будет направлена в чат участников.",
+                },
+                {
+                    "chunk_id": "forum_good_chat",
+                    "status": "published",
+                    "category": "форумы",
+                    "forum_normalized": "Студенческий спецназ",
+                    "topic": "chat",
+                    "intent_examples": ["когда добавят в чат"],
+                    "text_clean": "Ссылка на чат участников появится после отбора.",
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    build_forum_smoke_set(kb_seed, output, per_forum=1)
+
+    cases = json.loads(output.read_text(encoding="utf-8"))
+    assert cases[0]["expected_chunk_ids"] == ["forum_good_chat"]

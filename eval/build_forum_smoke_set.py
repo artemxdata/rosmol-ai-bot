@@ -10,6 +10,7 @@ from typing import Any
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from eval.ask_cases import seed_smoke_query, write_cases
+from src.graph.question_utils import FALLBACK_QUESTION_MARKERS
 
 
 def build_forum_smoke_set(
@@ -57,9 +58,26 @@ def _select_forum_records(records: list[dict[str, Any]], *, limit: int) -> list[
 
 def _record_priority(record: dict[str, Any]) -> tuple[int, int, str]:
     has_examples = 0 if record.get("intent_examples") else 1
+    unsupported_query_penalty = _unsupported_query_penalty(record)
     category_penalty = 0 if record.get("category") == "форумы" else 1
     chunk_id = str(record.get("chunk_id") or "")
-    return (has_examples, category_penalty, chunk_id)
+    return (has_examples, unsupported_query_penalty, category_penalty, chunk_id)
+
+
+def _unsupported_query_penalty(record: dict[str, Any]) -> int:
+    query = _normalize(seed_smoke_query(record))
+    answer = _normalize(str(record.get("text_clean") or record.get("text") or ""))
+    for markers, _question in FALLBACK_QUESTION_MARKERS:
+        if not any(marker in query for marker in markers):
+            continue
+        if any(marker in answer for marker in markers):
+            return 0
+        return 1
+    return 0
+
+
+def _normalize(value: str) -> str:
+    return value.casefold().replace("ё", "е")
 
 
 def _case_from_record(record: dict[str, Any], *, index: int, user_prefix: str) -> dict[str, Any]:

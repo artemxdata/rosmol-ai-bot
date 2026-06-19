@@ -61,6 +61,7 @@ async def run_quality_suite(
 ) -> dict[str, Any]:
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
     paths = _suite_paths(output_dir)
+    run_prefix = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
 
     retrieval_metrics = await run_retrieval_eval(
         golden_path,
@@ -85,6 +86,7 @@ async def run_quality_suite(
         max_smoke_cases=max_smoke_cases,
         markdown_path=paths["ask_md"],
         bypass_cache=bypass_cache,
+        generated_user_prefix=f"ask-eval-{run_prefix}",
     )
     threshold_report = analyze_thresholds(
         ask_metrics,
@@ -108,6 +110,7 @@ async def run_quality_suite(
             kb_seed_path,
             paths["forum_cases_json"],
             per_forum=forum_smoke_per_forum,
+            user_prefix=f"forum-smoke-{run_prefix}",
         )
         await run_ask_eval(
             cases_path=paths["forum_cases_json"],

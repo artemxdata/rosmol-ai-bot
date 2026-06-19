@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from time import perf_counter
 
 from src.config import get_settings
@@ -7,7 +8,9 @@ from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
-from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
+from src.models import QueryAnalysis, Question, ScoredChunk
+
+TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
 
 
 async def generate(state: BotState) -> dict:
@@ -86,15 +89,12 @@ def build_deterministic_source_response(
     chunks: list[ScoredChunk],
     max_confidence: float,
 ) -> str | None:
-    if analysis.complexity != Complexity.SIMPLE:
-        return None
     if len(questions) != 1:
         return None
     settings = get_settings()
-    if max_confidence < settings.reranker_threshold_high and not (
-        max_confidence >= settings.reranker_threshold_low
-        and _source_chunk_covers_question(questions[0], chunks[0])
-    ):
+    if max_confidence < getattr(settings, "reranker_threshold_low", 0.4):
+        return None
+    if not _source_chunk_covers_question(questions[0], chunks[0]):
         return None
 
     chunk = chunks[0]
@@ -106,27 +106,24 @@ def build_deterministic_source_response(
 
 def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> bool:
     question_normalized = _normalize(question.text)
-    metadata = chunk.metadata or {}
-    haystack = _normalize(
-        " ".join(
-            str(value or "")
-            for value in (
-                metadata.get("intent_name"),
-                metadata.get("topic"),
-                metadata.get("source_category"),
-                chunk.text,
-            )
-        )
-    )
+    haystack = _normalize(chunk.text)
     for markers, _question_text in FALLBACK_QUESTION_MARKERS:
         if not any(marker in question_normalized for marker in markers):
             continue
         return any(marker in haystack for marker in markers)
-    return False
+    question_tokens = _tokens(question.text)
+    if not question_tokens:
+        return False
+    overlap = question_tokens & _tokens(chunk.text)
+    return len(overlap) >= min(2, len(question_tokens))
 
 
 def _normalize(text: str) -> str:
     return text.casefold().replace("ё", "е")
+
+
+def _tokens(text: str) -> set[str]:
+    return set(TOKEN_RE.findall(_normalize(text)))
 
 
 def effective_questions(state: BotState, analysis: QueryAnalysis) -> list[Question]:

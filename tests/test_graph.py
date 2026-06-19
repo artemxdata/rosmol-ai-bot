@@ -1076,7 +1076,7 @@ async def test_generate_returns_source_chunk_for_simple_high_confidence(
     )
     chunk = ScoredChunk(
         chunk_id="ctx_1",
-        text="Исходный ответ из базы.",
+        text="Проезд на форум оплачивает организатор.",
         metadata={"chunk_id": "ctx_1"},
         score=0.9,
         reranker_score=0.91,
@@ -1093,9 +1093,74 @@ async def test_generate_returns_source_chunk_for_simple_high_confidence(
         }
     )
 
-    assert result["generated_response"] == "Исходный ответ из базы. [src:ctx_1]"
+    assert result["generated_response"] == "Проезд на форум оплачивает организатор. [src:ctx_1]"
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["ctx_1"]
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_return_source_chunk_when_only_metadata_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="docs",
+        text="Итоговая программа будет направлена в чат участников.",
+        metadata={"intent_name": "Документы мероприятия"},
+        score=1.0,
+        reranker_score=0.95,
+    )
+    llm = CapturingLLM()
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                questions=[Question(text="Вышлите положение")],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.95,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["generator_model"] == "ai-sage/GigaChat3-10B-A1.8B"
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_source_chunk_for_single_covered_complex_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="travel",
+        text="Проезд до места проведения форума и обратно оплачивает направляющая сторона.",
+        metadata={"intent_name": "Оплата проезда"},
+        score=0.8,
+        reranker_score=0.63,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                questions=[Question(text="Возмещение денежных средств на поездку")],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.63,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["travel"]
 
 
 @pytest.mark.asyncio

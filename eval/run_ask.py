@@ -69,12 +69,14 @@ async def run_eval(
     markdown_path: Path | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     bypass_cache: bool = False,
+    generated_user_prefix: str | None = None,
 ) -> dict[str, Any]:
     cases, generated_smoke_cases = await _load_cases(
         cases_path=cases_path,
         kb_seed_path=kb_seed_path,
         auto_smoke_cases=auto_smoke_cases,
         max_smoke_cases=max_smoke_cases,
+        user_prefix=generated_user_prefix or _default_generated_user_prefix("ask-eval"),
     )
     if not cases:
         metrics = _empty_metrics(target=target, cases_path=cases_path, auto_smoke_cases=False)
@@ -303,6 +305,7 @@ async def _load_cases(
     kb_seed_path: Path,
     auto_smoke_cases: bool,
     max_smoke_cases: int,
+    user_prefix: str,
 ) -> tuple[list[dict[str, Any]], bool]:
     raw_cases: list[dict[str, Any]] = []
     generated_smoke_cases = False
@@ -320,9 +323,18 @@ async def _load_cases(
         records = await asyncio.to_thread(_read_json, kb_seed_path)
         if not isinstance(records, list):
             raise ValueError("KB seed must be a JSON array")
-        cases = build_seed_ask_cases(records, max_cases=max_smoke_cases)
+        cases = build_seed_ask_cases(
+            records,
+            max_cases=max_smoke_cases,
+            user_prefix=user_prefix,
+        )
         generated_smoke_cases = True
     return cases, generated_smoke_cases
+
+
+def _default_generated_user_prefix(base: str) -> str:
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+    return f"{base}-{stamp}"
 
 
 async def _run_case(
@@ -650,6 +662,7 @@ def main() -> None:
     parser.add_argument("--trace-dsn", default="")
     parser.add_argument("--auto-smoke-cases", action="store_true")
     parser.add_argument("--max-smoke-cases", type=int, default=50)
+    parser.add_argument("--user-prefix", default="")
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--bypass-cache", action="store_true")
     args = parser.parse_args()
@@ -674,6 +687,7 @@ def main() -> None:
             max_smoke_cases=args.max_smoke_cases,
             markdown_path=markdown_path,
             bypass_cache=args.bypass_cache,
+            generated_user_prefix=args.user_prefix or None,
         )
     )
     print(
