@@ -367,6 +367,111 @@ async def test_verifier_escalates_multi_forum_partial_source_coverage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_multi_aspect_partial_source_coverage() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Нужен ли ноутбук, как доехать до площадки и можно ли отказаться от участия?"
+            ),
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": (
+                "До площадки можно добраться трансфером. "
+                "Если нужно отказаться от участия, отзовите заявку в личном кабинете."
+            ),
+            "generator_model": "source_chunk",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="travel",
+                    text="До площадки можно добраться на трансфере от вокзала.",
+                    metadata={"intent_name": "Трансфер и проезд"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="cancel",
+                    text="Если нужно отказаться от участия, отзовите заявку в личном кабинете.",
+                    metadata={"intent_name": "Отказ от участия"},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "partial_source_coverage"
+    assert "Что нужно взять с собой?" in result["verification"].details
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_multi_aspect_answer_when_sources_cover_each_aspect() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Нужен ли ноутбук, как доехать до площадки и можно ли отказаться от участия?"
+            ),
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": (
+                "Возьмите ноутбук, если он нужен для вашей программы. "
+                "До площадки можно добраться трансфером. "
+                "Если нужно отказаться от участия, отзовите заявку в личном кабинете."
+            ),
+            "generator_model": "source_chunk",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="items",
+                    text="Что взять с собой: ноутбук, зарядное устройство и удобную одежду.",
+                    metadata={"intent_name": "Вещи и снаряжение"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="travel",
+                    text="До площадки можно добраться на трансфере от вокзала.",
+                    metadata={"intent_name": "Трансфер и проезд"},
+                    reranker_score=0.8,
+                ),
+                ScoredChunk(
+                    chunk_id="cancel",
+                    text="Если нужно отказаться от участия, отзовите заявку в личном кабинете.",
+                    metadata={"intent_name": "Отказ от участия"},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_does_not_escalate_single_aspect_source_coverage() -> None:
+    result = await verify(
+        {
+            "message_masked": "Можно ли отказаться от участия?",
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": "Если нужно отказаться от участия, отзовите заявку.",
+            "generator_model": "source_chunk",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="cancel",
+                    text="Если нужно отказаться от участия, отзовите заявку в личном кабинете.",
+                    metadata={"intent_name": "Отказ от участия"},
+                    reranker_score=0.9,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
 async def test_verifier_escalates_ambiguous_forum_specific_sources() -> None:
     result = await verify(
         {

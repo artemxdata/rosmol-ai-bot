@@ -4,7 +4,7 @@ import re
 from time import perf_counter
 
 from src.config import get_settings
-from src.graph.question_utils import build_effective_questions
+from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
 from src.llm.cascade import select_judge_model
 from src.llm.json_utils import parse_llm_json
@@ -19,12 +19,17 @@ NO_QUESTION_RE = re.compile(
 )
 COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("регистрац", "подать заяв", "заявк"),
-    ("проезд", "дорог", "билет", "чартер"),
+    ("проезд", "дорог", "билет", "чартер", "доезд", "доехать", "добраться"),
     ("проживан", "жиль", "гостиниц", "отел"),
     ("питани", "еда", "корм"),
     ("документ", "паспорт", "справк"),
     ("возраст", "лет"),
     ("трансфер", "автобус", "шаттл"),
+    ("ноутбук", "снаряж", "вещ", "одежд", "взять с собой"),
+    ("отказ", "отказаться", "отозвать", "отменить участие"),
+    ("письмо-вызов", "письмо вызов", "приглашен", "подтверждение участия"),
+    ("дата", "даты", "срок", "заезд", "выезд"),
+    ("результат", "отбор", "одобрен", "статус", "рассмотр"),
     ("сертификат",),
     ("чат", "куратор"),
 )
@@ -125,6 +130,27 @@ async def verify(state: BotState) -> dict:
             "verifier_triggered": False,
             "should_escalate": True,
             "escalation_reason": "ambiguous_forum_context",
+        }
+
+    missing_coverage = _missing_aspect_coverage(state, chunks)
+    if missing_coverage:
+        result = VerificationResult(
+            has_hallucination=False,
+            confidence=confidence,
+            details="Missing aspect source coverage: " + "; ".join(missing_coverage),
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                guard=True,
+                missing_coverage=missing_coverage,
+            )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "partial_source_coverage",
         }
 
     missing_coverage = _missing_source_coverage(state, chunks)
@@ -242,6 +268,76 @@ def _missing_source_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
         if not _question_has_source_coverage(question, chunks):
             missing.append(_coverage_label(question))
     return missing
+
+
+def _missing_aspect_coverage(state: BotState, chunks: list[ScoredChunk]) -> list[str]:
+    analysis = state.get("analysis")
+    if not analysis or not chunks:
+        return []
+    if len(_detected_forums_for_coverage(analysis.extracted_params)) >= 2:
+        return []
+
+    message = state.get("message_masked") or state.get("message") or ""
+    questions = _aspect_questions_for_coverage(analysis, message)
+    if len(questions) < 2:
+        return []
+
+    source_chunks = _source_chunks_for_coverage(state, chunks)
+    missing = [
+        _coverage_label(question)
+        for question in questions
+        if not _question_has_source_coverage(question, source_chunks)
+    ]
+    return missing
+
+
+def _aspect_questions_for_coverage(
+    analysis: object,
+    message: str,
+) -> list[Question]:
+    questions = [
+        question
+        for question in build_effective_questions(analysis, message)
+        if _required_marker_groups(question.text)
+    ]
+    marker_questions = _marker_questions_from_message(analysis, message)
+    if len(marker_questions) > len(questions):
+        questions = marker_questions
+
+    unique: list[Question] = []
+    seen: set[tuple[str, str | None]] = set()
+    for question in questions:
+        key = (_normalize(question.text), question.forum_normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(question)
+    return unique
+
+
+def _marker_questions_from_message(analysis: object, message: str) -> list[Question]:
+    normalized = _normalize(message)
+    if not normalized:
+        return []
+    return [
+        Question(
+            text=question_text,
+            category=getattr(analysis, "category", None),
+            forum_normalized=getattr(analysis, "forum_normalized", None),
+        )
+        for markers, question_text in FALLBACK_QUESTION_MARKERS
+        if any(marker in normalized for marker in markers)
+    ]
+
+
+def _source_chunks_for_coverage(
+    state: BotState,
+    chunks: list[ScoredChunk],
+) -> list[ScoredChunk]:
+    cited_sources = set(state.get("cited_sources") or [])
+    if not cited_sources:
+        return chunks
+    return [chunk for chunk in chunks if chunk.chunk_id in cited_sources]
 
 
 def _detected_forums_for_coverage(extracted_params: dict) -> set[str]:
