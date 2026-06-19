@@ -7,7 +7,7 @@ from src.kb.forum_registry import detect_forums_from_text
 from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
-from src.models import QueryAnalysis
+from src.models import Complexity, QueryAnalysis
 
 
 async def analyze_query(state: BotState) -> dict:
@@ -38,6 +38,21 @@ async def analyze_query(state: BotState) -> dict:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
         return {"analysis": analysis}
     except Exception as exc:
+        fallback = _fallback_analysis(
+            state.get("message") or state["message_masked"],
+            state["message_masked"],
+            state.get("routing_hint"),
+        )
+        if fallback is not None:
+            if tracer:
+                tracer.add_error("analyze_llm", int((perf_counter() - started_at) * 1000), exc)
+                tracer.add(
+                    "analyze",
+                    int((perf_counter() - started_at) * 1000),
+                    fallback=True,
+                    reason="deterministic_fallback",
+                )
+            return {"analysis": fallback, "analyzer_fallback": True}
         if tracer:
             tracer.add_error("analyze", int((perf_counter() - started_at) * 1000), exc)
         return {
@@ -45,6 +60,59 @@ async def analyze_query(state: BotState) -> dict:
             "escalation_reason": "analyzer_failed",
             "error": str(exc),
         }
+
+
+def _fallback_analysis(
+    original_message: str,
+    masked_message: str,
+    routing_hint: object,
+) -> QueryAnalysis | None:
+    category = _infer_category_from_message(masked_message)
+    payload = {
+        "category": category,
+        "complexity": _complexity_from_routing_hint(routing_hint).value,
+        "questions": [
+            {
+                "text": masked_message,
+                "category": category,
+            }
+        ],
+    }
+    payload = _coerce_analysis_payload(payload)
+    _apply_deterministic_forum(payload, original_message)
+    if not payload.get("category") and not payload.get("forum_normalized"):
+        return None
+    return QueryAnalysis.model_validate(payload)
+
+
+def _infer_category_from_message(message: str) -> str | None:
+    normalized = message.casefold().replace("ё", "е")
+    if "грант" in normalized:
+        return "гранты"
+    if any(word in normalized for word in ("фгаис", "личн", "кабинет", "парол", "верификац")):
+        return "платформа_фгаис"
+    if any(word in normalized for word in ("ошиб", "баг", "не работает", "техподдерж")):
+        return "техподдержка"
+    if any(word in normalized for word in ("форум", "мероприят", "фестивал")):
+        return "форумы"
+    return None
+
+
+def _complexity_from_routing_hint(routing_hint: object) -> Complexity:
+    if isinstance(routing_hint, dict):
+        value = routing_hint.get("complexity")
+        if isinstance(value, str):
+            try:
+                return Complexity(value)
+            except ValueError:
+                return Complexity.COMPLEX
+    if isinstance(routing_hint, Complexity):
+        return routing_hint
+    if hasattr(routing_hint, "complexity"):
+        value = routing_hint.complexity
+        if isinstance(value, Complexity):
+            return value
+    return Complexity.COMPLEX
 
 
 def _coerce_analysis_payload(payload: dict) -> dict:

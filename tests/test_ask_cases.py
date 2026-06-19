@@ -72,6 +72,42 @@ def test_seed_smoke_query_ignores_fallback_source_category_prefix() -> None:
     assert seed_smoke_query(record) == "id not visible"
 
 
+def test_seed_smoke_query_uses_forum_prefix_only_for_forum_category() -> None:
+    forum_record = _record(
+        "forum_1",
+        "форумы",
+        forum="Машук",
+        example="какие документы нужны",
+    )
+    grant_record = _record(
+        "grant_1",
+        "гранты",
+        forum="Гранты для физических лиц",
+        example="где подать проект на грант",
+    )
+    grant_record["source_category"] = "Машук"
+
+    assert seed_smoke_query(forum_record) == "Машук какие документы нужны"
+    assert seed_smoke_query(grant_record) == "где подать проект на грант"
+
+
+def test_seed_smoke_query_prefers_generic_category_example() -> None:
+    record = _record(
+        "grant_1",
+        "гранты",
+        forum="Гранты для физических лиц",
+        example="есть ли гранты на смене физическая культура и спорт",
+    )
+    record["intent_examples"].extend(
+        [
+            "где подать проект на грант",
+            "есть ли росмолодёжь гранты на бирюсе",
+        ]
+    )
+
+    assert seed_smoke_query(record) == "где подать проект на грант"
+
+
 def test_summarize_cases_counts_categories_and_forums() -> None:
     cases = build_seed_ask_cases(
         [

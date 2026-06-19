@@ -40,6 +40,11 @@ class EmptyAnalysisLLM:
         return '{"forum": null, "forum_normalized": null, "category": "техподдержка"}'
 
 
+class AnalyzerOutageLLM:
+    async def generate(self, **kwargs):
+        raise RuntimeError("HTTP 503: no healthy upstream")
+
+
 class CapturingRetriever:
     def __init__(self) -> None:
         self.calls = []
@@ -501,6 +506,42 @@ async def test_analyze_detects_forum_from_original_message_after_pii_masking() -
     analysis = result["analysis"]
     assert analysis.forum_normalized == "Амур"
     assert analysis.category == "форумы"
+
+
+@pytest.mark.asyncio
+async def test_analyze_falls_back_to_deterministic_grant_routing_on_llm_outage() -> None:
+    result = await analyze_query(
+        {
+            "message": "где подать проект на грант",
+            "message_masked": "где подать проект на грант",
+            "routing_hint": {"complexity": "simple"},
+            "llm_client": AnalyzerOutageLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert result["analyzer_fallback"] is True
+    assert analysis.category == "гранты"
+    assert analysis.complexity == Complexity.SIMPLE
+    assert analysis.questions[0].text == "где подать проект на грант"
+    assert analysis.questions[0].category == "гранты"
+    assert "should_escalate" not in result
+
+
+@pytest.mark.asyncio
+async def test_analyze_still_escalates_unclear_query_on_llm_outage() -> None:
+    result = await analyze_query(
+        {
+            "message": "непонятная формулировка без домена",
+            "message_masked": "непонятная формулировка без домена",
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": AnalyzerOutageLLM(),
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "analyzer_failed"
+    assert "HTTP 503" in result["error"]
 
 
 @pytest.mark.asyncio

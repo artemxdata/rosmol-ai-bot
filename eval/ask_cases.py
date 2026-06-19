@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Any
 
 IGNORED_SOURCE_CATEGORY_PREFIXES = {"fallback", "fallback_condition"}
+CATEGORY_QUERY_CONFLICT_MARKERS = (
+    " смен",
+    "смене",
+    "смены",
+    "сменах",
+    "бирюс",
+    "форум",
+    "мероприят",
+)
 
 
 def build_seed_ask_cases(
@@ -152,8 +161,9 @@ def _is_eligible(record: dict[str, Any]) -> bool:
 def seed_smoke_query(record: dict[str, Any]) -> str:
     examples = record.get("intent_examples") or []
     if examples:
+        example = _select_seed_example(record, examples)
         prefix = _seed_query_prefix(record)
-        return " ".join(part for part in [str(prefix), str(examples[0])] if part).strip()
+        return " ".join(part for part in [str(prefix), example] if part).strip()
     intent = record.get("intent_name")
     if intent:
         prefix = _seed_query_prefix(record)
@@ -161,10 +171,33 @@ def seed_smoke_query(record: dict[str, Any]) -> str:
     return str(record.get("text_clean") or "")[:160]
 
 
+def _select_seed_example(record: dict[str, Any], examples: list[Any]) -> str:
+    cleaned = [str(example).strip() for example in examples if str(example).strip()]
+    if not cleaned:
+        return ""
+
+    if _clean_optional(record.get("category")).casefold() == "форумы":
+        return cleaned[0]
+
+    for example in cleaned:
+        if not _has_category_query_conflict(example):
+            return example
+    return cleaned[0]
+
+
+def _has_category_query_conflict(example: str) -> bool:
+    normalized = f" {example.casefold()} "
+    return any(marker in normalized for marker in CATEGORY_QUERY_CONFLICT_MARKERS)
+
+
 def _seed_query_prefix(record: dict[str, Any]) -> str:
+    category = _clean_optional(record.get("category")).casefold()
     forum = _clean_optional(record.get("forum_normalized"))
-    if forum:
+    if forum and (not category or category == "форумы"):
         return forum
+
+    if category and category != "форумы":
+        return ""
 
     source_category = _clean_optional(record.get("source_category"))
     if source_category.casefold() in IGNORED_SOURCE_CATEGORY_PREFIXES:
