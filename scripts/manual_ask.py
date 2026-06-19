@@ -101,6 +101,7 @@ async def run_manual_ask(
         "trace_found_count": sum(1 for item in results if item.get("trace_found")),
         "escalated_count": sum(1 for item in results if item.get("was_escalated") is True),
         "cache_hit_count": sum(1 for item in results if item.get("cache_hit") is True),
+        "verdict_counts": _count_values(results, "quality_verdict"),
         "llm_total_tokens": sum(int(item.get("llm_total_tokens") or 0) for item in results),
         "llm_estimated_cost_rub": round(
             sum(float(item.get("llm_estimated_cost_rub") or 0.0) for item in results),
@@ -120,6 +121,7 @@ def build_manual_report_item(
 ) -> dict[str, Any]:
     trace = trace or {}
     observed_chunk_ids = sorted(_collect_trace_chunk_ids(trace)) if trace else []
+    verdict, review_hint = _quality_verdict(http_result, trace)
     return {
         "id": case["id"],
         "query": case["query"],
@@ -128,6 +130,8 @@ def build_manual_report_item(
         "http_status": http_result.get("http_status"),
         "http_success": http_result.get("http_success"),
         "latency_ms": http_result.get("latency_ms"),
+        "quality_verdict": verdict,
+        "review_hint": review_hint,
         "response": http_result.get("response") or "",
         "error": http_result.get("error") or trace.get("error"),
         "trace_found": bool(trace),
@@ -164,6 +168,7 @@ def format_report(report: dict[str, Any]) -> str:
         f"Trace found: {report.get('trace_found_count')}",
         f"Escalated: {report.get('escalated_count')}",
         f"Cache hits: {report.get('cache_hit_count')}",
+        f"Verdicts: {json.dumps(report.get('verdict_counts') or {}, ensure_ascii=False)}",
         f"LLM tokens: {report.get('llm_total_tokens')}",
         f"Estimated cost, RUB: {report.get('llm_estimated_cost_rub')}",
     ]
@@ -195,7 +200,10 @@ def format_report_item(item: dict[str, Any], *, index: int = 1) -> str:
         f"Max reranker score: {item.get('max_reranker_score')}",
         f"Cited sources: {_join_short(item.get('cited_sources') or [])}",
         f"Observed chunks: {_join_short(item.get('observed_chunk_ids') or [])}",
+        f"Quality verdict: {item.get('quality_verdict') or '-'}",
     ]
+    if item.get("review_hint"):
+        lines.append(f"Review hint: {item['review_hint']}")
     if item.get("message_masked"):
         lines.append(f"Masked text: {item['message_masked']}")
     if item.get("error"):
@@ -372,6 +380,67 @@ def _format_trace_events(events: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _quality_verdict(
+    http_result: dict[str, Any],
+    trace: dict[str, Any],
+) -> tuple[str, str]:
+    if not http_result.get("http_success"):
+        return "http_error", "Проверить доступность /ask, Docker/app и текст HTTP-ошибки."
+    if not trace:
+        return (
+            "answer_without_trace",
+            "Ответ получен, но trace не найден; включите trace lookup для проверки RAG-пути.",
+        )
+    if trace.get("error"):
+        return "trace_error", "В trace есть ошибка узла графа; смотреть поле Error и Graph events."
+    if trace.get("was_escalated") is True:
+        reason = str(trace.get("escalation_reason") or "needs_operator")
+        return f"controlled_escalation:{reason}", _escalation_review_hint(reason)
+    if trace.get("cache_hit") is True:
+        return (
+            "cache_hit_answer",
+            "Ответ пришёл из semantic cache; для просмотра полного RAG-пути измените формулировку.",
+        )
+
+    model = str(trace.get("generator_model") or "")
+    observed_chunks = _collect_trace_chunk_ids(trace)
+    if model == "source_chunk":
+        return (
+            "deterministic_source_answer",
+            "Проверить, что выбранный top chunk действительно полностью отвечает на вопрос.",
+        )
+    if model and observed_chunks:
+        return (
+            "llm_grounded_answer",
+            "Проверить полноту ответа и соответствие cited/retrieved chunks всем аспектам вопроса.",
+        )
+    if observed_chunks:
+        return (
+            "rag_signals_without_route",
+            "Есть найденные chunks, но маршрут ответа неочевиден; "
+            "смотреть generator_model и events.",
+        )
+    return "no_rag_signals", "Нет видимых RAG-сигналов в trace; проверить retrieve/rerank/cache."
+
+
+def _escalation_review_hint(reason: str) -> str:
+    hints = {
+        "partial_source_coverage": (
+            "Хорошая эскалация, если источники покрыли только часть составного вопроса."
+        ),
+        "ambiguous_forum_context": (
+            "Хорошая эскалация, если вопрос смешивает условия разных форумов без уточнения."
+        ),
+        "insufficient_sources": (
+            "Проверить, действительно ли в KB нет подтверждённого ответа на этот аспект."
+        ),
+        "low_confidence": "Проверить expected chunks и пороги reranker на golden set.",
+        "no_relevant_chunks": "Это KB/retrieval gap: нужен chunk, metadata или новая формулировка.",
+        "ml_dependency_missing": "ML runtime не поднят; для live RAG нужен app-ml/INSTALL_ML=true.",
+    }
+    return hints.get(reason, "Проверить, что эскалация безопаснее ответа без источников.")
+
+
 def _compact_metadata(metadata: dict[str, Any]) -> str:
     allowed = [
         "model",
@@ -387,6 +456,14 @@ def _compact_metadata(metadata: dict[str, Any]) -> str:
     if not compact:
         return ""
     return json.dumps(compact, ensure_ascii=False, sort_keys=True)
+
+
+def _count_values(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _join_short(values: list[Any], *, limit: int = 8) -> str:

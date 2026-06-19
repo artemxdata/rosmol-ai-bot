@@ -77,6 +77,8 @@ def test_build_manual_report_item_extracts_trace_details() -> None:
     assert item["observed_chunk_ids"] == ["travel_chunk"]
     assert item["reranked_chunks"][0]["reranker_score"] == 0.91
     assert item["generator_model"] == "source_chunk"
+    assert item["quality_verdict"] == "deterministic_source_answer"
+    assert "top chunk" in item["review_hint"]
 
 
 def test_format_report_item_shows_answer_and_rag_signals() -> None:
@@ -88,6 +90,8 @@ def test_format_report_item_shows_answer_and_rag_signals() -> None:
             "http_success": True,
             "latency_ms": 100,
             "request_id": "11111111-1111-1111-1111-111111111111",
+            "quality_verdict": "deterministic_source_answer",
+            "review_hint": "Проверить top chunk.",
             "trace_found": True,
             "trace_total_latency_ms": 90,
             "cache_hit": False,
@@ -121,6 +125,8 @@ def test_format_report_item_shows_answer_and_rag_signals() -> None:
     assert "Top reranked chunks:" in rendered
     assert "chunk_1" in rendered
     assert "Graph events:" in rendered
+    assert "Quality verdict: deterministic_source_answer" in rendered
+    assert "Review hint: Проверить top chunk." in rendered
 
 
 @pytest.mark.asyncio
@@ -147,5 +153,8 @@ async def test_run_manual_ask_without_db_trace_uses_http_response() -> None:
     assert report["cases_total"] == 1
     assert report["http_success_count"] == 1
     assert report["trace_found_count"] == 0
+    assert report["verdict_counts"] == {"answer_without_trace": 1}
     assert report["results"][0]["response"] == "Здравствуйте!"
+    assert report["results"][0]["quality_verdict"] == "answer_without_trace"
     assert "Manual Ask Inspection" in format_report(report)
+    assert "Verdicts:" in format_report(report)

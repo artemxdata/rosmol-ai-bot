@@ -1,42 +1,92 @@
 [
   {
-    "id": "forum_age_travel_combo",
+    "id": "forum_age_travel_lodging_combo",
     "query": "Мне 17 лет, я из другого региона и хочу поехать на форум. Пустят ли меня, кто оплачивает дорогу и где я буду жить?",
-    "tags": ["manual", "complex", "forum", "age", "travel"]
+    "tags": ["manual", "complex", "forum", "age", "travel", "lodging"]
   },
   {
-    "id": "registration_profile_email",
+    "id": "registration_profile_email_id",
     "query": "Я подал заявку на форум, но письмо не пришло, в профиле ошибка в данных и я не понимаю, где найти ID профиля. Что делать по шагам?",
-    "tags": ["manual", "complex", "registration", "profile"]
+    "tags": ["manual", "complex", "registration", "profile", "email"]
   },
   {
-    "id": "grant_return_funds",
-    "query": "Я выиграл грант, но понял, что не смогу реализовать проект в срок. Как вернуть средства и куда писать?",
-    "tags": ["manual", "complex", "grant", "escalation"]
+    "id": "grant_return_funds_deadline",
+    "query": "Я выиграл грант, но понял, что не смогу реализовать проект в срок. Как вернуть средства, куда писать и что будет с отчётностью?",
+    "tags": ["manual", "complex", "grant", "deadline", "escalation"]
   },
   {
-    "id": "russian_north_documents",
+    "id": "russian_north_documents_transfer_food_age",
     "query": "Хочу на Российский Север: какие документы нужны, есть ли трансфер, питание и ограничения по возрасту?",
-    "tags": ["manual", "complex", "forum", "russian_north"]
+    "tags": ["manual", "complex", "forum", "russian_north", "documents", "transfer"]
   },
   {
-    "id": "more_than_travel_conditions",
+    "id": "more_than_travel_conditions_full",
     "query": "Расскажи про фестиваль Больше, чем путешествие: регистрация, возраст участников, проживание и дорога оплачиваются?",
-    "tags": ["manual", "complex", "forum", "travel_festival"]
+    "tags": ["manual", "complex", "forum", "travel_festival", "conditions"]
   },
   {
-    "id": "status_operator_needed",
-    "query": "Мне нужен оператор: статус заявки непонятный, письмо не пришло, а форум уже скоро. Куда обращаться?",
-    "tags": ["manual", "complex", "operator", "status"]
+    "id": "status_operator_deadline",
+    "query": "Мне нужен оператор: статус заявки непонятный, письмо не пришло, а форум уже скоро. Куда обращаться и нужно ли подавать заявку заново?",
+    "tags": ["manual", "complex", "operator", "status", "deadline"]
   },
   {
-    "id": "two_forums_compare",
+    "id": "two_forums_compare_decision",
     "query": "Чем отличаются Машук и Территория смыслов по регистрации, проживанию и оплате проезда? Куда мне лучше подаваться?",
-    "tags": ["manual", "complex", "compare", "forums"]
+    "tags": ["manual", "complex", "compare", "forums", "multi_forum"]
   },
   {
-    "id": "technical_login_and_application",
+    "id": "technical_login_application_deadline",
     "query": "Не могу войти в аккаунт, кнопка подачи заявки не работает, а дедлайн сегодня. Как восстановить доступ и успеть зарегистрироваться?",
-    "tags": ["manual", "complex", "technical", "deadline"]
+    "tags": ["manual", "complex", "technical", "deadline", "registration"]
+  },
+  {
+    "id": "approved_application_dates_transfer_invitation",
+    "query": "Заявку одобрили, но я не понимаю даты заезда, будет ли трансфер из аэропорта и где взять письмо-вызов для работы.",
+    "tags": ["manual", "complex", "approved", "dates", "transfer", "invitation"]
+  },
+  {
+    "id": "equipment_travel_cancel_combo",
+    "query": "Нужен ли ноутбук с собой, как доехать до площадки и что делать, если я в последний момент откажусь от участия?",
+    "tags": ["manual", "complex", "equipment", "travel", "cancel"]
+  },
+  {
+    "id": "unclear_forum_kemerovo_transfer",
+    "query": "Можно приехать в Кемерово вечером, будет ли автобус до площадки и где смотреть программу мероприятия?",
+    "tags": ["manual", "complex", "ambiguous_forum", "transfer", "program"]
+  },
+  {
+    "id": "reserve_status_results_participation",
+    "query": "У меня статус резерв, когда станут известны результаты отбора и можно ли всё равно покупать билеты заранее?",
+    "tags": ["manual", "complex", "status", "results", "travel"]
+  },
+  {
+    "id": "medical_documents_minor_lodging",
+    "query": "Если участнику меньше 18 лет, какие медицинские документы и согласия нужны, и будут ли отличаться условия проживания?",
+    "tags": ["manual", "complex", "minor", "medical", "documents", "lodging"]
+  },
+  {
+    "id": "platform_verification_application_missing",
+    "query": "Профиль не проходит верификацию, заявка пропала из личного кабинета, но на почте есть старое подтверждение. Как правильно действовать?",
+    "tags": ["manual", "complex", "platform", "verification", "application"]
+  },
+  {
+    "id": "certificate_chat_after_event",
+    "query": "Мероприятие уже прошло, где получить сертификат, как попасть в чат участников и кому писать, если сертификата нет?",
+    "tags": ["manual", "complex", "certificate", "chat", "after_event"]
+  },
+  {
+    "id": "travel_compensation_conditions",
+    "query": "Я еду поездом с пересадкой и хочу понять, компенсируют ли билеты, питание в дороге и трансфер до площадки.",
+    "tags": ["manual", "complex", "travel", "compensation", "food", "transfer"]
+  },
+  {
+    "id": "forum_specific_or_generic_conflict",
+    "query": "На странице форума написано одно, а в личном кабинете другое: какие сроки регистрации, документы и условия оплаты дороги считать правильными?",
+    "tags": ["manual", "complex", "conflict", "registration", "documents", "travel"]
+  },
+  {
+    "id": "event_market_day_youth",
+    "query": "Мы хотим участвовать в маркете на Дне молодёжи, но не понимаем требования к заявке, срок отбора и кому задавать организационные вопросы.",
+    "tags": ["manual", "complex", "market", "day_youth", "selection"]
   }
 ]
