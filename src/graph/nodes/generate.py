@@ -51,6 +51,7 @@ async def generate(state: BotState) -> dict:
     analysis = state["analysis"]
     questions = effective_questions(state, analysis)
     chunks = state.get("reranked_chunks", [])
+    max_confidence = float(state.get("max_confidence") or 0)
     if not chunks:
         if tracer:
             tracer.add(
@@ -67,11 +68,56 @@ async def generate(state: BotState) -> dict:
             "cited_sources": [],
         }
 
+    if analysis.complexity == Complexity.COMPLEX:
+        llm_source_chunks = _select_llm_source_chunks(
+            analysis,
+            questions,
+            chunks,
+            max_confidence,
+        )
+        if llm_source_chunks:
+            if _should_use_extractive_multi_source_answer(analysis, llm_source_chunks):
+                source_response = build_deterministic_source_response(llm_source_chunks)
+                if source_response:
+                    if tracer:
+                        tracer.add(
+                            "generate",
+                            int((perf_counter() - started_at) * 1000),
+                            mode="complex_source_chunk",
+                            chunks=len(llm_source_chunks),
+                        )
+                    return {
+                        "generated_response": source_response,
+                        "generator_model": "source_chunk",
+                        "cited_sources": [chunk.chunk_id for chunk in llm_source_chunks],
+                    }
+            return await _generate_with_llm(
+                state=state,
+                analysis=analysis,
+                questions=questions,
+                source_chunks=llm_source_chunks,
+                started_at=started_at,
+            )
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                mode="complex_source_only_escalation",
+                reason="insufficient_source_coverage",
+            )
+        return {
+            "should_escalate": True,
+            "escalation_reason": "insufficient_sources",
+            "generated_response": "",
+            "generator_model": "source_only",
+            "cited_sources": [],
+        }
+
     source_chunks = select_deterministic_source_chunks(
         analysis,
         questions,
         chunks,
-        max_confidence := float(state.get("max_confidence") or 0),
+        max_confidence,
         state.get("message_masked") or state.get("message"),
     )
     if source_chunks:
@@ -185,6 +231,17 @@ def _should_generate_with_llm(
     return analysis.complexity == Complexity.COMPLEX
 
 
+def _should_use_extractive_multi_source_answer(
+    analysis: QueryAnalysis,
+    source_chunks: list[ScoredChunk],
+) -> bool:
+    if analysis.category != "\u0444\u043e\u0440\u0443\u043c\u044b":
+        return False
+    if len(source_chunks) < 2:
+        return False
+    return all(_source_type_rank(chunk) == 0 for chunk in source_chunks)
+
+
 def _select_llm_source_chunks(
     analysis: QueryAnalysis,
     questions: list[Question],
@@ -224,7 +281,16 @@ def _has_textual_source_overlap(question: Question, chunk: ScoredChunk) -> bool:
     question_tokens = _tokens(question.text)
     if not question_tokens:
         return False
-    return bool(question_tokens & _tokens(chunk.text))
+    if question_tokens & _tokens(chunk.text):
+        return True
+
+    question_normalized = _normalize(question.text)
+    haystack = _source_coverage_haystack(chunk)
+    return any(
+        any(marker in question_normalized for marker in markers)
+        and any(marker in haystack for marker in markers)
+        for markers, _question_text in FALLBACK_QUESTION_MARKERS
+    )
 
 
 def _known_source_refs(response: str, chunks: list[ScoredChunk]) -> list[str]:
@@ -397,7 +463,13 @@ def _candidate_source_chunks(
                 for chunk in forum_chunks
                 if (chunk.metadata or {}).get("category") == analysis.category
             ]
+            if analysis.category == "\u0444\u043e\u0440\u0443\u043c\u044b":
+                category_chunks = _order_official_sources_first(category_chunks)
             if category_chunks:
+                if analysis.category == "\u0444\u043e\u0440\u0443\u043c\u044b":
+                    official_category_chunks = _official_source_chunks(category_chunks)
+                    if official_category_chunks:
+                        category_chunks = official_category_chunks
                 category_ids = {chunk.chunk_id for chunk in category_chunks}
                 return [
                     *category_chunks,
@@ -441,6 +513,34 @@ def _candidate_source_chunks(
     return chunks
 
 
+def _order_official_sources_first(chunks: list[ScoredChunk]) -> list[ScoredChunk]:
+    return [
+        chunk
+        for _, chunk in sorted(
+            enumerate(chunks),
+            key=lambda item: (_source_type_rank(item[1]), item[0]),
+        )
+    ]
+
+
+def _official_source_chunks(chunks: list[ScoredChunk]) -> list[ScoredChunk]:
+    return [
+        chunk
+        for chunk in chunks
+        if str((chunk.metadata or {}).get("source_type") or "").strip()
+        in {"docx", "xlsx"}
+    ]
+
+
+def _source_type_rank(chunk: ScoredChunk) -> int:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    if source_type in {"docx", "xlsx"}:
+        return 0
+    if source_type == "ticket_answer_bank":
+        return 2
+    return 1
+
+
 def _rank_source_candidates_for_question(
     analysis: QueryAnalysis,
     question: Question,
@@ -456,9 +556,10 @@ def _source_candidate_priority(
     analysis: QueryAnalysis,
     question: Question,
     chunk: ScoredChunk,
-) -> tuple[float, int, float, int, float]:
+) -> tuple[float, int, float, int, int, float]:
     intent_score = _adjusted_intent_example_match_score(question, chunk)
     field_score = _source_metadata_field_score(question, chunk)
+    source_rank = _source_type_rank(chunk)
     generic_rank = 1 if _is_generic_chunk(chunk) else 0
     unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
     confidence = float(chunk.reranker_score or chunk.score or 0)
@@ -467,14 +568,15 @@ def _source_candidate_priority(
             0,
             unscoped_grant_rank,
             -float(intent_score * 100) - field_score,
+            source_rank,
             generic_rank,
             -confidence,
         )
     if _metadata_matches_specific_question(analysis, question, chunk):
-        return (1, unscoped_grant_rank, -field_score, generic_rank, -confidence)
+        return (1, unscoped_grant_rank, -field_score, source_rank, generic_rank, -confidence)
     if field_score > 0:
-        return (2, unscoped_grant_rank, -field_score, generic_rank, -confidence)
-    return (3, unscoped_grant_rank, 0, generic_rank, -confidence)
+        return (2, unscoped_grant_rank, -field_score, source_rank, generic_rank, -confidence)
+    return (3, unscoped_grant_rank, 0, source_rank, generic_rank, -confidence)
 
 
 def _original_question(analysis: QueryAnalysis, message: str | None) -> Question | None:

@@ -88,6 +88,22 @@ FORUM_SPECIFIC_MARKERS = (
     "кемеров",
     "новокузнец",
 )
+FORUM_SPECIFIC_MARKERS = FORUM_SPECIFIC_MARKERS + (
+    "\u0432\u043e\u0437\u0440\u0430\u0441\u0442",
+    "\u043b\u0435\u0442",
+    "\u043f\u0440\u043e\u0435\u0437\u0434",
+    "\u0434\u043e\u0440\u043e\u0433",
+    "\u0431\u0438\u043b\u0435\u0442",
+    "\u043e\u043f\u043b\u0430\u0442",
+    "\u0432\u043e\u0437\u043c\u0435\u0449",
+    "\u043f\u0440\u043e\u0436\u0438\u0432",
+    "\u0440\u0430\u0437\u043c\u0435\u0449",
+    "\u043f\u0430\u043b\u0430\u0442",
+    "\u0433\u043e\u0441\u0442\u0438\u043d\u0438\u0446",
+    "\u043e\u0442\u0435\u043b",
+    "\u043f\u0438\u0442\u0430\u043d",
+    "\u0435\u0434\u0430",
+)
 INSUFFICIENT_SOURCE_RE = re.compile(
     r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
     r"из\s+(?:представленных|переданных)\s+источников\s+невозможно\s+ответить|"
@@ -107,6 +123,17 @@ SPECIALIST_REDIRECT_RE = re.compile(
     r"рекоменду(?:ю|ем)\s+(?:направить|обратиться|обратитесь)\s+.*"
     r"(?:специалист|служб[ау]\s+(?:поддержк|забот)|координатор))",
     flags=re.IGNORECASE,
+)
+UNSUPPORTED_DIRECTIVE_MARKERS: tuple[str, ...] = (
+    "обратитесь напрямую",
+    "обратитесь к организатор",
+    "напишите организатор",
+    "предоставьте следующую информацию",
+    "полные фио",
+    "регион и насел",
+    "электронную почту",
+    "уточнить вашу регистрацию",
+    "подтвердить участие",
 )
 
 
@@ -170,6 +197,27 @@ async def verify(state: BotState) -> dict:
             "verifier_triggered": False,
             "should_escalate": True,
             "escalation_reason": "insufficient_sources",
+        }
+
+    unsupported_directives = _unsupported_directive_markers(response, state, chunks)
+    if unsupported_directives:
+        result = VerificationResult(
+            has_hallucination=True,
+            confidence=0.0,
+            details="Unsupported directive markers: " + "; ".join(unsupported_directives),
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                guard=True,
+                unsupported_directives=unsupported_directives,
+            )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "unsupported_instruction",
         }
 
     ambiguous_forums = _ambiguous_forum_context(state, chunks)
@@ -312,6 +360,36 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
             if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
         }
     return sorted(forums) if len(forums) > 1 else []
+
+
+def _unsupported_directive_markers(
+    response: str,
+    state: BotState,
+    chunks: list[ScoredChunk],
+) -> list[str]:
+    normalized_response = _normalize(SOURCE_RE.sub(" ", response))
+    markers_in_response = [
+        marker for marker in UNSUPPORTED_DIRECTIVE_MARKERS if marker in normalized_response
+    ]
+    if not markers_in_response:
+        return []
+
+    source_chunks = _source_chunks_for_response(response, state, chunks)
+    normalized_sources = _normalize(" ".join(chunk.text for chunk in source_chunks))
+    return [
+        marker for marker in markers_in_response if marker not in normalized_sources
+    ]
+
+
+def _source_chunks_for_response(
+    response: str,
+    state: BotState,
+    chunks: list[ScoredChunk],
+) -> list[ScoredChunk]:
+    cited_sources = set(state.get("cited_sources") or SOURCE_RE.findall(response))
+    if not cited_sources:
+        return chunks
+    return [chunk for chunk in chunks if chunk.chunk_id in cited_sources]
 
 
 def _missing_source_coverage(state: BotState, chunks: list[ScoredChunk]) -> list[str]:

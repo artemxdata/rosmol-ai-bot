@@ -60,6 +60,41 @@ async def test_verifier_blocks_llm_answer_without_source_citations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_unsupported_registration_instruction() -> None:
+    llm = JudgeLLM('{"has_hallucination": false, "confidence": 1.0}')
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Обратитесь напрямую к организаторам фестиваля через адрес электронной почты. "
+                "Предоставьте следующую информацию: полные ФИО, регион и населённый пункт, "
+                "электронную почту. Это поможет уточнить вашу регистрацию. [src:reg]"
+            ),
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "cited_sources": ["reg"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="reg",
+                    text=(
+                        "Конкурсный отбор уже завершён, победители получили уведомления 5 июня. "
+                        "На фестивальный день регистрация открыта до 11 июля включительно."
+                    ),
+                    metadata={"forum_normalized": "Больше, чем путешествие"},
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["verification"].has_hallucination is True
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "unsupported_instruction"
+
+
+@pytest.mark.asyncio
 async def test_verifier_accepts_high_confidence_without_judge() -> None:
     result = await verify(
         {
@@ -610,6 +645,50 @@ async def test_verifier_escalates_single_cited_forum_when_candidates_are_ambiguo
 
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "ambiguous_forum_context"
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_forum_details_without_forum_name() -> None:
+    message = (
+        "\u041c\u043d\u0435 17 \u043b\u0435\u0442, "
+        "\u043a\u0442\u043e \u043e\u043f\u043b\u0430\u0447\u0438\u0432\u0430\u0435\u0442 "
+        "\u0434\u043e\u0440\u043e\u0433\u0443 \u0438 \u0433\u0434\u0435 "
+        "\u0436\u0438\u0442\u044c \u043d\u0430 \u0444\u043e\u0440\u0443\u043c\u0435?"
+    )
+    category = "\u0444\u043e\u0440\u0443\u043c\u044b"
+    gosstart = "\u0413\u043e\u0441\u0421\u0442\u0430\u0440\u0442"
+    morning = "\u0423\u0442\u0440\u043e"
+
+    result = await verify(
+        {
+            "message_masked": message,
+            "analysis": QueryAnalysis(category=category),
+            "generated_response": "Answer mixes forum facts. [src:age] [src:travel]",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="age",
+                    text="Age restrictions for one forum.",
+                    metadata={"forum_normalized": gosstart},
+                    reranker_score=0.8,
+                ),
+                ScoredChunk(
+                    chunk_id="travel",
+                    text="Travel and lodging details for another forum.",
+                    metadata={"forum_normalized": morning},
+                    reranker_score=0.7,
+                ),
+            ],
+            "cited_sources": ["age", "travel"],
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert gosstart in result["verification"].details
+    assert morning in result["verification"].details
+
 
 @pytest.mark.asyncio
 async def test_verifier_allows_generic_multi_forum_sources_without_forum_specific_query() -> None:

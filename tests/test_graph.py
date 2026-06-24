@@ -10,7 +10,7 @@ from src.graph.nodes.analyze import (
     _coerce_analysis_payload,
     analyze_query,
 )
-from src.graph.nodes.escalate import escalate
+from src.graph.nodes.escalate import PARTIAL_COVERAGE_NOTE, escalate
 from src.graph.nodes.generate import generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
@@ -330,7 +330,7 @@ async def test_respond_preserves_paragraphs_between_multiple_source_chunks() -> 
 
 
 @pytest.mark.asyncio
-async def test_escalate_preserves_partial_answer_for_partial_source_coverage() -> None:
+async def test_escalate_returns_only_safe_note_for_partial_source_coverage() -> None:
     result = await escalate(
         {
             "generated_response": "Подтверждённая часть ответа. [src:ctx_1]",
@@ -340,13 +340,14 @@ async def test_escalate_preserves_partial_answer_for_partial_source_coverage() -
 
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "partial_source_coverage"
-    assert result["final_response"].startswith("Подтверждённая часть ответа.")
+    assert result["final_response"] == PARTIAL_COVERAGE_NOTE
+    assert "Подтверждённая часть ответа" not in result["final_response"]
     assert "[src:" not in result["final_response"]
     assert "нет достаточных подтверждённых данных" in result["final_response"]
 
 
 @pytest.mark.asyncio
-async def test_escalate_removes_full_coverage_claim_for_partial_source_coverage() -> None:
+async def test_escalate_drops_generated_claims_for_partial_source_coverage() -> None:
     result = await escalate(
         {
             "generated_response": (
@@ -357,7 +358,8 @@ async def test_escalate_removes_full_coverage_claim_for_partial_source_coverage(
         }
     )
 
-    assert "Подтверждённая часть ответа." in result["final_response"]
+    assert result["final_response"] == PARTIAL_COVERAGE_NOTE
+    assert "Подтверждённая часть ответа." not in result["final_response"]
     assert "Источники полностью покрывают" not in result["final_response"]
     assert "нет достаточных подтверждённых данных" in result["final_response"]
 
@@ -2049,6 +2051,143 @@ async def test_rerank_uses_fallback_questions_when_analyzer_returns_none(
         "travel",
         "age",
     ]
+
+
+@pytest.mark.asyncio
+async def test_rerank_keeps_second_candidate_for_multi_aspect_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+
+    docs_word = "\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442"
+    age_word = "\u0432\u043e\u0437\u0440\u0430\u0441\u0442"
+
+    class TwoCandidateReranker:
+        def rerank_groups(
+            self,
+            groups: list[tuple[str, list[Chunk], int]],
+        ) -> list[list[ScoredChunk]]:
+            return [self.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
+
+        def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+            query_lower = query.casefold()
+            if docs_word in query_lower:
+                order = ["docs_main", "docs_extra", "age"]
+            elif age_word in query_lower:
+                order = ["age", "docs_main", "docs_extra"]
+            else:
+                order = ["docs_main", "age", "docs_extra"]
+            by_id = {chunk.chunk_id: chunk for chunk in chunks}
+            ranked = [by_id[chunk_id] for chunk_id in order if chunk_id in by_id]
+            return [
+                ScoredChunk(
+                    **chunk.model_dump(exclude={"score"}),
+                    score=chunk.score,
+                    reranker_score=0.9 - index * 0.1,
+                )
+                for index, chunk in enumerate(ranked[:top_k])
+            ]
+
+    chunks = [
+        Chunk(
+            chunk_id="docs_main",
+            text=f"{docs_word}: passport.",
+            metadata={"intent_name": docs_word},
+            score=0.8,
+        ),
+        Chunk(
+            chunk_id="docs_extra",
+            text=f"{docs_word}: medical certificate.",
+            metadata={"intent_name": docs_word},
+            score=0.7,
+        ),
+        Chunk(
+            chunk_id="age",
+            text=f"{age_word}: 14-35.",
+            metadata={"intent_name": age_word},
+            score=0.6,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": f"{docs_word} \u0438 {age_word}?",
+            "analysis": QueryAnalysis(questions=[]),
+            "retrieved_chunks": chunks,
+            "reranker": TwoCandidateReranker(),
+        }
+    )
+
+    assert "docs_extra" in [chunk.chunk_id for chunk in result["reranked_chunks"]]
+
+
+@pytest.mark.asyncio
+async def test_rerank_prefers_official_forum_source_over_answer_bank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+
+    forum = "BCT"
+    category = "\u0444\u043e\u0440\u0443\u043c\u044b"
+    registration = "\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f"
+    chunks = [
+        Chunk(
+            chunk_id="ticket_answer_bank_account",
+            text=f"{registration}: account owner request.",
+            metadata={
+                "forum_normalized": forum,
+                "category": category,
+                "source_type": "ticket_answer_bank",
+                "intent_name": registration,
+                "intent_examples": [registration],
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="official_registration",
+            text=f"{registration}: official festival dates.",
+            metadata={
+                "forum_normalized": forum,
+                "category": category,
+                "source_type": "docx",
+                "intent_name": registration,
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": registration,
+            "analysis": QueryAnalysis(
+                forum_normalized=forum,
+                category=category,
+                questions=[
+                    Question(text=registration, forum_normalized=forum, category=category)
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": InputOrderReranker(),
+        }
+    )
+
+    chunk_ids = [chunk.chunk_id for chunk in result["reranked_chunks"]]
+    assert chunk_ids[0] == "official_registration"
+    assert "ticket_answer_bank_account" not in chunk_ids
 
 
 @pytest.mark.asyncio
@@ -4088,6 +4227,146 @@ async def test_generate_combines_multiple_covered_source_chunks(
     assert result["cited_sources"] == ["travel", "housing"]
     assert "Проезд до форума" in result["generated_response"]
     assert "палатках" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum = "Больше, чем путешествие"
+    chunks = [
+        ScoredChunk(
+            chunk_id="registration",
+            text="Регистрация на фестивальный день открыта до 11 июля включительно.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "docx",
+                "intent_name": "registraciya",
+                "topic": "sroki_registracii_i_rezultaty_otbora",
+            },
+            score=0.8,
+            reranker_score=0.8,
+        ),
+        ScoredChunk(
+            chunk_id="age",
+            text="Возрастная маркировка фестиваля 0+.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "docx",
+                "intent_name": "vozrast",
+                "topic": "vozrastnye_ogranicheniya",
+            },
+            score=0.8,
+            reranker_score=0.8,
+        ),
+        ScoredChunk(
+            chunk_id="travel",
+            text="Победителям оплачивают проезд, питание и проживание.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "docx",
+                "intent_name": "oplata_proezda_i_prozhivaniya",
+                "topic": "oplata_proezda_i_prozhivaniya",
+            },
+            score=0.8,
+            reranker_score=0.8,
+        ),
+    ]
+    llm = FailingLLM()
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized=forum,
+                questions=[
+                    Question(text="Как зарегистрироваться?", forum_normalized=forum),
+                    Question(text="Какой возраст?", forum_normalized=forum),
+                    Question(text="Оплата проезда и проживания?", forum_normalized=forum),
+                ],
+            ),
+            "message_masked": (
+                "Больше, чем путешествие: регистрация, возраст, дорога и проживание?"
+            ),
+            "reranked_chunks": chunks,
+            "max_confidence": 0.8,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["registration", "age", "travel"]
+    assert "Регистрация на фестивальный день открыта" in result["generated_response"]
+    assert "Возрастная маркировка" in result["generated_response"]
+    assert "Победителям оплачивают проезд" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_complex_message_uses_multiple_fallback_aspect_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunks = [
+        ScoredChunk(
+            chunk_id="docs",
+            text="Для поездки нужны паспорт и медицинская справка.",
+            metadata={"forum_normalized": "Российский Север", "category": "форумы"},
+            score=0.8,
+            reranker_score=0.82,
+        ),
+        ScoredChunk(
+            chunk_id="transfer",
+            text="Для участников будет организован бесплатный трансфер.",
+            metadata={"forum_normalized": "Российский Север", "category": "форумы"},
+            score=0.8,
+            reranker_score=0.8,
+        ),
+        ScoredChunk(
+            chunk_id="food",
+            text="На площадке будут организованы точки питания и питьевая вода.",
+            metadata={"forum_normalized": "Российский Север", "category": "форумы"},
+            score=0.8,
+            reranker_score=0.78,
+        ),
+    ]
+    llm = CapturingLLM(
+        "Нужны паспорт и медицинская справка. [src:docs]\n\n"
+        "Трансфер для участников бесплатный. [src:transfer]\n\n"
+        "На площадке будут точки питания и питьевая вода. [src:food]"
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized="Российский Север",
+                questions=[],
+            ),
+            "message_masked": (
+                "Российский Север: какие документы нужны, есть ли трансфер и питание?"
+            ),
+            "reranked_chunks": chunks,
+            "max_confidence": 0.82,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert result["cited_sources"] == ["docs", "transfer", "food"]
 
 
 @pytest.mark.asyncio

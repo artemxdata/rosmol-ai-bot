@@ -6,6 +6,7 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         (
             "регистрац",
+            "зарегистр",
             "подать заяв",
             "подать проект",
             "заявк",

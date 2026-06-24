@@ -182,7 +182,7 @@ def _rerank_for_state(
         original_priority_candidate,
     ):
         _append_chunk(selected, seen, _priority_scored_candidate(original_priority_candidate))
-    per_question_limit = 2 if len(questions) <= 3 else 1
+    per_question_limit = 2 if len(questions) <= 5 else 1
     group_specs: list[tuple[str, list[Chunk], int]] = []
 
     for question in questions:
@@ -195,7 +195,7 @@ def _rerank_for_state(
             _append_chunk(selected, seen, _source_candidate(candidates[0]))
         group_specs.append((question, candidates, per_question_limit))
 
-    target_size = max(4, min(MAX_RERANKED_CHUNKS, len(questions)))
+    target_size = min(MAX_RERANKED_CHUNKS, max(4, len(questions) + 2))
     query_candidates = _candidate_chunks_for_question(query, scoped_chunks, QUERY_CANDIDATE_LIMIT)
     if original_priority_candidate and original_priority_candidate.chunk_id not in {
         chunk.chunk_id for chunk in query_candidates
@@ -205,8 +205,13 @@ def _rerank_for_state(
     group_results = _rerank_groups(reranker, group_specs)
 
     for ranked_chunks in group_results[:-1]:
+        added_for_question = 0
         for chunk in ranked_chunks:
-            if _append_chunk(selected, seen, chunk):
+            before_count = len(seen)
+            _append_chunk(selected, seen, chunk)
+            if len(seen) > before_count:
+                added_for_question += 1
+            if added_for_question >= per_question_limit:
                 break
 
     for chunk in group_results[-1]:
@@ -246,7 +251,17 @@ def _scoped_chunks_for_analysis(
                 for chunk in forum_chunks
                 if (chunk.metadata or {}).get("category") == category
             ]
+            if category == "\u0444\u043e\u0440\u0443\u043c\u044b":
+                category_chunks = _order_official_sources_first(category_chunks)
             if category_chunks:
+                if category == "\u0444\u043e\u0440\u0443\u043c\u044b":
+                    official_category_chunks = _official_source_chunks(category_chunks)
+                    if official_category_chunks:
+                        category_chunks = official_category_chunks
+                        exact_example_chunks = _official_or_same_chunk_protected_chunks(
+                            exact_example_chunks,
+                            official_category_chunks,
+                        )
                 category_ids = {chunk.chunk_id for chunk in category_chunks}
                 compatible_chunks = [
                     chunk
@@ -288,6 +303,55 @@ def _scoped_chunks_for_analysis(
             return _with_protected_chunks(compatible_chunks, exact_example_chunks)
 
     return chunks
+
+
+def _order_official_sources_first(chunks: list[Chunk]) -> list[Chunk]:
+    return [
+        chunk
+        for _, chunk in sorted(
+            enumerate(chunks),
+            key=lambda item: (_source_type_rank(item[1]), item[0]),
+        )
+    ]
+
+
+def _official_source_chunks(chunks: list[Chunk]) -> list[Chunk]:
+    return [
+        chunk
+        for chunk in chunks
+        if str((chunk.metadata or {}).get("source_type") or "").strip()
+        in {"docx", "xlsx"}
+    ]
+
+
+def _official_or_same_chunk_protected_chunks(
+    protected_chunks: list[Chunk],
+    official_chunks: list[Chunk],
+) -> list[Chunk]:
+    official_ids = {chunk.chunk_id for chunk in official_chunks}
+    return [
+        chunk
+        for chunk in protected_chunks
+        if chunk.chunk_id in official_ids or _source_type_rank(chunk) == 0
+    ]
+
+
+def _source_type_rank(chunk: Chunk) -> int:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    if source_type in {"docx", "xlsx"}:
+        return 0
+    if source_type == "ticket_answer_bank":
+        return 2
+    return 1
+
+
+def _source_reliability_score(chunk: Chunk) -> float:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    if source_type in {"docx", "xlsx"}:
+        return 3.0
+    if source_type == "ticket_answer_bank":
+        return -3.0
+    return 0.0
 
 
 def _is_compatible_category(category: str | None, chunk: Chunk) -> bool:
@@ -372,6 +436,7 @@ def _candidate_chunks_for_question(
             + _marker_bonus(question, text_haystack, weight=8.0)
             + _metadata_field_score(question_tokens, chunk)
             + _generic_penalty(chunk, has_specific_candidate)
+            + _source_reliability_score(chunk)
             + overlap
             + float(chunk.score or 0)
         )
