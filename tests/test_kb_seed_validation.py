@@ -4,7 +4,12 @@ import json
 
 import pytest
 
-from scripts.index_kb import build_embedding_text, validate_only, validate_seed_items
+from scripts.index_kb import (
+    build_embedding_text,
+    validate_only,
+    validate_quality_gate,
+    validate_seed_items,
+)
 
 
 def test_validate_seed_items_accepts_valid_records() -> None:
@@ -62,6 +67,32 @@ def test_validate_only_prints_record_count(tmp_path, capsys: pytest.CaptureFixtu
     validate_only(path)
 
     assert "valid_records=1" in capsys.readouterr().out
+
+
+def test_validate_quality_gate_accepts_passed_report(tmp_path) -> None:
+    path = tmp_path / "quality_gate.json"
+    path.write_text(
+        json.dumps({"passed": True, "failed_checks": 0}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    assert validate_quality_gate(path)["passed"] is True
+
+
+def test_validate_quality_gate_rejects_missing_report(tmp_path) -> None:
+    with pytest.raises(ValueError, match="does not exist"):
+        validate_quality_gate(tmp_path / "missing.json")
+
+
+def test_validate_quality_gate_rejects_failed_report(tmp_path) -> None:
+    path = tmp_path / "quality_gate.json"
+    path.write_text(
+        json.dumps({"passed": False, "failed_checks": 2}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="failed_checks=2"):
+        validate_quality_gate(path)
 
 
 def test_build_embedding_text_includes_intent_examples_without_changing_answer() -> None:

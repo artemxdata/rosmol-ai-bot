@@ -178,6 +178,21 @@ def validate_only(path: Path) -> None:
     print(f"valid_records={len(records)} path={path}")
 
 
+def validate_quality_gate(path: Path) -> dict:
+    if not path.exists():
+        raise ValueError(f"Quality gate report does not exist: {path}")
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Quality gate report must contain a JSON object: {path}")
+    if payload.get("passed") is not True:
+        failed_checks = payload.get("failed_checks")
+        raise ValueError(
+            "Quality gate did not pass"
+            + (f": failed_checks={failed_checks}" if failed_checks is not None else "")
+        )
+    return payload
+
+
 def _read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -188,6 +203,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--path", default="data/knowledge_base_seed.json")
     parser.add_argument("--collection", default=settings.qdrant_knowledge_collection)
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument(
+        "--quality-gate",
+        default="",
+        help="Path to quality_gate.json. Checked when --require-quality-gate is set.",
+    )
+    parser.add_argument(
+        "--require-quality-gate",
+        action="store_true",
+        help="Refuse indexing unless the quality gate report exists and passed=true.",
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -202,6 +227,13 @@ def main() -> None:
     if args.validate_only:
         validate_only(Path(args.path))
     else:
+        if args.require_quality_gate:
+            quality_gate_path = (
+                Path(args.quality_gate)
+                if args.quality_gate
+                else Path("reports/quality_suite/quality_gate.json")
+            )
+            validate_quality_gate(quality_gate_path)
         try:
             asyncio.run(index_kb(Path(args.path), args.collection, args.limit))
         except MLDependencyError as exc:
