@@ -13,15 +13,35 @@ from src.models import Complexity, QueryAnalysis
 async def analyze_query(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
+    original_message = state.get("message") or state["message_masked"]
+    masked_message = state["message_masked"]
+    routing_hint = state.get("routing_hint")
+
+    deterministic = _deterministic_analysis(
+        original_message,
+        masked_message,
+        routing_hint,
+    )
+    if deterministic is not None:
+        if tracer:
+            tracer.add(
+                "analyze",
+                int((perf_counter() - started_at) * 1000),
+                mode="deterministic",
+            )
+        return {
+            "analysis": deterministic,
+            "analyzer_mode": "deterministic",
+        }
+
     try:
         llm = state["llm_client"]
-        routing_hint = state.get("routing_hint")
         model = select_analyzer_model(routing_hint)
         content = await llm.generate(
             model=model,
             system=QUERY_ANALYZER_SYSTEM,
             user=build_analyzer_user(
-                state["message_masked"],
+                masked_message,
                 state.get("session"),
                 None,
                 routing_hint,
@@ -31,17 +51,18 @@ async def analyze_query(state: BotState) -> dict:
         payload = _coerce_analysis_payload(parse_llm_json(content))
         _apply_deterministic_forum(
             payload,
-            state.get("message") or state["message_masked"],
+            original_message,
         )
+        _apply_forum_category_guardrail(payload, original_message)
         analysis = QueryAnalysis.model_validate(payload)
         if tracer:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
         return {"analysis": analysis}
     except Exception as exc:
         fallback = _fallback_analysis(
-            state.get("message") or state["message_masked"],
-            state["message_masked"],
-            state.get("routing_hint"),
+            original_message,
+            masked_message,
+            routing_hint,
         )
         if fallback is not None:
             if tracer:
@@ -62,6 +83,14 @@ async def analyze_query(state: BotState) -> dict:
         }
 
 
+def _deterministic_analysis(
+    original_message: str,
+    masked_message: str,
+    routing_hint: object,
+) -> QueryAnalysis | None:
+    return _fallback_analysis(original_message, masked_message, routing_hint)
+
+
 def _fallback_analysis(
     original_message: str,
     masked_message: str,
@@ -71,15 +100,11 @@ def _fallback_analysis(
     payload = {
         "category": category,
         "complexity": _complexity_from_routing_hint(routing_hint).value,
-        "questions": [
-            {
-                "text": masked_message,
-                "category": category,
-            }
-        ],
+        "questions": [],
     }
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
+    _apply_forum_category_guardrail(payload, original_message)
     if not payload.get("category") and not payload.get("forum_normalized"):
         return None
     return QueryAnalysis.model_validate(payload)
@@ -89,10 +114,56 @@ def _infer_category_from_message(message: str) -> str | None:
     normalized = message.casefold().replace("ё", "е")
     if "грант" in normalized:
         return "гранты"
-    if any(word in normalized for word in ("фгаис", "личн", "кабинет", "парол", "верификац")):
-        return "платформа_фгаис"
-    if any(word in normalized for word in ("ошиб", "баг", "не работает", "техподдерж")):
+    if any(
+        marker in normalized
+        for marker in (
+            "отчет",
+            "отчетност",
+            "отчёт",
+            "отчётност",
+            "расход",
+            "смет",
+            "договор",
+            "наклад",
+            "закуп",
+            "контрольн",
+            "точк",
+        )
+    ):
+        return "гранты"
+    if (
+        "проект" in normalized
+        and any(marker in normalized for marker in ("подать", "заявк", "отправ"))
+        and not any(marker in normalized for marker in ("форум", "фестивал", "мероприят"))
+    ):
+        return "гранты"
+    if any(
+        word in normalized
+        for word in (
+            "ошиб",
+            "баг",
+            "не работает",
+            "техподдерж",
+            "id не",
+            "id проф",
+            "айди",
+            "ид проф",
+        )
+    ):
         return "техподдержка"
+    if any(
+        word in normalized
+        for word in (
+            "фгаис",
+            "личн",
+            "кабинет",
+            "парол",
+            "верификац",
+            "регистрац",
+            "зарегистр",
+        )
+    ):
+        return "платформа_фгаис"
     if any(word in normalized for word in ("форум", "мероприят", "фестивал")):
         return "форумы"
     return None
@@ -117,8 +188,10 @@ def _complexity_from_routing_hint(routing_hint: object) -> Complexity:
 
 def _coerce_analysis_payload(payload: dict) -> dict:
     normalized = dict(payload)
-    normalized["forum"] = _coerce_optional_string(normalized.get("forum"))
-    normalized["forum_normalized"] = _coerce_optional_string(normalized.get("forum_normalized"))
+    normalized["forum"] = _normalize_forum_alias(_coerce_optional_string(normalized.get("forum")))
+    normalized["forum_normalized"] = _normalize_forum_alias(
+        _coerce_optional_string(normalized.get("forum_normalized"))
+    )
     normalized["topics"] = _coerce_string_list(normalized.get("topics"))
     normalized["category"] = _normalize_category(normalized.get("category"))
     _drop_pseudo_forum_for_category(normalized)
@@ -170,6 +243,42 @@ def _apply_deterministic_forum(payload: dict, message: str) -> None:
         override_forum=True,
         override_category=force_forum_category,
     )
+
+
+def _apply_forum_category_guardrail(payload: dict, message: str) -> None:
+    forum = str(payload.get("forum_normalized") or payload.get("forum") or "").strip()
+    if not forum or _is_grant_pseudo_forum(forum):
+        return
+    if _has_forum_technical_marker(message):
+        return
+    if _should_force_forum_category(forum, message) or _should_override_llm_category_for_forum(
+        payload.get("category"),
+        message,
+    ):
+        payload["category"] = "форумы"
+        _propagate_question_defaults(payload, override_category=True)
+
+
+def _should_override_llm_category_for_forum(category: object, message: str) -> bool:
+    if category not in {"платформа_фгаис", "навигация", "общее", None}:
+        return False
+    return not _has_forum_technical_marker(message)
+
+
+def _has_forum_technical_marker(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е")
+    technical_markers = (
+        "ошиб",
+        "не работает",
+        "не приходит письмо",
+        "парол",
+        "id проф",
+        "айди",
+        "ид проф",
+        "верификац",
+        "техподдерж",
+    )
+    return any(marker in normalized for marker in technical_markers)
 
 
 def _propagate_question_defaults(
@@ -227,7 +336,10 @@ def _coerce_questions(value: object) -> list[dict]:
         question = dict(item)
         question["topic"] = _coerce_optional_string(question.get("topic"))
         question["forum"] = _coerce_optional_string(question.get("forum"))
-        question["forum_normalized"] = _coerce_optional_string(question.get("forum_normalized"))
+        question["forum"] = _normalize_forum_alias(_coerce_optional_string(question.get("forum")))
+        question["forum_normalized"] = _normalize_forum_alias(
+            _coerce_optional_string(question.get("forum_normalized"))
+        )
         question["category"] = _normalize_category(question.get("category"))
         if question.get("forum_normalized") is None and question.get("forum"):
             question["forum_normalized"] = question["forum"]
@@ -271,6 +383,12 @@ def _normalize_category(value: object) -> str | None:
 def _drop_pseudo_forum_for_category(payload: dict) -> None:
     category = payload.get("category")
     forum = str(payload.get("forum_normalized") or payload.get("forum") or "")
+    if _is_platform_pseudo_forum(forum):
+        payload["forum"] = None
+        payload["forum_normalized"] = None
+        if category in {None, "форумы"}:
+            payload["category"] = "платформа_фгаис"
+        return
     if category != "гранты" or not _is_grant_pseudo_forum(forum):
         return
     payload["forum"] = None
@@ -286,7 +404,35 @@ def _drop_pseudo_forums(payload: dict) -> None:
 
 def _is_grant_pseudo_forum(value: str | None) -> bool:
     normalized = str(value or "").casefold().replace("ё", "е")
-    return "грант" in normalized and "физичес" in normalized
+    return normalized in {"грант", "гранты"} or "грант" in normalized and (
+        "физичес" in normalized or "росмолод" in normalized
+    )
+
+
+def _is_platform_pseudo_forum(value: str | None) -> bool:
+    normalized = str(value or "").casefold().replace("ё", "е").strip()
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "myrosmol.ru",
+            "admin.myrosmol",
+            "фгаис",
+            "личный кабинет",
+            "личн кабинет",
+        )
+    )
+
+
+def _normalize_forum_alias(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    match_key = normalized.casefold().replace("ё", "е").replace("i", "и")
+    if match_key in {"иволга", "иволга 2025", "иволге", "иволгу"}:
+        return "Иволга"
+    return normalized
 
 
 def _coerce_optional_string(value: object) -> str | None:

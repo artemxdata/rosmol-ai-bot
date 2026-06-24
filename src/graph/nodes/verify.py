@@ -18,9 +18,12 @@ NO_QUESTION_RE = re.compile(
     flags=re.IGNORECASE,
 )
 COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("регистрац", "подать заяв", "заявк", "поучаств", "участв", "акци"),
+    ("регистрац", "подать заяв", "подать проект", "заявк", "поучаств", "участв", "акци"),
     (
         "проезд",
+        "оплат",
+        "расход",
+        "покрыва",
         "дорог",
         "билет",
         "чартер",
@@ -62,8 +65,14 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
         "возврат денег",
         "вернуть денеж",
         "возврат денеж",
+        "не удается реализ",
+        "не удаётся реализ",
+        "не могу реализ",
+        "не получается реализ",
+        "сорвал",
     ),
     ("отчет", "отчетност", "отчёт", "отчётност"),
+    ("id не", "id проф", "айди", "ид проф"),
 )
 FORUM_SPECIFIC_MARKERS = (
     "дата",
@@ -276,6 +285,12 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
         for chunk in source_chunks
         if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
     }
+    if len(forums) <= 1 and cited_sources:
+        forums = {
+            forum
+            for chunk in chunks
+            if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
+        }
     return sorted(forums) if len(forums) > 1 else []
 
 
@@ -411,6 +426,8 @@ def _chunk_matches_question_forum(chunk: ScoredChunk, question: Question) -> boo
 
 def _chunk_haystack(chunk: ScoredChunk) -> str:
     metadata = chunk.metadata or {}
+    examples = metadata.get("intent_examples") or []
+    examples_text = " ".join(str(example or "") for example in examples if example)
     metadata_text = " ".join(
         str(value or "")
         for value in (
@@ -420,7 +437,7 @@ def _chunk_haystack(chunk: ScoredChunk) -> str:
             metadata.get("forum_normalized"),
         )
     )
-    return f"{metadata_text} {chunk.text}"
+    return f"{metadata_text} {examples_text} {chunk.text}"
 
 
 def _required_marker_groups(question_text: str) -> list[tuple[str, ...]]:

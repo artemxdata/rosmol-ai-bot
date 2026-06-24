@@ -14,8 +14,9 @@ def _record(
     *,
     forum: str | None = None,
     example: str | None = None,
+    source_type: str | None = None,
 ) -> dict:
-    return {
+    record = {
         "chunk_id": chunk_id,
         "status": "published",
         "category": category,
@@ -24,6 +25,9 @@ def _record(
         "intent_examples": [example or f"question {chunk_id}"],
         "text_clean": f"Answer {chunk_id}",
     }
+    if source_type:
+        record["source_type"] = source_type
+    return record
 
 
 def test_select_balanced_records_round_robins_categories() -> None:
@@ -46,6 +50,31 @@ def test_select_balanced_records_round_robins_categories() -> None:
     ]
 
 
+def test_select_balanced_records_respects_source_type_limits() -> None:
+    records = [
+        _record("ticket_1", "forums", source_type="ticket_answer_bank"),
+        _record("ticket_2", "grants", source_type="ticket_answer_bank"),
+        _record("ticket_3", "platform", source_type="ticket_answer_bank"),
+        _record("xlsx_1", "forums", source_type="xlsx"),
+        _record("xlsx_2", "grants", source_type="xlsx"),
+        _record("docx_1", "forums", source_type="docx"),
+    ]
+
+    selected = select_balanced_records(
+        records,
+        max_cases=5,
+        source_type_limits={"ticket_answer_bank": 3, "xlsx": 1, "docx": 1},
+    )
+
+    assert [record["chunk_id"] for record in selected] == [
+        "ticket_1",
+        "ticket_2",
+        "ticket_3",
+        "xlsx_1",
+        "docx_1",
+    ]
+
+
 def test_build_seed_ask_cases_adds_expected_chunk_and_tags() -> None:
     cases = build_seed_ask_cases([_record("grant_1", "гранты")], user_prefix="local")
 
@@ -63,6 +92,16 @@ def test_build_seed_ask_cases_adds_expected_chunk_and_tags() -> None:
             "tags": ["seed_balanced", "category:гранты"],
         }
     ]
+
+
+def test_build_seed_ask_cases_can_require_expected_citation() -> None:
+    cases = build_seed_ask_cases(
+        [_record("ticket_1", "grants", source_type="ticket_answer_bank")],
+        require_cited_chunks=True,
+    )
+
+    assert cases[0]["expected_cited_chunk_ids"] == ["ticket_1"]
+    assert "source_type:ticket_answer_bank" in cases[0]["tags"]
 
 
 def test_seed_smoke_query_ignores_fallback_source_category_prefix() -> None:

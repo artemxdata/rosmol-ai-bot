@@ -31,3 +31,12 @@ def test_masks_plain_russian_phone_without_plus() -> None:
     assert "89991234567" not in masked
     assert masked == "Позвоните [ТЕЛЕФОН] или [ТЕЛЕФОН]"
     assert mapping["phone"] == ["79833384190", "89991234567"]
+
+
+def test_does_not_mask_support_role_phrase_as_person_name() -> None:
+    masker = PIIMasker()
+
+    masked, mapping = masker.mask("Сопровождающее лицо на форуме")
+
+    assert masked == "Сопровождающее лицо на форуме"
+    assert "name" not in mapping

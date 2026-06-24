@@ -184,6 +184,7 @@ def prepare_case(
         "user_id": "ticket-eval",
         "channel": "api",
         "expected_chunk_ids": expected_chunk_ids,
+        "expected_cited_chunk_ids": expected_chunk_ids if not expected_escalated else [],
         "expected_answer_contains": normalize_answer_contains(
             raw.get("expected_answer_contains") or []
         ),
@@ -335,6 +336,7 @@ def build_review_rows(cases: list[dict[str, Any]], limit: int = 300) -> list[dic
                 "expected_escalated": item["expected_escalated"],
                 "expected_escalation_reason": item.get("expected_escalation_reason") or "",
                 "expected_chunk_ids": ", ".join(item["expected_chunk_ids"]),
+                "expected_cited_chunk_ids": ", ".join(item["expected_cited_chunk_ids"]),
                 "best_chunk_match_score": item.get("best_chunk_match_score"),
                 "needs_review": item["needs_review"],
                 "review_reason": item["review_reason"],

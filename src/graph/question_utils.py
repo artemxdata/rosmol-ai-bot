@@ -4,7 +4,15 @@ from src.models import QueryAnalysis, Question
 
 FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
-        ("регистрац", "подать заяв", "заявк", "поучаств", "участв", "акци"),
+        (
+            "регистрац",
+            "подать заяв",
+            "подать проект",
+            "заявк",
+            "поучаств",
+            "участв",
+            "акци",
+        ),
         "Как подать заявку или зарегистрироваться?",
     ),
     (("документ", "паспорт", "справк"), "Какие документы нужны?"),
@@ -15,6 +23,9 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         (
             "проезд",
+            "оплат",
+            "расход",
+            "покрыва",
             "дорог",
             "билет",
             "чартер",
@@ -37,6 +48,7 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
         ("отказ", "отказаться", "отозвать", "отменить участие"),
         "Как отказаться от участия или отозвать заявку?",
     ),
+    (("отклон", "причин отклон"), "Почему отклонили заявку?"),
     (
         (
             "письмо-вызов",
@@ -49,10 +61,46 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
         ),
         "Как получить письмо-вызов или подтверждение участия?",
     ),
+    (
+        (
+            "заезд и выезд",
+            "заезда и выезда",
+            "время заезда",
+            "время выезда",
+            "когда заезд",
+            "когда выезд",
+        ),
+        "Когда заезд и выезд?",
+    ),
     (("дата", "даты", "срок", "заезд", "выезд"), "Какие даты и сроки?"),
     (("сертификат",), "Будет ли сертификат?"),
     (("чат", "куратор"), "Как попасть в чат мероприятия?"),
     (("результат", "отбор", "одобрен", "статус", "рассмотр"), "Когда будут результаты отбора?"),
+    (
+        (
+            "оператор",
+            "контакт",
+            "связаться",
+            "поддержк",
+            "служба заботы",
+        ),
+        "Как связаться с оператором или поддержкой?",
+    ),
+    (
+        (
+            "техническ",
+            "ошиб",
+            "не работает",
+            "не открывается",
+            "не загружается",
+            "не могу войти",
+            "не получается войти",
+            "не могу зайти",
+            "авторизац",
+            "баг",
+        ),
+        "Что делать при технической ошибке или проблеме доступа?",
+    ),
     (
         (
             "вернуть грантов",
@@ -68,6 +116,52 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     ),
     (
         ("отчет", "отчетност", "отчёт", "отчётност"),
+        "Как оформить отчётность по гранту?",
+    ),
+    (
+        (
+            "не удается реализ",
+            "не удаётся реализ",
+            "не могу реализ",
+            "не получается реализ",
+            "сорвал",
+        ),
+        "Как вернуть грантовые средства?",
+    ),
+    (("id не", "id проф", "айди", "ид проф"), "Где найти ID профиля?"),
+    (
+        (
+            "что такое росмолод",
+            "кто такие росмолод",
+            "чем занимается росмолод",
+        ),
+        "Что такое Росмолодёжь?",
+    ),
+    (
+        ("до свид", "пока", "прощ", "всего добр", "хорошего дня"),
+        "Прощание",
+    ),
+    (
+        ("рекоменд", "посовет", "подбери", "подойдет", "подойдёт"),
+        "Какие мероприятия могут подойти?",
+    ),
+)
+GRANT_FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        (
+            "отчет",
+            "отчетност",
+            "отчёт",
+            "отчётност",
+            "расход",
+            "смет",
+            "договор",
+            "акт",
+            "наклад",
+            "закуп",
+            "контрольн",
+            "точк",
+        ),
         "Как оформить отчётность по гранту?",
     ),
 )
@@ -97,14 +191,40 @@ def _base_questions(
     *,
     extra_fallback_markers: tuple[tuple[tuple[str, ...], str], ...] = (),
 ) -> list[Question]:
+    message = str(message or "").strip()
     if analysis.questions:
+        filtered_questions = _filter_inferred_aspect_questions(
+            analysis.questions,
+            message,
+            extra_markers=extra_fallback_markers,
+            category=analysis.category,
+        )
+        if filtered_questions:
+            return filtered_questions
+        detected = _fallback_questions_from_message(
+            message,
+            extra_markers=extra_fallback_markers,
+            category=analysis.category,
+        )
+        if detected:
+            return [
+                Question(
+                    text=text,
+                    category=analysis.category,
+                    forum_normalized=analysis.forum_normalized,
+                )
+                for text in detected
+            ]
         return analysis.questions
 
-    message = str(message or "").strip()
     if not message:
         return []
 
-    detected = _fallback_questions_from_message(message, extra_markers=extra_fallback_markers)
+    detected = _fallback_questions_from_message(
+        message,
+        extra_markers=extra_fallback_markers,
+        category=analysis.category,
+    )
     if detected:
         return [
             Question(
@@ -122,6 +242,49 @@ def _base_questions(
             forum_normalized=analysis.forum_normalized,
         )
     ]
+
+
+def _filter_inferred_aspect_questions(
+    questions: list[Question],
+    message: str,
+    *,
+    extra_markers: tuple[tuple[tuple[str, ...], str], ...] = (),
+    category: str | None = None,
+) -> list[Question]:
+    message_marker_groups = _matched_marker_group_indexes(
+        message,
+        extra_markers=extra_markers,
+        category=category,
+    )
+    if not message_marker_groups:
+        return questions
+
+    filtered: list[Question] = []
+    for question in questions:
+        question_marker_groups = _matched_marker_group_indexes(
+            question.text,
+            extra_markers=extra_markers,
+            category=category,
+        )
+        if question_marker_groups and not question_marker_groups <= message_marker_groups:
+            continue
+        filtered.append(question)
+    return filtered
+
+
+def _matched_marker_group_indexes(
+    text: str,
+    *,
+    extra_markers: tuple[tuple[tuple[str, ...], str], ...] = (),
+    category: str | None = None,
+) -> set[int]:
+    normalized = text.casefold().replace("ё", "е")
+    groups: set[int] = set()
+    markers_to_scan = _fallback_marker_groups(extra_markers, category=category)
+    for index, (markers, _question) in enumerate(markers_to_scan):
+        if any(marker in normalized for marker in markers):
+            groups.add(index)
+    return groups
 
 
 def _detected_forums(analysis: QueryAnalysis) -> list[str]:
@@ -195,26 +358,77 @@ def _fallback_questions_from_message(
     message: str,
     *,
     extra_markers: tuple[tuple[tuple[str, ...], str], ...] = (),
+    category: str | None = None,
 ) -> list[str]:
     normalized = message.casefold().replace("ё", "е")
     questions: list[str] = []
-    for markers, question in (*extra_markers, *FALLBACK_QUESTION_MARKERS):
+    for markers, question in _fallback_marker_groups(extra_markers, category=category):
         if any(marker in normalized for marker in markers):
-            if _should_skip_fallback_question(question, normalized):
+            if _should_skip_fallback_question(question, normalized, category=category):
                 continue
-            questions.append(question)
+            if question not in questions:
+                questions.append(question)
     return questions
 
 
-def _should_skip_fallback_question(question: str, normalized_message: str) -> bool:
-    if question != "Какие даты и сроки?":
-        return False
+def _fallback_marker_groups(
+    extra_markers: tuple[tuple[tuple[str, ...], str], ...],
+    *,
+    category: str | None,
+) -> tuple[tuple[tuple[str, ...], str], ...]:
+    category_markers = (
+        GRANT_FALLBACK_QUESTION_MARKERS if category == "гранты" else ()
+    )
+    return (*extra_markers, *FALLBACK_QUESTION_MARKERS, *category_markers)
+
+
+def _should_skip_fallback_question(
+    question: str,
+    normalized_message: str,
+    *,
+    category: str | None,
+) -> bool:
     has_reporting_context = any(
         marker in normalized_message
         for marker in ("отчет", "отчетност", "отчёт", "отчётност")
     )
-    has_explicit_event_dates = any(
-        marker in normalized_message
-        for marker in ("дата", "даты", "заезд", "выезд")
-    )
-    return has_reporting_context and not has_explicit_event_dates
+    if question == "Какие даты и сроки?":
+        has_arrival_departure_context = any(
+            marker in normalized_message
+            for marker in (
+                "заезд и выезд",
+                "заезда и выезда",
+                "время заезда",
+                "время выезда",
+                "когда заезд",
+                "когда выезд",
+            )
+        )
+        if has_arrival_departure_context:
+            return True
+        has_explicit_event_dates = any(
+            marker in normalized_message
+            for marker in ("дата", "даты", "заезд", "выезд")
+        )
+        return has_reporting_context and not has_explicit_event_dates
+
+    if question == "Кто оплачивает проезд?":
+        has_travel_context = any(
+            marker in normalized_message
+            for marker in (
+                "проезд",
+                "дорог",
+                "билет",
+                "чартер",
+                "доезд",
+                "доехать",
+                "добраться",
+                "поездк",
+            )
+        )
+        return category == "гранты" and "расход" in normalized_message and not has_travel_context
+
+    if question == "Как подать заявку или зарегистрироваться?":
+        return "отклон" in normalized_message
+
+    return False

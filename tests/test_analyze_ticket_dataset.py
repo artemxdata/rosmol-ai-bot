@@ -5,6 +5,7 @@ from scripts.analyze_ticket_dataset import (
     build_golden_candidates,
     build_reranker_pairs,
     choose_answer_candidate,
+    choose_question_candidate,
     classify_category,
     classify_escalation,
     classify_topic,
@@ -12,6 +13,7 @@ from scripts.analyze_ticket_dataset import (
     is_low_signal_title,
     mask_pii,
     normalize_ticket,
+    score_question_segment,
     split_message_segments,
 )
 
@@ -151,6 +153,31 @@ def test_choose_answer_candidate_rejects_thread_artifact_user_fragments() -> Non
     )
 
     assert answer == ""
+
+
+def test_choose_question_candidate_prefers_user_question_over_support_answer() -> None:
+    answer_like = (
+        "Здесь все зависит от возраста ребенка. Если ребенку от 14 до 17 лет, "
+        "необходимо приложить согласие законного представителя."
+    )
+    user_like = "Подскажите, можно ли пройти регистрацию на форум с ребенком?"
+
+    question = choose_question_candidate("", [answer_like, user_like])
+
+    assert question == user_like
+    assert score_question_segment(user_like) > score_question_segment(answer_like)
+
+
+def test_choose_question_candidate_skips_answer_only_segments() -> None:
+    question = choose_question_candidate(
+        "Здесь все зависит от возраста участника",
+        [
+            "Для этого необходимо перейти в личный кабинет и проверить статус заявки.",
+            "Обрати внимание: регистрация проходит только через платформу Росмолодежи.",
+        ],
+    )
+
+    assert question == ""
 
 
 def test_classification_detects_forum_registration_and_technical_escalation() -> None:

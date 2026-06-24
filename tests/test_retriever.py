@@ -8,13 +8,20 @@ from src.rag.retriever import Retriever, build_filter
 
 
 def test_build_filter_contains_status_and_derived_keys() -> None:
-    query_filter = build_filter({"forum_normalized": "Машук", "category": "форумы"})
+    query_filter = build_filter(
+        {
+            "forum_normalized": "Машук",
+            "category": "форумы",
+            "source_type": "ticket_answer_bank",
+        }
+    )
 
     assert isinstance(query_filter, models.Filter)
     field_keys = [condition.key for condition in query_filter.must if hasattr(condition, "key")]
     assert "status" in field_keys
     assert "forum_key" in field_keys
     assert "category_key" in field_keys
+    assert "source_type" in field_keys
 
 
 class FakeEmbedder:
@@ -35,6 +42,46 @@ class FakeQdrant:
         return Result()
 
 
+class FakeScrollQdrant(FakeQdrant):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scroll_kwargs = None
+
+    async def scroll(self, **kwargs):
+        self.scroll_kwargs = kwargs
+
+        class Point:
+            def __init__(self, point_id: str, payload: dict) -> None:
+                self.id = point_id
+                self.payload = payload
+
+        return (
+            [
+                Point(
+                    "generic",
+                    {
+                        "chunk_id": "generic",
+                        "source_type": "ticket_answer_bank",
+                        "category": "гранты",
+                        "text_clean": "Generic grant reporting answer.",
+                        "intent_examples": ["How to submit a report?"],
+                    },
+                ),
+                Point(
+                    "exact",
+                    {
+                        "chunk_id": "exact",
+                        "source_type": "ticket_answer_bank",
+                        "category": "гранты",
+                        "text_clean": "Use the personal account for the exact report case.",
+                        "intent_examples": ["Can I upload a grant report after correction?"],
+                    },
+                ),
+            ],
+            None,
+        )
+
+
 @pytest.mark.asyncio
 async def test_retriever_applies_filter_to_prefetches() -> None:
     qdrant = FakeQdrant()
@@ -51,3 +98,29 @@ async def test_retriever_applies_filter_to_prefetches() -> None:
     query_filter = qdrant.kwargs["query_filter"]
     assert qdrant.kwargs["prefetch"][0].filter == query_filter
     assert qdrant.kwargs["prefetch"][1].filter == query_filter
+
+
+@pytest.mark.asyncio
+async def test_retriever_keyword_candidates_prioritize_exact_intent_examples() -> None:
+    qdrant = FakeScrollQdrant()
+    retriever = Retriever(
+        qdrant,
+        FakeEmbedder(),  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    chunks = await retriever.retrieve_keyword_candidates(
+        "Can I upload a grant report after correction?",
+        {"category": "гранты"},
+        top_k=2,
+    )
+
+    assert [chunk.chunk_id for chunk in chunks] == ["exact"]
+    assert qdrant.scroll_kwargs is not None
+    assert qdrant.scroll_kwargs["collection_name"] == "knowledge_base_sandbox"
+    field_keys = [
+        condition.key
+        for condition in qdrant.scroll_kwargs["scroll_filter"].must
+        if hasattr(condition, "key")
+    ]
+    assert "source_type" in field_keys

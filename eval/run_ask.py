@@ -5,6 +5,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import sys
 from collections import Counter
 from datetime import UTC, datetime
@@ -23,6 +24,22 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from eval.ask_cases import build_seed_ask_cases
 from src.config import get_settings
 
+FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
+    r"(ответ[а]?[^.!?]{0,120}\s+в\s+источник(?:е|ах)\s+нет|"
+    r"в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+информации|"
+    r"из\s+(?:представленных|переданных)\s+источников\s+невозможно\s+ответить|"
+    r"источники\s+не\s+(?:содержат|подтверждают)|"
+    r"информации\s+(?:в\s+источниках\s+)?нет|"
+    r"информаци[яи][^.!?]{0,160}отсутств)",
+    flags=re.IGNORECASE,
+)
+NON_ANSWER_RE = re.compile(
+    r"(уже\s+был[ао]?\s+предоставлен[ао]?\s+в\s+источник(?:е|ах)|"
+    r"смотрите\s+источник|"
+    r"обратитесь\s+к\s+источнику)",
+    flags=re.IGNORECASE,
+)
+
 
 def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     query = raw.get("query") or raw.get("question") or raw.get("text")
@@ -38,6 +55,16 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     expected_answer_contains = _string_list(
         raw.get("expected_answer_contains") or raw.get("answer_contains") or []
     )
+    expected_cited_chunk_ids = _string_list(
+        raw.get("expected_cited_chunk_ids") or raw.get("expected_cited_sources") or []
+    )
+    equivalent_chunk_ids = _equivalent_chunk_id_map(
+        raw.get("equivalent_chunk_ids")
+        or raw.get("equivalent_chunks")
+        or raw.get("acceptable_chunk_ids")
+        or {},
+        expected_chunk_ids,
+    )
 
     return {
         "id": str(raw.get("id") or raw.get("case_id") or query),
@@ -45,6 +72,8 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         "user_id": str(raw.get("user_id") or "ask-eval"),
         "channel": str(raw.get("channel") or "api"),
         "expected_chunk_ids": expected_chunk_ids,
+        "expected_cited_chunk_ids": expected_cited_chunk_ids,
+        "equivalent_chunk_ids": equivalent_chunk_ids,
         "expected_answer_contains": expected_answer_contains,
         "expected_escalated": raw.get("expected_escalated"),
         "expected_escalation_reason": raw.get("expected_escalation_reason"),
@@ -151,6 +180,7 @@ def summarize_results(
         if item.get("trace_total_latency_ms") is not None
     ]
     chunk_scored = [item for item in results if item.get("expected_chunk_ids")]
+    cited_scored = [item for item in results if item.get("expected_cited_chunk_ids")]
     answer_scored = [item for item in results if item.get("expected_answer_contains")]
     trace_scored = [item for item in results if item.get("trace_found")]
     usage_events = [event for item in results for event in item.get("llm_usage", [])]
@@ -172,6 +202,18 @@ def summarize_results(
         "pass_rate": _bool_rate(results, "passed"),
         "http_success_rate": _bool_rate(results, "http_success"),
         "expected_chunk_hit_rate": _bool_rate(chunk_scored, "expected_chunk_hit"),
+        "expected_or_equivalent_chunk_hit_rate": _bool_rate(
+            chunk_scored,
+            "expected_or_equivalent_chunk_hit",
+        ),
+        "expected_cited_chunk_hit_rate": _bool_rate(
+            cited_scored,
+            "expected_cited_chunk_hit",
+        ),
+        "expected_cited_or_equivalent_chunk_hit_rate": _bool_rate(
+            cited_scored,
+            "expected_cited_or_equivalent_chunk_hit",
+        ),
         "answer_contains_rate": _bool_rate(answer_scored, "answer_contains_match"),
         "trace_coverage_rate": len(trace_scored) / len(results) if results else None,
         "escalation_rate": _bool_rate(trace_scored, "was_escalated"),
@@ -201,6 +243,8 @@ def summarize_results(
         "escalation_reason_counts": dict(
             Counter(str(item.get("escalation_reason") or "none") for item in results)
         ),
+        "failure_reason_counts": _failure_reason_counts(results),
+        "likely_infrastructure_failure": _likely_infrastructure_failure(results),
         "llm_prompt_tokens": sum(int(item.get("llm_prompt_tokens") or 0) for item in results),
         "llm_completion_tokens": sum(
             int(item.get("llm_completion_tokens") or 0) for item in results
@@ -230,37 +274,114 @@ def score_case(
 
     observed_chunk_ids = _collect_trace_chunk_ids(trace)
     expected_chunk_ids = case.get("expected_chunk_ids") or []
+    expected_cited_chunk_ids = case.get("expected_cited_chunk_ids") or []
+    equivalent_chunk_ids = case.get("equivalent_chunk_ids") or {}
     expected_answer_contains = case.get("expected_answer_contains") or []
     expected_escalated = case.get("expected_escalated")
     expected_escalation_reason = case.get("expected_escalation_reason")
     expected_generator_model = case.get("expected_generator_model")
 
     checks: dict[str, bool | None] = {}
+    required_checks: dict[str, bool | None] = {}
+    missing_expected_chunk_ids: list[str] = []
+    missing_expected_or_equivalent_chunk_ids: list[str] = []
     if expected_chunk_ids:
-        checks["expected_chunk_hit"] = bool(set(expected_chunk_ids) & observed_chunk_ids)
+        expected_chunk_set = set(expected_chunk_ids)
+        missing_expected_chunk_ids = sorted(expected_chunk_set - observed_chunk_ids)
+        exact_hit = (
+            not missing_expected_chunk_ids
+            if len(expected_chunk_ids) > 1
+            else bool(expected_chunk_set & observed_chunk_ids)
+        )
+        missing_expected_or_equivalent_chunk_ids = _missing_expected_or_equivalent_ids(
+            expected_chunk_ids,
+            equivalent_chunk_ids,
+            observed_chunk_ids,
+        )
+        equivalent_hit = not missing_expected_or_equivalent_chunk_ids
+        checks["expected_chunk_hit"] = exact_hit
+        checks["expected_or_equivalent_chunk_hit"] = equivalent_hit
+        required_checks["expected_chunk_hit"] = (
+            equivalent_hit if equivalent_chunk_ids else exact_hit
+        )
+    missing_expected_cited_chunk_ids: list[str] = []
+    missing_expected_cited_or_equivalent_chunk_ids: list[str] = []
+    cited_chunk_ids = _collect_trace_cited_chunk_ids(trace)
+    if expected_cited_chunk_ids:
+        expected_cited_set = set(expected_cited_chunk_ids)
+        missing_expected_cited_chunk_ids = sorted(expected_cited_set - cited_chunk_ids)
+        exact_cited_hit = not missing_expected_cited_chunk_ids
+        missing_expected_cited_or_equivalent_chunk_ids = (
+            _missing_expected_or_equivalent_ids(
+                expected_cited_chunk_ids,
+                equivalent_chunk_ids,
+                cited_chunk_ids,
+            )
+        )
+        equivalent_cited_hit = not missing_expected_cited_or_equivalent_chunk_ids
+        checks["expected_cited_chunk_hit"] = exact_cited_hit
+        checks["expected_cited_or_equivalent_chunk_hit"] = equivalent_cited_hit
+        required_checks["expected_cited_chunk_hit"] = (
+            equivalent_cited_hit if equivalent_chunk_ids else exact_cited_hit
+        )
     if expected_answer_contains:
         normalized_response = response_text.lower()
-        checks["answer_contains_match"] = all(
+        answer_contains_match = all(
             expected.lower() in normalized_response for expected in expected_answer_contains
         )
+        checks["answer_contains_match"] = answer_contains_match
+        required_checks["answer_contains_match"] = answer_contains_match
     if expected_escalated is not None:
-        checks["escalation_match"] = (
+        escalation_match = (
             bool(trace.get("was_escalated")) == bool(expected_escalated)
             if trace
             else None
         )
+        checks["escalation_match"] = escalation_match
+        required_checks["escalation_match"] = escalation_match
     if expected_escalation_reason:
-        checks["escalation_reason_match"] = (
+        escalation_reason_match = (
             trace.get("escalation_reason") == expected_escalation_reason if trace else None
         )
+        checks["escalation_reason_match"] = escalation_reason_match
+        required_checks["escalation_reason_match"] = escalation_reason_match
     if expected_generator_model:
-        checks["generator_model_match"] = (
+        generator_model_match = (
             trace.get("generator_model") == expected_generator_model if trace else None
         )
+        checks["generator_model_match"] = generator_model_match
+        required_checks["generator_model_match"] = generator_model_match
+    if expected_chunk_ids and expected_escalated is not True:
+        no_false_insufficient = not _looks_like_insufficient_source(
+            response_text
+        )
+        no_non_answer = not _looks_like_non_answer(response_text)
+        checks["no_false_insufficient_source_response"] = no_false_insufficient
+        checks["no_non_answer_response"] = no_non_answer
+        required_checks["no_false_insufficient_source_response"] = no_false_insufficient
+        required_checks["no_non_answer_response"] = no_non_answer
 
-    passed = http_success and all(value is True for value in checks.values())
-    if not checks:
+    passed = http_success and all(value is True for value in required_checks.values())
+    if not required_checks:
         passed = http_success
+    failure_reasons = _failure_reasons(
+        http_success=http_success,
+        trace_found=bool(trace),
+        checks=checks,
+        required_checks=required_checks,
+        has_equivalent_chunks=bool(equivalent_chunk_ids),
+        expected_chunk_ids=expected_chunk_ids,
+        expected_cited_chunk_ids=expected_cited_chunk_ids,
+        missing_expected_chunk_ids=missing_expected_chunk_ids,
+        missing_expected_or_equivalent_chunk_ids=missing_expected_or_equivalent_chunk_ids,
+        missing_expected_cited_chunk_ids=missing_expected_cited_chunk_ids,
+        missing_expected_cited_or_equivalent_chunk_ids=(
+            missing_expected_cited_or_equivalent_chunk_ids
+        ),
+        expected_escalated=expected_escalated,
+        was_escalated=trace.get("was_escalated"),
+        error=http_result.get("error") or trace.get("error"),
+    )
 
     return {
         "id": case["id"],
@@ -274,8 +395,25 @@ def score_case(
         "error": http_result.get("error") or trace.get("error"),
         "trace_found": bool(trace),
         "expected_chunk_ids": expected_chunk_ids,
+        "equivalent_chunk_ids": equivalent_chunk_ids,
         "observed_chunk_ids": sorted(observed_chunk_ids),
         "expected_chunk_hit": checks.get("expected_chunk_hit"),
+        "expected_or_equivalent_chunk_hit": checks.get("expected_or_equivalent_chunk_hit"),
+        "missing_expected_chunk_ids": missing_expected_chunk_ids,
+        "missing_expected_or_equivalent_chunk_ids": (
+            missing_expected_or_equivalent_chunk_ids
+        ),
+        "expected_cited_chunk_ids": expected_cited_chunk_ids,
+        "expected_cited_chunk_hit": checks.get("expected_cited_chunk_hit"),
+        "expected_cited_or_equivalent_chunk_hit": checks.get(
+            "expected_cited_or_equivalent_chunk_hit"
+        ),
+        "missing_expected_cited_chunk_ids": missing_expected_cited_chunk_ids,
+        "missing_expected_cited_or_equivalent_chunk_ids": (
+            missing_expected_cited_or_equivalent_chunk_ids
+        ),
+        "cited_source_ids": sorted(cited_chunk_ids),
+        "cited_source_types": _cited_source_types(trace, cited_chunk_ids),
         "expected_answer_contains": expected_answer_contains,
         "answer_contains_match": checks.get("answer_contains_match"),
         "expected_escalated": expected_escalated,
@@ -287,6 +425,10 @@ def score_case(
         "expected_generator_model": expected_generator_model,
         "generator_model": trace.get("generator_model"),
         "generator_model_match": checks.get("generator_model_match"),
+        "no_false_insufficient_source_response": checks.get(
+            "no_false_insufficient_source_response"
+        ),
+        "no_non_answer_response": checks.get("no_non_answer_response"),
         "cache_hit": trace.get("cache_hit"),
         "max_reranker_score": trace.get("max_reranker_score"),
         "trace_total_latency_ms": trace.get("total_latency_ms"),
@@ -296,7 +438,97 @@ def score_case(
         "llm_total_tokens": trace.get("llm_total_tokens") or 0,
         "llm_estimated_cost_rub": trace.get("llm_estimated_cost_rub") or 0.0,
         "passed": passed,
+        "failure_reasons": [] if passed else failure_reasons,
     }
+
+
+def _failure_reasons(
+    *,
+    http_success: bool,
+    trace_found: bool,
+    checks: dict[str, bool | None],
+    required_checks: dict[str, bool | None],
+    has_equivalent_chunks: bool,
+    expected_chunk_ids: list[str],
+    expected_cited_chunk_ids: list[str],
+    missing_expected_chunk_ids: list[str],
+    missing_expected_or_equivalent_chunk_ids: list[str],
+    missing_expected_cited_chunk_ids: list[str],
+    missing_expected_cited_or_equivalent_chunk_ids: list[str],
+    expected_escalated: object,
+    was_escalated: object,
+    error: object,
+) -> list[str]:
+    reasons: list[str] = []
+    if not http_success:
+        reasons.append("http_error")
+    if http_success and not trace_found:
+        reasons.append("trace_missing")
+    if expected_chunk_ids and required_checks.get("expected_chunk_hit") is False:
+        reasons.append(
+            "expected_or_equivalent_chunk_not_observed"
+            if has_equivalent_chunks
+            else "expected_chunk_not_observed"
+        )
+    if expected_cited_chunk_ids and required_checks.get("expected_cited_chunk_hit") is False:
+        if has_equivalent_chunks:
+            if (
+                missing_expected_or_equivalent_chunk_ids
+                == missing_expected_cited_or_equivalent_chunk_ids
+            ):
+                reasons.append("expected_or_equivalent_chunk_not_retrieved")
+            else:
+                reasons.append("expected_or_equivalent_chunk_not_cited")
+        elif missing_expected_chunk_ids == missing_expected_cited_chunk_ids:
+            reasons.append("expected_chunk_not_retrieved")
+        else:
+            reasons.append("expected_chunk_not_cited")
+    if required_checks.get("answer_contains_match") is False:
+        reasons.append("answer_contains_mismatch")
+    if required_checks.get("escalation_match") is False:
+        if expected_escalated is False and was_escalated is True:
+            reasons.append("unexpected_escalation")
+        elif expected_escalated is True and was_escalated is False:
+            reasons.append("missing_escalation")
+        else:
+            reasons.append("escalation_mismatch")
+    if required_checks.get("escalation_reason_match") is False:
+        reasons.append("escalation_reason_mismatch")
+    if required_checks.get("generator_model_match") is False:
+        reasons.append("generator_model_mismatch")
+    if required_checks.get("no_false_insufficient_source_response") is False:
+        reasons.append("false_insufficient_source_response")
+    if required_checks.get("no_non_answer_response") is False:
+        reasons.append("non_answer_response")
+    if error and not reasons:
+        reasons.append("error")
+    return reasons or ["quality_check_failed"]
+
+
+def _looks_like_insufficient_source(response_text: str) -> bool:
+    normalized = response_text.casefold().replace("ё", "е")
+    return bool(FALSE_INSUFFICIENT_SOURCE_RE.search(normalized))
+
+
+def _looks_like_non_answer(response_text: str) -> bool:
+    normalized = response_text.casefold().replace("ё", "е")
+    return bool(NON_ANSWER_RE.search(normalized))
+
+
+def _failure_reason_counts(results: list[dict[str, Any]]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in results:
+        for reason in item.get("failure_reasons") or []:
+            counter[str(reason)] += 1
+    return dict(counter)
+
+
+def _likely_infrastructure_failure(results: list[dict[str, Any]]) -> bool:
+    if not results:
+        return False
+    if any(item.get("http_success") for item in results):
+        return False
+    return all("http_error" in (item.get("failure_reasons") or []) for item in results)
 
 
 async def _load_cases(
@@ -318,7 +550,10 @@ async def _load_cases(
     elif not auto_smoke_cases:
         raise FileNotFoundError(f"ask eval cases file not found: {cases_path}")
 
-    cases = [_normalize_case(item) for item in raw_cases]
+    cases = _apply_user_prefix(
+        [_normalize_case(item) for item in raw_cases],
+        user_prefix=user_prefix,
+    )
     if not cases and auto_smoke_cases:
         records = await asyncio.to_thread(_read_json, kb_seed_path)
         if not isinstance(records, list):
@@ -330,6 +565,17 @@ async def _load_cases(
         )
         generated_smoke_cases = True
     return cases, generated_smoke_cases
+
+
+def _apply_user_prefix(cases: list[dict[str, Any]], *, user_prefix: str) -> list[dict[str, Any]]:
+    if not user_prefix:
+        return cases
+    isolated: list[dict[str, Any]] = []
+    for index, case in enumerate(cases, start=1):
+        item = dict(case)
+        item["user_id"] = f"{user_prefix}-{index}"
+        isolated.append(item)
+    return isolated
 
 
 def _default_generated_user_prefix(base: str) -> str:
@@ -426,6 +672,50 @@ def _collect_trace_chunk_ids(trace: dict[str, Any]) -> set[str]:
     return chunk_ids
 
 
+def _collect_trace_cited_chunk_ids(trace: dict[str, Any]) -> set[str]:
+    return {str(item) for item in trace.get("cited_sources") or [] if item}
+
+
+def _cited_source_types(trace: dict[str, Any], cited_chunk_ids: set[str]) -> list[str]:
+    if not cited_chunk_ids:
+        return []
+    metadata_by_id = _trace_metadata_by_chunk_id(trace)
+    source_types = {
+        _source_type_for_chunk(chunk_id, metadata_by_id.get(chunk_id))
+        for chunk_id in cited_chunk_ids
+    }
+    return sorted(source_type for source_type in source_types if source_type)
+
+
+def _trace_metadata_by_chunk_id(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    metadata_by_id: dict[str, dict[str, Any]] = {}
+    for field in ("retrieved_chunks", "reranker_scores"):
+        for item in trace.get(field) or []:
+            if not isinstance(item, dict):
+                continue
+            chunk_id = item.get("chunk_id")
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            if not chunk_id and metadata:
+                chunk_id = metadata.get("chunk_id")
+            if chunk_id:
+                metadata_by_id[str(chunk_id)] = metadata
+    return metadata_by_id
+
+
+def _source_type_for_chunk(chunk_id: str, metadata: dict[str, Any] | None) -> str:
+    metadata = metadata or {}
+    source_type = str(metadata.get("source_type") or "").strip()
+    if source_type:
+        return source_type
+    if chunk_id.startswith("ticket_answer_bank_"):
+        return "ticket_answer_bank"
+    if chunk_id.startswith("xlsx_"):
+        return "xlsx"
+    if chunk_id.startswith("docx_"):
+        return "docx"
+    return "unknown"
+
+
 def _auth_headers(api_key_env: str | None) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if not api_key_env:
@@ -480,6 +770,36 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _equivalent_chunk_id_map(value: Any, expected_chunk_ids: list[str]) -> dict[str, list[str]]:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        result: dict[str, list[str]] = {}
+        for chunk_id, equivalents in value.items():
+            normalized = _string_list(equivalents)
+            if normalized:
+                result[str(chunk_id)] = normalized
+        return result
+
+    equivalents = _string_list(value)
+    if not equivalents:
+        return {}
+    return {chunk_id: equivalents for chunk_id in expected_chunk_ids}
+
+
+def _missing_expected_or_equivalent_ids(
+    expected_chunk_ids: list[str],
+    equivalent_chunk_ids: dict[str, list[str]],
+    observed_chunk_ids: set[str],
+) -> list[str]:
+    missing: list[str] = []
+    for expected_id in expected_chunk_ids:
+        accepted_ids = {expected_id, *equivalent_chunk_ids.get(expected_id, [])}
+        if not accepted_ids & observed_chunk_ids:
+            missing.append(expected_id)
+    return missing
+
+
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -500,12 +820,19 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"- Pass rate: `{_format_rate(metrics.get('pass_rate'))}`",
         f"- HTTP success rate: `{_format_rate(metrics.get('http_success_rate'))}`",
         f"- Expected chunk hit rate: `{_format_rate(metrics.get('expected_chunk_hit_rate'))}`",
+        "- Expected or equivalent chunk hit rate: "
+        f"`{_format_rate(metrics.get('expected_or_equivalent_chunk_hit_rate'))}`",
+        "- Expected cited chunk hit rate: "
+        f"`{_format_rate(metrics.get('expected_cited_chunk_hit_rate'))}`",
+        "- Expected cited or equivalent chunk hit rate: "
+        f"`{_format_rate(metrics.get('expected_cited_or_equivalent_chunk_hit_rate'))}`",
         f"- Escalation rate: `{_format_rate(metrics.get('escalation_rate'))}`",
         f"- Cache hit rate: `{_format_rate(metrics.get('cache_hit_rate'))}`",
         f"- Source chunk rate: `{_format_rate(metrics.get('source_chunk_rate'))}`",
         "- Low-confidence chunk hits: "
         f"`{metrics.get('low_confidence_expected_chunk_hits')}` "
         f"(`{_format_rate(metrics.get('low_confidence_expected_chunk_hit_rate'))}`)",
+        f"- Likely infrastructure failure: `{metrics.get('likely_infrastructure_failure')}`",
         f"- LLM cost, RUB: `{metrics.get('llm_estimated_cost_rub')}`",
         "",
         "## Latency",
@@ -513,6 +840,12 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         "| Metric | HTTP ms | Trace ms |",
         "|---|---:|---:|",
     ]
+    failure_counts = metrics.get("failure_reason_counts") or {}
+    if failure_counts:
+        lines.extend(["", "## Failure Reasons", ""])
+        for reason, count in sorted(failure_counts.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"- `{reason}`: `{count}`")
+
     latency = metrics.get("latency_ms") or {}
     trace_latency = metrics.get("trace_total_latency_ms") or {}
     for key in ("avg", "p50", "p95", "max"):
@@ -535,8 +868,15 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
     if failed:
         lines.extend(["", "## Failed Cases", ""])
         for item in failed[:20]:
-            reason = item.get("error") or item.get("escalation_reason") or "quality check failed"
-            lines.append(f"- `{item.get('id')}` status={item.get('http_status')} reason={reason}")
+            reasons = ", ".join(item.get("failure_reasons") or [])
+            reason = item.get("error") or item.get("escalation_reason") or reasons
+            reason = reason or "quality check failed"
+            source_types = ",".join(item.get("cited_source_types") or [])
+            source_note = f" sources={source_types}" if source_types else ""
+            lines.append(
+                f"- `{item.get('id')}` status={item.get('http_status')}"
+                f"{source_note} reason={reason}"
+            )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

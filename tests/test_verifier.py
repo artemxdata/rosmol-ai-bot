@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.graph.nodes.verify import verify
-from src.models import QueryAnalysis, ScoredChunk
+from src.models import QueryAnalysis, Question, ScoredChunk
 
 
 class JudgeLLM:
@@ -47,6 +47,38 @@ async def test_verifier_accepts_high_confidence_without_judge() -> None:
     assert result["verification"].has_hallucination is False
     assert result["verifier_triggered"] is False
 
+
+@pytest.mark.asyncio
+async def test_verifier_uses_answer_bank_intent_examples_for_coverage() -> None:
+    result = await verify(
+        {
+            "message_masked": "Как получить консультацию по отчетности?",
+            "analysis": QueryAnalysis(
+                questions=[Question(text="Как получить консультацию по отчетности?")]
+            ),
+            "generated_response": (
+                "Свяжитесь с куратором грантового конкурса. [src:ticket_answer_bank_001]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["ticket_answer_bank_001"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="ticket_answer_bank_001",
+                    text="Свяжитесь с куратором грантового конкурса.",
+                    metadata={
+                        "source_type": "ticket_answer_bank",
+                        "intent_examples": ["Как получить консультацию по отчетности?"],
+                    },
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
 
 @pytest.mark.asyncio
 async def test_verifier_judges_llm_generation_even_with_high_confidence() -> None:
@@ -504,6 +536,50 @@ async def test_verifier_escalates_ambiguous_forum_specific_sources() -> None:
     assert result["escalation_reason"] == "ambiguous_forum_context"
     assert "Утро" in result["verification"].details
 
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_single_cited_forum_when_candidates_are_ambiguous() -> None:
+    message = (
+        "\u041c\u043e\u0436\u043d\u043e "
+        "\u043f\u0440\u0438\u0435\u0445\u0430\u0442\u044c "
+        "\u0432 \u041a\u0435\u043c\u0435\u0440\u043e\u0432\u043e "
+        "\u0438 \u0431\u0443\u0434\u0435\u0442 \u043b\u0438 "
+        "\u0442\u0440\u0430\u043d\u0441\u0444\u0435\u0440?"
+    )
+    category = "\u0444\u043e\u0440\u0443\u043c\u044b"
+    response = (
+        "\u0422\u0440\u0430\u043d\u0441\u0444\u0435\u0440 "
+        "\u0431\u0443\u0434\u0435\u0442. [src:morning]"
+    )
+    morning = "\u0423\u0442\u0440\u043e"
+    sheregesh = "\u0428\u0435\u0440\u0435\u0433\u0435\u0448"
+    result = await verify(
+        {
+            "message_masked": message,
+            "analysis": QueryAnalysis(category=category),
+            "generated_response": response,
+            "generator_model": "source_chunk",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="morning",
+                    text=f"{response} {morning}.",
+                    metadata={"forum_normalized": morning},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="sheregesh",
+                    text=f"{response} {sheregesh}.",
+                    metadata={"forum_normalized": sheregesh},
+                    reranker_score=0.8,
+                ),
+            ],
+            "cited_sources": ["morning"],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
 
 @pytest.mark.asyncio
 async def test_verifier_allows_generic_multi_forum_sources_without_forum_specific_query() -> None:

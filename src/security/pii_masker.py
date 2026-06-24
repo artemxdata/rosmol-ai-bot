@@ -9,6 +9,21 @@ PHONE_RE = re.compile(
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.IGNORECASE)
 PASSPORT_RE = re.compile(r"(?<!\d)\d{4}\s?\d{6}(?!\d)")
 DATE_RE = re.compile(r"(?<!\d)(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4})(?!\d)")
+NON_PERSON_NAME_PHRASES = (
+    "сопровождающее",
+    "сопровождающего",
+    "сопровождающее лицо",
+    "сопровождающего лица",
+    "ответственное",
+    "ответственного",
+    "ответственное лицо",
+    "ответственного лица",
+    "физическое лицо",
+    "физического лица",
+    "юридическое лицо",
+    "юридического лица",
+    "личный кабинет",
+)
 
 
 @dataclass
@@ -84,8 +99,17 @@ class PIIMasker:
         doc.segment(self._segmenter)
         doc.tag_ner(self._ner_tagger)
 
-        names = [span.text for span in doc.spans if span.type == "PER"]
+        names = [
+            span.text
+            for span in doc.spans
+            if span.type == "PER" and not _is_known_non_person_phrase(span.text)
+        ]
         masked = text
         for name in sorted(set(names), key=len, reverse=True):
             masked = masked.replace(name, self.placeholders["name"])
         return masked, names
+
+
+def _is_known_non_person_phrase(value: str) -> bool:
+    normalized = value.casefold().replace("ё", "е").strip()
+    return any(phrase in normalized for phrase in NON_PERSON_NAME_PHRASES)

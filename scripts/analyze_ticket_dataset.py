@@ -61,6 +61,21 @@ SUPPORT_ANSWER_MARKERS = [
     "если",
 ]
 
+ANSWER_OPENING_MARKERS = [
+    "здесь все зависит",
+    "здесь всё зависит",
+    "для этого",
+    "для того чтобы",
+    "обрати внимание",
+    "подать заявку можно",
+    "регистрация проходит",
+    "перейдите",
+    "проверьте",
+    "необходимо",
+    "поступил ответ",
+    "к сожалению",
+]
+
 USER_REQUEST_MARKERS = [
     " я ",
     " мне ",
@@ -80,6 +95,20 @@ USER_REQUEST_MARKERS = [
     "хочу",
     "возник",
     "буду ждать",
+]
+
+QUESTION_MARKERS = [
+    "как ",
+    "где ",
+    "что ",
+    "когда ",
+    "куда ",
+    "почему ",
+    "можно ли",
+    "что делать",
+    "как быть",
+    "подскажите",
+    "помогите",
 ]
 
 THREAD_ARTIFACT_MARKERS = [
@@ -357,20 +386,47 @@ def is_boilerplate(text: str) -> bool:
 
 
 def choose_question_candidate(title: str, segments: list[str]) -> str:
-    if 8 <= len(title) <= 500 and not is_low_signal_title(title):
+    title_score = score_question_segment(title)
+    if 8 <= len(title) <= 500 and not is_low_signal_title(title) and title_score >= 0:
         return title
-    question_segments = [
-        segment
-        for segment in segments
-        if "?" in segment
-        or any(
-            marker in normalize_for_match(segment)
-            for marker in ("как ", "где ", "что ", "когда ", "куда ")
-        )
-    ]
-    if question_segments:
-        return max(question_segments[:5], key=len)[:1000]
-    return max(segments[:5], key=len, default="")[:1000]
+
+    candidates: list[tuple[int, int, str]] = []
+    for index, segment in enumerate(segments[:8]):
+        score = score_question_segment(segment)
+        if score > 0:
+            candidates.append((score, -index, segment))
+    if candidates:
+        return max(candidates, key=lambda item: (item[0], item[1], -len(item[2])))[2][:1000]
+    return ""
+
+
+def score_question_segment(segment: str) -> int:
+    normalized = normalize_for_match(segment)
+    padded = f" {normalized} "
+    if not normalized or is_boilerplate(segment):
+        return -100
+
+    score = 0
+    score += 8 * sum(marker in padded for marker in USER_REQUEST_MARKERS)
+    score += 5 * sum(marker in normalized for marker in QUESTION_MARKERS)
+    if "?" in segment:
+        score += 6
+    if re.search(r"\b(?:здравствуйте|добрый день|добрый вечер)\b", normalized):
+        score += 2
+    if re.search(r"\b(?:не могу|не получается|не пришло|не получил|не успел)\b", normalized):
+        score += 4
+
+    score -= 9 * sum(marker in normalized for marker in ANSWER_OPENING_MARKERS)
+    score -= 12 * sum(marker in normalized for marker in THREAD_ARTIFACT_MARKERS)
+    if THREAD_TIMESTAMP_RE.search(normalized):
+        score -= 12
+    if len(segment) > 500:
+        score -= 4
+    if len(segment) > 1000:
+        score -= 8
+    if len(segment) < 8:
+        score -= 8
+    return score
 
 
 def is_low_signal_title(title: str) -> bool:

@@ -23,15 +23,23 @@ def build_seed_ask_cases(
     user_prefix: str = "ask-eval",
     per_category_limit: int | None = None,
     per_forum_limit: int = 3,
+    source_type_limits: dict[str, int] | None = None,
+    require_cited_chunks: bool = False,
 ) -> list[dict[str, Any]]:
     selected = select_balanced_records(
         records,
         max_cases=max_cases,
         per_category_limit=per_category_limit,
         per_forum_limit=per_forum_limit,
+        source_type_limits=source_type_limits,
     )
     return [
-        _case_from_record(record, index, user_prefix)
+        _case_from_record(
+            record,
+            index,
+            user_prefix,
+            require_cited_chunks=require_cited_chunks,
+        )
         for index, record in enumerate(selected, 1)
     ]
 
@@ -41,6 +49,82 @@ def select_balanced_records(
     max_cases: int,
     per_category_limit: int | None = None,
     per_forum_limit: int = 3,
+    source_type_limits: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    if source_type_limits:
+        return _select_source_type_balanced_records(
+            records,
+            max_cases=max_cases,
+            source_type_limits=source_type_limits,
+            per_category_limit=per_category_limit,
+            per_forum_limit=per_forum_limit,
+        )
+    return _select_category_balanced_records(
+        records,
+        max_cases=max_cases,
+        per_category_limit=per_category_limit,
+        per_forum_limit=per_forum_limit,
+    )
+
+
+def _select_source_type_balanced_records(
+    records: list[dict[str, Any]],
+    *,
+    max_cases: int,
+    source_type_limits: dict[str, int],
+    per_category_limit: int | None,
+    per_forum_limit: int,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+
+    for source_type, source_limit in source_type_limits.items():
+        remaining_slots = max_cases - len(selected)
+        if remaining_slots <= 0:
+            break
+        if source_limit <= 0:
+            continue
+        source_records = [
+            record
+            for record in records
+            if _source_type(record) == source_type
+            and _record_id(record) not in selected_ids
+        ]
+        source_selected = _select_category_balanced_records(
+            source_records,
+            max_cases=min(source_limit, remaining_slots),
+            per_category_limit=per_category_limit,
+            per_forum_limit=per_forum_limit,
+        )
+        selected.extend(source_selected)
+        selected_ids.update(_record_id(record) for record in source_selected)
+
+    if len(selected) >= max_cases:
+        return selected[:max_cases]
+
+    remaining = [
+        record
+        for record in records
+        if _record_id(record) not in selected_ids
+        and _source_type(record) not in source_type_limits
+    ]
+    selected.extend(
+        _select_category_balanced_records(
+            remaining,
+            max_cases=max_cases - len(selected),
+            per_category_limit=per_category_limit,
+            per_forum_limit=per_forum_limit,
+        )
+    )
+    return selected[:max_cases]
+
+
+def _select_category_balanced_records(
+    records: list[dict[str, Any]],
+    *,
+    max_cases: int,
+    per_category_limit: int | None,
+    per_forum_limit: int,
 ) -> list[dict[str, Any]]:
     buckets: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
     for record in records:
@@ -88,6 +172,7 @@ def select_balanced_records(
 def summarize_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     category_counts: Counter[str] = Counter()
     forum_counts: Counter[str] = Counter()
+    source_type_counts: Counter[str] = Counter()
     tag_counts: Counter[str] = Counter()
     for case in cases:
         for tag in case.get("tags", []):
@@ -96,11 +181,14 @@ def summarize_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
                 category_counts[tag.removeprefix("category:")] += 1
             elif tag.startswith("forum:"):
                 forum_counts[tag.removeprefix("forum:")] += 1
+            elif tag.startswith("source_type:"):
+                source_type_counts[tag.removeprefix("source_type:")] += 1
 
     return {
         "cases_total": len(cases),
         "category_counts": dict(category_counts),
         "forum_counts_top": dict(forum_counts.most_common(20)),
+        "source_type_counts": dict(source_type_counts),
         "tag_counts_top": dict(tag_counts.most_common(20)),
     }
 
@@ -110,15 +198,24 @@ def write_cases(path: Path, cases: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(cases, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _case_from_record(record: dict[str, Any], index: int, user_prefix: str) -> dict[str, Any]:
+def _case_from_record(
+    record: dict[str, Any],
+    index: int,
+    user_prefix: str,
+    *,
+    require_cited_chunks: bool = False,
+) -> dict[str, Any]:
     chunk_id = str(record["chunk_id"])
     tags = ["seed_balanced", f"category:{record.get('category') or 'unknown'}"]
+    source_type = _clean_optional(record.get("source_type"))
+    if source_type:
+        tags.append(f"source_type:{source_type}")
     if record.get("forum_normalized"):
         tags.append(f"forum:{record['forum_normalized']}")
     if record.get("topic"):
         tags.append(f"topic:{record['topic']}")
 
-    return {
+    case = {
         "id": f"seed_balanced::{chunk_id}",
         "query": seed_smoke_query(record),
         "user_id": f"{user_prefix}-{index}",
@@ -130,6 +227,9 @@ def _case_from_record(record: dict[str, Any], index: int, user_prefix: str) -> d
         "expected_generator_model": None,
         "tags": tags,
     }
+    if require_cited_chunks:
+        case["expected_cited_chunk_ids"] = [chunk_id]
+    return case
 
 
 def _pop_next_allowed_record(
@@ -156,6 +256,14 @@ def _pop_next_allowed_record(
 
 def _is_eligible(record: dict[str, Any]) -> bool:
     return record.get("status") == "published" and bool(seed_smoke_query(record))
+
+
+def _source_type(record: dict[str, Any]) -> str:
+    return str(record.get("source_type") or "unknown").strip() or "unknown"
+
+
+def _record_id(record: dict[str, Any]) -> str:
+    return str(record.get("chunk_id") or id(record))
 
 
 def seed_smoke_query(record: dict[str, Any]) -> str:

@@ -16,6 +16,8 @@ def build_eval_set(
     max_cases: int,
     per_category_limit: int | None,
     per_forum_limit: int,
+    source_type_limits: dict[str, int] | None = None,
+    require_cited_chunks: bool = False,
 ) -> dict:
     records = json.loads(kb_seed_path.read_text(encoding="utf-8"))
     if not isinstance(records, list):
@@ -26,11 +28,35 @@ def build_eval_set(
         max_cases=max_cases,
         per_category_limit=per_category_limit,
         per_forum_limit=per_forum_limit,
+        source_type_limits=source_type_limits,
+        require_cited_chunks=require_cited_chunks,
     )
     write_cases(output_path, cases)
     summary = summarize_cases(cases)
     summary["output"] = str(output_path)
     return summary
+
+
+def parse_source_type_limits(value: str) -> dict[str, int] | None:
+    value = value.strip()
+    if not value:
+        return None
+    limits: dict[str, int] = {}
+    for item in value.split(","):
+        key, separator, raw_limit = item.partition("=")
+        source_type = key.strip()
+        if not separator or not source_type:
+            raise ValueError(
+                "source type limits must use comma-separated source_type=count pairs"
+            )
+        try:
+            limit = int(raw_limit.strip())
+        except ValueError as exc:
+            raise ValueError(f"invalid source type limit for {source_type}") from exc
+        if limit < 0:
+            raise ValueError(f"source type limit must be non-negative: {source_type}")
+        limits[source_type] = limit
+    return limits
 
 
 def main() -> None:
@@ -40,6 +66,19 @@ def main() -> None:
     parser.add_argument("--max-cases", type=int, default=100)
     parser.add_argument("--per-category-limit", type=int, default=None)
     parser.add_argument("--per-forum-limit", type=int, default=3)
+    parser.add_argument(
+        "--source-type-limits",
+        default="",
+        help=(
+            "Comma-separated source_type=count quotas, for example "
+            "ticket_answer_bank=100,xlsx=45,docx=15."
+        ),
+    )
+    parser.add_argument(
+        "--require-cited-chunks",
+        action="store_true",
+        help="Require every generated case to cite its expected chunk in ask eval scoring.",
+    )
     args = parser.parse_args()
 
     summary = build_eval_set(
@@ -48,6 +87,8 @@ def main() -> None:
         max_cases=args.max_cases,
         per_category_limit=args.per_category_limit,
         per_forum_limit=args.per_forum_limit,
+        source_type_limits=parse_source_type_limits(args.source_type_limits),
+        require_cited_chunks=args.require_cited_chunks,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

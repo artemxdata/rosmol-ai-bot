@@ -77,6 +77,7 @@ def test_prepare_case_marks_weak_chunk_labels_for_review() -> None:
     )
 
     assert case["expected_chunk_ids"] == ["grant_return"]
+    assert case["expected_cited_chunk_ids"] == ["grant_return"]
     assert case["needs_review"] is False
     assert case["tags"][:4] == [
         "ticket_analysis",
