@@ -32,6 +32,34 @@ async def test_verifier_rejects_unknown_source_marker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_blocks_llm_answer_without_source_citations() -> None:
+    llm = JudgeLLM('{"has_hallucination": false, "confidence": 1.0}')
+
+    result = await verify(
+        {
+            "generated_response": "Проезд оплачивает направляющая сторона.",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="travel",
+                    text="Проезд оплачивает направляющая сторона.",
+                    metadata={},
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["verification"].has_hallucination is True
+    assert result["verifier_triggered"] is False
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "missing_source_citations"
+
+
+@pytest.mark.asyncio
 async def test_verifier_accepts_high_confidence_without_judge() -> None:
     result = await verify(
         {
@@ -80,13 +108,14 @@ async def test_verifier_uses_answer_bank_intent_examples_for_coverage() -> None:
     assert "should_escalate" not in result
     assert result["verifier_triggered"] is False
 
+
 @pytest.mark.asyncio
 async def test_verifier_judges_llm_generation_even_with_high_confidence() -> None:
     llm = JudgeLLM('{"has_hallucination": false, "confidence": 0.88, "details": "grounded"}')
 
     result = await verify(
         {
-            "generated_response": "Ответ по источнику.",
+            "generated_response": "Ответ по источнику. [src:ctx_1]",
             "generator_model": "GigaChat/GigaChat-2-Max",
             "reranked_chunks": [
                 ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.9)
@@ -318,7 +347,8 @@ async def test_verifier_allows_support_instruction_when_sources_are_sufficient()
     result = await verify(
         {
             "generated_response": (
-                "Если проблема сохраняется, обратитесь в службу поддержки с описанием ошибки."
+                "Если проблема сохраняется, обратитесь в службу поддержки с описанием ошибки. "
+                "[src:ctx_1]"
             ),
             "generator_model": "GigaChat/GigaChat-2-Max",
             "reranked_chunks": [

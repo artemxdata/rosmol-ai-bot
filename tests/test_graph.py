@@ -25,14 +25,15 @@ class FailingLLM:
 
 
 class CapturingLLM:
-    def __init__(self) -> None:
+    def __init__(self, response: str = "LLM answer [src:ctx_1]") -> None:
+        self.response = response
         self.calls = 0
         self.kwargs = []
 
     async def generate(self, **kwargs):
         self.calls += 1
         self.kwargs.append(kwargs)
-        return "LLM answer [src:ctx_1]"
+        return self.response
 
 
 class EmptyAnalysisLLM:
@@ -3732,7 +3733,7 @@ async def test_generate_covers_compatible_fallback_metadata_question(
 
 
 @pytest.mark.asyncio
-async def test_generate_returns_source_chunk_for_single_covered_complex_question(
+async def test_generate_uses_max_for_single_covered_complex_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -3747,6 +3748,8 @@ async def test_generate_returns_source_chunk_for_single_covered_complex_question
         reranker_score=0.63,
     )
 
+    llm = CapturingLLM("Проезд до места проведения оплачивает направляющая сторона. [src:travel]")
+
     result = await generate(
         {
             "analysis": QueryAnalysis(
@@ -3755,11 +3758,13 @@ async def test_generate_returns_source_chunk_for_single_covered_complex_question
             ),
             "reranked_chunks": [chunk],
             "max_confidence": 0.63,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["travel"]
 
 
@@ -4055,6 +4060,10 @@ async def test_generate_combines_multiple_covered_source_chunks(
             reranker_score=0.68,
         ),
     ]
+    llm = CapturingLLM(
+        "Проезд до форума оплачивает направляющая сторона. [src:travel]\n\n"
+        "Участников размещают в палатках на площадке форума. [src:housing]"
+    )
 
     result = await generate(
         {
@@ -4069,14 +4078,16 @@ async def test_generate_combines_multiple_covered_source_chunks(
             ),
             "reranked_chunks": chunks,
             "max_confidence": 0.7,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["travel", "housing"]
     assert "Проезд до форума" in result["generated_response"]
-    assert "Формат проживания" in result["generated_response"]
+    assert "палатках" in result["generated_response"]
 
 
 @pytest.mark.asyncio

@@ -127,6 +127,26 @@ async def verify(state: BotState) -> dict:
 
     cited = set(SOURCE_RE.findall(response))
     known = {chunk.chunk_id for chunk in chunks}
+    if _requires_source_citations(state) and not cited:
+        result = VerificationResult(
+            has_hallucination=True,
+            confidence=0.0,
+            details="LLM response has no source citations.",
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                guard=True,
+                reason="missing_source_citations",
+            )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "missing_source_citations",
+        }
+
     unknown_sources = cited - known
     if unknown_sources:
         result = VerificationResult(
@@ -466,3 +486,8 @@ def _can_skip_llm_judge(state: BotState, confidence: float) -> bool:
     if state.get("generator_model") != "source_chunk":
         return False
     return confidence >= get_settings().reranker_threshold_high
+
+
+def _requires_source_citations(state: BotState) -> bool:
+    model = state.get("generator_model")
+    return bool(model and model not in {"source_chunk", "source_only"})

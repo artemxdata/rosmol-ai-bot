@@ -6,9 +6,12 @@ from time import perf_counter
 from src.config import get_settings
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
-from src.models import QueryAnalysis, Question, ScoredChunk
+from src.llm.cascade import select_generator_model
+from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
+from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
 
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
+SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
 HOUSING_CONDITION_TERMS = (
     "формат проживан",
     "условия проживан",
@@ -68,10 +71,18 @@ async def generate(state: BotState) -> dict:
         analysis,
         questions,
         chunks,
-        float(state.get("max_confidence") or 0),
+        max_confidence := float(state.get("max_confidence") or 0),
         state.get("message_masked") or state.get("message"),
     )
     if source_chunks:
+        if _should_generate_with_llm(analysis, source_chunks):
+            return await _generate_with_llm(
+                state=state,
+                analysis=analysis,
+                questions=questions,
+                source_chunks=source_chunks,
+                started_at=started_at,
+            )
         source_response = build_deterministic_source_response(source_chunks)
         if tracer:
             tracer.add(
@@ -85,6 +96,16 @@ async def generate(state: BotState) -> dict:
             "generator_model": "source_chunk",
             "cited_sources": [chunk.chunk_id for chunk in source_chunks],
         }
+
+    llm_source_chunks = _select_llm_source_chunks(analysis, questions, chunks, max_confidence)
+    if llm_source_chunks:
+        return await _generate_with_llm(
+            state=state,
+            analysis=analysis,
+            questions=questions,
+            source_chunks=llm_source_chunks,
+            started_at=started_at,
+        )
 
     if tracer:
         tracer.add(
@@ -100,6 +121,120 @@ async def generate(state: BotState) -> dict:
         "generator_model": "source_only",
         "cited_sources": [],
     }
+
+
+async def _generate_with_llm(
+    *,
+    state: BotState,
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+    started_at: float,
+) -> dict:
+    tracer = state.get("trace")
+    model = select_generator_model(analysis.complexity)
+    try:
+        content = await state["llm_client"].generate(
+            model=model,
+            system=RESPONSE_GENERATOR_SYSTEM,
+            user=build_generator_user(
+                questions=questions,
+                chunks=source_chunks,
+                session=state.get("session"),
+                params=analysis.extracted_params,
+            ),
+            response_format="text",
+            temperature=0.1,
+            max_tokens=1500,
+        )
+    except Exception as exc:
+        if tracer:
+            tracer.add_error("generate", int((perf_counter() - started_at) * 1000), exc)
+        return {
+            "should_escalate": True,
+            "escalation_reason": "llm_generation_failed",
+            "generated_response": "",
+            "generator_model": model,
+            "cited_sources": [],
+            "error": str(exc),
+        }
+
+    cited_sources = _known_source_refs(content, source_chunks)
+    if tracer:
+        tracer.add(
+            "generate",
+            int((perf_counter() - started_at) * 1000),
+            mode="llm",
+            model=model,
+            chunks=len(source_chunks),
+            cited_sources=len(cited_sources),
+        )
+    return {
+        "generated_response": content,
+        "generator_model": model,
+        "cited_sources": cited_sources,
+    }
+
+
+def _should_generate_with_llm(
+    analysis: QueryAnalysis,
+    source_chunks: list[ScoredChunk],
+) -> bool:
+    if not source_chunks:
+        return False
+    return analysis.complexity == Complexity.COMPLEX
+
+
+def _select_llm_source_chunks(
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    chunks: list[ScoredChunk],
+    max_confidence: float,
+) -> list[ScoredChunk]:
+    settings = get_settings()
+    if max_confidence < getattr(settings, "reranker_threshold_low", 0.4):
+        return []
+    if not questions:
+        return []
+
+    candidates = _candidate_source_chunks(analysis, chunks)
+    selected: list[ScoredChunk] = []
+    selected_ids: set[str] = set()
+    for question in questions:
+        ranked = _rank_source_candidates_for_question(analysis, question, candidates)
+        source_chunk = next(
+            (
+                chunk
+                for chunk in ranked
+                if _source_chunk_covers_question(question, chunk)
+                and _has_textual_source_overlap(question, chunk)
+            ),
+            None,
+        )
+        if source_chunk is None:
+            return []
+        if source_chunk.chunk_id in selected_ids:
+            continue
+        selected.append(source_chunk)
+        selected_ids.add(source_chunk.chunk_id)
+    return selected
+
+
+def _has_textual_source_overlap(question: Question, chunk: ScoredChunk) -> bool:
+    question_tokens = _tokens(question.text)
+    if not question_tokens:
+        return False
+    return bool(question_tokens & _tokens(chunk.text))
+
+
+def _known_source_refs(response: str, chunks: list[ScoredChunk]) -> list[str]:
+    known = {chunk.chunk_id for chunk in chunks}
+    cited: list[str] = []
+    for source_id in SOURCE_RE.findall(response or ""):
+        if source_id not in known or source_id in cited:
+            continue
+        cited.append(source_id)
+    return cited
 
 
 def select_deterministic_source_chunks(
