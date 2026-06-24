@@ -3,16 +3,18 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from hmac import compare_digest
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import asyncpg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
+from src.admin import kb_store
 from src.channels.hde import HDEAdapter
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
@@ -88,6 +90,11 @@ class AskPayload(BaseModel):
         return normalized
 
 
+class AdminChunkUpdate(BaseModel):
+    status: str | None = None
+    text_clean: str | None = Field(default=None, max_length=20000)
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -134,6 +141,63 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
     else:
         response = await process_message(message, request.app)
     return {"request_id": str(message.request_id), "response": response}
+
+
+@app.get("/admin/kb/chunks")
+async def admin_list_kb_chunks(
+    request: Request,
+    status: str | None = None,
+    category: str | None = None,
+    forum: str | None = None,
+    source_type: str | None = None,
+    q: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    if status and status not in kb_store.VALID_STATUSES:
+        raise HTTPException(status_code=422, detail="Invalid status")
+    return await asyncio.to_thread(
+        kb_store.list_chunks,
+        _kb_seed_path(),
+        status=status,
+        category=category,
+        forum=forum,
+        source_type=source_type,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/admin/kb/chunks/{chunk_id}")
+async def admin_get_kb_chunk(chunk_id: str, request: Request) -> dict[str, Any]:
+    _require_admin_secret(request)
+    record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+    return record
+
+
+@app.patch("/admin/kb/chunks/{chunk_id}")
+async def admin_update_kb_chunk(
+    chunk_id: str,
+    payload: AdminChunkUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    try:
+        return await asyncio.to_thread(
+            kb_store.update_chunk,
+            _kb_seed_path(),
+            chunk_id,
+            status=payload.status,
+            text_clean=payload.text_clean,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Chunk not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/webhook/vk")
@@ -192,6 +256,17 @@ def _require_optional_secret(
 
     if not provided or not compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _require_admin_secret(request: Request) -> None:
+    expected = (getattr(get_settings(), "admin_auth_token", "") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin API is disabled")
+    _require_optional_secret(request, expected, "x-admin-token")
+
+
+def _kb_seed_path() -> Path:
+    return Path(getattr(get_settings(), "kb_seed_path", "data/knowledge_base_seed.json"))
 
 
 def _should_bypass_cache(request: Request) -> bool:

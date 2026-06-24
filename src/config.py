@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_auth_token: str = ""
     webhook_auth_token: str = ""
+    admin_auth_token: str = ""
+    kb_seed_path: str = "data/knowledge_base_seed.json"
 
     cloud_ru_api_key: str = ""
     cloud_ru_chat_completions_url: str = (
