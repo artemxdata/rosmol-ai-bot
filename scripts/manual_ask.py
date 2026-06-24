@@ -53,6 +53,8 @@ async def run_manual_ask(
     trace_lookup: bool = True,
     trace_dsn: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    bypass_cache: bool = False,
+    isolate_users: bool = False,
 ) -> dict[str, Any]:
     trace_pool: asyncpg.Pool | None = None
     trace_lookup_error: str | None = None
@@ -72,6 +74,8 @@ async def run_manual_ask(
             trace_lookup_error = "; ".join(errors)
 
     headers = _auth_headers(api_key_env)
+    if bypass_cache:
+        headers["X-Bypass-Cache"] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
     async with httpx.AsyncClient(transport=transport, timeout=request_timeout) as client:
         results = await asyncio.gather(
@@ -81,12 +85,12 @@ async def run_manual_ask(
                     target=target,
                     headers=headers,
                     case=case,
-                    user_id=user_id,
+                    user_id=f"{user_id}-{index}" if isolate_users else user_id,
                     channel=channel,
                     semaphore=semaphore,
                     trace_pool=trace_pool,
                 )
-                for case in cases
+                for index, case in enumerate(cases, start=1)
             ]
         )
 
@@ -96,6 +100,8 @@ async def run_manual_ask(
     report: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
         "target": target,
+        "bypass_cache": bypass_cache,
+        "isolate_users": isolate_users,
         "cases_total": len(results),
         "http_success_count": sum(1 for item in results if item.get("http_success")),
         "trace_found_count": sum(1 for item in results if item.get("trace_found")),
@@ -163,6 +169,8 @@ def format_report(report: dict[str, Any]) -> str:
     lines = [
         "Manual Ask Inspection",
         f"Target: {report.get('target')}",
+        f"Bypass cache: {report.get('bypass_cache')}",
+        f"Isolate users: {report.get('isolate_users')}",
         f"Cases: {report.get('cases_total')}",
         f"HTTP OK: {report.get('http_success_count')}",
         f"Trace found: {report.get('trace_found_count')}",
@@ -303,7 +311,12 @@ async def _load_cases_from_args(args: argparse.Namespace) -> list[dict[str, Any]
         raw_cases.extend(raw)
     if not raw_cases:
         raise ValueError("pass --text or --file")
-    return [normalize_manual_case(raw, index) for index, raw in enumerate(raw_cases, start=1)]
+    cases = [normalize_manual_case(raw, index) for index, raw in enumerate(raw_cases, start=1)]
+    if args.max_cases is None:
+        return cases
+    if args.max_cases < 1:
+        raise ValueError("--max-cases must be greater than zero")
+    return cases[: args.max_cases]
 
 
 def _top_chunks(chunks: list[Any], limit: int = 5) -> list[dict[str, Any]]:
@@ -522,6 +535,17 @@ def main() -> None:
     parser.add_argument("--trace-dsn", default="")
     parser.add_argument("--output", default="reports/manual_ask.json")
     parser.add_argument("--no-output", action="store_true")
+    parser.add_argument("--max-cases", type=int, default=None)
+    parser.add_argument(
+        "--bypass-cache",
+        action="store_true",
+        help="Send X-Bypass-Cache=1 so local /ask executes the full RAG path.",
+    )
+    parser.add_argument(
+        "--isolate-users",
+        action="store_true",
+        help="Use a unique user_id per case to avoid Redis session context leakage.",
+    )
     args = parser.parse_args()
 
     async def _run() -> dict[str, Any]:
@@ -536,6 +560,8 @@ def main() -> None:
             api_key_env=args.api_key_env,
             trace_lookup=not args.no_db_traces,
             trace_dsn=args.trace_dsn or None,
+            bypass_cache=args.bypass_cache,
+            isolate_users=args.isolate_users,
         )
         if not args.no_output:
             await asyncio.to_thread(_write_json, Path(args.output), report)

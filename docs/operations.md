@@ -27,6 +27,16 @@ Run quality suite with a bounded LLM budget:
 .venv\Scripts\python.exe -m eval.build_demo_quality_report --metrics reports\quality_suite\ask_eval.json --output reports\demo_quality.md
 ```
 
+Run a transparent manual inspection against the ML app without semantic cache
+or shared Redis session context:
+
+```powershell
+.venv\Scripts\python.exe scripts\manual_ask.py --file data\manual_complex_queries.json --target http://localhost:8001/ask --max-cases 10 --bypass-cache --isolate-users --output reports\manual_complex_inspection.json
+```
+
+The `app-ml` profile uses a longer local timeout than the lightweight app
+because CPU rerank plus Max synthesis can exceed 90 seconds on cold runs.
+
 ## PostgreSQL Backup
 
 Create a local dump from Docker:

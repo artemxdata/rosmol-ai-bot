@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from argparse import Namespace
 
 import httpx
 import pytest
 
 from scripts.manual_ask import (
+    _load_cases_from_args,
     build_manual_report_item,
     format_report,
     format_report_item,
@@ -158,3 +160,54 @@ async def test_run_manual_ask_without_db_trace_uses_http_response() -> None:
     assert report["results"][0]["quality_verdict"] == "answer_without_trace"
     assert "Manual Ask Inspection" in format_report(report)
     assert "Verdicts:" in format_report(report)
+
+
+@pytest.mark.asyncio
+async def test_run_manual_ask_can_bypass_cache_and_isolate_users() -> None:
+    seen_user_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["X-Bypass-Cache"] == "1"
+        payload = json.loads(request.content.decode("utf-8"))
+        seen_user_ids.append(payload["user_id"])
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "OK",
+            },
+        )
+
+    report = await run_manual_ask(
+        [
+            {"id": "first", "query": "РџРµСЂРІС‹Р№", "tags": []},
+            {"id": "second", "query": "Р’С‚РѕСЂРѕР№", "tags": []},
+        ],
+        target="http://test/ask",
+        user_id="manual-demo",
+        trace_lookup=False,
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+        isolate_users=True,
+    )
+
+    assert seen_user_ids == ["manual-demo-1", "manual-demo-2"]
+    assert report["bypass_cache"] is True
+    assert report["isolate_users"] is True
+    rendered = format_report(report)
+    assert "Bypass cache: True" in rendered
+    assert "Isolate users: True" in rendered
+
+
+@pytest.mark.asyncio
+async def test_load_cases_from_args_applies_max_cases() -> None:
+    cases = await _load_cases_from_args(
+        Namespace(
+            text=["one", "two", "three"],
+            file="",
+            max_cases=2,
+        )
+    )
+
+    assert [case["query"] for case in cases] == ["one", "two"]
