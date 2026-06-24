@@ -99,6 +99,10 @@ async def run_eval(
     transport: httpx.AsyncBaseTransport | None = None,
     bypass_cache: bool = False,
     generated_user_prefix: str | None = None,
+    max_cases: int | None = None,
+    max_llm_cost_rub: float | None = None,
+    require_budget_for_large_runs: bool = True,
+    large_run_threshold: int = 20,
 ) -> dict[str, Any]:
     cases, generated_smoke_cases = await _load_cases(
         cases_path=cases_path,
@@ -107,8 +111,27 @@ async def run_eval(
         max_smoke_cases=max_smoke_cases,
         user_prefix=generated_user_prefix or _default_generated_user_prefix("ask-eval"),
     )
+    original_cases_total = len(cases)
+    if max_cases is not None:
+        if max_cases < 1:
+            raise ValueError("--max-cases must be greater than zero")
+        cases = cases[:max_cases]
+    _guard_large_live_run_budget(
+        cases=cases,
+        target=target,
+        transport=transport,
+        max_llm_cost_rub=max_llm_cost_rub,
+        require_budget=require_budget_for_large_runs,
+        large_run_threshold=large_run_threshold,
+    )
     if not cases:
         metrics = _empty_metrics(target=target, cases_path=cases_path, auto_smoke_cases=False)
+        _apply_run_limits(
+            metrics,
+            original_cases_total=original_cases_total,
+            max_cases=max_cases,
+            max_llm_cost_rub=max_llm_cost_rub,
+        )
         await asyncio.to_thread(_write_json, output_path, metrics)
         if markdown_path:
             await asyncio.to_thread(_write_markdown, markdown_path, metrics)
@@ -158,6 +181,12 @@ async def run_eval(
         cases_path=cases_path,
         generated_smoke_cases=generated_smoke_cases,
         trace_lookup_error=trace_lookup_error,
+    )
+    _apply_run_limits(
+        metrics,
+        original_cases_total=original_cases_total,
+        max_cases=max_cases,
+        max_llm_cost_rub=max_llm_cost_rub,
     )
     await asyncio.to_thread(_write_json, output_path, metrics)
     if markdown_path:
@@ -260,6 +289,55 @@ def summarize_results(
     if trace_lookup_error:
         metrics["trace_lookup_error"] = trace_lookup_error
     return metrics
+
+
+def _guard_large_live_run_budget(
+    *,
+    cases: list[dict[str, Any]],
+    target: str,
+    transport: httpx.AsyncBaseTransport | None,
+    max_llm_cost_rub: float | None,
+    require_budget: bool,
+    large_run_threshold: int,
+) -> None:
+    if not require_budget or transport is not None:
+        return
+    if large_run_threshold < 1:
+        raise ValueError("--large-run-threshold must be greater than zero")
+    if max_llm_cost_rub is not None:
+        if max_llm_cost_rub < 0:
+            raise ValueError("--max-llm-cost-rub must be zero or greater")
+        return
+    if len(cases) <= large_run_threshold:
+        return
+    raise ValueError(
+        "Refusing to run a large live ask eval without an explicit LLM budget: "
+        f"{len(cases)} cases against {target}. "
+        "Pass --max-llm-cost-rub <rubles>, --max-cases <n>, or "
+        "--allow-unbounded-llm-cost for a deliberate full run."
+    )
+
+
+def _apply_run_limits(
+    metrics: dict[str, Any],
+    *,
+    original_cases_total: int,
+    max_cases: int | None,
+    max_llm_cost_rub: float | None,
+) -> None:
+    if max_cases is not None:
+        metrics["cases_original_total"] = original_cases_total
+        metrics["cases_limit"] = max_cases
+        metrics["cases_limited"] = original_cases_total > metrics.get("cases_total", 0)
+
+    if max_llm_cost_rub is None:
+        metrics["llm_budget_rub"] = None
+        metrics["llm_budget_exceeded"] = None
+        return
+
+    actual_cost = float(metrics.get("llm_estimated_cost_rub") or 0.0)
+    metrics["llm_budget_rub"] = max_llm_cost_rub
+    metrics["llm_budget_exceeded"] = actual_cost > max_llm_cost_rub
 
 
 def score_case(
@@ -834,6 +912,8 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"(`{_format_rate(metrics.get('low_confidence_expected_chunk_hit_rate'))}`)",
         f"- Likely infrastructure failure: `{metrics.get('likely_infrastructure_failure')}`",
         f"- LLM cost, RUB: `{metrics.get('llm_estimated_cost_rub')}`",
+        f"- LLM budget, RUB: `{metrics.get('llm_budget_rub')}`",
+        f"- LLM budget exceeded: `{metrics.get('llm_budget_exceeded')}`",
         "",
         "## Latency",
         "",
@@ -1002,6 +1082,19 @@ def main() -> None:
     parser.add_argument("--trace-dsn", default="")
     parser.add_argument("--auto-smoke-cases", action="store_true")
     parser.add_argument("--max-smoke-cases", type=int, default=50)
+    parser.add_argument("--max-cases", type=int, default=None)
+    parser.add_argument("--max-llm-cost-rub", type=float, default=None)
+    parser.add_argument(
+        "--large-run-threshold",
+        type=int,
+        default=20,
+        help="Require an explicit LLM budget above this number of live cases.",
+    )
+    parser.add_argument(
+        "--allow-unbounded-llm-cost",
+        action="store_true",
+        help="Allow a large live eval without --max-llm-cost-rub.",
+    )
     parser.add_argument("--user-prefix", default="")
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--bypass-cache", action="store_true")
@@ -1028,6 +1121,10 @@ def main() -> None:
             markdown_path=markdown_path,
             bypass_cache=args.bypass_cache,
             generated_user_prefix=args.user_prefix or None,
+            max_cases=args.max_cases,
+            max_llm_cost_rub=args.max_llm_cost_rub,
+            require_budget_for_large_runs=not args.allow_unbounded_llm_cost,
+            large_run_threshold=args.large_run_threshold,
         )
     )
     print(
@@ -1037,6 +1134,8 @@ def main() -> None:
             indent=2,
         )
     )
+    if metrics.get("llm_budget_exceeded") is True:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

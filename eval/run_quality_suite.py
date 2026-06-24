@@ -57,6 +57,9 @@ async def run_quality_suite(
     forum_smoke: bool = False,
     forum_smoke_per_forum: int = 1,
     bypass_cache: bool = True,
+    max_llm_cost_rub: float | None = None,
+    ask_max_cases: int | None = None,
+    allow_unbounded_llm_cost: bool = False,
     gate_config: GateConfig | None = None,
 ) -> dict[str, Any]:
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
@@ -87,6 +90,9 @@ async def run_quality_suite(
         markdown_path=paths["ask_md"],
         bypass_cache=bypass_cache,
         generated_user_prefix=f"ask-eval-{run_prefix}",
+        max_cases=ask_max_cases,
+        max_llm_cost_rub=max_llm_cost_rub,
+        require_budget_for_large_runs=not allow_unbounded_llm_cost,
     )
     threshold_report = analyze_thresholds(
         ask_metrics,
@@ -123,6 +129,8 @@ async def run_quality_suite(
             kb_seed_path=kb_seed_path,
             markdown_path=paths["forum_ask_md"],
             bypass_cache=bypass_cache,
+            max_llm_cost_rub=max_llm_cost_rub,
+            require_budget_for_large_runs=not allow_unbounded_llm_cost,
         )
         forum_summary = await asyncio.to_thread(
             summarize_forum_ask,
@@ -167,6 +175,8 @@ async def run_quality_suite(
                 "expected_chunk_hit_rate",
                 "low_confidence_expected_chunk_hit_rate",
                 "llm_estimated_cost_rub",
+                "llm_budget_rub",
+                "llm_budget_exceeded",
             ),
         ),
         "generation": _summary_subset(
@@ -295,6 +305,7 @@ def main() -> None:
     parser.add_argument("--max-smoke-cases", type=int, default=50)
     parser.add_argument("--ask-concurrency", type=int, default=1)
     parser.add_argument("--ask-timeout", type=float, default=120.0)
+    parser.add_argument("--ask-max-cases", type=int, default=None)
     parser.add_argument("--no-db-traces", action="store_true")
     parser.add_argument("--trace-dsn", default="")
     parser.add_argument("--current-low", type=float, default=0.4)
@@ -311,6 +322,7 @@ def main() -> None:
     parser.add_argument("--max-low-confidence-hit-rate", type=float, default=0.1)
     parser.add_argument("--max-latency-p95-ms", type=int, default=None)
     parser.add_argument("--max-llm-cost-rub", type=float, default=None)
+    parser.add_argument("--allow-unbounded-llm-cost", action="store_true")
     parser.add_argument("--min-forum-pass-rate", type=float, default=1.0)
     parser.add_argument("--min-forum-expected-chunk-hit-rate", type=float, default=1.0)
     parser.add_argument("--max-problem-forums", type=int, default=0)
@@ -351,6 +363,7 @@ def main() -> None:
             max_smoke_cases=args.max_smoke_cases,
             ask_concurrency=args.ask_concurrency,
             ask_timeout=args.ask_timeout,
+            ask_max_cases=args.ask_max_cases,
             trace_lookup=not args.no_db_traces,
             trace_dsn=args.trace_dsn or None,
             current_low=args.current_low,
@@ -359,6 +372,8 @@ def main() -> None:
             forum_smoke=args.forum_smoke,
             forum_smoke_per_forum=args.forum_smoke_per_forum,
             bypass_cache=not args.use_cache,
+            max_llm_cost_rub=args.max_llm_cost_rub,
+            allow_unbounded_llm_cost=args.allow_unbounded_llm_cost,
             gate_config=gate_config,
         )
     )

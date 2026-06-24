@@ -529,6 +529,105 @@ async def test_run_eval_can_send_bypass_cache_header(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_eval_blocks_large_live_run_without_budget(tmp_path: Path) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps(
+            [{"id": f"case-{idx}", "query": f"Вопрос {idx}"} for idx in range(21)],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="explicit LLM budget"):
+        await run_eval(
+            cases_path=cases,
+            output_path=output,
+            target="http://localhost:8001/ask",
+            trace_lookup=False,
+            api_key_env=None,
+        )
+
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_eval_allows_large_mock_run_without_budget(tmp_path: Path) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps(
+            [{"id": f"case-{idx}", "query": f"Вопрос {idx}"} for idx in range(21)],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "OK",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases,
+        output_path=output,
+        target="http://test/ask",
+        trace_lookup=False,
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert metrics["cases_total"] == 21
+    assert metrics["llm_budget_rub"] is None
+    assert metrics["llm_budget_exceeded"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_eval_marks_budget_status_and_case_limit(tmp_path: Path) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps(
+            [{"id": f"case-{idx}", "query": f"Вопрос {idx}"} for idx in range(5)],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "OK",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases,
+        output_path=output,
+        target="http://test/ask",
+        trace_lookup=False,
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+        max_cases=2,
+        max_llm_cost_rub=0.0,
+    )
+
+    assert metrics["cases_total"] == 2
+    assert metrics["cases_original_total"] == 5
+    assert metrics["cases_limit"] == 2
+    assert metrics["cases_limited"] is True
+    assert metrics["llm_budget_rub"] == 0.0
+    assert metrics["llm_budget_exceeded"] is False
+
+
+@pytest.mark.asyncio
 async def test_run_eval_user_prefix_isolates_loaded_case_users(tmp_path: Path) -> None:
     cases = tmp_path / "ask_cases.json"
     output = tmp_path / "ask_metrics.json"
