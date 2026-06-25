@@ -9,6 +9,7 @@ from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
 from src.models import Complexity, QueryAnalysis
+from src.security.operator_request import is_operator_request
 
 
 async def analyze_query(state: BotState) -> dict:
@@ -128,29 +129,7 @@ def _fallback_analysis(
 
 
 def _is_operator_request(message: str) -> bool:
-    normalized = message.casefold().replace("ё", "е")
-    if re.search(r"\bжив(?:ой|ого|ым)?\s+человек(?:а|ом)?\b", normalized):
-        return True
-
-    if not any(marker in normalized for marker in ("оператор", "специалист", "сотрудник")):
-        return False
-    return any(
-        marker in normalized
-        for marker in (
-            "хочу",
-            "нужен",
-            "нужна",
-            "нужно",
-            "можно",
-            "перевед",
-            "соедин",
-            "свяж",
-            "поговор",
-            "позов",
-            "передай",
-            "передайте",
-        )
-    )
+    return is_operator_request(message)
 
 
 def _should_force_simple_support_query(category: str | None, message: str) -> bool:

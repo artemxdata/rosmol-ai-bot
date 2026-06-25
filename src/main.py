@@ -36,6 +36,7 @@ from src.rag.embedder import Embedder
 from src.rag.reranker import Reranker
 from src.rag.retriever import Retriever
 from src.security import profanity, safety
+from src.security.operator_request import is_operator_request
 from src.security.pii_masker import PIIMasker
 from src.security.rate_limiter import RateLimiter
 from src.session.manager import SessionManager
@@ -354,6 +355,25 @@ async def process_message(
         )
 
     session = await fastapi_app.state.sessions.get_or_create(message.channel.value, message.user_id)
+
+    if is_operator_request(masked_text):
+        response = "Передаю обращение специалисту."
+        await fastapi_app.state.sessions.append_turn(session, masked_text, response)
+        await _safe_log(
+            fastapi_app,
+            {
+                "request_id": message.request_id,
+                "channel": message.channel.value,
+                "user_id_hash": user_id_hash,
+                "message_masked": masked_text,
+                "final_response": response,
+                "should_escalate": True,
+                "escalation_reason": "operator_requested",
+                "total_latency_ms": int((perf_counter() - started_at) * 1000),
+            },
+        )
+        return response
+
     routing_hint = estimate_routing_hint(masked_text)
     detected_forum = detect_forum_from_text(message.text)
 

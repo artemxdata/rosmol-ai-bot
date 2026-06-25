@@ -243,6 +243,24 @@ async def test_process_message_safety_escalates_before_graph(
 
 
 @pytest.mark.asyncio
+async def test_process_message_operator_request_escalates_before_cache_and_graph(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(cached_response="Ответ из кэша")
+    message = IncomingMessage(user_id="u1", channel=Channel.HDE, text="Позови оператора")
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Передаю обращение специалисту."
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+    assert app.state.sessions.appended == [("Позови оператора", response)]
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "operator_requested"
+
+
+@pytest.mark.asyncio
 async def test_process_message_returns_semantic_cache_hit(
     no_llm_settings: None,
     captured_logs: list[dict[str, Any]],
