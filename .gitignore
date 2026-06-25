@@ -16,7 +16,14 @@ build/
 .cache/
 models/
 /data/private/
-/Новый бот Росмол .xlsx
+
+# private exports and local source documents
+RAG_Dataset*
+**/RAG_Dataset*
+*.xlsx
+*.xls
+*.docx
+*.doc
 
 # runtime artifacts
 logs/

@@ -10,7 +10,12 @@ __pycache__/
 logs/
 eval/metrics*.json
 /data/private/
-/Новый бот Росмол .xlsx
+RAG_Dataset*
+**/RAG_Dataset*
+*.xlsx
+*.xls
+*.docx
+*.doc
 postgres_data/
 redis_data/
 qdrant_storage/
