@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from src.graph.graph import build_graph
+from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE
 from src.main import app as fastapi_app
 from src.main import process_message
 from src.models import Channel, Chunk, IncomingMessage, ScoredChunk, Session
@@ -415,6 +416,28 @@ async def test_process_message_low_confidence_graph_path_escalates(
     assert "Передаю обращение специалисту" in response
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "low_confidence"
+
+
+@pytest.mark.asyncio
+async def test_process_message_safe_offtopic_returns_scope_note_without_escalation(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(graph=build_graph())
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="Какая погода завтра в Москве?",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == OFFTOPIC_SCOPE_NOTE
+    assert app.state.sessions.appended == [("Какая погода завтра в Москве?", response)]
+    assert captured_logs[0]["analysis"].category == "offtopic"
+    assert captured_logs[0]["analysis"].is_offtopic is True
+    assert captured_logs[0]["should_escalate"] is False
+    assert captured_logs[0]["escalation_reason"] is None
 
 
 @pytest.mark.asyncio

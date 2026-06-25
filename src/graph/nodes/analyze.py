@@ -107,16 +107,23 @@ def _fallback_analysis(
     routing_hint: object,
 ) -> QueryAnalysis | None:
     category = _infer_category_from_message(masked_message)
+    is_offtopic = _is_safe_offtopic(masked_message)
+    if is_offtopic:
+        category = "offtopic"
     complexity = _complexity_from_routing_hint(routing_hint)
     if _should_force_simple_support_query(category, masked_message):
         complexity = Complexity.SIMPLE
     should_escalate = _is_operator_request(masked_message)
+    if is_offtopic:
+        should_escalate = False
     if should_escalate and not category:
         category = "навигация"
     payload = {
         "category": category,
         "complexity": complexity.value,
         "questions": [],
+        "needs_clarification": is_offtopic,
+        "is_offtopic": is_offtopic,
         "should_escalate": should_escalate,
         "escalation_reason": "operator_requested" if should_escalate else None,
     }
@@ -130,6 +137,49 @@ def _fallback_analysis(
 
 def _is_operator_request(message: str) -> bool:
     return is_operator_request(message)
+
+
+def _is_safe_offtopic(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е")
+    in_scope_markers = (
+        "форум",
+        "мероприят",
+        "фестивал",
+        "грант",
+        "фгаис",
+        "молодежь россии",
+        "молодёжь россии",
+        "росмолод",
+        "заявк",
+        "личн",
+        "кабинет",
+        "профил",
+    )
+    if any(marker in normalized for marker in in_scope_markers):
+        return False
+
+    offtopic_markers = (
+        "погода",
+        "температура",
+        "курс валют",
+        "курс доллара",
+        "курс евро",
+        "новости",
+        "гороскоп",
+        "анекдот",
+        "шутк",
+        "рецепт",
+        "приготовить",
+        "домашн",
+        "контрольн",
+        "реферат",
+        "сочинение",
+        "реши задачу",
+        "переведи",
+        "фильм",
+        "сериал",
+    )
+    return any(marker in normalized for marker in offtopic_markers)
 
 
 def _should_force_simple_support_query(category: str | None, message: str) -> bool:
@@ -244,6 +294,12 @@ def _coerce_analysis_payload(payload: dict) -> dict:
     _drop_pseudo_forum_for_category(normalized)
     if not isinstance(normalized.get("extracted_params"), dict):
         normalized["extracted_params"] = {}
+    if bool(normalized.get("is_offtopic")) or normalized.get("category") == "offtopic":
+        normalized["category"] = "offtopic"
+        normalized["is_offtopic"] = True
+        normalized["needs_clarification"] = True
+        normalized["should_escalate"] = False
+        normalized["escalation_reason"] = None
     if normalized.get("forum") and not normalized.get("forum_normalized"):
         normalized["forum_normalized"] = normalized["forum"]
     normalized["questions"] = _coerce_questions(normalized.get("questions"))
@@ -403,6 +459,19 @@ def _normalize_category(value: object) -> str | None:
         return None
     normalized = text.casefold().replace("ё", "е").replace("_", " ")
 
+    if any(
+        word in normalized
+        for word in (
+            "offtopic",
+            "оффтоп",
+            "не по теме",
+            "вне темы",
+            "погода",
+            "курс валют",
+            "гороскоп",
+        )
+    ):
+        return "offtopic"
     if any(word in normalized for word in ("форум", "мероприят", "событи")):
         return "форумы"
     if "грант" in normalized:

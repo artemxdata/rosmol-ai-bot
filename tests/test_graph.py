@@ -10,6 +10,7 @@ from src.graph.nodes.analyze import (
     _coerce_analysis_payload,
     analyze_query,
 )
+from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE, clarify
 from src.graph.nodes.escalate import PARTIAL_COVERAGE_NOTE, escalate
 from src.graph.nodes.generate import generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
@@ -277,6 +278,20 @@ class InputOrderGroupReranker:
 def test_route_after_analyze_clarifies() -> None:
     state = {"analysis": QueryAnalysis(needs_clarification=True)}
     assert route_after_analyze(state) == "clarify"
+
+
+def test_route_after_analyze_clarifies_safe_offtopic_without_escalation() -> None:
+    state = {"analysis": QueryAnalysis(category="offtopic", is_offtopic=True)}
+    assert route_after_analyze(state) == "clarify"
+
+
+@pytest.mark.asyncio
+async def test_clarify_returns_scope_note_for_safe_offtopic() -> None:
+    result = await clarify({"analysis": QueryAnalysis(category="offtopic", is_offtopic=True)})
+
+    assert result["final_response"] == OFFTOPIC_SCOPE_NOTE
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
 
 
 def test_route_after_rerank_escalates_on_low_score(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -918,6 +933,27 @@ async def test_analyze_routes_explicit_operator_request_to_escalation() -> None:
     assert analysis.should_escalate is True
     assert analysis.escalation_reason == "operator_requested"
     assert route_after_analyze({"analysis": analysis}) == "escalate"
+
+
+@pytest.mark.asyncio
+async def test_analyze_uses_deterministic_safe_offtopic_without_llm() -> None:
+    result = await analyze_query(
+        {
+            "message": "Какая погода завтра в Москве?",
+            "message_masked": "Какая погода завтра в Москве?",
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert result["analyzer_mode"] == "deterministic"
+    assert "should_escalate" not in result
+    assert analysis.category == "offtopic"
+    assert analysis.is_offtopic is True
+    assert analysis.needs_clarification is True
+    assert analysis.should_escalate is False
+    assert route_after_analyze({"analysis": analysis}) == "clarify"
 
 
 @pytest.mark.asyncio

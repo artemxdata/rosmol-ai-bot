@@ -6,6 +6,8 @@ from src.graph.state import BotState
 
 def route_after_analyze(state: BotState) -> str:
     analysis = state.get("analysis")
+    if analysis and analysis.is_offtopic:
+        return "clarify"
     if state.get("should_escalate") or (analysis and analysis.should_escalate):
         return "escalate"
     if analysis and analysis.needs_clarification:
