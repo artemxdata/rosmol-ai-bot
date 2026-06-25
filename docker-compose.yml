@@ -96,6 +96,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
       WEBHOOK_AUTH_TOKEN: ${WEBHOOK_AUTH_TOKEN:-}
+      HDE_TRIGGER_PREFIX: ${HDE_TRIGGER_PREFIX:-}
       CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:-}
       CLOUD_RU_CHAT_COMPLETIONS_URL: ${CLOUD_RU_CHAT_COMPLETIONS_URL:-https://foundation-models.api.cloud.ru/v1/chat/completions}
       CLOUD_RU_MODEL: ${CLOUD_RU_MODEL:-}
