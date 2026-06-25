@@ -119,6 +119,56 @@ ufw --force enable
 ufw status
 ```
 
+## HDE Dispatcher Payloads
+
+Set the trigger marker only in server `.env`, not in Git:
+
+```dotenv
+HDE_TRIGGER_PREFIX=<dispatcher-start-marker>
+```
+
+For the HDE dispatcher rule that starts bot processing for a new ticket:
+
+```json
+{
+  "event": "new_message",
+  "chat_id": "{ticket_id}",
+  "visitor": {
+    "id": "{user_id}",
+    "fields": {
+      "name": "{user_name}"
+    }
+  },
+  "message": {
+    "kind": "visitor",
+    "text": "{HDE_TRIGGER_PREFIX} {answer_last_without_html}"
+  }
+}
+```
+
+For the HDE dispatcher rule that sends a user's next reply to the bot:
+
+```json
+{
+  "event": "new_message",
+  "chat_id": "{ticket_id}",
+  "visitor": {
+    "id": "{user_id}",
+    "fields": {
+      "name": "{user_name}"
+    }
+  },
+  "message": {
+    "kind": "visitor",
+    "text": "{answer_last_without_html}"
+  }
+}
+```
+
+The HDE adapter uses `chat_id` as the bot conversation id because replies must
+be bound to the ticket. The trigger prefix is stripped before the message reaches
+PII masking, RAG, or LLM.
+
 ## PostgreSQL Backup
 
 Create a local dump from Docker:

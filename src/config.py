@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     api_auth_token: str = ""
     webhook_auth_token: str = ""
     admin_auth_token: str = ""
+    hde_trigger_prefix: str = ""
     kb_seed_path: str = "data/knowledge_base_seed.json"
 
     cloud_ru_api_key: str = ""
