@@ -37,6 +37,88 @@ or shared Redis session context:
 The `app-ml` profile uses a longer local timeout than the lightweight app
 because CPU rerank plus Max synthesis can exceed 90 seconds on cold runs.
 
+## Server Staging Deploy
+
+Current staging target: Ubuntu 24.04 host with Docker already installed.
+The application container is bound to localhost only; public traffic must go
+through nginx.
+
+Install missing base tools:
+
+```bash
+apt update
+apt install -y git ufw ca-certificates curl
+```
+
+Add swap before enabling local ML/reranker workloads on an 11 GiB RAM host:
+
+```bash
+fallocate -l 8G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+cp /etc/fstab /etc/fstab.bak
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+free -h
+```
+
+Clone the private repository with a read-only GitHub deploy key. Do not paste
+private keys or `.env` contents into chats:
+
+```bash
+ssh-keygen -t ed25519 -C "rosmol-ai-bot-deploy@rag-llmchatme" -f /root/.ssh/rosmol_ai_bot_deploy -N ""
+cat /root/.ssh/rosmol_ai_bot_deploy.pub
+```
+
+After adding that public key in GitHub repository settings as a read-only
+deploy key:
+
+```bash
+cat >> /root/.ssh/config <<'EOF'
+Host github.com-rosmol
+  HostName github.com
+  User git
+  IdentityFile /root/.ssh/rosmol_ai_bot_deploy
+  IdentitiesOnly yes
+EOF
+chmod 600 /root/.ssh/config
+ssh -T git@github.com-rosmol
+git clone git@github.com-rosmol:artemxdata/rosmol-ai-bot.git /opt/rosmol-ai-bot
+cd /opt/rosmol-ai-bot
+cp .env.example .env
+chmod 600 .env
+```
+
+Fill `.env` manually on the server. Minimum staging overrides:
+
+```dotenv
+APP_ENV=staging
+NGINX_BIND=0.0.0.0
+NGINX_HOST_PORT=80
+INSTALL_ML=false
+```
+
+Also set real secrets and strong database credentials in `.env`: Cloud.ru API
+key, API/webhook/admin tokens, `POSTGRES_PASSWORD`, and matching
+`POSTGRES_DSN`.
+
+Start and verify:
+
+```bash
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1/ready
+```
+
+Open only required ports:
+
+```bash
+ufw allow OpenSSH
+ufw allow 80/tcp
+ufw --force enable
+ufw status
+```
+
 ## PostgreSQL Backup
 
 Create a local dump from Docker:

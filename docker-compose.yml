@@ -123,7 +123,7 @@ services:
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-45}
       ML_UNLOAD_AFTER_USE: ${ML_UNLOAD_AFTER_USE:-false}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${APP_HOST_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,7 +144,7 @@ services:
     container_name: rosmol-nginx
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "${NGINX_BIND:-127.0.0.1}:${NGINX_HOST_PORT:-8080}:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

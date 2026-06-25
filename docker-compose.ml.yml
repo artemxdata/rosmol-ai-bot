@@ -48,7 +48,7 @@ services:
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     ports:
-      - "8001:8000"
+      - "127.0.0.1:${APP_ML_HOST_PORT:-8001}:8000"
     volumes:
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
