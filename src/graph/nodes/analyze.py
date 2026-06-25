@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from time import perf_counter
 
 from src.graph.state import BotState
@@ -29,10 +30,14 @@ async def analyze_query(state: BotState) -> dict:
                 int((perf_counter() - started_at) * 1000),
                 mode="deterministic",
             )
-        return {
+        result = {
             "analysis": deterministic,
             "analyzer_mode": "deterministic",
         }
+        if deterministic.should_escalate:
+            result["should_escalate"] = True
+            result["escalation_reason"] = deterministic.escalation_reason or "needs_operator"
+        return result
 
     try:
         llm = state["llm_client"]
@@ -57,7 +62,11 @@ async def analyze_query(state: BotState) -> dict:
         analysis = QueryAnalysis.model_validate(payload)
         if tracer:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
-        return {"analysis": analysis}
+        result = {"analysis": analysis}
+        if analysis.should_escalate:
+            result["should_escalate"] = True
+            result["escalation_reason"] = analysis.escalation_reason or "needs_operator"
+        return result
     except Exception as exc:
         fallback = _fallback_analysis(
             original_message,
@@ -97,10 +106,18 @@ def _fallback_analysis(
     routing_hint: object,
 ) -> QueryAnalysis | None:
     category = _infer_category_from_message(masked_message)
+    complexity = _complexity_from_routing_hint(routing_hint)
+    if _should_force_simple_support_query(category, masked_message):
+        complexity = Complexity.SIMPLE
+    should_escalate = _is_operator_request(masked_message)
+    if should_escalate and not category:
+        category = "навигация"
     payload = {
         "category": category,
-        "complexity": _complexity_from_routing_hint(routing_hint).value,
+        "complexity": complexity.value,
         "questions": [],
+        "should_escalate": should_escalate,
+        "escalation_reason": "operator_requested" if should_escalate else None,
     }
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
@@ -108,6 +125,44 @@ def _fallback_analysis(
     if not payload.get("category") and not payload.get("forum_normalized"):
         return None
     return QueryAnalysis.model_validate(payload)
+
+
+def _is_operator_request(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е")
+    if re.search(r"\bжив(?:ой|ого|ым)?\s+человек(?:а|ом)?\b", normalized):
+        return True
+
+    if not any(marker in normalized for marker in ("оператор", "специалист", "сотрудник")):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "хочу",
+            "нужен",
+            "нужна",
+            "нужно",
+            "можно",
+            "перевед",
+            "соедин",
+            "свяж",
+            "поговор",
+            "позов",
+            "передай",
+            "передайте",
+        )
+    )
+
+
+def _should_force_simple_support_query(category: str | None, message: str) -> bool:
+    if category not in {"техподдержка", "платформа_фгаис"}:
+        return False
+    normalized = message.casefold().replace("ё", "е")
+    words = re.findall(r"[\w-]+", normalized, flags=re.UNICODE)
+    if len(words) > 12:
+        return False
+    if any(marker in normalized for marker in ("если", "сравни", "одновременно", "несколько")):
+        return False
+    return True
 
 
 def _infer_category_from_message(message: str) -> str | None:
@@ -143,6 +198,19 @@ def _infer_category_from_message(message: str) -> str | None:
             "ошиб",
             "баг",
             "не работает",
+            "не получается войти",
+            "не получается выбрать",
+            "не получается отправить",
+            "не получается сохранить",
+            "не получается заполнить",
+            "не удается выбрать",
+            "не удаётся выбрать",
+            "не удается отправить",
+            "не удаётся отправить",
+            "не удается сохранить",
+            "не удаётся сохранить",
+            "не удается заполнить",
+            "не удаётся заполнить",
             "техподдерж",
             "id не",
             "id проф",

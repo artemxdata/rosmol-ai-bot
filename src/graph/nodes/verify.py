@@ -91,6 +91,9 @@ FORUM_SPECIFIC_MARKERS = (
 FORUM_SPECIFIC_MARKERS = FORUM_SPECIFIC_MARKERS + (
     "\u0432\u043e\u0437\u0440\u0430\u0441\u0442",
     "\u043b\u0435\u0442",
+    "\u043f\u043e\u0434\u0430\u0442",
+    "\u0443\u0447\u0430\u0441\u0442",
+    "\u0440\u0435\u0433\u0438\u0441\u0442\u0440",
     "\u043f\u0440\u043e\u0435\u0437\u0434",
     "\u0434\u043e\u0440\u043e\u0433",
     "\u0431\u0438\u043b\u0435\u0442",
@@ -106,9 +109,11 @@ FORUM_SPECIFIC_MARKERS = FORUM_SPECIFIC_MARKERS + (
 )
 INSUFFICIENT_SOURCE_RE = re.compile(
     r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
+    r"в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:достаточных\s+)?(?:данных|сведений)|"
     r"из\s+(?:представленных|переданных)\s+источников\s+невозможно\s+ответить|"
     r"источники\s+не\s+(?:содержат|подтверждают)|"
     r"информации\s+(?:в\s+источниках\s+)?нет|"
+    r"(?:достаточных\s+)?(?:данных|сведений)\s+(?:в\s+источниках\s+)?нет|"
     r"нет\s+информации\s+о|"
     r"источник(?:е|ах)\s+отсутств|"
     r"не\s+указан[аоы]?\s+в\s+(?:предоставленных\s+)?источниках|"
@@ -353,7 +358,7 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
         for chunk in source_chunks
         if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
     }
-    if len(forums) <= 1 and cited_sources:
+    if len(forums) <= 1 and cited_sources and forums:
         forums = {
             forum
             for chunk in chunks

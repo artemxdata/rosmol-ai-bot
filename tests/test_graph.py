@@ -882,6 +882,45 @@ async def test_analyze_uses_deterministic_grant_routing_without_llm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_routes_application_ui_failure_to_support_without_llm() -> None:
+    result = await analyze_query(
+        {
+            "message": "Не получается выбрать направление в заявке",
+            "message_masked": "Не получается выбрать направление в заявке",
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert result["analyzer_mode"] == "deterministic"
+    assert analysis.category == "техподдержка"
+    assert analysis.complexity == Complexity.SIMPLE
+    assert analysis.forum_normalized is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_routes_explicit_operator_request_to_escalation() -> None:
+    result = await analyze_query(
+        {
+            "message": "Хочу поговорить с оператором",
+            "message_masked": "Хочу поговорить с оператором",
+            "routing_hint": {"complexity": "simple"},
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert result["analyzer_mode"] == "deterministic"
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "operator_requested"
+    assert analysis.category == "навигация"
+    assert analysis.should_escalate is True
+    assert analysis.escalation_reason == "operator_requested"
+    assert route_after_analyze({"analysis": analysis}) == "escalate"
+
+
+@pytest.mark.asyncio
 async def test_analyze_uses_deterministic_grant_reporting_without_llm() -> None:
     result = await analyze_query(
         {

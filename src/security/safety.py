@@ -2,17 +2,72 @@ from __future__ import annotations
 
 import re
 
+
+def _compile(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern, re.IGNORECASE | re.UNICODE)
+
+
 SAFETY_PATTERNS: dict[str, re.Pattern[str]] = {
-    "self_harm": re.compile(
-        r"\b(?:суицид|самоубийств|покончу с собой|не хочу жить)\b",
-        re.IGNORECASE,
+    "safety_self_harm": _compile(
+        r"("
+        r"суицид|самоубийств|самоубиться|"
+        r"поконч(?:ить|у|ил|ила)\s+с\s+собой|"
+        r"не\s+хочу\s+жить|жить\s+не\s+хоч(?:у|ется)|"
+        r"хочу\s+умереть|уб(?:ить|ью)\s+себя|"
+        r"налож(?:ить|у)\s+на\s+себя\s+руки|"
+        r"порез(?:ать|ал|ала|у)\s+вен(?:ы|у)|"
+        r"самоповрежд|причин(?:ить|ю)\s+себе\s+вред"
+        r")"
     ),
-    "threat": re.compile(r"\b(?:убью|взорву|угрожаю|расправлюсь)\b", re.IGNORECASE),
+    "safety_bullying": _compile(
+        r"("
+        r"буллинг|травл|травят|затравили|"
+        r"унижают|оскорбляют|издеваются|гнобят|"
+        r"запугивают|шантажируют|преследуют|харассмент"
+        r")"
+    ),
+    "safety_threat": _compile(
+        r"("
+        r"угрож(?:аю|ает|ают|али|ают\s+мне)|угрозы|"
+        r"уб(?:ью|ить)\s+(?:его|ее|её|их|тебя|себя|организатор|участник)|"
+        r"хочу\s+(?:ударить|побить|избить)|"
+        r"зареж(?:у|ет|ут)|изобь(?:ю|ет|ют)|побь(?:ю|ет|ют)|"
+        r"покалеч(?:у|ит|ат)|взорв(?:у|ет|ут)|подожг(?:у|ет|ут)|"
+        r"устро(?:ю|ит|ят)\s+расправ"
+        r")"
+    ),
+    "safety_abuse": _compile(
+        r"("
+        r"насилие|изнасил|домога(?:ется|ются|лся|лась|тельств)|"
+        r"побои|избили|избивают|напали|нападение|"
+        r"сексуальн(?:ое|ые|ых)\s+(?:насилие|домогательств)"
+        r")"
+    ),
+    "safety_medical_emergency": _compile(
+        r"("
+        r"нужна\s+скорая|вызовите\s+скорую|"
+        r"потерял(?:а)?\s+сознание|не\s+могу\s+дышать|"
+        r"сильн(?:ое|ая|ый)\s+кровотеч|сердечн(?:ый|ого)\s+приступ|"
+        r"мне\s+очень\s+плохо"
+        r")"
+    ),
+    "safety_dangerous_instruction": _compile(
+        r"("
+        r"как\s+(?:сделать|изготовить|собрать)\s+(?:бомбу|взрывчат|оружие)|"
+        r"где\s+(?:купить|достать)\s+(?:наркотик|оружие|взрывчат)|"
+        r"как\s+(?:пронести|спрятать)\s+(?:оружие|нож|наркотик)"
+        r")"
+    ),
 }
 
 
 def check(text: str) -> tuple[bool, str | None]:
+    normalized = _normalize(text)
     for reason, pattern in SAFETY_PATTERNS.items():
-        if pattern.search(text):
+        if pattern.search(normalized):
             return False, reason
     return True, None
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.casefold().replace("ё", "е").split())

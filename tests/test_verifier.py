@@ -112,6 +112,120 @@ async def test_verifier_accepts_high_confidence_without_judge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_single_cited_forum_when_forum_context_is_ambiguous() -> None:
+    result = await verify(
+        {
+            "message_masked": "Подать заявку на участие",
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": (
+                "Подать заявку на форум «Утро» можно в личном кабинете. "
+                "[src:utro_application]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["utro_application"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="utro_application",
+                    text="Подать заявку на форум «Утро» можно в личном кабинете.",
+                    metadata={"forum_normalized": "Утро"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="mashuk_application",
+                    text="Подать заявку на форум «Машук» можно в личном кабинете.",
+                    metadata={"forum_normalized": "Машук"},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_generic_platform_registration_source_with_forum_candidates() -> None:
+    result = await verify(
+        {
+            "message_masked": "Как зарегистрироваться на ФГАИС?",
+            "analysis": QueryAnalysis(category="платформа_фгаис"),
+            "generated_response": (
+                "Пройти регистрацию во ФГАИС можно по ссылке: "
+                "https://myrosmol.ru/auth/register [src:fgais_registration]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["fgais_registration"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="fgais_registration",
+                    text="Пройти регистрацию во ФГАИС можно по ссылке: https://myrosmol.ru/auth/register",
+                    metadata={"category": "платформа_фгаис"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="utro_application",
+                    text="Подать заявку на форум «Утро» можно в личном кабинете.",
+                    metadata={"forum_normalized": "Утро"},
+                    reranker_score=0.7,
+                ),
+                ScoredChunk(
+                    chunk_id="mashuk_application",
+                    text="Подать заявку на форум «Машук» можно в личном кабинете.",
+                    metadata={"forum_normalized": "Машук"},
+                    reranker_score=0.7,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_unscoped_technical_application_issue() -> None:
+    result = await verify(
+        {
+            "message_masked": "Не получается выбрать направление в заявке",
+            "analysis": QueryAnalysis(category="техподдержка"),
+            "generated_response": (
+                "Попробуйте очистить кеш и cookie браузера, открыть сайт в другом браузере "
+                "и повторить попытку. [src:technical_error]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["technical_error"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="technical_error",
+                    text=(
+                        "При технической ошибке очистите кеш и cookie браузера, "
+                        "откройте сайт в другом браузере и повторите попытку."
+                    ),
+                    metadata={"category": "техподдержка"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="forum_application",
+                    text="Подать заявку на форум можно в личном кабинете.",
+                    metadata={"forum_normalized": "Утро", "category": "форумы"},
+                    reranker_score=0.7,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
 async def test_verifier_uses_answer_bank_intent_examples_for_coverage() -> None:
     result = await verify(
         {
@@ -230,6 +344,25 @@ async def test_verifier_escalates_when_answer_says_info_absent_and_redirects() -
             "generated_response": (
                 "Из представленных источников невозможно ответить на вопрос. "
                 "Информация об условиях отсутствует. Рекомендую обратиться к специалистам."
+            ),
+            "reranked_chunks": [
+                ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.8)
+            ],
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "insufficient_sources"
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_when_answer_says_sources_lack_sufficient_data() -> None:
+    result = await verify(
+        {
+            "generated_response": (
+                "В источниках нет достаточных данных о конкретных документах. "
+                "Однако указано, что положение будет доступно в карточке мероприятия."
             ),
             "reranked_chunks": [
                 ScoredChunk(chunk_id="ctx_1", text="Источник", metadata={}, reranker_score=0.8)
