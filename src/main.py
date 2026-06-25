@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any
 
 import asyncpg
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
@@ -228,16 +228,38 @@ async def max_webhook(request: Request) -> dict[str, bool]:
 
 
 @app.post("/webhook/hde")
-async def hde_webhook(request: Request) -> dict[str, bool]:
+async def hde_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, bool]:
     _require_optional_secret(
         request,
         getattr(get_settings(), "webhook_auth_token", ""),
         "x-webhook-secret",
     )
     message = hde_adapter.parse(await request.json())
-    response = await process_message(message, request.app)
-    await hde_adapter.send(message.user_id, response)
+    background_tasks.add_task(_process_hde_message, message, request.app)
     return {"ok": True}
+
+
+async def _process_hde_message(message: IncomingMessage, fastapi_app: FastAPI) -> None:
+    try:
+        response = await process_message(message, fastapi_app)
+    except Exception as exc:
+        logger.exception(
+            "hde_background_processing_failed",
+            request_id=str(message.request_id),
+            ticket_id=message.user_id,
+            error=str(exc),
+        )
+        response = "Передаю обращение специалисту."
+
+    try:
+        await hde_adapter.send(message.user_id, response)
+    except Exception as exc:
+        logger.exception(
+            "hde_background_send_failed",
+            request_id=str(message.request_id),
+            ticket_id=message.user_id,
+            error=str(exc),
+        )
 
 
 def _require_optional_secret(

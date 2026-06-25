@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     webhook_auth_token: str = ""
     admin_auth_token: str = ""
     hde_trigger_prefix: str = ""
+    hde_base_url: str = ""
+    hde_api_email: str = ""
+    hde_api_key: str = ""
+    hde_bot_user_id: str = ""
+    hde_request_timeout_seconds: float = Field(default=20.0, ge=1)
     kb_seed_path: str = "data/knowledge_base_seed.json"
 
     cloud_ru_api_key: str = ""

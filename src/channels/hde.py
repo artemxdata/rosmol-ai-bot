@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from loguru import logger
 
 from src.channels.base import ChannelAdapter
@@ -46,10 +48,40 @@ class HDEAdapter(ChannelAdapter):
         )
 
     async def send(self, user_id: str, text: str) -> None:
+        settings = get_settings()
+        base_url = str(getattr(settings, "hde_base_url", "") or "").strip()
+        api_email = str(getattr(settings, "hde_api_email", "") or "").strip()
+        api_key = str(getattr(settings, "hde_api_key", "") or "").strip()
+        bot_user_id = str(getattr(settings, "hde_bot_user_id", "") or "").strip()
+        timeout = float(getattr(settings, "hde_request_timeout_seconds", 20.0) or 20.0)
+
+        if not base_url or not api_email or not api_key:
+            logger.warning(
+                "hde_send_skipped_not_configured",
+                ticket_id=user_id,
+                has_base_url=bool(base_url),
+                has_api_email=bool(api_email),
+                has_api_key=bool(api_key),
+            )
+            return
+
+        payload = {"text": text}
+        if bot_user_id:
+            payload["user_id"] = bot_user_id
+
+        url = _build_hde_posts_url(base_url, user_id)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                url,
+                data=payload,
+                auth=httpx.BasicAuth(api_email, api_key),
+            )
+            response.raise_for_status()
+
         logger.info(
-            "hde_send_stub",
-            user_id=user_id,
-            text=text[:200],
+            "hde_send_ok",
+            ticket_id=user_id,
+            status_code=response.status_code,
             fields=[HDE_FIELD_CATEGORY_BOT, HDE_FIELD_ESCALATION_BOT, HDE_FIELD_SUMMARY_BOT],
         )
 
@@ -84,3 +116,14 @@ def _normalize_attachments(raw_attachments: Any) -> list[dict[str, Any]]:
     if isinstance(raw_attachments, dict):
         return [raw_attachments]
     return []
+
+
+def _build_hde_posts_url(base_url: str, ticket_id: str) -> str:
+    normalized = str(base_url or "").strip().rstrip("/")
+    if not normalized:
+        raise ValueError("HDE base URL is not configured")
+    if normalized.endswith("/api/v2"):
+        api_base = normalized
+    else:
+        api_base = f"{normalized}/api/v2"
+    return f"{api_base}/tickets/{quote(str(ticket_id).strip(), safe='')}/posts/"

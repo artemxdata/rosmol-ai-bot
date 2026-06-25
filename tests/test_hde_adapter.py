@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from src.channels.hde import HDEAdapter
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from src.channels.hde import HDEAdapter, _build_hde_posts_url
 from src.models import Channel
 
 
@@ -54,3 +59,83 @@ def test_hde_adapter_keeps_legacy_flat_payload_support() -> None:
     assert message.channel == Channel.HDE
     assert message.text == "Передайте оператору"
     assert message.attachments == [{"id": "file-1"}]
+
+
+def test_build_hde_posts_url_accepts_domain_or_api_base() -> None:
+    assert (
+        _build_hde_posts_url("https://rosmolodezh.helpdeskeddy.com", "123")
+        == "https://rosmolodezh.helpdeskeddy.com/api/v2/tickets/123/posts/"
+    )
+    assert (
+        _build_hde_posts_url("https://rosmolodezh.helpdeskeddy.com/api/v2/", "ABC 123")
+        == "https://rosmolodezh.helpdeskeddy.com/api/v2/tickets/ABC%20123/posts/"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hde_send_posts_public_reply_with_basic_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        status_code = 201
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, *, data: dict[str, str], auth: object) -> FakeResponse:
+            captured["url"] = url
+            captured["data"] = data
+            captured["auth_type"] = type(auth).__name__
+            return FakeResponse()
+
+    monkeypatch.setattr("src.channels.hde.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "src.channels.hde.get_settings",
+        lambda: SimpleNamespace(
+            hde_base_url="https://rosmolodezh.helpdeskeddy.com",
+            hde_api_email="bot@example.com",
+            hde_api_key="secret",
+            hde_bot_user_id="42",
+            hde_request_timeout_seconds=7,
+        ),
+    )
+
+    await HDEAdapter().send("123", "Ответ бота")
+
+    assert captured["url"] == "https://rosmolodezh.helpdeskeddy.com/api/v2/tickets/123/posts/"
+    assert captured["data"] == {"text": "Ответ бота", "user_id": "42"}
+    assert captured["auth_type"] == "BasicAuth"
+    assert captured["timeout"] == 7
+
+
+@pytest.mark.asyncio
+async def test_hde_send_skips_when_api_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("HTTP client must not be created")
+
+    monkeypatch.setattr("src.channels.hde.httpx.AsyncClient", FailingAsyncClient)
+    monkeypatch.setattr(
+        "src.channels.hde.get_settings",
+        lambda: SimpleNamespace(
+            hde_base_url="",
+            hde_api_email="",
+            hde_api_key="",
+            hde_bot_user_id="",
+            hde_request_timeout_seconds=7,
+        ),
+    )
+
+    await HDEAdapter().send("123", "Ответ бота")

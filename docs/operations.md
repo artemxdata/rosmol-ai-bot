@@ -169,6 +169,38 @@ The HDE adapter uses `chat_id` as the bot conversation id because replies must
 be bound to the ticket. The trigger prefix is stripped before the message reaches
 PII masking, RAG, or LLM.
 
+HDE replies are sent through HelpDeskEddy API v2 as public ticket posts:
+
+```http
+POST /api/v2/tickets/{ticket_id}/posts/
+Authorization: Basic <HDE_API_EMAIL:HDE_API_KEY>
+Content-Type: application/x-www-form-urlencoded
+```
+
+Form fields:
+
+```text
+text=<bot answer>
+user_id=<optional bot/user id>
+```
+
+Server `.env`:
+
+```dotenv
+HDE_BASE_URL=https://rosmolodezh.helpdeskeddy.com
+HDE_API_EMAIL=<api-user-email>
+HDE_API_KEY=<api-key>
+HDE_BOT_USER_ID=
+HDE_REQUEST_TIMEOUT_SECONDS=20
+```
+
+Use `/posts/` for a public answer visible to the client. `/comments/` is for
+internal staff comments and must not be used for normal bot replies.
+
+The HDE webhook endpoint returns `{"ok": true}` immediately and processes the
+RAG/LLM answer in the FastAPI background task. This prevents HDE/nginx timeouts
+on slow CPU inference or Max-generation requests.
+
 ## PostgreSQL Backup
 
 Create a local dump from Docker:
