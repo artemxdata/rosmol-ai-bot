@@ -104,7 +104,7 @@ async def generate(state: BotState) -> dict:
             questions,
             chunks,
             max_confidence,
-            state.get("message_masked") or state.get("message"),
+            _state_message_for_search(state),
         )
         if source_chunks and _should_use_extractive_multi_source_answer(analysis, source_chunks):
             source_response = build_deterministic_source_response(source_chunks)
@@ -161,7 +161,7 @@ async def generate(state: BotState) -> dict:
         questions,
         chunks,
         max_confidence,
-        state.get("message_masked") or state.get("message"),
+        _state_message_for_search(state),
     )
     if source_chunks:
         if _should_generate_with_llm(analysis, source_chunks):
@@ -489,14 +489,60 @@ def select_deterministic_source_chunk(
 def build_deterministic_source_response(chunks: list[ScoredChunk] | ScoredChunk) -> str | None:
     if isinstance(chunks, ScoredChunk):
         chunks = [chunks]
-    parts = [
-        f"{chunk.text.strip()} [src:{chunk.chunk_id}]"
-        for chunk in chunks
-        if chunk.text.strip()
-    ]
+
+    if len(chunks) == 1:
+        text = chunks[0].text.strip()
+        return f"{text} [src:{chunks[0].chunk_id}]" if text else None
+
+    parts: list[str] = []
+    seen_paragraphs: set[str] = set()
+    seen_links: set[str] = set()
+    for chunk in chunks:
+        text = _compact_source_chunk_text(
+            chunk.text,
+            seen_paragraphs=seen_paragraphs,
+            seen_links=seen_links,
+        )
+        if not text:
+            continue
+        parts.append(f"{text} [src:{chunk.chunk_id}]")
     if not parts:
         return None
     return "\n\n".join(parts)
+
+
+def _compact_source_chunk_text(
+    text: str,
+    *,
+    seen_paragraphs: set[str],
+    seen_links: set[str],
+) -> str:
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n{1,}", text.strip())]
+    kept: list[str] = []
+    for paragraph in paragraphs:
+        if not paragraph:
+            continue
+        normalized = _normalize_source_paragraph(paragraph)
+        if not normalized or normalized in seen_paragraphs:
+            continue
+        links = set(re.findall(r"https?://\S+", paragraph))
+        if links and links <= seen_links and _is_link_repeat_paragraph(paragraph):
+            continue
+        seen_paragraphs.add(normalized)
+        seen_links.update(links)
+        kept.append(paragraph)
+    return "\n".join(kept).strip()
+
+
+def _normalize_source_paragraph(text: str) -> str:
+    normalized = re.sub(r"https?://\S+", "<url>", text.casefold().replace("ё", "е"))
+    normalized = re.sub(r"[^\w\s<>]+", " ", normalized, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _is_link_repeat_paragraph(text: str) -> bool:
+    normalized = _normalize_source_paragraph(text)
+    return len(normalized.split()) <= 18
 
 
 def _candidate_source_chunks(
@@ -1015,6 +1061,14 @@ def _metadata_matches_specific_question(
     if _asks_contact_operator(question_normalized):
         return "контакты_и_оператор" in metadata_haystack
 
+    if _asks_decline_participation(question_normalized):
+        return (
+            "otkaz_ot_uchastiya" in metadata_haystack
+            or "отказ от участия" in metadata_haystack
+            or "отозвать заявку" in _normalize(chunk.text)
+            or "отказаться от участия" in _normalize(chunk.text)
+        )
+
     if _asks_language_settings(question_normalized):
         return "yazyki" in metadata_haystack or "язык" in metadata_haystack
 
@@ -1272,6 +1326,27 @@ def _asks_registration(question_normalized: str) -> bool:
 
 def _asks_profile_id(question_normalized: str) -> bool:
     return any(marker in question_normalized for marker in ("id проф", "айди", "ид проф"))
+
+
+def _asks_decline_participation(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "отмена заявки",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "подтвердил участие",
+            "подтвердила участие",
+        )
+    )
 
 
 def _asks_grant_return(question_normalized: str) -> bool:
@@ -1622,14 +1697,15 @@ def _tokens(text: str) -> set[str]:
 
 
 def effective_questions(state: BotState, analysis: QueryAnalysis) -> list[Question]:
+    message = _state_message_for_search(state)
     questions = build_effective_questions(
         analysis,
-        state.get("message_masked") or state.get("message"),
+        message,
     )
     if questions:
         return questions
 
-    text = str(state.get("message_masked") or state.get("message") or "").strip()
+    text = str(message or "").strip()
     if not text:
         return []
     return [
@@ -1639,3 +1715,12 @@ def effective_questions(state: BotState, analysis: QueryAnalysis) -> list[Questi
             forum_normalized=analysis.forum_normalized,
         )
     ]
+
+
+def _state_message_for_search(state: BotState) -> str:
+    return str(
+        state.get("contextual_message")
+        or state.get("message_masked")
+        or state.get("message")
+        or ""
+    )

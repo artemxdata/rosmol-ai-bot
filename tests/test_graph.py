@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.graph.context import apply_session_context, build_contextual_message
 from src.graph.edges import route_after_analyze, route_after_rerank, route_after_verify
 from src.graph.nodes.analyze import (
     _apply_deterministic_forum,
@@ -12,12 +13,22 @@ from src.graph.nodes.analyze import (
 )
 from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE, clarify
 from src.graph.nodes.escalate import PARTIAL_COVERAGE_NOTE, escalate
-from src.graph.nodes.generate import generate
+from src.graph.nodes.generate import build_deterministic_source_response, generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
 from src.graph.nodes.retrieve import retrieve
+from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import build_effective_questions
-from src.models import Chunk, Complexity, QueryAnalysis, Question, ScoredChunk, VerificationResult
+from src.models import (
+    Channel,
+    Chunk,
+    Complexity,
+    QueryAnalysis,
+    Question,
+    ScoredChunk,
+    Session,
+    VerificationResult,
+)
 
 
 class FailingLLM:
@@ -711,6 +722,45 @@ def test_fallback_questions_map_short_id_issue_to_profile_id_flow() -> None:
     )
 
     assert [question.text for question in questions] == ["Где найти ID профиля?"]
+
+
+def test_fallback_questions_map_cannot_go_followup_to_decline_not_travel() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Амур"),
+        "А что делать, если я уже подтвердил участие, но теперь не могу поехать?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как отказаться от участия или отозвать заявку?"
+    ]
+    assert questions[0].forum_normalized == "Амур"
+
+
+def test_query_aliases_expand_cannot_go_to_decline_terms() -> None:
+    expanded = expand_query_aliases("Подтвердил участие, но не могу поехать")
+
+    assert "отказ от участия" in expanded
+    assert "отозвать заявку" in expanded
+
+
+def test_session_context_restores_forum_for_followup_from_last_five_turns() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        last_messages=[
+            {
+                "user": "Подскажи по форуму Амур: как подать заявку?",
+                "bot": "Регистрация на форум «Амур» закрыта.",
+            }
+        ],
+    )
+    message = "А что делать, если я уже подтвердил участие, но теперь не могу поехать?"
+    analysis = apply_session_context(QueryAnalysis(), message, session)
+
+    assert analysis.forum_normalized == "Амур"
+    assert analysis.category == "форумы"
+    assert build_contextual_message(message, session, analysis).startswith("Амур: ")
 
 
 def test_fallback_questions_do_not_match_hotel_marker_inside_wanted_word() -> None:
@@ -5497,6 +5547,109 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
     assert "Регистрация на фестивальный день открыта" in result["generated_response"]
     assert "Возрастная маркировка" in result["generated_response"]
     assert "Победителям оплачивают проезд" in result["generated_response"]
+
+
+def test_source_chunk_response_deduplicates_repeated_paragraphs_and_links() -> None:
+    chunks = [
+        ScoredChunk(
+            chunk_id="registration",
+            text=(
+                "❗️ Сейчас регистрация на мероприятие закрыта.\n"
+                "Пожалуйста, ожидай обновлений на платформе https://events.myrosmol.ru/"
+            ),
+            metadata={"source_type": "xlsx"},
+            score=0.8,
+            reranker_score=0.8,
+        ),
+        ScoredChunk(
+            chunk_id="age",
+            text=(
+                "Участие доступно пользователям от 14 до 35 лет включительно.\n"
+                "❗️ Сейчас регистрация на мероприятие закрыта.\n"
+                "Пожалуйста, ожидай обновлений на платформе https://events.myrosmol.ru/"
+            ),
+            metadata={"source_type": "xlsx"},
+            score=0.8,
+            reranker_score=0.8,
+        ),
+    ]
+
+    response = build_deterministic_source_response(chunks)
+
+    assert response is not None
+    assert response.count("Сейчас регистрация на мероприятие закрыта") == 1
+    assert response.count("https://events.myrosmol.ru/") == 1
+    assert "[src:registration]" in response
+    assert "[src:age]" in response
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    travel = ScoredChunk(
+        chunk_id="amur_travel",
+        text="Проезд участников форума оплачивается направляющей стороной.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Амур",
+            "source_type": "xlsx",
+            "topic": "oplata_proezda",
+            "intent_name": "Оплата проезда",
+        },
+        score=0.96,
+        reranker_score=0.95,
+    )
+    decline = ScoredChunk(
+        chunk_id="amur_decline",
+        text=(
+            "Если ты успешно пройдёшь конкурсный отбор, но затем решишь отказаться "
+            "от участия — пожалуйста, обязательно сообщи нам."
+        ),
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Амур",
+            "source_type": "xlsx",
+            "topic": "otkaz_ot_uchastiya",
+            "intent_name": "Отказ от участия",
+            "intent_examples": [
+                "Подала согласие на заявку, но принять участие не смогу",
+                "Я не смогу приехать.",
+                "Как отказаться от участия?",
+            ],
+        },
+        score=0.72,
+        reranker_score=0.7,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Амур",
+            ),
+            "message_masked": (
+                "А что делать, если я уже подтвердил участие, но теперь не могу поехать?"
+            ),
+            "contextual_message": (
+                "Амур: А что делать, если я уже подтвердил участие, "
+                "но теперь не могу поехать?"
+            ),
+            "reranked_chunks": [travel, decline],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["amur_decline"]
+    assert "отказаться от участия" in result["generated_response"]
+    assert "Проезд участников" not in result["generated_response"]
 
 
 @pytest.mark.asyncio

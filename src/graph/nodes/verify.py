@@ -42,7 +42,21 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("возраст", "лет"),
     ("трансфер", "автобус", "шаттл"),
     ("ноутбук", "снаряж", "вещ", "одежд", "взять с собой"),
-    ("отказ", "отказаться", "отозвать", "отменить участие"),
+    (
+        "отказ",
+        "отказаться",
+        "отозвать",
+        "отменить участие",
+        "отмена заявки",
+        "не могу поехать",
+        "не смогу поехать",
+        "не могу приехать",
+        "не смогу приехать",
+        "не могу посетить",
+        "не смогу посетить",
+        "подтвердил участие",
+        "подтвердила участие",
+    ),
     (
         "письмо-вызов",
         "письмо вызов",
@@ -345,7 +359,7 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
     if analysis and _detected_forums_for_coverage(analysis.extracted_params):
         return []
 
-    message = _normalize(str(state.get("message_masked") or state.get("message") or ""))
+    message = _normalize(str(_state_message_for_search(state)))
     if not any(marker in message for marker in FORUM_SPECIFIC_MARKERS):
         return []
 
@@ -429,7 +443,7 @@ def _missing_source_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
     if len(detected_forums) < 2:
         return []
 
-    message = state.get("message_masked") or state.get("message") or ""
+    message = _state_message_for_search(state)
     questions = build_effective_questions(analysis, message)
     if len(questions) < 2:
         return []
@@ -450,7 +464,7 @@ def _missing_aspect_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
     if len(_detected_forums_for_coverage(analysis.extracted_params)) >= 2:
         return []
 
-    message = state.get("message_masked") or state.get("message") or ""
+    message = _state_message_for_search(state)
     if _is_feedback_coverage_exempt(message):
         return []
     questions = _aspect_questions_for_coverage(analysis, message)
@@ -502,6 +516,7 @@ def _marker_questions_from_message(analysis: object, message: str) -> list[Quest
         )
         for markers, question_text in FALLBACK_QUESTION_MARKERS
         if any(marker in normalized for marker in markers)
+        and not _should_skip_marker_question(question_text, normalized)
     ]
 
 
@@ -593,6 +608,59 @@ def _required_marker_groups(question_text: str) -> list[tuple[str, ...]]:
         for markers in COVERAGE_MARKER_GROUPS
         if any(marker in normalized_question for marker in markers)
     ]
+
+
+def _should_skip_marker_question(question_text: str, normalized_message: str) -> bool:
+    if not _has_decline_participation_context(normalized_message):
+        return False
+    if question_text == "Как подать заявку или зарегистрироваться?":
+        return True
+    if question_text != "Кто оплачивает проезд?":
+        return False
+    return not any(
+        marker in normalized_message
+        for marker in (
+            "проезд",
+            "дорог",
+            "билет",
+            "чартер",
+            "доезд",
+            "добраться",
+            "оплат",
+            "стоимост",
+            "возмещ",
+        )
+    )
+
+
+def _has_decline_participation_context(normalized_message: str) -> bool:
+    return any(
+        marker in normalized_message
+        for marker in (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "отмена заявки",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "подтвердил участие",
+            "подтвердила участие",
+        )
+    )
+
+
+def _state_message_for_search(state: BotState) -> str:
+    return str(
+        state.get("contextual_message")
+        or state.get("message_masked")
+        or state.get("message")
+        or ""
+    )
 
 
 def _coverage_label(question: Question) -> str:

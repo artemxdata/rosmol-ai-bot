@@ -27,6 +27,32 @@ def expand_query_aliases(text: str) -> str:
             aliases.append(grant_application_alias)
     if "письмо" in normalized and any(marker in normalized for marker in ("вызов", "регион")):
         aliases.append("письмо-вызов письмо вызов официальное подтверждение участия")
+    if _has_decline_participation_context(normalized):
+        aliases.append(
+            "отказ от участия отказаться от участия отозвать заявку отменить участие "
+            "отмена заявки не смогу приехать не смогу посетить мероприятие"
+        )
     if aliases:
         expanded = f"{expanded} {' '.join(aliases)}"
     return expanded
+
+
+def _has_decline_participation_context(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "отмена заявки",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "подтвердил участие",
+            "подтвердила участие",
+        )
+    )

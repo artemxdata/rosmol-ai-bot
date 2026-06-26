@@ -60,7 +60,12 @@ async def rerank(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     chunks = state.get("retrieved_chunks", [])
-    query = state.get("message_masked") or state.get("message") or ""
+    query = (
+        state.get("contextual_message")
+        or state.get("message_masked")
+        or state.get("message")
+        or ""
+    )
     settings = get_settings()
     if _should_unload_model(settings, "ml_unload_embedder_after_use"):
         await _unload_model_owner(state.get("embedder"))

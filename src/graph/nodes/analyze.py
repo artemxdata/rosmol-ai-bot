@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from time import perf_counter
 
+from src.graph.context import apply_session_context, build_contextual_message
 from src.graph.state import BotState
 from src.kb.forum_registry import detect_forums_from_text
 from src.llm.cascade import select_analyzer_model
@@ -23,6 +24,7 @@ async def analyze_query(state: BotState) -> dict:
         original_message,
         masked_message,
         routing_hint,
+        state.get("session"),
     )
     if deterministic is not None:
         if tracer:
@@ -34,6 +36,11 @@ async def analyze_query(state: BotState) -> dict:
         result = {
             "analysis": deterministic,
             "analyzer_mode": "deterministic",
+            "contextual_message": build_contextual_message(
+                masked_message,
+                state.get("session"),
+                deterministic,
+            ),
         }
         if deterministic.should_escalate:
             result["should_escalate"] = True
@@ -61,9 +68,17 @@ async def analyze_query(state: BotState) -> dict:
         )
         _apply_forum_category_guardrail(payload, original_message)
         analysis = QueryAnalysis.model_validate(payload)
+        analysis = apply_session_context(analysis, masked_message, state.get("session"))
         if tracer:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
-        result = {"analysis": analysis}
+        result = {
+            "analysis": analysis,
+            "contextual_message": build_contextual_message(
+                masked_message,
+                state.get("session"),
+                analysis,
+            ),
+        }
         if analysis.should_escalate:
             result["should_escalate"] = True
             result["escalation_reason"] = analysis.escalation_reason or "needs_operator"
@@ -73,6 +88,7 @@ async def analyze_query(state: BotState) -> dict:
             original_message,
             masked_message,
             routing_hint,
+            state.get("session"),
         )
         if fallback is not None:
             if tracer:
@@ -83,7 +99,15 @@ async def analyze_query(state: BotState) -> dict:
                     fallback=True,
                     reason="deterministic_fallback",
                 )
-            return {"analysis": fallback, "analyzer_fallback": True}
+            return {
+                "analysis": fallback,
+                "analyzer_fallback": True,
+                "contextual_message": build_contextual_message(
+                    masked_message,
+                    state.get("session"),
+                    fallback,
+                ),
+            }
         if tracer:
             tracer.add_error("analyze", int((perf_counter() - started_at) * 1000), exc)
         return {
@@ -97,14 +121,16 @@ def _deterministic_analysis(
     original_message: str,
     masked_message: str,
     routing_hint: object,
+    session: object | None = None,
 ) -> QueryAnalysis | None:
-    return _fallback_analysis(original_message, masked_message, routing_hint)
+    return _fallback_analysis(original_message, masked_message, routing_hint, session)
 
 
 def _fallback_analysis(
     original_message: str,
     masked_message: str,
     routing_hint: object,
+    session: object | None = None,
 ) -> QueryAnalysis | None:
     category = _infer_category_from_message(masked_message)
     is_offtopic = _is_safe_offtopic(masked_message)
@@ -145,9 +171,11 @@ def _fallback_analysis(
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
     _apply_forum_category_guardrail(payload, original_message)
-    if not payload.get("category") and not payload.get("forum_normalized"):
+    analysis = QueryAnalysis.model_validate(payload)
+    analysis = apply_session_context(analysis, masked_message, session)
+    if not analysis.category and not analysis.forum_normalized:
         return None
-    return QueryAnalysis.model_validate(payload)
+    return analysis
 
 
 def _is_operator_request(message: str) -> bool:

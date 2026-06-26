@@ -46,7 +46,21 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     ),
     (("ноутбук", "снаряж", "вещ", "одежд", "взять с собой"), "Что нужно взять с собой?"),
     (
-        ("отказ", "отказаться", "отозвать", "отменить участие"),
+        (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "отмена заявки",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "подтвердил участие",
+            "подтвердила участие",
+        ),
         "Как отказаться от участия или отозвать заявку?",
     ),
     (("отклон", "причин отклон"), "Почему отклонили заявку?"),
@@ -444,6 +458,23 @@ def _should_skip_fallback_question(
         return has_reporting_context and not has_explicit_event_dates
 
     if question == "Кто оплачивает проезд?":
+        if _has_decline_participation_context(normalized_message):
+            has_explicit_travel_cost_context = any(
+                marker in normalized_message
+                for marker in (
+                    "проезд",
+                    "дорог",
+                    "билет",
+                    "чартер",
+                    "доезд",
+                    "добраться",
+                    "оплат",
+                    "стоимост",
+                    "возмещ",
+                )
+            )
+            if not has_explicit_travel_cost_context:
+                return True
         has_travel_context = any(
             marker in normalized_message
             for marker in (
@@ -460,6 +491,29 @@ def _should_skip_fallback_question(
         return category == "гранты" and "расход" in normalized_message and not has_travel_context
 
     if question == "Как подать заявку или зарегистрироваться?":
+        if _has_decline_participation_context(normalized_message):
+            return True
         return "отклон" in normalized_message
 
     return False
+
+
+def _has_decline_participation_context(normalized_message: str) -> bool:
+    return any(
+        marker in normalized_message
+        for marker in (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "отмена заявки",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "подтвердил участие",
+            "подтвердила участие",
+        )
+    )

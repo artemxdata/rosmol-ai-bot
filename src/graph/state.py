@@ -14,6 +14,7 @@ class BotState(TypedDict, total=False):
     user_id_hash: str
     message: str
     message_masked: str
+    contextual_message: str
     routing_hint: dict[str, Any]
     session: Session
     analysis: QueryAnalysis

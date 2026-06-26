@@ -27,7 +27,16 @@ MULTI_ASPECT_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("медицин",),
     ("овз",),
     ("иностран",),
-    ("отказ", "отозвать"),
+    (
+        "отказ",
+        "отозвать",
+        "отменить",
+        "не могу поехать",
+        "не смогу поехать",
+        "не смогу приехать",
+        "подтвердил участие",
+        "подтвердила участие",
+    ),
     ("проживан", "гостиниц", "отел"),
 )
 
@@ -43,7 +52,11 @@ async def retrieve(state: BotState) -> dict:
         "forum_normalized": analysis.forum_normalized,
         "category": analysis.category,
     }
-    message = state.get("message_masked") or state.get("message")
+    message = (
+        state.get("contextual_message")
+        or state.get("message_masked")
+        or state.get("message")
+    )
     base_questions = build_effective_questions(analysis, message)
     allow_strict_forum_stop = len(base_questions) <= 1 and not _has_multi_aspect_message(
         message
