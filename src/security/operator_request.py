@@ -8,6 +8,16 @@ LIVE_PERSON_RE = re.compile(
 )
 
 TARGET_MARKERS = ("оператор", "специалист", "сотрудник", "поддержк")
+EMPLOYMENT_MARKERS = (
+    "ваканс",
+    "работ",
+    "трудоустр",
+    "устроиться",
+    "стать",
+    "побыть",
+    "резюме",
+    "карьер",
+)
 ACTION_MARKERS = (
     "хочу",
     "нужен",
@@ -23,6 +33,8 @@ ACTION_MARKERS = (
     "передайте",
     "позови",
     "позовите",
+    "жду",
+    "ожида",
 )
 
 
@@ -33,5 +45,7 @@ def is_operator_request(text: str) -> bool:
     if LIVE_PERSON_RE.search(normalized):
         return True
     if not any(marker in normalized for marker in TARGET_MARKERS):
+        return False
+    if any(marker in normalized for marker in EMPLOYMENT_MARKERS):
         return False
     return any(marker in normalized for marker in ACTION_MARKERS)

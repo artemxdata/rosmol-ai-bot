@@ -111,6 +111,20 @@ def _fallback_analysis(
     if is_offtopic:
         category = "offtopic"
     complexity = _complexity_from_routing_hint(routing_hint)
+    if _has_feedback_context(masked_message):
+        complexity = Complexity.SIMPLE
+    if _is_exact_fallback_intent_message(masked_message):
+        complexity = Complexity.SIMPLE
+    needs_clarification = is_offtopic or _needs_application_context_clarification(
+        masked_message
+    )
+    clarification_question = (
+        "Уточни, пожалуйста, речь о форуме, мероприятии или грантовом конкурсе?"
+        if needs_clarification and not is_offtopic
+        else None
+    )
+    if needs_clarification:
+        complexity = Complexity.SIMPLE
     if _should_force_simple_support_query(category, masked_message):
         complexity = Complexity.SIMPLE
     should_escalate = _is_operator_request(masked_message)
@@ -122,7 +136,8 @@ def _fallback_analysis(
         "category": category,
         "complexity": complexity.value,
         "questions": [],
-        "needs_clarification": is_offtopic,
+        "needs_clarification": needs_clarification,
+        "clarification_question": clarification_question,
         "is_offtopic": is_offtopic,
         "should_escalate": should_escalate,
         "escalation_reason": "operator_requested" if should_escalate else None,
@@ -178,6 +193,12 @@ def _is_safe_offtopic(message: str) -> bool:
         "переведи",
         "фильм",
         "сериал",
+        "починить телефон",
+        "чинить телефон",
+        "ремонт телефон",
+        "сломался телефон",
+        "починить айфон",
+        "ремонт айфон",
     )
     return any(marker in normalized for marker in offtopic_markers)
 
@@ -194,8 +215,58 @@ def _should_force_simple_support_query(category: str | None, message: str) -> bo
     return True
 
 
+def _is_exact_fallback_intent_message(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е").strip()
+    return normalized.startswith(("технические вопросы.", "рекомендации.")) or any(
+        marker in normalized
+        for marker in (
+            "предложение о сотрудничестве",
+            "предложение сотрудничества",
+            "возможности бота",
+            "abilities",
+            "что такое росмолод",
+            "обратную связь о сотрудн",
+            "обратная связь о сотрудн",
+        )
+    )
+
+
+def _needs_application_context_clarification(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е")
+    if not ("подать" in normalized and "заяв" in normalized and "участ" in normalized):
+        return False
+    return not any(
+        marker in normalized
+        for marker in (
+            "грант",
+            "проект",
+            "форум",
+            "мероприят",
+            "фестивал",
+            "фгаис",
+            "росмолод",
+        )
+    )
+
+
 def _infer_category_from_message(message: str) -> str | None:
     normalized = message.casefold().replace("ё", "е")
+    if _has_staff_feedback_context(normalized):
+        return "навигация"
+    if normalized.startswith("технические вопросы.") or "технические вопросы" in normalized:
+        return "техподдержка"
+    if normalized.startswith("рекомендации.") or "рекомендации" in normalized:
+        return "общее"
+    if any(marker in normalized for marker in ("сотруднич", "партнерств", "партнёрств")):
+        return "общее"
+    if any(marker in normalized for marker in ("возможности бота", "abilities", "что умеешь")):
+        return "общее"
+    if "что такое росмолод" in normalized or "кто такие росмолод" in normalized:
+        return "платформа_фгаис"
+    if _needs_application_context_clarification(normalized):
+        return "форумы"
+    if _has_feedback_context(normalized):
+        return "гранты"
     if "грант" in normalized:
         return "гранты"
     if any(
@@ -224,6 +295,17 @@ def _infer_category_from_message(message: str) -> str | None:
     if any(
         word in normalized
         for word in (
+            "отвяз",
+            "госуслуг",
+            "есиа",
+            "верифицировать другой",
+            "верификац другого",
+            "двойное граждан",
+            "два граждан",
+            "почта физ",
+            "почта юр",
+            "ответственное лицо",
+            "ответственного лица",
             "ошиб",
             "баг",
             "не работает",
@@ -264,6 +346,34 @@ def _infer_category_from_message(message: str) -> str | None:
     if any(word in normalized for word in ("форум", "мероприят", "фестивал")):
         return "форумы"
     return None
+
+
+def _has_staff_feedback_context(message: str) -> bool:
+    normalized = str(message or "").casefold().replace("ё", "е")
+    return "обратн" in normalized and any(
+        marker in normalized for marker in ("сотрудн", "специалист", "оператор")
+    )
+
+
+def _has_feedback_context(message: str) -> bool:
+    normalized = str(message or "").casefold().replace("ё", "е")
+    if "обратн" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "заявк",
+            "проект",
+            "грант",
+            "эксперт",
+            "оценк",
+            "куратор",
+            "балл",
+            "остав",
+            "поделит",
+            "впечатл",
+        )
+    )
 
 
 def _complexity_from_routing_hint(routing_hint: object) -> Complexity:

@@ -40,3 +40,12 @@ def test_does_not_mask_support_role_phrase_as_person_name() -> None:
 
     assert masked == "Сопровождающее лицо на форуме"
     assert "name" not in mapping
+
+
+def test_does_not_mask_forum_intent_phrase_as_person_name() -> None:
+    masker = PIIMasker()
+
+    masked, mapping = masker.mask("Иволга письмо-вызов")
+
+    assert masked == "Иволга письмо-вызов"
+    assert "name" not in mapping

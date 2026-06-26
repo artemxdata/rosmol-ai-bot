@@ -13,6 +13,7 @@ class GateConfig:
     min_recall_at_5: float = 0.85
     min_ask_pass_rate: float = 0.9
     min_expected_chunk_hit_rate: float = 0.85
+    min_behavior_match_rate: float = 0.95
     min_http_success_rate: float = 0.99
     min_trace_coverage_rate: float = 0.95
     max_low_confidence_hit_rate: float = 0.1
@@ -69,8 +70,12 @@ def build_quality_gate_report(
                     config.min_ask_pass_rate,
                 ),
                 _min_check(
-                    "ask_expected_chunk_hit_rate",
-                    ask_metrics.get("expected_chunk_hit_rate"),
+                    "ask_expected_or_equivalent_chunk_hit_rate",
+                    _preferred_rate(
+                        ask_metrics,
+                        "expected_or_equivalent_chunk_hit_rate",
+                        "expected_chunk_hit_rate",
+                    ),
                     config.min_expected_chunk_hit_rate,
                 ),
                 _min_check(
@@ -90,6 +95,14 @@ def build_quality_gate_report(
                 ),
             ]
         )
+        if ask_metrics.get("behavior_match_rate") is not None:
+            checks.append(
+                _min_check(
+                    "ask_behavior_match_rate",
+                    ask_metrics.get("behavior_match_rate"),
+                    config.min_behavior_match_rate,
+                )
+            )
         if config.max_latency_p95_ms is not None:
             checks.append(
                 _max_check(
@@ -138,8 +151,12 @@ def build_quality_gate_report(
                     config.min_forum_pass_rate,
                 ),
                 _min_check(
-                    "forum_smoke_expected_chunk_hit_rate",
-                    forum_metrics.get("expected_chunk_hit_rate"),
+                    "forum_smoke_expected_or_equivalent_chunk_hit_rate",
+                    _preferred_rate(
+                        forum_metrics,
+                        "expected_or_equivalent_chunk_hit_rate",
+                        "expected_chunk_hit_rate",
+                    ),
                     config.min_forum_expected_chunk_hit_rate,
                 ),
                 _max_check(
@@ -264,6 +281,11 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _preferred_rate(payload: dict[str, Any], preferred: str, fallback: str) -> Any:
+    value = payload.get(preferred)
+    return payload.get(fallback) if value is None else value
+
+
 def _int_or_none(value: Any) -> int | None:
     if value is None:
         return None
@@ -319,6 +341,7 @@ def main() -> None:
     parser.add_argument("--min-recall-at-5", type=float, default=0.85)
     parser.add_argument("--min-ask-pass-rate", type=float, default=0.9)
     parser.add_argument("--min-expected-chunk-hit-rate", type=float, default=0.85)
+    parser.add_argument("--min-behavior-match-rate", type=float, default=0.95)
     parser.add_argument("--min-http-success-rate", type=float, default=0.99)
     parser.add_argument("--min-trace-coverage-rate", type=float, default=0.95)
     parser.add_argument("--max-low-confidence-hit-rate", type=float, default=0.1)
@@ -338,6 +361,7 @@ def main() -> None:
         min_recall_at_5=args.min_recall_at_5,
         min_ask_pass_rate=args.min_ask_pass_rate,
         min_expected_chunk_hit_rate=args.min_expected_chunk_hit_rate,
+        min_behavior_match_rate=args.min_behavior_match_rate,
         min_http_success_rate=args.min_http_success_rate,
         min_trace_coverage_rate=args.min_trace_coverage_rate,
         max_low_confidence_hit_rate=args.max_low_confidence_hit_rate,

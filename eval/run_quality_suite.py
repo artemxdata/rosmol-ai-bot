@@ -173,6 +173,8 @@ async def run_quality_suite(
                 "cases_total",
                 "pass_rate",
                 "expected_chunk_hit_rate",
+                "expected_or_equivalent_chunk_hit_rate",
+                "behavior_match_rate",
                 "low_confidence_expected_chunk_hit_rate",
                 "llm_estimated_cost_rub",
                 "llm_budget_rub",
@@ -264,7 +266,8 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         (
             f"| Ask | {summary['ask'].get('cases_total')} | "
             f"pass `{_format_rate(summary['ask'].get('pass_rate'))}` | "
-            f"chunk hit `{_format_rate(summary['ask'].get('expected_chunk_hit_rate'))}` |"
+            "chunk hit "
+            f"`{_format_rate(_ask_chunk_hit_rate(summary))}` |"
         ),
         (
             f"| Generation | {summary['generation'].get('cases_total')} | "
@@ -292,6 +295,19 @@ def _format_rate(value: Any) -> str:
     return f"{float(value) * 100:.1f}%"
 
 
+def _ask_chunk_hit_rate(summary: dict[str, Any]) -> Any:
+    return _preferred_rate(
+        summary["ask"],
+        "expected_or_equivalent_chunk_hit_rate",
+        "expected_chunk_hit_rate",
+    )
+
+
+def _preferred_rate(payload: dict[str, Any], preferred: str, fallback: str) -> Any:
+    value = payload.get(preferred)
+    return payload.get(fallback) if value is None else value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="reports/quality_suite")
@@ -317,6 +333,7 @@ def main() -> None:
     parser.add_argument("--min-recall-at-5", type=float, default=0.85)
     parser.add_argument("--min-ask-pass-rate", type=float, default=0.9)
     parser.add_argument("--min-expected-chunk-hit-rate", type=float, default=0.85)
+    parser.add_argument("--min-behavior-match-rate", type=float, default=0.95)
     parser.add_argument("--min-http-success-rate", type=float, default=0.99)
     parser.add_argument("--min-trace-coverage-rate", type=float, default=0.95)
     parser.add_argument("--max-low-confidence-hit-rate", type=float, default=0.1)
@@ -337,6 +354,7 @@ def main() -> None:
         min_recall_at_5=args.min_recall_at_5,
         min_ask_pass_rate=args.min_ask_pass_rate,
         min_expected_chunk_hit_rate=args.min_expected_chunk_hit_rate,
+        min_behavior_match_rate=args.min_behavior_match_rate,
         min_http_success_rate=args.min_http_success_rate,
         min_trace_coverage_rate=args.min_trace_coverage_rate,
         max_low_confidence_hit_rate=args.max_low_confidence_hit_rate,

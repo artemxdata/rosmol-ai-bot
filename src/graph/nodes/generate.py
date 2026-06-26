@@ -4,6 +4,7 @@ import re
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
@@ -98,6 +99,48 @@ async def generate(state: BotState) -> dict:
                 source_chunks=llm_source_chunks,
                 started_at=started_at,
             )
+        source_chunks = select_deterministic_source_chunks(
+            analysis,
+            questions,
+            chunks,
+            max_confidence,
+            state.get("message_masked") or state.get("message"),
+        )
+        if source_chunks and _should_use_extractive_multi_source_answer(analysis, source_chunks):
+            source_response = build_deterministic_source_response(source_chunks)
+            if source_response:
+                if tracer:
+                    tracer.add(
+                        "generate",
+                        int((perf_counter() - started_at) * 1000),
+                        mode="complex_deterministic_source_chunk",
+                        chunks=len(source_chunks),
+                    )
+                return {
+                    "generated_response": source_response,
+                    "generator_model": "source_chunk",
+                    "cited_sources": [chunk.chunk_id for chunk in source_chunks],
+                }
+        single_official_source = _trusted_single_official_source(
+            chunks,
+            getattr(get_settings(), "reranker_threshold_high", 0.7),
+            analysis=analysis,
+        )
+        if single_official_source is not None:
+            source_response = build_deterministic_source_response(single_official_source)
+            if source_response:
+                if tracer:
+                    tracer.add(
+                        "generate",
+                        int((perf_counter() - started_at) * 1000),
+                        mode="complex_single_official_source_chunk",
+                        chunks=1,
+                    )
+                return {
+                    "generated_response": source_response,
+                    "generator_model": "source_chunk",
+                    "cited_sources": [single_official_source.chunk_id],
+                }
         if tracer:
             tracer.add(
                 "generate",
@@ -235,6 +278,8 @@ def _should_use_extractive_multi_source_answer(
     analysis: QueryAnalysis,
     source_chunks: list[ScoredChunk],
 ) -> bool:
+    if len(source_chunks) == 1:
+        return _source_type_rank(source_chunks[0]) == 0
     if analysis.category != "\u0444\u043e\u0440\u0443\u043c\u044b":
         return False
     if len(source_chunks) < 2:
@@ -264,7 +309,10 @@ def _select_llm_source_chunks(
                 chunk
                 for chunk in ranked
                 if _source_chunk_covers_question(question, chunk)
-                and _has_textual_source_overlap(question, chunk)
+                and (
+                    _metadata_matches_specific_question(analysis, question, chunk)
+                    or _has_textual_source_overlap(question, chunk)
+                )
             ),
             None,
         )
@@ -319,6 +367,19 @@ def select_deterministic_source_chunks(
     selected: list[ScoredChunk] = []
     selected_ids: set[str] = set()
     original_question = _original_question(analysis, message)
+    if original_question is None and len(questions) == 1:
+        original_question = questions[0]
+    if _is_specific_technical_question(original_question) or _is_feedback_question(
+        original_question
+    ):
+        specific_raw_source = _specific_source_for_original_question(
+            original_question,
+            chunks,
+            analysis=analysis,
+        )
+        if specific_raw_source is not None:
+            return [specific_raw_source]
+
     exact_raw_source = _exact_source_for_original_question(
         original_question,
         chunks,
@@ -446,8 +507,7 @@ def _candidate_source_chunks(
         unscoped_grant_chunks = [
             chunk
             for chunk in chunks
-            if (chunk.metadata or {}).get("category") == "гранты"
-            and not str((chunk.metadata or {}).get("forum_normalized") or "").strip()
+            if _is_unscoped_grant_chunk(chunk)
         ]
         return [*unscoped_grant_chunks, *chunks]
 
@@ -556,27 +616,72 @@ def _source_candidate_priority(
     analysis: QueryAnalysis,
     question: Question,
     chunk: ScoredChunk,
-) -> tuple[float, int, float, int, int, float]:
+) -> tuple[float, int, int, float, int, int, float]:
+    if (
+        _is_specific_technical_question(question) or _is_feedback_question(question)
+    ) and _metadata_matches_specific_question(analysis, question, chunk):
+        field_score = _source_metadata_field_score(question, chunk)
+        source_rank = _source_type_rank(chunk)
+        generic_rank = 1 if _is_generic_chunk(chunk) else 0
+        unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
+        grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
+        confidence = float(chunk.reranker_score or chunk.score or 0)
+        return (
+            0,
+            unscoped_grant_rank,
+            grant_source_category_rank,
+            -field_score,
+            source_rank,
+            generic_rank,
+            -confidence,
+        )
+
     intent_score = _adjusted_intent_example_match_score(question, chunk)
     field_score = _source_metadata_field_score(question, chunk)
     source_rank = _source_type_rank(chunk)
     generic_rank = 1 if _is_generic_chunk(chunk) else 0
     unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
+    grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
     confidence = float(chunk.reranker_score or chunk.score or 0)
     if intent_score:
         return (
             0,
             unscoped_grant_rank,
+            grant_source_category_rank,
             -float(intent_score * 100) - field_score,
             source_rank,
             generic_rank,
             -confidence,
         )
     if _metadata_matches_specific_question(analysis, question, chunk):
-        return (1, unscoped_grant_rank, -field_score, source_rank, generic_rank, -confidence)
+        return (
+            1,
+            unscoped_grant_rank,
+            grant_source_category_rank,
+            -field_score,
+            source_rank,
+            generic_rank,
+            -confidence,
+        )
     if field_score > 0:
-        return (2, unscoped_grant_rank, -field_score, source_rank, generic_rank, -confidence)
-    return (3, unscoped_grant_rank, 0, source_rank, generic_rank, -confidence)
+        return (
+            2,
+            unscoped_grant_rank,
+            grant_source_category_rank,
+            -field_score,
+            source_rank,
+            generic_rank,
+            -confidence,
+        )
+    return (
+        3,
+        unscoped_grant_rank,
+        grant_source_category_rank,
+        0,
+        source_rank,
+        generic_rank,
+        -confidence,
+    )
 
 
 def _original_question(analysis: QueryAnalysis, message: str | None) -> Question | None:
@@ -587,6 +692,23 @@ def _original_question(analysis: QueryAnalysis, message: str | None) -> Question
         text=text,
         category=analysis.category,
         forum_normalized=analysis.forum_normalized,
+    )
+
+
+def _is_specific_technical_question(question: Question | None) -> bool:
+    if question is None:
+        return False
+    return _asks_specific_technical_question(_normalize(question.text))
+
+
+def _is_feedback_question(question: Question | None) -> bool:
+    if question is None:
+        return False
+    normalized = _normalize(question.text)
+    return (
+        _asks_staff_feedback(normalized)
+        or _asks_expert_feedback(normalized)
+        or _asks_leave_feedback(normalized)
     )
 
 
@@ -707,11 +829,34 @@ def _trusted_top_official_source(
         return None
     if analysis and not _chunk_matches_analysis_scope(top_chunk, analysis):
         return None
+    if analysis and _should_prefer_unscoped_grant_source(analysis):
+        source_category = _normalize(str(metadata.get("source_category") or ""))
+        if "грант" not in source_category:
+            return None
     if float(top_chunk.reranker_score or 0) < threshold:
         return None
     if float(top_chunk.score or 0) < 0.95:
         return None
     return top_chunk
+
+
+def _trusted_single_official_source(
+    chunks: list[ScoredChunk],
+    threshold: float,
+    *,
+    analysis: QueryAnalysis,
+) -> ScoredChunk | None:
+    if len(chunks) != 1:
+        return None
+    chunk = chunks[0]
+    metadata = chunk.metadata or {}
+    if metadata.get("source_type") not in {"xlsx", "docx"}:
+        return None
+    if not _chunk_matches_analysis_scope(chunk, analysis):
+        return None
+    if float(chunk.reranker_score or 0) < threshold:
+        return None
+    return chunk
 
 
 def _chunk_matches_analysis_scope(chunk: ScoredChunk, analysis: QueryAnalysis) -> bool:
@@ -834,6 +979,21 @@ def _metadata_matches_specific_question(
     metadata_haystack = _metadata_haystack(chunk)
     question_normalized = _normalize(question.text)
 
+    if _asks_staff_feedback(question_normalized):
+        return "ostavit_obratnuyu_svyaz_o_sotrudn" in metadata_haystack
+
+    if _asks_leave_feedback(question_normalized):
+        return (
+            "ostavit_obratnuyu_svyaz_o" in metadata_haystack
+            and "sotrudn" not in metadata_haystack
+        )
+
+    if _asks_expert_feedback(question_normalized):
+        return "zapros_obratnoy_svyazi_kuratora" in metadata_haystack
+
+    if _asks_password_recovery(question_normalized):
+        return "vosstanovit_parol" in metadata_haystack
+
     if analysis.category == "платформа_фгаис":
         if _asks_registration(question_normalized):
             return (
@@ -855,13 +1015,6 @@ def _metadata_matches_specific_question(
     if _asks_contact_operator(question_normalized):
         return "контакты_и_оператор" in metadata_haystack
 
-    if _asks_access_or_technical_error(question_normalized):
-        return (
-            "доступ_и_техническая_ошибка" in metadata_haystack
-            or "tehnicheskaya_oshibka" in metadata_haystack
-            or "техническая ошибка" in metadata_haystack
-        )
-
     if _asks_language_settings(question_normalized):
         return "yazyki" in metadata_haystack or "язык" in metadata_haystack
 
@@ -880,6 +1033,19 @@ def _metadata_matches_specific_question(
     if _asks_responsible_person_change(question_normalized):
         return "kak_smenit_otvetstvennoe_lico" in metadata_haystack
 
+    if _asks_municipal_admin_access(question_normalized):
+        return "dostup_municipalnogo_administratora" in metadata_haystack
+
+    if _asks_specific_technical_question(question_normalized):
+        return False
+
+    if _asks_access_or_technical_error(question_normalized):
+        return (
+            "доступ_и_техническая_ошибка" in metadata_haystack
+            or "tehnicheskaya_oshibka" in metadata_haystack
+            or "техническая ошибка" in metadata_haystack
+        )
+
     if _asks_transfer(question_normalized):
         return "transfer" in metadata_haystack or "трансфер" in metadata_haystack
 
@@ -887,6 +1053,18 @@ def _metadata_matches_specific_question(
         return (
             "vremya_zaezda_i_vyezda" in metadata_haystack
             or ("заезд" in metadata_haystack and "выезд" in metadata_haystack)
+        )
+
+    if _asks_invitation_letter(question_normalized):
+        return "pismo_vyzov" in metadata_haystack or "письмо-вызов" in metadata_haystack
+
+    if _asks_documents_or_packing(question_normalized):
+        return (
+            "pamyatka_uchastnika_foruma" in metadata_haystack
+            or "документ" in metadata_haystack
+            or "паспорт" in metadata_haystack
+            or "справк" in metadata_haystack
+            or "вещ" in metadata_haystack
         )
 
     if _asks_event_dates(question_normalized):
@@ -912,10 +1090,52 @@ def _metadata_matches_specific_question(
             or "вернуть грантовые средства" in _normalize(chunk.text)
         )
 
+    if analysis.category == "гранты" and _asks_grant_project_change(question_normalized):
+        text_haystack = _normalize(chunk.text)
+        return (
+            "vnesti_izmeneniya_v_proekt" in metadata_haystack
+            or "внести изменения в проект" in metadata_haystack
+            or "изменить смету" in text_haystack
+        )
+
+    if analysis.category == "гранты" and _asks_grant_application(question_normalized):
+        return (
+            "podat_zayavku_na_uchastie" in metadata_haystack
+            and "грант" in metadata_haystack
+        )
+
     if _asks_what_is_rosmol(question_normalized):
         return (
             "chto_takoe_rosmolodezh" in metadata_haystack
             or "что такое росмолодежь" in metadata_haystack
+        )
+
+    if _asks_cooperation(question_normalized):
+        return (
+            "predlozhenie_sotrudnichestva" in metadata_haystack
+            or "сотруднич" in metadata_haystack
+            or "партнер" in metadata_haystack
+            or "партнёр" in metadata_haystack
+        )
+
+    if _asks_bot_abilities(question_normalized):
+        return (
+            "vozmozhnosti_bota_abilities" in metadata_haystack
+            or "возможности бота" in metadata_haystack
+            or "abilities" in metadata_haystack
+        )
+
+    if _asks_student_recommendation(question_normalized):
+        return (
+            "rekomendacii_studenty" in metadata_haystack
+            or "рекомендации.студенты" in metadata_haystack
+        )
+
+    if _asks_sport_recommendation(question_normalized):
+        return (
+            "rekomendacii_sport" in metadata_haystack
+            or "физическая культура" in metadata_haystack
+            or "спорт" in metadata_haystack
         )
 
     if _asks_farewell(question_normalized):
@@ -944,8 +1164,31 @@ def _should_prefer_unscoped_grant_source(analysis: QueryAnalysis) -> bool:
 def _unscoped_grant_rank(analysis: QueryAnalysis, chunk: ScoredChunk) -> int:
     if not _should_prefer_unscoped_grant_source(analysis):
         return 0
-    forum = str((chunk.metadata or {}).get("forum_normalized") or "").strip()
-    return 1 if forum else 0
+    return 0 if _is_unscoped_grant_chunk(chunk) else 1
+
+
+def _is_unscoped_grant_chunk(chunk: ScoredChunk) -> bool:
+    metadata = chunk.metadata or {}
+    if metadata.get("category") != "гранты":
+        return False
+    if str(metadata.get("forum_normalized") or "").strip():
+        return False
+    source_category = _normalize(str(metadata.get("source_category") or ""))
+    return not source_category or "грант" in source_category
+
+
+def _grant_source_category_rank(
+    analysis: QueryAnalysis,
+    question: Question,
+    chunk: ScoredChunk,
+) -> int:
+    if analysis.category != "гранты":
+        return 0
+    question_normalized = _normalize(question.text)
+    if "грант" not in question_normalized:
+        return 0
+    source_category = _normalize(str((chunk.metadata or {}).get("source_category") or ""))
+    return 0 if "грант" in source_category else 1
 
 
 def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> bool:
@@ -1043,6 +1286,79 @@ def _asks_grant_return(question_normalized: str) -> bool:
     )
 
 
+def _asks_grant_project_change(question_normalized: str) -> bool:
+    if "грант" not in question_normalized and "проект" not in question_normalized:
+        return False
+    return any(
+        marker in question_normalized
+        for marker in (
+            "внести измен",
+            "изменить проект",
+            "изменить смет",
+            "поменять смет",
+            "скорректировать проект",
+            "редактировать проект",
+        )
+    )
+
+
+def _asks_grant_application(question_normalized: str) -> bool:
+    return "грант" in question_normalized and any(
+        marker in question_normalized
+        for marker in (
+            "подать заяв",
+            "подача заяв",
+            "заявку на участие",
+            "участие в грант",
+        )
+    )
+
+
+def _asks_password_recovery(question_normalized: str) -> bool:
+    return "парол" in question_normalized and any(
+        marker in question_normalized for marker in ("восстанов", "забыл", "сброс")
+    )
+
+
+def _asks_expert_feedback(question_normalized: str) -> bool:
+    if "обратн" not in question_normalized:
+        return False
+    explicit_expert_markers = (
+        "эксперт",
+        "оценк",
+        "балл",
+        "разбаллов",
+        "куратор",
+        "заявк",
+        "проект",
+    )
+    if any(
+        marker in question_normalized for marker in ("остав", "поделит", "впечатл", "отзыв")
+    ) and not any(marker in question_normalized for marker in explicit_expert_markers):
+        return False
+    return any(
+        marker in question_normalized
+        for marker in (*explicit_expert_markers, "грант")
+    )
+
+
+def _asks_staff_feedback(question_normalized: str) -> bool:
+    return "обратн" in question_normalized and any(
+        marker in question_normalized for marker in ("сотрудн", "специалист", "оператор")
+    )
+
+
+def _asks_leave_feedback(question_normalized: str) -> bool:
+    if _asks_staff_feedback(question_normalized):
+        return False
+    if _asks_expert_feedback(question_normalized):
+        return False
+    return "обратн" in question_normalized and any(
+        marker in question_normalized
+        for marker in ("остав", "поделит", "впечатл", "отзыв")
+    )
+
+
 def _asks_what_is_rosmol(question_normalized: str) -> bool:
     return any(
         marker in question_normalized
@@ -1050,6 +1366,26 @@ def _asks_what_is_rosmol(question_normalized: str) -> bool:
             "что такое росмолод",
             "кто такие росмолод",
             "чем занимается росмолод",
+        )
+    )
+
+
+def _asks_cooperation(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("сотруднич", "партнерств", "партнёрств", "партнер", "партнёр")
+    )
+
+
+def _asks_bot_abilities(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in (
+            "возможности бота",
+            "abilities",
+            "что умеешь",
+            "что ты умеешь",
+            "чем можешь помочь",
         )
     )
 
@@ -1065,6 +1401,24 @@ def _asks_recommendation(question_normalized: str) -> bool:
     return any(
         marker in question_normalized
         for marker in ("рекоменд", "посовет", "подбери", "подойдет", "подойдёт")
+    )
+
+
+def _asks_sport_recommendation(question_normalized: str) -> bool:
+    return _asks_recommendation(question_normalized) and any(
+        marker in question_normalized for marker in ("спорт", "физкультур", "физическая")
+    )
+
+
+def _asks_student_recommendation(question_normalized: str) -> bool:
+    return _asks_recommendation(question_normalized) and any(
+        marker in question_normalized for marker in ("студент", "студенч")
+    )
+
+
+def _asks_municipal_admin_access(question_normalized: str) -> bool:
+    return any(marker in question_normalized for marker in ("муниципаль", "мо ")) and any(
+        marker in question_normalized for marker in ("администратор", "админ")
     )
 
 
@@ -1132,6 +1486,19 @@ def _asks_arrival_departure(question_normalized: str) -> bool:
     )
 
 
+def _asks_invitation_letter(question_normalized: str) -> bool:
+    return "письмо" in question_normalized and any(
+        marker in question_normalized
+        for marker in (
+            "вызов",
+            "на регион",
+            "в регион",
+            "для региона",
+            "подтверждение участия",
+        )
+    )
+
+
 def _asks_event_dates(question_normalized: str) -> bool:
     if _asks_arrival_departure(question_normalized):
         return False
@@ -1150,6 +1517,23 @@ def _asks_event_dates(question_normalized: str) -> bool:
             "когда начинается",
             "когда начнется",
             "когда начнётся",
+        )
+    )
+
+
+def _asks_documents_or_packing(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in (
+            "документ",
+            "паспорт",
+            "справк",
+            "памятк",
+            "что взять",
+            "взять с собой",
+            "вещ",
+            "одежд",
+            "список необходим",
         )
     )
 
@@ -1181,6 +1565,20 @@ def _asks_dual_citizenship(question_normalized: str) -> bool:
 def _asks_responsible_person_change(question_normalized: str) -> bool:
     return "ответствен" in question_normalized and any(
         marker in question_normalized for marker in ("смен", "измен", "помен")
+    )
+
+
+def _asks_specific_technical_question(question_normalized: str) -> bool:
+    return any(
+        (
+            _asks_language_settings(question_normalized),
+            _asks_unlink_gosuslugi(question_normalized),
+            _asks_verify_other_account(question_normalized),
+            _asks_same_email_for_person_and_org(question_normalized),
+            _asks_dual_citizenship(question_normalized),
+            _asks_responsible_person_change(question_normalized),
+            _asks_password_recovery(question_normalized),
+        )
     )
 
 
@@ -1216,7 +1614,7 @@ def _source_coverage_haystack(chunk: ScoredChunk) -> str:
 
 
 def _normalize(text: str) -> str:
-    return text.casefold().replace("ё", "е")
+    return expand_query_aliases(text).casefold().replace("ё", "е")
 
 
 def _tokens(text: str) -> set[str]:

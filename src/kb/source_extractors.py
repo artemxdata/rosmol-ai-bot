@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import html
 import re
 import unicodedata
@@ -413,6 +414,7 @@ def base_record(
 
 
 def clean_bot_text(value: str) -> str:
+    value = _render_known_random_template(value)
     text = html.unescape(value)
     text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
     text = re.sub(r"<[^>]+>", "", text)
@@ -422,7 +424,24 @@ def clean_bot_text(value: str) -> str:
     return _strip_export_quote_artifact(cleaned)
 
 
+def _render_known_random_template(value: str) -> str:
+    match = re.fullmatch(r"\s*\{\{\s*(\[[^\]]+\])\s*\|\s*random\s*\}\}\s*", value)
+    if not match:
+        return value
+    try:
+        options = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return value
+    if not isinstance(options, list) or not options:
+        return value
+    first = options[0]
+    return str(first) if isinstance(first, str) and first.strip() else value
+
+
 def infer_category(source_category: str, intent: str, text: str, sheet_name: str) -> str:
+    source_category_normalized = source_category.casefold()
+    intent_normalized = intent.casefold()
+    text_normalized = text.casefold()
     haystack = f"{source_category} {intent} {text}".casefold()
     if sheet_name == "FALLBACK":
         if any(word in haystack for word in ("техничес", "ошиб", "кэш", "браузер")):
@@ -432,10 +451,12 @@ def infer_category(source_category: str, intent: str, text: str, sheet_name: str
         if any(word in haystack for word in ("оператор", "привет", "прощан", "благодар")):
             return "навигация"
         return "общее"
-    if "грант" in haystack:
+    if "грант" in source_category_normalized or "грант" in intent_normalized:
         return "гранты"
     if source_category:
         return "форумы"
+    if "грант" in text_normalized:
+        return "гранты"
     return "общее"
 
 
@@ -447,7 +468,30 @@ def infer_forum(
 ) -> str | None:
     if "грант" in source_category.casefold():
         return None
+    source_category_match = _match_forum_alias(source_category, registry)
+    if source_category_match:
+        return source_category_match
+
     haystack = _normalize_for_match(f"{source_category} {intent} {text}")
+    for alias, normalized in _registry_forum_aliases(registry):
+        if "грант" in alias:
+            continue
+        if alias and alias in haystack:
+            return normalized
+    return None
+
+
+def _match_forum_alias(value: str, registry: list[dict[str, Any]]) -> str | None:
+    normalized_value = _normalize_for_match(value)
+    if not normalized_value:
+        return None
+    for alias, normalized in _registry_forum_aliases(registry):
+        if alias == normalized_value:
+            return normalized
+    return None
+
+
+def _registry_forum_aliases(registry: list[dict[str, Any]]) -> list[tuple[str, str]]:
     aliases: list[tuple[str, str]] = []
     for event in registry:
         normalized = str(event["normalized"])
@@ -455,10 +499,7 @@ def infer_forum(
         aliases.append((_normalize_for_match(str(event.get("name", normalized))), normalized))
         for alias in event.get("aliases", []):
             aliases.append((_normalize_for_match(str(alias)), normalized))
-    for alias, normalized in sorted(aliases, key=lambda item: len(item[0]), reverse=True):
-        if alias and alias in haystack:
-            return normalized
-    return None
+    return sorted(aliases, key=lambda item: len(item[0]), reverse=True)
 
 
 def infer_docx_forum(file_name: str) -> str | None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from time import perf_counter
 
+from src.config import get_settings
+from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import build_effective_questions
 from src.graph.state import BotState
 from src.models import Question
@@ -13,6 +15,21 @@ KEYWORD_RECALL_TOP_K = 6
 KEYWORD_RECALL_SCAN_LIMIT = 2048
 OFFICIAL_KEYWORD_SOURCE_TYPES = ("xlsx", "docx")
 FALLBACK_KEYWORD_SOURCE_TYPES = ("ticket_answer_bank",)
+MULTI_ASPECT_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("документ", "паспорт", "справк"),
+    ("трансфер", "автобус", "шаттл"),
+    ("проезд", "оплат", "дорог", "билет"),
+    ("письмо-вызов", "письмо вызов", "приглашен"),
+    ("место проведения",),
+    ("дресс", "одежд"),
+    ("магазин",),
+    ("памятк",),
+    ("медицин",),
+    ("овз",),
+    ("иностран",),
+    ("отказ", "отозвать"),
+    ("проживан", "гостиниц", "отел"),
+)
 
 
 async def retrieve(state: BotState) -> dict:
@@ -27,9 +44,13 @@ async def retrieve(state: BotState) -> dict:
         "category": analysis.category,
     }
     message = state.get("message_masked") or state.get("message")
+    base_questions = build_effective_questions(analysis, message)
+    allow_strict_forum_stop = len(base_questions) <= 1 and not _has_multi_aspect_message(
+        message
+    )
     questions = _questions_with_original_message(
         analysis,
-        build_effective_questions(analysis, message),
+        base_questions,
         message,
     )
 
@@ -44,11 +65,12 @@ async def retrieve(state: BotState) -> dict:
         }
         try:
             found = []
+            retrieval_query = expand_query_aliases(question.text)
             for attempt_index, candidate_filters in enumerate(_filter_attempts(question_filters)):
                 used_filters.append(candidate_filters)
                 top_k = _top_k_for_attempt(candidate_filters, attempt_index)
                 attempt_chunks = await state["retriever"].retrieve(
-                    question.text,
+                    retrieval_query,
                     candidate_filters,
                     top_k=top_k,
                 )
@@ -56,14 +78,19 @@ async def retrieve(state: BotState) -> dict:
                 found.extend(
                     await _keyword_recall_candidates(
                         state["retriever"],
-                        question.text,
+                        retrieval_query,
                         candidate_filters,
                         attempt_index=attempt_index,
                         tracer=tracer,
                         started_at=started_at,
                     )
                 )
-                if attempt_chunks and not _should_continue_filter_attempts(attempt_index):
+                if attempt_chunks and not _should_continue_filter_attempts(
+                    attempt_index,
+                    candidate_filters,
+                    attempt_chunks,
+                    allow_strict_forum_stop=allow_strict_forum_stop,
+                ):
                     break
             chunks.extend(found)
         except MLDependencyError as exc:
@@ -116,10 +143,36 @@ def _filter_attempts(filters: dict) -> list[dict]:
     return _dedupe_filters(attempts)
 
 
-def _should_continue_filter_attempts(attempt_index: int) -> bool:
-    # Atypical ticket phrasing often needs the fully broad fallback even when
-    # a scoped attempt found plausible but generic chunks.
+def _should_continue_filter_attempts(
+    attempt_index: int,
+    filters: dict,
+    attempt_chunks: list,
+    *,
+    allow_strict_forum_stop: bool,
+) -> bool:
+    if (
+        allow_strict_forum_stop
+        and attempt_index == 0
+        and filters.get("forum_normalized")
+        and filters.get("category")
+        and len(attempt_chunks) >= get_settings().retrieval_strict_forum_stop_min_chunks
+    ):
+        return False
     return True
+
+
+def _has_multi_aspect_message(message: str | None) -> bool:
+    normalized = _normalize_question_text(str(message or ""))
+    if not normalized:
+        return False
+
+    matched_groups = 0
+    for markers in MULTI_ASPECT_MARKER_GROUPS:
+        if any(marker in normalized for marker in markers):
+            matched_groups += 1
+            if matched_groups > 1:
+                return True
+    return False
 
 
 def _top_k_for_attempt(filters: dict, attempt_index: int) -> int:

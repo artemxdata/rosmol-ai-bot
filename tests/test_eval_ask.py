@@ -38,10 +38,11 @@ def test_normalize_case_accepts_common_fields() -> None:
         "expected_chunk_ids": ["chunk_1"],
         "expected_cited_chunk_ids": [],
         "equivalent_chunk_ids": {},
-        "expected_answer_contains": ["оплачивает самостоятельно"],
-        "expected_escalated": False,
-        "expected_escalation_reason": None,
-        "expected_generator_model": "source_chunk",
+            "expected_answer_contains": ["оплачивает самостоятельно"],
+            "expected_behavior": None,
+            "expected_escalated": False,
+            "expected_escalation_reason": None,
+            "expected_generator_model": "source_chunk",
         "tags": ["travel"],
     }
 
@@ -73,6 +74,7 @@ def test_build_seed_ask_cases_uses_intent_examples() -> None:
             "channel": "api",
             "expected_chunk_ids": ["travel"],
             "expected_answer_contains": [],
+            "expected_behavior": "answer",
             "expected_escalated": None,
             "expected_escalation_reason": None,
             "expected_generator_model": None,
@@ -131,6 +133,158 @@ def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:
     assert result["escalation_match"] is True
     assert result["generator_model_match"] is True
     assert result["passed"] is True
+
+
+def test_normalize_case_accepts_expected_behavior_aliases() -> None:
+    case = _normalize_case(
+        {
+            "id": "scope",
+            "query": "Какая погода завтра?",
+            "expected_response_type": "offtopic",
+        }
+    )
+
+    assert case["expected_behavior"] == "scope_note"
+
+
+def test_normalize_case_infers_scope_note_from_seed_topic() -> None:
+    case = _normalize_case(
+        {
+            "id": "seed_balanced::xlsx_fallback_r0022_offtop_ne_po_rosmolodezhi",
+            "query": "как починить телефон",
+            "expected_chunk_ids": ["xlsx_fallback_r0022_offtop_ne_po_rosmolodezhi"],
+            "expected_cited_chunk_ids": ["xlsx_fallback_r0022_offtop_ne_po_rosmolodezhi"],
+            "tags": ["seed_balanced", "topic:offtop_ne_po_rosmolodezhi"],
+        }
+    )
+
+    assert case["expected_behavior"] == "scope_note"
+    assert case["expected_chunk_ids"] == []
+    assert case["expected_cited_chunk_ids"] == []
+
+
+def test_normalize_case_infers_escalation_from_seed_topic() -> None:
+    case = _normalize_case(
+        {
+            "id": "seed_balanced::xlsx_fallback_r0017_pereklyuchit_na_operatora",
+            "query": "Жду ответ оператора",
+            "expected_chunk_ids": ["xlsx_fallback_r0017_pereklyuchit_na_operatora"],
+            "expected_cited_chunk_ids": ["xlsx_fallback_r0017_pereklyuchit_na_operatora"],
+            "tags": ["seed_balanced", "topic:pereklyuchit_na_operatora"],
+        }
+    )
+
+    assert case["expected_behavior"] == "escalate"
+    assert case["expected_chunk_ids"] == []
+    assert case["expected_cited_chunk_ids"] == []
+
+
+def test_normalize_case_infers_clarify_for_generic_application_query() -> None:
+    case = _normalize_case(
+        {
+            "id": "seed_balanced::xlsx_category_r0007_podat_zayavku_na_uchastie",
+            "query": "Подать заявку на участие",
+            "expected_chunk_ids": ["xlsx_category_r0007_podat_zayavku_na_uchastie"],
+            "expected_cited_chunk_ids": ["xlsx_category_r0007_podat_zayavku_na_uchastie"],
+        }
+    )
+
+    assert case["expected_behavior"] == "clarify"
+    assert case["expected_chunk_ids"] == []
+    assert case["expected_cited_chunk_ids"] == []
+
+
+def test_score_case_accepts_scope_note_behavior() -> None:
+    case = _normalize_case(
+        {
+            "id": "weather",
+            "query": "Какая погода завтра?",
+            "expected_behavior": "scope_note",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": (
+            "Я отвечаю на вопросы по мероприятиям, форумам, ФГАИС «Молодёжь России» "
+            "и грантам Росмолодёжи. Задай, пожалуйста, вопрос по этим темам."
+        ),
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(case, http_result, {"was_escalated": False})
+
+    assert result["observed_behavior"] == "scope_note"
+    assert result["behavior_match"] is True
+    assert result["passed"] is True
+
+
+def test_score_case_accepts_clarify_behavior() -> None:
+    case = _normalize_case(
+        {
+            "id": "generic-application",
+            "query": "Подать заявку на участие",
+            "expected_behavior": "clarify",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Уточни, пожалуйста, речь о форуме, мероприятии или грантовом конкурсе?",
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(case, http_result, {"was_escalated": False})
+
+    assert result["observed_behavior"] == "clarify"
+    assert result["passed"] is True
+
+
+def test_score_case_accepts_escalate_behavior() -> None:
+    case = _normalize_case(
+        {
+            "id": "operator",
+            "query": "Позови оператора",
+            "expected_behavior": "escalate",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Передаю обращение специалисту.",
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(case, http_result, {"was_escalated": True})
+
+    assert result["observed_behavior"] == "escalate"
+    assert result["passed"] is True
+
+
+def test_score_case_rejects_behavior_mismatch() -> None:
+    case = _normalize_case(
+        {
+            "id": "generic-application",
+            "query": "Подать заявку на участие",
+            "expected_behavior": "clarify",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Подать заявку можно на странице мероприятия.",
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(case, http_result, {"was_escalated": False})
+
+    assert result["observed_behavior"] == "answer"
+    assert result["passed"] is False
+    assert result["failure_reasons"] == ["behavior_mismatch:clarify!=answer"]
 
 
 def test_score_case_rejects_false_insufficient_source_answer() -> None:

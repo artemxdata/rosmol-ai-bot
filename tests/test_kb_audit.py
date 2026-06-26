@@ -57,14 +57,45 @@ def test_audit_seed_records_detects_errors_and_warnings() -> None:
 
     codes = {finding["code"] for finding in report["findings"]}
     assert report["errors"] == 2
-    assert report["warnings"] == 3
+    assert report["warnings"] == 4
     assert {
         "trailing_export_quote",
         "template_artifact",
         "missing_topic",
+        "short_published_text",
         "grant_record_has_forum",
         "duplicate_text",
     } <= codes
+
+
+def test_audit_seed_records_detects_private_source_references_and_offtopic_context() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "private",
+                "text_clean": "Private source answer",
+                "category": "общее",
+                "topic": "answer_bank",
+                "source_type": "ticket_answer_bank",
+                "source_file": "data/private/tickets/export.json",
+            },
+            {
+                "chunk_id": "offtopic",
+                "text_clean": "Я отвечаю только по Росмолодёжи",
+                "category": "общее",
+                "topic": "offtop_ne_po_rosmolodezhi",
+                "forum": "Гранты для физических лиц",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            },
+        ]
+    )
+
+    findings = {finding["code"]: finding for finding in report["findings"]}
+    assert report["errors"] == 1
+    assert report["warnings"] == 1
+    assert findings["private_source_reference"]["chunk_ids"] == ["private"]
+    assert findings["offtopic_record_has_context"]["chunk_ids"] == ["offtopic"]
 
 
 def test_audit_seed_records_includes_quality_summary() -> None:
@@ -109,7 +140,7 @@ def test_audit_seed_records_detects_forum_registry_coverage_gaps() -> None:
         [
             {
                 "chunk_id": "forum_a_1",
-                "text_clean": "Answer",
+                "text_clean": "Forum coverage answer",
                 "category": "forums",
                 "forum_normalized": "Forum A",
                 "topic": "documents",
@@ -131,6 +162,7 @@ def test_audit_seed_records_detects_forum_registry_coverage_gaps() -> None:
         forum_registry=[
             {"name": "Forum A", "normalized": "Forum A"},
             {"name": "Forum B", "normalized": "Forum B"},
+            {"name": "Гранты 1 сезон", "normalized": "Гранты 1 сезон"},
         ],
         min_forum_chunks=2,
         min_forum_topics=2,
@@ -203,7 +235,7 @@ def test_audit_kb_seed_reads_forum_registry_for_coverage(tmp_path: Path) -> None
             [
                 {
                     "chunk_id": "forum_a_1",
-                    "text_clean": "Answer",
+                    "text_clean": "Forum coverage answer",
                     "category": "forums",
                     "forum_normalized": "Forum A",
                     "topic": "documents",

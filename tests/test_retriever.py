@@ -25,7 +25,11 @@ def test_build_filter_contains_status_and_derived_keys() -> None:
 
 
 class FakeEmbedder:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def encode(self, query: str):
+        self.calls += 1
         return np.array([0.1, 0.2]), {1: 0.5}
 
 
@@ -98,6 +102,22 @@ async def test_retriever_applies_filter_to_prefetches() -> None:
     query_filter = qdrant.kwargs["query_filter"]
     assert qdrant.kwargs["prefetch"][0].filter == query_filter
     assert qdrant.kwargs["prefetch"][1].filter == query_filter
+
+
+@pytest.mark.asyncio
+async def test_retriever_reuses_query_embedding_for_filter_attempts() -> None:
+    qdrant = FakeQdrant()
+    embedder = FakeEmbedder()
+    retriever = Retriever(
+        qdrant,
+        embedder,  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    await retriever.retrieve("статус заявки", {"category": "платформа_фгаис"}, top_k=5)
+    await retriever.retrieve("статус заявки", {}, top_k=5)
+
+    assert embedder.calls == 1
 
 
 @pytest.mark.asyncio

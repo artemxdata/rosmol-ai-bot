@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import RLock
 from typing import Any
 
 from src.models import Chunk, ScoredChunk
@@ -11,18 +12,20 @@ RerankGroup = tuple[str, list[Chunk], int]
 class Reranker:
     def __init__(self) -> None:
         self._model: Any | None = None
+        self._model_lock = RLock()
 
     def _load_model(self) -> Any:
-        if self._model is None:
-            try:
-                from FlagEmbedding import FlagReranker
-            except ImportError as exc:
-                raise MLDependencyError(
-                    "FlagEmbedding is not installed. Install project ML extras or rebuild "
-                    "Docker with INSTALL_ML=true to enable bge-reranker-v2-m3."
-                ) from exc
+        with self._model_lock:
+            if self._model is None:
+                try:
+                    from FlagEmbedding import FlagReranker
+                except ImportError as exc:
+                    raise MLDependencyError(
+                        "FlagEmbedding is not installed. Install project ML extras or rebuild "
+                        "Docker with INSTALL_ML=true to enable bge-reranker-v2-m3."
+                    ) from exc
 
-            self._model = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False)
+                self._model = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False)
         return self._model
 
     def rerank(self, query: str, chunks: list[Chunk], top_k: int = 4) -> list[ScoredChunk]:
@@ -62,14 +65,16 @@ class Reranker:
         return output_by_group
 
     def _compute_scores(self, pairs: list[list[str]]) -> list[float]:
-        model = self._load_model()
-        raw_scores = model.compute_score(pairs, normalize=True)
+        with self._model_lock:
+            model = self._load_model()
+            raw_scores = model.compute_score(pairs, normalize=True)
         if isinstance(raw_scores, float):
             return [raw_scores]
         return [float(score) for score in raw_scores]
 
     def unload(self) -> None:
-        self._model = None
+        with self._model_lock:
+            self._model = None
 
 
 def _rank_scored_chunks(

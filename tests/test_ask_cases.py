@@ -86,6 +86,7 @@ def test_build_seed_ask_cases_adds_expected_chunk_and_tags() -> None:
             "channel": "api",
             "expected_chunk_ids": ["grant_1"],
             "expected_answer_contains": [],
+            "expected_behavior": "answer",
             "expected_escalated": None,
             "expected_escalation_reason": None,
             "expected_generator_model": None,
@@ -104,11 +105,68 @@ def test_build_seed_ask_cases_can_require_expected_citation() -> None:
     assert "source_type:ticket_answer_bank" in cases[0]["tags"]
 
 
+def test_build_seed_ask_cases_marks_offtopic_as_scope_note() -> None:
+    record = _record(
+        "offtopic",
+        "общее",
+        example="как починить телефон",
+    )
+    record["topic"] = "offtop_ne_po_rosmolodezhi"
+
+    cases = build_seed_ask_cases([record], user_prefix="local")
+
+    assert cases[0]["expected_behavior"] == "scope_note"
+    assert cases[0]["expected_chunk_ids"] == []
+
+
+def test_build_seed_ask_cases_marks_operator_request_as_escalation() -> None:
+    record = _record(
+        "operator",
+        "навигация",
+        example="позови оператора",
+    )
+    record["topic"] = "pereklyuchit_na_operatora"
+
+    cases = build_seed_ask_cases([record], user_prefix="local")
+
+    assert cases[0]["expected_behavior"] == "escalate"
+    assert cases[0]["expected_chunk_ids"] == []
+
+
 def test_seed_smoke_query_ignores_fallback_source_category_prefix() -> None:
     record = _record("fallback_1", "навигация", example="id not visible")
     record["source_category"] = "fallback"
 
     assert seed_smoke_query(record) == "id not visible"
+
+
+def test_seed_smoke_query_ignores_nlu_source_category_prefix() -> None:
+    record = _record("fallback_1", "рекомендации", example="")
+    record["source_category"] = "NLU/other/ДЖАМПЫ"
+    record["intent_examples"] = []
+    record["intent_name"] = "рекомендации.спорт"
+
+    assert seed_smoke_query(record) == "рекомендации.спорт"
+
+
+def test_seed_smoke_query_trims_dangling_preposition() -> None:
+    record = _record("fallback_1", "платформа_фгаис", example="")
+    record["source_category"] = "fallback"
+    record["intent_examples"] = []
+    record["intent_name"] = "Где смотреть статус заявок в"
+
+    assert seed_smoke_query(record) == "Где смотреть статус заявок"
+
+
+def test_seed_smoke_query_uses_forum_field_when_normalized_forum_missing() -> None:
+    record = _record("forum_1", "форумы", example="")
+    record["forum_normalized"] = ""
+    record["forum"] = "ТИМ Бирюса"
+    record["source_category"] = "NLU/other/ДЖАМПЫ"
+    record["intent_examples"] = []
+    record["intent_name"] = "Рекомендации: спорт"
+
+    assert seed_smoke_query(record) == "ТИМ Бирюса Рекомендации: спорт"
 
 
 def test_seed_smoke_query_uses_forum_prefix_only_for_forum_category() -> None:
@@ -128,6 +186,22 @@ def test_seed_smoke_query_uses_forum_prefix_only_for_forum_category() -> None:
 
     assert seed_smoke_query(forum_record) == "Машук какие документы нужны"
     assert seed_smoke_query(grant_record) == "где подать проект на грант"
+
+
+def test_seed_smoke_query_adds_source_category_for_non_forum_intent_without_examples() -> None:
+    grant_record = _record(
+        "grant_1",
+        "гранты",
+        forum="Гранты для физических лиц",
+    )
+    grant_record["intent_examples"] = []
+    grant_record["intent_name"] = "Подать заявку на участие"
+    grant_record["source_category"] = "Гранты для физических лиц"
+
+    assert (
+        seed_smoke_query(grant_record)
+        == "Гранты для физических лиц Подать заявку на участие"
+    )
 
 
 def test_seed_smoke_query_prefers_generic_category_example() -> None:

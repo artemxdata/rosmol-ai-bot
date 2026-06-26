@@ -192,6 +192,9 @@ HDE_API_EMAIL=<api-user-email>
 HDE_API_KEY=<api-key>
 HDE_BOT_USER_ID=
 HDE_REQUEST_TIMEOUT_SECONDS=20
+HDE_RATE_LIMIT_RPM=250
+HDE_RATE_LIMIT_REMAINING_RESERVE=30
+HDE_RATE_LIMIT_BAN_SECONDS=1200
 ```
 
 Use `/posts/` for a public answer visible to the client. `/comments/` is for
@@ -200,6 +203,13 @@ internal staff comments and must not be used for normal bot replies.
 The HDE webhook endpoint returns `{"ok": true}` immediately and processes the
 RAG/LLM answer in the FastAPI background task. This prevents HDE/nginx timeouts
 on slow CPU inference or Max-generation requests.
+
+HelpDeskEddy applies a shared system-wide API limit. The standard HDE limit is
+300 RPM for the whole account, including exports and unrelated scripts, not only
+this bot. Keep the bot below the account limit (`HDE_RATE_LIMIT_RPM=250` by
+default), watch `X-Rate-Limit` and `X-Rate-Limit-Remaining`, and pause outgoing
+HDE sends when the remaining quota is low. Load and quality evals must run
+locally through `/ask`; do not use HDE/VK as a load-test transport.
 
 ## PostgreSQL Backup
 

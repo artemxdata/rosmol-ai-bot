@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any
 
 from src.config import get_settings
+from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
 from src.models import Chunk, ScoredChunk
@@ -128,6 +129,7 @@ def _rerank_for_state(
     query: str,
     chunks: list[Chunk],
 ) -> list[ScoredChunk]:
+    query = expand_query_aliases(query)
     analysis = state.get("analysis")
     scoped_chunks = _scoped_chunks_for_analysis(analysis, chunks, query)
     original_priority_candidate = _priority_source_candidate(query, scoped_chunks)
@@ -155,18 +157,28 @@ def _rerank_for_state(
             chunk.chunk_id for chunk in candidates
         }:
             candidates = [priority_candidate, *candidates]
+        if priority_candidate and _is_promotable_priority_candidate(
+            query,
+            rerank_query,
+            priority_candidate,
+        ):
+            selected: list[ScoredChunk] = [_priority_scored_candidate(priority_candidate)]
+            seen = {priority_candidate.chunk_id}
+            for candidate in candidates:
+                if candidate.chunk_id in seen:
+                    continue
+                selected.append(_source_candidate(candidate))
+                seen.add(candidate.chunk_id)
+                if len(selected) >= 4:
+                    break
+            return selected
+        if _source_only_fast_path_allowed(analysis, scoped_chunks):
+            return _source_only_ranked_candidates(candidates, priority_candidate, 4)
         ranked = reranker.rerank(rerank_query, candidates, 4)
-        if priority_candidate and (
-            _intent_example_matches_question(query, priority_candidate)
-            or _intent_example_matches_question(rerank_query, priority_candidate)
-            or _metadata_matches_promotable_priority_question(
-                _normalize(query),
-                priority_candidate,
-            )
-            or _metadata_matches_promotable_priority_question(
-                _normalize(rerank_query),
-                priority_candidate,
-            )
+        if priority_candidate and _is_promotable_priority_candidate(
+            query,
+            rerank_query,
+            priority_candidate,
         ):
             return _prepend_priority_candidate(ranked, priority_candidate)[:4]
         if priority_candidate and priority_candidate.chunk_id not in {
@@ -177,7 +189,8 @@ def _rerank_for_state(
 
     selected: list[ScoredChunk] = []
     seen: set[str] = set()
-    if original_priority_candidate and _intent_example_matches_question(
+    if original_priority_candidate and _is_promotable_priority_candidate(
+        query,
         query,
         original_priority_candidate,
     ):
@@ -201,6 +214,12 @@ def _rerank_for_state(
         chunk.chunk_id for chunk in query_candidates
     }:
         query_candidates = [original_priority_candidate, *query_candidates]
+    if _source_only_fast_path_allowed(analysis, scoped_chunks):
+        for candidate in query_candidates:
+            _append_chunk(selected, seen, _source_candidate(candidate))
+            if len(selected) >= target_size:
+                break
+        return _boost_source_only_confidence(selected[:MAX_RERANKED_CHUNKS])
     group_specs.append((query, query_candidates, 4))
     group_results = _rerank_groups(reranker, group_specs)
 
@@ -289,6 +308,8 @@ def _scoped_chunks_for_analysis(
             if _is_compatible_category(category, chunk)
         ]
         if category_chunks:
+            if category == "гранты" and not forum:
+                category_chunks = _order_unscoped_grant_sources_first(category_chunks)
             category_ids = {chunk.chunk_id for chunk in category_chunks}
             scoped_chunks = [
                 *category_chunks,
@@ -322,6 +343,30 @@ def _official_source_chunks(chunks: list[Chunk]) -> list[Chunk]:
         if str((chunk.metadata or {}).get("source_type") or "").strip()
         in {"docx", "xlsx"}
     ]
+
+
+def _order_unscoped_grant_sources_first(chunks: list[Chunk]) -> list[Chunk]:
+    return [
+        chunk
+        for _, chunk in sorted(
+            enumerate(chunks),
+            key=lambda item: (_unscoped_grant_rank(item[1]), item[0]),
+        )
+    ]
+
+
+def _unscoped_grant_rank(chunk: Chunk) -> int:
+    return 0 if _is_unscoped_grant_chunk(chunk) else 1
+
+
+def _is_unscoped_grant_chunk(chunk: Chunk) -> bool:
+    metadata = chunk.metadata or {}
+    if metadata.get("category") != "гранты":
+        return False
+    if str(metadata.get("forum_normalized") or "").strip():
+        return False
+    source_category = _normalize(str(metadata.get("source_category") or ""))
+    return not source_category or "грант" in source_category
 
 
 def _official_or_same_chunk_protected_chunks(
@@ -406,6 +451,66 @@ def _rerank_groups(
     return [reranker.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
 
 
+def _source_only_fast_path_allowed(analysis: Any, scoped_chunks: list[Chunk]) -> bool:
+    if not analysis or not scoped_chunks:
+        return False
+    forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
+    category = str(getattr(analysis, "category", None) or "").strip()
+    if not forum or category != "\u0444\u043e\u0440\u0443\u043c\u044b":
+        return False
+    return any(_chunk_matches_exact_forum(chunk, forum) for chunk in scoped_chunks)
+
+
+def _chunk_matches_exact_forum(chunk: Chunk, forum: str) -> bool:
+    metadata = chunk.metadata or {}
+    return metadata.get("forum_normalized") == forum and float(chunk.score or 0.0) >= 0.05
+
+
+def _source_only_ranked_candidates(
+    candidates: list[Chunk],
+    priority_candidate: Chunk | None,
+    limit: int,
+) -> list[ScoredChunk]:
+    selected: list[ScoredChunk] = []
+    seen: set[str] = set()
+    if priority_candidate:
+        _append_chunk(selected, seen, _source_candidate(priority_candidate))
+    for candidate in candidates:
+        _append_chunk(selected, seen, _source_candidate(candidate))
+        if len(selected) >= limit:
+            break
+    return _boost_source_only_confidence(selected)
+
+
+def _boost_source_only_confidence(chunks: list[ScoredChunk]) -> list[ScoredChunk]:
+    threshold = float(get_settings().reranker_threshold_high)
+    return [
+        chunk.model_copy(
+            update={"reranker_score": max(float(chunk.reranker_score or 0.0), threshold)}
+        )
+        for chunk in chunks
+    ]
+
+
+def _is_promotable_priority_candidate(
+    query: str,
+    rerank_query: str,
+    priority_candidate: Chunk,
+) -> bool:
+    return (
+        _intent_example_matches_question(query, priority_candidate)
+        or _intent_example_matches_question(rerank_query, priority_candidate)
+        or _metadata_matches_promotable_priority_question(
+            _normalize(query),
+            priority_candidate,
+        )
+        or _metadata_matches_promotable_priority_question(
+            _normalize(rerank_query),
+            priority_candidate,
+        )
+    )
+
+
 def _candidate_chunks_for_question(
     question: str,
     chunks: list[Chunk],
@@ -435,6 +540,7 @@ def _candidate_chunks_for_question(
             _marker_bonus(question, metadata_haystack, weight=20.0)
             + _marker_bonus(question, text_haystack, weight=8.0)
             + _metadata_field_score(question_tokens, chunk)
+            + _unscoped_grant_question_score(question, chunk)
             + _generic_penalty(chunk, has_specific_candidate)
             + _source_reliability_score(chunk)
             + overlap
@@ -448,6 +554,16 @@ def _candidate_chunks_for_question(
 
 def _priority_source_candidate(question: str, chunks: list[Chunk]) -> Chunk | None:
     normalized_question = _normalize(question)
+    if (
+        _asks_specific_technical_question(normalized_question)
+        or _asks_feedback_question(normalized_question)
+        or _asks_grant_application(normalized_question)
+        or _asks_invitation_letter(normalized_question)
+    ):
+        metadata_match = _metadata_priority_candidate(normalized_question, chunks)
+        if metadata_match:
+            return metadata_match
+
     intent_matches = []
     for index, chunk in enumerate(chunks):
         intent_score = _intent_example_match_score(question, chunk)
@@ -460,6 +576,13 @@ def _priority_source_candidate(question: str, chunks: list[Chunk]) -> Chunk | No
     if intent_matches:
         return max(intent_matches)[2]
 
+    return _metadata_priority_candidate(normalized_question, chunks)
+
+
+def _metadata_priority_candidate(
+    normalized_question: str,
+    chunks: list[Chunk],
+) -> Chunk | None:
     for chunk in chunks:
         if _metadata_matches_priority_question(normalized_question, chunk):
             return chunk
@@ -470,6 +593,17 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
     metadata_haystack = _metadata_haystack(chunk)
     text_haystack = _normalize(chunk.text)
 
+    if _asks_staff_feedback(normalized_question):
+        return "ostavit_obratnuyu_svyaz_o_sotrudn" in metadata_haystack
+    if _asks_leave_feedback(normalized_question):
+        return (
+            "ostavit_obratnuyu_svyaz_o" in metadata_haystack
+            and "sotrudn" not in metadata_haystack
+        )
+    if _asks_expert_feedback(normalized_question):
+        return "zapros_obratnoy_svyazi_kuratora" in metadata_haystack
+    if _asks_password_recovery(normalized_question):
+        return "vosstanovit_parol" in metadata_haystack
     if _asks_registration(normalized_question):
         return (
             "kak_zaregistrirovatsya_na_fgais" in metadata_haystack
@@ -481,12 +615,6 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
         )
     if _asks_contact_operator(normalized_question):
         return "контакты_и_оператор" in metadata_haystack
-    if _asks_access_or_technical_error(normalized_question):
-        return (
-            "доступ_и_техническая_ошибка" in metadata_haystack
-            or "tehnicheskaya_oshibka" in metadata_haystack
-            or "техническая ошибка" in metadata_haystack
-        )
     if _asks_language_settings(normalized_question):
         return "yazyki" in metadata_haystack or "язык" in metadata_haystack
     if _asks_unlink_gosuslugi(normalized_question):
@@ -499,12 +627,30 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
         return "dvoynoe_grazhdanstvo" in metadata_haystack
     if _asks_responsible_person_change(normalized_question):
         return "kak_smenit_otvetstvennoe_lico" in metadata_haystack
+    if _asks_specific_technical_question(normalized_question):
+        return False
+    if _asks_access_or_technical_error(normalized_question):
+        return (
+            "доступ_и_техническая_ошибка" in metadata_haystack
+            or "tehnicheskaya_oshibka" in metadata_haystack
+            or "техническая ошибка" in metadata_haystack
+        )
     if _asks_transfer(normalized_question):
         return "transfer" in metadata_haystack or "трансфер" in metadata_haystack
     if _asks_arrival_departure(normalized_question):
         return (
             "vremya_zaezda_i_vyezda" in metadata_haystack
             or ("заезд" in metadata_haystack and "выезд" in metadata_haystack)
+        )
+    if _asks_invitation_letter(normalized_question):
+        return "pismo_vyzov" in metadata_haystack or "письмо-вызов" in metadata_haystack
+    if _asks_documents_or_packing(normalized_question):
+        return (
+            "pamyatka_uchastnika_foruma" in metadata_haystack
+            or "документ" in metadata_haystack
+            or "паспорт" in metadata_haystack
+            or "справк" in metadata_haystack
+            or "вещ" in metadata_haystack
         )
     if _asks_event_dates(normalized_question):
         return (
@@ -524,13 +670,42 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
             or "вернуть денежные средства" in metadata_haystack
             or "вернуть грантовые средства" in text_haystack
         )
+    if _asks_grant_project_change(normalized_question):
+        return (
+            "vnesti_izmeneniya_v_proekt" in metadata_haystack
+            or "внести изменения в проект" in metadata_haystack
+            or "изменить смету" in text_haystack
+        )
+    if _asks_grant_application(normalized_question):
+        return (
+            "podat_zayavku_na_uchastie" in metadata_haystack
+            and "грант" in metadata_haystack
+        )
     if _asks_what_is_rosmol(normalized_question):
         return (
             "chto_takoe_rosmolodezh" in metadata_haystack
             or "что такое росмолодежь" in metadata_haystack
         )
+    if _asks_cooperation(normalized_question):
+        return (
+            "predlozhenie_sotrudnichestva" in metadata_haystack
+            or "сотруднич" in metadata_haystack
+            or "партнер" in metadata_haystack
+            or "партнёр" in metadata_haystack
+        )
+    if _asks_bot_abilities(normalized_question):
+        return (
+            "vozmozhnosti_bota_abilities" in metadata_haystack
+            or "возможности бота" in metadata_haystack
+            or "abilities" in metadata_haystack
+        )
     if _asks_farewell(normalized_question):
         return "proschanie" in metadata_haystack or "прощание" in metadata_haystack
+    if _asks_student_recommendation(normalized_question):
+        return (
+            "rekomendacii_studenty" in metadata_haystack
+            or "рекомендации.студенты" in metadata_haystack
+        )
     if _asks_recommendation(normalized_question):
         return (
             "rekomendacii_obschie" in metadata_haystack
@@ -584,13 +759,54 @@ def _metadata_matches_promotable_priority_question(
     chunk: Chunk,
 ) -> bool:
     metadata_haystack = _metadata_haystack(chunk)
+    text_haystack = _normalize(chunk.text)
+    if _asks_staff_feedback(normalized_question):
+        return "ostavit_obratnuyu_svyaz_o_sotrudn" in metadata_haystack
+    if _asks_leave_feedback(normalized_question):
+        return (
+            "ostavit_obratnuyu_svyaz_o" in metadata_haystack
+            and "sotrudn" not in metadata_haystack
+        )
+    if _asks_expert_feedback(normalized_question):
+        return "zapros_obratnoy_svyazi_kuratora" in metadata_haystack
+    if _asks_password_recovery(normalized_question):
+        return "vosstanovit_parol" in metadata_haystack
+    if _asks_grant_project_change(normalized_question):
+        return (
+            "vnesti_izmeneniya_v_proekt" in metadata_haystack
+            or "внести изменения в проект" in metadata_haystack
+            or "изменить смету" in text_haystack
+        )
+    if _asks_grant_application(normalized_question):
+        return (
+            "podat_zayavku_na_uchastie" in metadata_haystack
+            and "грант" in metadata_haystack
+        )
     if _asks_what_is_rosmol(normalized_question):
         return (
             "chto_takoe_rosmolodezh" in metadata_haystack
             or "что такое росмолодежь" in metadata_haystack
         )
+    if _asks_cooperation(normalized_question):
+        return (
+            "predlozhenie_sotrudnichestva" in metadata_haystack
+            or "сотруднич" in metadata_haystack
+            or "партнер" in metadata_haystack
+            or "партнёр" in metadata_haystack
+        )
+    if _asks_bot_abilities(normalized_question):
+        return (
+            "vozmozhnosti_bota_abilities" in metadata_haystack
+            or "возможности бота" in metadata_haystack
+            or "abilities" in metadata_haystack
+        )
     if _asks_farewell(normalized_question):
         return "proschanie" in metadata_haystack or "прощание" in metadata_haystack
+    if _asks_student_recommendation(normalized_question):
+        return (
+            "rekomendacii_studenty" in metadata_haystack
+            or "рекомендации.студенты" in metadata_haystack
+        )
     if _asks_recommendation(normalized_question):
         return (
             "rekomendacii_obschie" in metadata_haystack
@@ -614,6 +830,8 @@ def _metadata_matches_promotable_priority_question(
         return "dvoynoe_grazhdanstvo" in metadata_haystack
     if _asks_responsible_person_change(normalized_question):
         return "kak_smenit_otvetstvennoe_lico" in metadata_haystack
+    if _asks_invitation_letter(normalized_question):
+        return "pismo_vyzov" in metadata_haystack or "письмо-вызов" in metadata_haystack
     return False
 
 
@@ -658,6 +876,20 @@ def _metadata_field_score(question_tokens: set[str], chunk: Chunk) -> float:
     return score
 
 
+def _unscoped_grant_question_score(question: str, chunk: Chunk) -> float:
+    if not _is_unscoped_grant_query(question):
+        return 0.0
+    metadata = chunk.metadata or {}
+    if metadata.get("category") != "гранты":
+        return 0.0
+    return 20.0 if _is_unscoped_grant_chunk(chunk) else -20.0
+
+
+def _is_unscoped_grant_query(question: str) -> bool:
+    question_normalized = _normalize(question)
+    return "грант" in question_normalized and "форум" not in question_normalized
+
+
 def _generic_penalty(chunk: Chunk, has_specific_candidate: bool) -> float:
     if not has_specific_candidate or not _is_generic_chunk(chunk):
         return 0.0
@@ -696,6 +928,12 @@ def _adjusted_intent_example_match_score(question: str, chunk: Chunk) -> int:
 
 def _intent_example_match_score(question: str, chunk: Chunk) -> int:
     metadata = chunk.metadata or {}
+    if (
+        _is_unscoped_grant_query(question)
+        and metadata.get("category") == "гранты"
+        and not _is_unscoped_grant_chunk(chunk)
+    ):
+        return 0
     examples = metadata.get("intent_examples") or []
     if not examples:
         return 0
@@ -807,6 +1045,87 @@ def _asks_grant_return(normalized_question: str) -> bool:
     )
 
 
+def _asks_grant_project_change(normalized_question: str) -> bool:
+    if "грант" not in normalized_question and "проект" not in normalized_question:
+        return False
+    return any(
+        marker in normalized_question
+        for marker in (
+            "внести измен",
+            "изменить проект",
+            "изменить смет",
+            "поменять смет",
+            "скорректировать проект",
+            "редактировать проект",
+        )
+    )
+
+
+def _asks_grant_application(normalized_question: str) -> bool:
+    return "грант" in normalized_question and any(
+        marker in normalized_question
+        for marker in (
+            "подать заяв",
+            "подача заяв",
+            "заявку на участие",
+            "участие в грант",
+        )
+    )
+
+
+def _asks_password_recovery(normalized_question: str) -> bool:
+    return "парол" in normalized_question and any(
+        marker in normalized_question for marker in ("восстанов", "забыл", "сброс")
+    )
+
+
+def _asks_expert_feedback(normalized_question: str) -> bool:
+    if "обратн" not in normalized_question:
+        return False
+    explicit_expert_markers = (
+        "эксперт",
+        "оценк",
+        "балл",
+        "разбаллов",
+        "куратор",
+        "заявк",
+        "проект",
+    )
+    if any(
+        marker in normalized_question for marker in ("остав", "поделит", "впечатл", "отзыв")
+    ) and not any(marker in normalized_question for marker in explicit_expert_markers):
+        return False
+    return any(
+        marker in normalized_question
+        for marker in (*explicit_expert_markers, "грант")
+    )
+
+
+def _asks_staff_feedback(normalized_question: str) -> bool:
+    return "обратн" in normalized_question and any(
+        marker in normalized_question for marker in ("сотрудн", "специалист", "оператор")
+    )
+
+
+def _asks_leave_feedback(normalized_question: str) -> bool:
+    if _asks_staff_feedback(normalized_question):
+        return False
+    if _asks_expert_feedback(normalized_question):
+        return False
+    return "обратн" in normalized_question and any(
+        marker in normalized_question
+        for marker in ("остав", "поделит", "впечатл", "отзыв")
+    )
+
+
+def _asks_feedback_question(normalized_question: str) -> bool:
+    return (
+        _asks_staff_feedback(normalized_question)
+        or _asks_expert_feedback(normalized_question)
+        or _asks_leave_feedback(normalized_question)
+    )
+
+
 def _asks_what_is_rosmol(normalized_question: str) -> bool:
     return any(
         marker in normalized_question
@@ -814,6 +1133,26 @@ def _asks_what_is_rosmol(normalized_question: str) -> bool:
             "что такое росмолод",
             "кто такие росмолод",
             "чем занимается росмолод",
+        )
+    )
+
+
+def _asks_cooperation(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("сотруднич", "партнерств", "партнёрств", "партнер", "партнёр")
+    )
+
+
+def _asks_bot_abilities(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in (
+            "возможности бота",
+            "abilities",
+            "что умеешь",
+            "что ты умеешь",
+            "чем можешь помочь",
         )
     )
 
@@ -829,6 +1168,12 @@ def _asks_recommendation(normalized_question: str) -> bool:
     return any(
         marker in normalized_question
         for marker in ("рекоменд", "посовет", "подбери", "подойдет", "подойдёт")
+    )
+
+
+def _asks_student_recommendation(normalized_question: str) -> bool:
+    return _asks_recommendation(normalized_question) and any(
+        marker in normalized_question for marker in ("студент", "студенч")
     )
 
 
@@ -896,6 +1241,19 @@ def _asks_arrival_departure(normalized_question: str) -> bool:
     )
 
 
+def _asks_invitation_letter(normalized_question: str) -> bool:
+    return "письмо" in normalized_question and any(
+        marker in normalized_question
+        for marker in (
+            "вызов",
+            "на регион",
+            "в регион",
+            "для региона",
+            "подтверждение участия",
+        )
+    )
+
+
 def _asks_event_dates(normalized_question: str) -> bool:
     if _asks_arrival_departure(normalized_question):
         return False
@@ -914,6 +1272,23 @@ def _asks_event_dates(normalized_question: str) -> bool:
             "когда начинается",
             "когда начнется",
             "когда начнётся",
+        )
+    )
+
+
+def _asks_documents_or_packing(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in (
+            "документ",
+            "паспорт",
+            "справк",
+            "памятк",
+            "что взять",
+            "взять с собой",
+            "вещ",
+            "одежд",
+            "список необходим",
         )
     )
 
@@ -948,8 +1323,22 @@ def _asks_responsible_person_change(normalized_question: str) -> bool:
     )
 
 
+def _asks_specific_technical_question(normalized_question: str) -> bool:
+    return any(
+        (
+            _asks_language_settings(normalized_question),
+            _asks_unlink_gosuslugi(normalized_question),
+            _asks_verify_other_account(normalized_question),
+            _asks_same_email_for_person_and_org(normalized_question),
+            _asks_dual_citizenship(normalized_question),
+            _asks_responsible_person_change(normalized_question),
+            _asks_password_recovery(normalized_question),
+        )
+    )
+
+
 def _normalize(text: str) -> str:
-    return text.casefold().replace("ё", "е")
+    return expand_query_aliases(text).casefold().replace("ё", "е")
 
 
 async def _unload_model_owner(owner: Any) -> None:

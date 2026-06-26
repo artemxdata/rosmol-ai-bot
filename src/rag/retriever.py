@@ -42,6 +42,7 @@ class Retriever:
         self.qdrant = qdrant_client
         self.embedder = embedder
         self.collection_name = collection_name
+        self._query_vector_cache: dict[str, tuple[Any, dict[str, float]]] = {}
         self._keyword_payload_cache: dict[str, list[dict[str, Any]]] = {}
 
     async def retrieve(
@@ -50,7 +51,7 @@ class Retriever:
         filters: dict[str, Any] | None = None,
         top_k: int = 10,
     ) -> list[Chunk]:
-        dense, sparse = await asyncio.to_thread(self.embedder.encode, query)
+        dense, sparse = await self._encode_query(query)
         indices, values = sparse_to_indices_values(sparse)
         query_filter = build_filter(filters or {})
 
@@ -88,6 +89,17 @@ class Retriever:
                 )
             )
         return chunks
+
+    async def _encode_query(self, query: str) -> tuple[Any, dict[str, float]]:
+        cached = self._query_vector_cache.get(query)
+        if cached is not None:
+            return cached
+
+        encoded = await asyncio.to_thread(self.embedder.encode, query)
+        if len(self._query_vector_cache) >= 256:
+            self._query_vector_cache.clear()
+        self._query_vector_cache[query] = encoded
+        return encoded
 
     async def retrieve_keyword_candidates(
         self,

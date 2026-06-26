@@ -28,6 +28,12 @@ def test_clean_bot_text_strips_export_quote_artifact() -> None:
     assert clean_bot_text("Обращайтесь!😊'") == "Обращайтесь!😊"
 
 
+def test_clean_bot_text_renders_known_random_template_deterministically() -> None:
+    assert clean_bot_text("{{ ['Всегда рад!', 'Рад быть полезным!']|random}}") == (
+        "Всегда рад!"
+    )
+
+
 def test_read_xlsx_sheets_reads_inline_strings(tmp_path: Path) -> None:
     xlsx = tmp_path / "source.xlsx"
     _write_minimal_xlsx(xlsx)
@@ -104,6 +110,68 @@ def test_fallback_excel_records_do_not_inherit_forum_metadata() -> None:
     assert records[0]["category"] == "общее"
     assert records[0]["source_category"] == "Машук"
     assert records[0]["forum_normalized"] is None
+
+
+def test_excel_records_prefer_source_category_forum_over_grant_alias() -> None:
+    rows = [
+        SpreadsheetRow(
+            "category",
+            86,
+            (
+                "Машук",
+                "Росмолодежь.Гранты",
+                "Гранты для физических лиц проходят в рамках форума.",
+            ),
+        )
+    ]
+    registry = [
+        {"name": "Машук", "normalized": "Машук", "aliases": []},
+        {
+            "name": "Гранты для физических лиц",
+            "normalized": "Гранты для физических лиц",
+            "aliases": [],
+        },
+    ]
+
+    records = build_excel_answer_records(
+        rows=rows,
+        sheet_category=None,
+        source_file="Новый бот Росмол .xlsx",
+        intent_examples={},
+        registry=registry,
+        extraction_date=date(2026, 6, 11),
+    )
+
+    assert records[0]["category"] == "гранты"
+    assert records[0]["source_category"] == "Машук"
+    assert records[0]["forum_normalized"] == "Машук"
+
+
+def test_excel_records_keep_forum_category_when_only_answer_mentions_grants() -> None:
+    rows = [
+        SpreadsheetRow(
+            "category",
+            474,
+            (
+                "Ростов",
+                "О мероприятии",
+                "Форум помогает участникам запускать проекты и участвовать в грантовом конкурсе.",
+            ),
+        )
+    ]
+    registry = [{"name": "Ростов", "normalized": "Ростов", "aliases": []}]
+
+    records = build_excel_answer_records(
+        rows=rows,
+        sheet_category=None,
+        source_file="Новый бот Росмол .xlsx",
+        intent_examples={},
+        registry=registry,
+        extraction_date=date(2026, 6, 11),
+    )
+
+    assert records[0]["category"] == "форумы"
+    assert records[0]["forum_normalized"] == "Ростов"
 
 
 def test_parse_docx_intent_blocks_keeps_mult_paragraph_answer(tmp_path: Path) -> None:

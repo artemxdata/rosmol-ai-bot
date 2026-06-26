@@ -193,6 +193,15 @@ def _base_questions(
     extra_fallback_markers: tuple[tuple[tuple[str, ...], str], ...] = (),
 ) -> list[Question]:
     message = str(message or "").strip()
+    if _has_feedback_context(message):
+        return [
+            Question(
+                text=message,
+                category=analysis.category or "\u0433\u0440\u0430\u043d\u0442\u044b",
+                forum_normalized=analysis.forum_normalized,
+            )
+        ]
+
     if analysis.questions:
         filtered_questions = _filter_inferred_aspect_questions(
             analysis.questions,
@@ -243,6 +252,27 @@ def _base_questions(
             forum_normalized=analysis.forum_normalized,
         )
     ]
+
+
+def _has_feedback_context(message: str) -> bool:
+    normalized = str(message or "").casefold().replace("\u0451", "\u0435")
+    if "\u043e\u0431\u0440\u0430\u0442\u043d" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "\u0437\u0430\u044f\u0432\u043a",
+            "\u043f\u0440\u043e\u0435\u043a\u0442",
+            "\u0433\u0440\u0430\u043d\u0442",
+            "\u044d\u043a\u0441\u043f\u0435\u0440\u0442",
+            "\u043e\u0446\u0435\u043d\u043a",
+            "\u043a\u0443\u0440\u0430\u0442\u043e\u0440",
+            "\u0431\u0430\u043b\u043b",
+            "\u043e\u0441\u0442\u0430\u0432",
+            "\u043f\u043e\u0434\u0435\u043b\u0438\u0442",
+            "\u0432\u043f\u0435\u0447\u0430\u0442\u043b",
+        )
+    )
 
 
 def _filter_inferred_aspect_questions(

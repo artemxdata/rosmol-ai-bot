@@ -22,6 +22,8 @@ def test_quality_gate_passes_core_metrics_and_warns_on_threshold_calibration() -
         ask_metrics={
             "pass_rate": 0.95,
             "expected_chunk_hit_rate": 0.93,
+            "expected_or_equivalent_chunk_hit_rate": 0.97,
+            "behavior_match_rate": 1.0,
             "http_success_rate": 1.0,
             "trace_coverage_rate": 1.0,
             "low_confidence_expected_chunk_hit_rate": 0.05,
@@ -45,6 +47,8 @@ def test_quality_gate_passes_core_metrics_and_warns_on_threshold_calibration() -
     assert report["warning_checks"] == 1
     checks = {item["name"]: item for item in report["checks"]}
     assert checks["retrieval_recall_at_5"]["status"] == "pass"
+    assert checks["ask_expected_or_equivalent_chunk_hit_rate"]["actual"] == 0.97
+    assert checks["ask_behavior_match_rate"]["status"] == "pass"
     assert checks["generation_pass_rate"]["status"] == "pass"
     assert checks["rag_low_threshold_calibration"]["status"] == "warn"
 
@@ -66,7 +70,7 @@ def test_quality_gate_fails_missing_or_bad_core_metrics() -> None:
     failed = {item["name"] for item in report["checks"] if item["status"] == "fail"}
     assert "retrieval_metrics_present" in failed
     assert "ask_pass_rate" in failed
-    assert "ask_expected_chunk_hit_rate" in failed
+    assert "ask_expected_or_equivalent_chunk_hit_rate" in failed
     assert "ask_low_confidence_expected_chunk_hit_rate" in failed
 
 
@@ -76,6 +80,7 @@ def test_quality_gate_checks_forum_smoke_summary_when_provided() -> None:
         ask_metrics={
             "pass_rate": 1.0,
             "expected_chunk_hit_rate": 1.0,
+            "expected_or_equivalent_chunk_hit_rate": 1.0,
             "http_success_rate": 1.0,
             "trace_coverage_rate": 1.0,
             "low_confidence_expected_chunk_hit_rate": 0.0,
@@ -85,6 +90,7 @@ def test_quality_gate_checks_forum_smoke_summary_when_provided() -> None:
             "forums_total": 29,
             "pass_rate": 1.0,
             "expected_chunk_hit_rate": 1.0,
+            "expected_or_equivalent_chunk_hit_rate": 1.0,
             "problem_forums": [],
         },
         config=GateConfig(min_forums_total=29),
@@ -93,7 +99,7 @@ def test_quality_gate_checks_forum_smoke_summary_when_provided() -> None:
     checks = {item["name"]: item for item in report["checks"]}
     assert report["passed"] is True
     assert checks["forum_smoke_pass_rate"]["status"] == "pass"
-    assert checks["forum_smoke_expected_chunk_hit_rate"]["status"] == "pass"
+    assert checks["forum_smoke_expected_or_equivalent_chunk_hit_rate"]["status"] == "pass"
     assert checks["forum_smoke_problem_forums"]["status"] == "pass"
     assert checks["forum_smoke_forums_total"]["status"] == "pass"
 
@@ -104,6 +110,7 @@ def test_quality_gate_fails_bad_generation_metrics() -> None:
         ask_metrics={
             "pass_rate": 1.0,
             "expected_chunk_hit_rate": 1.0,
+            "expected_or_equivalent_chunk_hit_rate": 1.0,
             "http_success_rate": 1.0,
             "trace_coverage_rate": 1.0,
             "low_confidence_expected_chunk_hit_rate": 0.0,
@@ -127,6 +134,7 @@ def test_quality_gate_fails_forum_smoke_problem_forums() -> None:
         ask_metrics={
             "pass_rate": 1.0,
             "expected_chunk_hit_rate": 1.0,
+            "expected_or_equivalent_chunk_hit_rate": 1.0,
             "http_success_rate": 1.0,
             "trace_coverage_rate": 1.0,
             "low_confidence_expected_chunk_hit_rate": 0.0,
@@ -136,6 +144,7 @@ def test_quality_gate_fails_forum_smoke_problem_forums() -> None:
             "forums_total": 2,
             "pass_rate": 0.5,
             "expected_chunk_hit_rate": 1.0,
+            "expected_or_equivalent_chunk_hit_rate": 1.0,
             "problem_forums": [{"forum": "Утро"}],
         },
     )
@@ -151,6 +160,7 @@ def test_quality_gate_writes_json_and_markdown(tmp_path: Path) -> None:
         ask_metrics={
             "pass_rate": 1.0,
             "expected_chunk_hit_rate": 1.0,
+            "expected_or_equivalent_chunk_hit_rate": 1.0,
             "http_success_rate": 1.0,
             "trace_coverage_rate": 1.0,
             "low_confidence_expected_chunk_hit_rate": 0.0,

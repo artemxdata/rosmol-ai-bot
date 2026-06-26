@@ -147,6 +147,34 @@ async def test_verifier_escalates_single_cited_forum_when_forum_context_is_ambig
 
 
 @pytest.mark.asyncio
+async def test_verifier_escalates_single_forum_source_for_unanchored_forum_question() -> None:
+    result = await verify(
+        {
+            "message_masked": "Подать заявку на участие",
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": (
+                "Подать заявку на форум «Утро» можно в личном кабинете. "
+                "[src:utro_application]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["utro_application"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="utro_application",
+                    text="Подать заявку на форум «Утро» можно в личном кабинете.",
+                    metadata={"forum_normalized": "Утро"},
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_generic_platform_registration_source_with_forum_candidates() -> None:
     result = await verify(
         {
@@ -665,6 +693,45 @@ async def test_verifier_allows_multi_aspect_answer_when_sources_cover_each_aspec
                     text="Если нужно отказаться от участия, отзовите заявку в личном кабинете.",
                     metadata={"intent_name": "Отказ от участия"},
                     reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_does_not_split_expert_feedback_into_application_and_results() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "предоставить подробную обратную связь по результатам "
+                "экспертной оценки моей заявки"
+            ),
+            "analysis": QueryAnalysis(category="гранты"),
+            "generated_response": (
+                "Чтобы получить обратную связь по заявке, зайди в профиль и выбери "
+                "«Мои заявки». Обратная связь предоставляется участникам в течение 60 дней."
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["expert_feedback"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="expert_feedback",
+                    text=(
+                        "Чтобы получить обратную связь по заявке, зайди в профиль и "
+                        "выбери «Мои заявки». Обратная связь предоставляется участникам "
+                        "в течение 60 дней."
+                    ),
+                    metadata={
+                        "intent_name": "Запрос обратной связи куратора",
+                        "topic": "zapros_obratnoy_svyazi_kuratora",
+                    },
+                    reranker_score=0.9,
                 ),
             ],
             "max_confidence": 0.9,

@@ -39,6 +39,22 @@ NON_ANSWER_RE = re.compile(
     r"обратитесь\s+к\s+источнику)",
     flags=re.IGNORECASE,
 )
+EXPECTED_BEHAVIORS = {"answer", "clarify", "scope_note", "escalate"}
+SCOPE_NOTE_MARKERS = (
+    "я отвечаю на вопросы по мероприятиям",
+    "форумам, фгаис",
+    "грантам росмолодежи",
+    "задай, пожалуйста, вопрос по этим темам",
+)
+CLARIFICATION_MARKERS = (
+    "уточни",
+    "уточните",
+    "речь о",
+    "название форума",
+    "какой форум",
+    "каком форуме",
+    "тему вопроса",
+)
 
 
 def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
@@ -46,6 +62,11 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     if not query:
         raise ValueError("ask eval case must contain query, question, or text")
 
+    expected_behavior = _normalize_expected_behavior(
+        raw.get("expected_behavior")
+        or raw.get("expected_response_type")
+        or raw.get("behavior")
+    ) or _infer_expected_behavior(raw, str(query))
     expected_chunk_ids = _string_list(
         raw.get("expected_chunk_ids")
         or raw.get("expected_chunks")
@@ -65,6 +86,10 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         or {},
         expected_chunk_ids,
     )
+    if expected_behavior and expected_behavior != "answer":
+        expected_chunk_ids = []
+        expected_cited_chunk_ids = []
+        equivalent_chunk_ids = {}
 
     return {
         "id": str(raw.get("id") or raw.get("case_id") or query),
@@ -75,6 +100,7 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         "expected_cited_chunk_ids": expected_cited_chunk_ids,
         "equivalent_chunk_ids": equivalent_chunk_ids,
         "expected_answer_contains": expected_answer_contains,
+        "expected_behavior": expected_behavior,
         "expected_escalated": raw.get("expected_escalated"),
         "expected_escalation_reason": raw.get("expected_escalation_reason"),
         "expected_generator_model": raw.get("expected_generator_model"),
@@ -211,6 +237,7 @@ def summarize_results(
     chunk_scored = [item for item in results if item.get("expected_chunk_ids")]
     cited_scored = [item for item in results if item.get("expected_cited_chunk_ids")]
     answer_scored = [item for item in results if item.get("expected_answer_contains")]
+    behavior_scored = [item for item in results if item.get("expected_behavior")]
     trace_scored = [item for item in results if item.get("trace_found")]
     usage_events = [event for item in results for event in item.get("llm_usage", [])]
     reranker_scores = _numeric_values(results, "max_reranker_score")
@@ -244,6 +271,7 @@ def summarize_results(
             "expected_cited_or_equivalent_chunk_hit",
         ),
         "answer_contains_rate": _bool_rate(answer_scored, "answer_contains_match"),
+        "behavior_match_rate": _bool_rate(behavior_scored, "behavior_match"),
         "trace_coverage_rate": len(trace_scored) / len(results) if results else None,
         "escalation_rate": _bool_rate(trace_scored, "was_escalated"),
         "cache_hit_rate": _bool_rate(trace_scored, "cache_hit"),
@@ -273,6 +301,12 @@ def summarize_results(
             Counter(str(item.get("escalation_reason") or "none") for item in results)
         ),
         "failure_reason_counts": _failure_reason_counts(results),
+        "expected_behavior_counts": dict(
+            Counter(str(item.get("expected_behavior") or "unscored") for item in results)
+        ),
+        "observed_behavior_counts": dict(
+            Counter(str(item.get("observed_behavior") or "unknown") for item in results)
+        ),
         "likely_infrastructure_failure": _likely_infrastructure_failure(results),
         "llm_prompt_tokens": sum(int(item.get("llm_prompt_tokens") or 0) for item in results),
         "llm_completion_tokens": sum(
@@ -355,6 +389,8 @@ def score_case(
     expected_cited_chunk_ids = case.get("expected_cited_chunk_ids") or []
     equivalent_chunk_ids = case.get("equivalent_chunk_ids") or {}
     expected_answer_contains = case.get("expected_answer_contains") or []
+    expected_behavior = case.get("expected_behavior")
+    observed_behavior = _observed_behavior(response_text, trace)
     expected_escalated = case.get("expected_escalated")
     expected_escalation_reason = case.get("expected_escalation_reason")
     expected_generator_model = case.get("expected_generator_model")
@@ -409,6 +445,10 @@ def score_case(
         )
         checks["answer_contains_match"] = answer_contains_match
         required_checks["answer_contains_match"] = answer_contains_match
+    if expected_behavior:
+        behavior_match = observed_behavior == expected_behavior
+        checks["behavior_match"] = behavior_match
+        required_checks["behavior_match"] = behavior_match
     if expected_escalated is not None:
         escalation_match = (
             bool(trace.get("was_escalated")) == bool(expected_escalated)
@@ -456,6 +496,8 @@ def score_case(
         missing_expected_cited_or_equivalent_chunk_ids=(
             missing_expected_cited_or_equivalent_chunk_ids
         ),
+        expected_behavior=expected_behavior,
+        observed_behavior=observed_behavior,
         expected_escalated=expected_escalated,
         was_escalated=trace.get("was_escalated"),
         error=http_result.get("error") or trace.get("error"),
@@ -494,6 +536,9 @@ def score_case(
         "cited_source_types": _cited_source_types(trace, cited_chunk_ids),
         "expected_answer_contains": expected_answer_contains,
         "answer_contains_match": checks.get("answer_contains_match"),
+        "expected_behavior": expected_behavior,
+        "observed_behavior": observed_behavior,
+        "behavior_match": checks.get("behavior_match"),
         "expected_escalated": expected_escalated,
         "was_escalated": trace.get("was_escalated"),
         "escalation_match": checks.get("escalation_match"),
@@ -533,6 +578,8 @@ def _failure_reasons(
     missing_expected_or_equivalent_chunk_ids: list[str],
     missing_expected_cited_chunk_ids: list[str],
     missing_expected_cited_or_equivalent_chunk_ids: list[str],
+    expected_behavior: object,
+    observed_behavior: object,
     expected_escalated: object,
     was_escalated: object,
     error: object,
@@ -563,6 +610,8 @@ def _failure_reasons(
             reasons.append("expected_chunk_not_cited")
     if required_checks.get("answer_contains_match") is False:
         reasons.append("answer_contains_mismatch")
+    if required_checks.get("behavior_match") is False:
+        reasons.append(f"behavior_mismatch:{expected_behavior}!={observed_behavior}")
     if required_checks.get("escalation_match") is False:
         if expected_escalated is False and was_escalated is True:
             reasons.append("unexpected_escalation")
@@ -591,6 +640,63 @@ def _looks_like_insufficient_source(response_text: str) -> bool:
 def _looks_like_non_answer(response_text: str) -> bool:
     normalized = response_text.casefold().replace("ё", "е")
     return bool(NON_ANSWER_RE.search(normalized))
+
+
+def _normalize_expected_behavior(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    normalized = str(value).casefold().strip().replace("-", "_")
+    aliases = {
+        "offtopic": "scope_note",
+        "scope": "scope_note",
+        "scope-note": "scope_note",
+        "clarification": "clarify",
+        "escalation": "escalate",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in EXPECTED_BEHAVIORS:
+        raise ValueError(
+            "expected_behavior must be one of: "
+            f"{', '.join(sorted(EXPECTED_BEHAVIORS))}"
+        )
+    return normalized
+
+
+def _infer_expected_behavior(raw: dict[str, Any], query: str) -> str | None:
+    tags = " ".join(_string_list(raw.get("tags") or []))
+    identity = f"{raw.get('id') or raw.get('case_id') or ''} {tags}".casefold()
+    if "topic:offtop_ne_po_rosmolodezhi" in identity:
+        return "scope_note"
+    if "topic:pereklyuchit_na_operatora" in identity:
+        return "escalate"
+
+    normalized_query = " ".join(query.casefold().replace("ё", "е").split())
+    if normalized_query in {
+        "подать заявку на участие",
+        "как подать заявку",
+        "хочу подать заявку",
+    }:
+        return "clarify"
+    return None
+
+
+def _observed_behavior(response_text: str, trace: dict[str, Any]) -> str:
+    if trace.get("was_escalated") is True:
+        return "escalate"
+    normalized = response_text.casefold().replace("ё", "е")
+    if _looks_like_scope_note(normalized):
+        return "scope_note"
+    if _looks_like_clarification(normalized):
+        return "clarify"
+    return "answer"
+
+
+def _looks_like_scope_note(normalized_response: str) -> bool:
+    return all(marker in normalized_response for marker in SCOPE_NOTE_MARKERS)
+
+
+def _looks_like_clarification(normalized_response: str) -> bool:
+    return any(marker in normalized_response for marker in CLARIFICATION_MARKERS)
 
 
 def _failure_reason_counts(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -905,6 +1011,7 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         "- Expected cited or equivalent chunk hit rate: "
         f"`{_format_rate(metrics.get('expected_cited_or_equivalent_chunk_hit_rate'))}`",
         f"- Escalation rate: `{_format_rate(metrics.get('escalation_rate'))}`",
+        f"- Behavior match rate: `{_format_rate(metrics.get('behavior_match_rate'))}`",
         f"- Cache hit rate: `{_format_rate(metrics.get('cache_hit_rate'))}`",
         f"- Source chunk rate: `{_format_rate(metrics.get('source_chunk_rate'))}`",
         "- Low-confidence chunk hits: "

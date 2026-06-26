@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from src.main import ready
+from src.main import _run_ml_prewarm, ready
 
 
 class FakeRedis:
@@ -28,13 +28,32 @@ class FakeQdrant:
         return []
 
 
-def _request(*, redis_fail: bool = False) -> SimpleNamespace:
+class FakeEmbedder:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def encode(self, query: str) -> tuple[list[float], dict[str, float]]:
+        self.queries.append(query)
+        return [0.1], {"1": 0.5}
+
+
+class FakeReranker:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, int]] = []
+
+    def rerank(self, query: str, chunks: list, top_k: int) -> list:
+        self.calls.append((query, len(chunks), top_k))
+        return []
+
+
+def _request(*, redis_fail: bool = False, ml_prewarm: dict | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
                 redis=FakeRedis(redis_fail),
                 pg_pool=FakePGPool(),
                 qdrant=FakeQdrant(),
+                ml_prewarm=ml_prewarm,
             )
         )
     )
@@ -57,3 +76,26 @@ async def test_ready_returns_503_when_dependency_fails() -> None:
 
     assert exc.value.status_code == 503
     assert exc.value.detail["checks"]["redis"] == "error: RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_ready_reports_failed_ml_prewarm() -> None:
+    with pytest.raises(HTTPException) as exc:
+        await ready(  # type: ignore[arg-type]
+            _request(ml_prewarm={"enabled": True, "status": "error", "error": "TimeoutError"})
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["checks"]["ml_prewarm"] == "error: TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_run_ml_prewarm_loads_embedder_and_reranker() -> None:
+    embedder = FakeEmbedder()
+    reranker = FakeReranker()
+    app = SimpleNamespace(state=SimpleNamespace(embedder=embedder, reranker=reranker))
+
+    await _run_ml_prewarm(app)  # type: ignore[arg-type]
+
+    assert embedder.queries == ["регистрация на форум"]
+    assert reranker.calls == [("регистрация на форум", 1, 1)]

@@ -30,7 +30,7 @@ from src.llm.usage import (
 )
 from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
-from src.models import Channel, IncomingMessage
+from src.models import Channel, Chunk, IncomingMessage
 from src.rag.cache import SemanticCache
 from src.rag.embedder import Embedder
 from src.rag.reranker import Reranker
@@ -63,6 +63,12 @@ async def lifespan(app: FastAPI):
     app.state.reranker = Reranker()
     app.state.semantic_cache = SemanticCache(app.state.qdrant, app.state.embedder)
     app.state.graph = build_graph()
+    app.state.ml_prewarm = {
+        "enabled": settings.ml_prewarm_on_startup,
+        "status": "disabled",
+    }
+    if settings.ml_prewarm_on_startup:
+        await _prewarm_ml_runtime(app, settings)
     yield
     await app.state.redis.aclose()
     await app.state.pg_pool.close()
@@ -122,6 +128,14 @@ async def ready(request: Request) -> dict[str, Any]:
         checks["qdrant"] = "ok"
     except Exception as exc:
         checks["qdrant"] = f"error: {type(exc).__name__}"
+
+    ml_prewarm = getattr(request.app.state, "ml_prewarm", None)
+    if ml_prewarm and ml_prewarm.get("enabled"):
+        if ml_prewarm.get("status") == "ok":
+            checks["ml_prewarm"] = "ok"
+        else:
+            error = ml_prewarm.get("error") or ml_prewarm.get("status") or "unknown"
+            checks["ml_prewarm"] = f"error: {error}"
 
     if any(status != "ok" for status in checks.values()):
         raise HTTPException(status_code=503, detail={"status": "degraded", "checks": checks})
@@ -260,6 +274,49 @@ async def _process_hde_message(message: IncomingMessage, fastapi_app: FastAPI) -
             ticket_id=message.user_id,
             error=str(exc),
         )
+
+
+async def _prewarm_ml_runtime(fastapi_app: FastAPI, settings: Any) -> None:
+    started_at = perf_counter()
+    fastapi_app.state.ml_prewarm = {
+        "enabled": True,
+        "status": "warming",
+    }
+    try:
+        await asyncio.wait_for(
+            _run_ml_prewarm(fastapi_app),
+            timeout=float(getattr(settings, "ml_prewarm_timeout_seconds", 120.0)),
+        )
+    except Exception as exc:
+        latency_ms = int((perf_counter() - started_at) * 1000)
+        fastapi_app.state.ml_prewarm = {
+            "enabled": True,
+            "status": "error",
+            "error": type(exc).__name__,
+            "latency_ms": latency_ms,
+        }
+        logger.warning("ml_prewarm_failed", error=str(exc), latency_ms=latency_ms)
+        return
+
+    latency_ms = int((perf_counter() - started_at) * 1000)
+    fastapi_app.state.ml_prewarm = {
+        "enabled": True,
+        "status": "ok",
+        "latency_ms": latency_ms,
+    }
+    logger.info("ml_prewarm_ok", latency_ms=latency_ms)
+
+
+async def _run_ml_prewarm(fastapi_app: FastAPI) -> None:
+    query = "регистрация на форум"
+    await asyncio.to_thread(fastapi_app.state.embedder.encode, query)
+    warm_chunk = Chunk(
+        chunk_id="ml_prewarm",
+        text="Регистрация на форум Росмолодёжи.",
+        metadata={"chunk_id": "ml_prewarm"},
+        score=1.0,
+    )
+    await asyncio.to_thread(fastapi_app.state.reranker.rerank, query, [warm_chunk], 1)
 
 
 def _require_optional_secret(

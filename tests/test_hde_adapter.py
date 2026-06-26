@@ -121,6 +121,161 @@ async def test_hde_send_posts_public_reply_with_basic_auth(
 
 
 @pytest.mark.asyncio
+async def test_hde_send_skips_when_local_rate_limit_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeRateLimiter:
+        async def try_acquire(self, *, rpm: int) -> tuple[bool, str, float]:
+            assert rpm == 250
+            return False, "hde_local_rpm_limit_reached", 12.5
+
+    class FailingAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("HTTP client must not be created")
+
+    monkeypatch.setattr("src.channels.hde.httpx.AsyncClient", FailingAsyncClient)
+    monkeypatch.setattr(
+        "src.channels.hde.get_settings",
+        lambda: SimpleNamespace(
+            hde_base_url="https://rosmolodezh.helpdeskeddy.com",
+            hde_api_email="bot@example.com",
+            hde_api_key="secret",
+            hde_bot_user_id="",
+            hde_request_timeout_seconds=7,
+            hde_rate_limit_rpm=250,
+            hde_rate_limit_remaining_reserve=30,
+            hde_rate_limit_ban_seconds=1200,
+        ),
+    )
+
+    await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "РћС‚РІРµС‚")
+
+
+@pytest.mark.asyncio
+async def test_hde_send_handles_hde_ban_without_retrying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeRateLimiter:
+        async def try_acquire(self, *, rpm: int) -> tuple[bool, None, None]:
+            captured["rpm"] = rpm
+            return True, None, None
+
+        async def block_for(self, seconds: float) -> None:
+            captured["blocked_for"] = seconds
+
+    class FakeResponse:
+        status_code = 401
+        headers = {"X-Rate-Limit": "300", "X-Rate-Limit-Remaining": "0"}
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "errors": [
+                    {
+                        "code": "e-401",
+                        "title": "Ban",
+                        "details": "Ban for 20 min. API limit reached (300 request per minute).",
+                    }
+                ]
+            }
+
+        def raise_for_status(self) -> None:
+            raise AssertionError("rate limit response must not raise")
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, *, data: dict[str, str], auth: object) -> FakeResponse:
+            captured["url"] = url
+            return FakeResponse()
+
+    monkeypatch.setattr("src.channels.hde.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "src.channels.hde.get_settings",
+        lambda: SimpleNamespace(
+            hde_base_url="https://rosmolodezh.helpdeskeddy.com",
+            hde_api_email="bot@example.com",
+            hde_api_key="secret",
+            hde_bot_user_id="",
+            hde_request_timeout_seconds=7,
+            hde_rate_limit_rpm=250,
+            hde_rate_limit_remaining_reserve=30,
+            hde_rate_limit_ban_seconds=1200,
+        ),
+    )
+
+    await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "РћС‚РІРµС‚")
+
+    assert captured["rpm"] == 250
+    assert captured["blocked_for"] == 1200
+    assert captured["url"] == "https://rosmolodezh.helpdeskeddy.com/api/v2/tickets/123/posts/"
+
+
+@pytest.mark.asyncio
+async def test_hde_send_blocks_future_sends_when_remaining_is_low(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeRateLimiter:
+        async def try_acquire(self, *, rpm: int) -> tuple[bool, None, None]:
+            return True, None, None
+
+        async def block_for(self, seconds: float) -> None:
+            captured["blocked_for"] = seconds
+
+    class FakeResponse:
+        status_code = 201
+        headers = {"X-Rate-Limit": "300", "X-Rate-Limit-Remaining": "20"}
+
+        def json(self) -> dict[str, Any]:
+            return {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, *, data: dict[str, str], auth: object) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr("src.channels.hde.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "src.channels.hde.get_settings",
+        lambda: SimpleNamespace(
+            hde_base_url="https://rosmolodezh.helpdeskeddy.com",
+            hde_api_email="bot@example.com",
+            hde_api_key="secret",
+            hde_bot_user_id="",
+            hde_request_timeout_seconds=7,
+            hde_rate_limit_rpm=250,
+            hde_rate_limit_remaining_reserve=30,
+            hde_rate_limit_ban_seconds=1200,
+        ),
+    )
+
+    await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "РћС‚РІРµС‚")
+
+    assert captured["blocked_for"] == 60.0
+
+
+@pytest.mark.asyncio
 async def test_hde_send_skips_when_api_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingAsyncClient:
         def __init__(self, *args: object, **kwargs: object) -> None:

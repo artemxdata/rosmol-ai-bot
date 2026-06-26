@@ -41,6 +41,7 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
             "message_masked": "Регистрация на форум",
             "routing_hint": {"complexity": "simple", "reason": "registration_faq"},
             "trace": tracer,
+            "generated_response": "Ответ по источнику [src:chunk_1] [src:chunk_1] [src:chunk_2]",
             "llm_usage": [{"model": "GigaChat/GigaChat-2-Max", "total_tokens": 42}],
             "llm_prompt_tokens": 30,
             "llm_completion_tokens": 12,
@@ -56,6 +57,7 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
     assert "llm_usage" in pool.query
     routing_hint = json.loads(pool.args[4])
     assert routing_hint["reason"] == "registration_faq"
+    assert pool.args[12] == ["chunk_1", "chunk_2"]
     llm_usage = json.loads(pool.args[18])
     assert llm_usage[0]["model"] == "GigaChat/GigaChat-2-Max"
     assert pool.args[19] == 30

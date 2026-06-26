@@ -1,0 +1,3144 @@
+[
+  {
+    "id": "rag_dataset_demo::typical::001",
+    "query": "Территория смыслов Вышлите пожалуйста положение, в личном кабинете не отображается",
+    "user_id": "rag-dataset-demo-typical-001",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0013_dokumenty_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Территория смыслов",
+      "topic:dokumenty_meropriyatiya",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0013_dokumenty_meropriyatiya"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "dokumenty_meropriyatiya"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::002",
+    "query": "ввиду обстоятельств не удаётся реализовать грант",
+    "user_id": "rag-dataset-demo-typical-002",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0001_vernut_denezhnye_sredstva"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:vernut_denezhnye_sredstva",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0001_vernut_denezhnye_sredstva"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "vernut_denezhnye_sredstva"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::003",
+    "query": "id не вижу",
+    "user_id": "rag-dataset-demo-typical-003",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0008_gde_nayti_id_profilya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:gde_nayti_id_profilya",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0008_gde_nayti_id_profilya"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "gde_nayti_id_profilya"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::004",
+    "query": "Подскажите, пожалуйста, по какой ссылке можно пройти регистрацию?",
+    "user_id": "rag-dataset-demo-typical-004",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0005_kak_zaregistrirovatsya_na_fgais"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:kak_zaregistrirovatsya_na_fgais",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0005_kak_zaregistrirovatsya_na_fgais"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "kak_zaregistrirovatsya_na_fgais"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::005",
+    "query": "Оставить обратную связь о сотрудн",
+    "user_id": "rag-dataset-demo-typical-005",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0001_ostavit_obratnuyu_svyaz_o_sotrudn"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:ostavit_obratnuyu_svyaz_o_sotrudn",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0001_ostavit_obratnuyu_svyaz_o_sotrudn"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "ostavit_obratnuyu_svyaz_o_sotrudn"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::006",
+    "query": "Предложение о сотрудничестве",
+    "user_id": "rag-dataset-demo-typical-006",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0003_predlozhenie_sotrudnichestva"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:общее",
+      "source_type:xlsx",
+      "topic:predlozhenie_sotrudnichestva",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0003_predlozhenie_sotrudnichestva"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "predlozhenie_sotrudnichestva"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::007",
+    "query": "Территория смыслов возмещение денежных средств на поездку до мероприятия",
+    "user_id": "rag-dataset-demo-typical-007",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0014_oplata_proezda"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Территория смыслов",
+      "topic:oplata_proezda",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0014_oplata_proezda"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "oplata_proezda"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::008",
+    "query": "предоставить подробную обратную связь по результатам экспертной оценки моей заявки",
+    "user_id": "rag-dataset-demo-typical-008",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0002_zapros_obratnoy_svyazi_kuratora"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:zapros_obratnoy_svyazi_kuratora",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0002_zapros_obratnoy_svyazi_kuratora"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "zapros_obratnoy_svyazi_kuratora"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::009",
+    "query": "Не получается выбрать направление",
+    "user_id": "rag-dataset-demo-typical-009",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0014_tehnicheskaya_oshibka"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskaya_oshibka",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0014_tehnicheskaya_oshibka"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskaya_oshibka"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::010",
+    "query": "Восстановить пароль",
+    "user_id": "rag-dataset-demo-typical-010",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0006_vosstanovit_parol"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:vosstanovit_parol",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0006_vosstanovit_parol"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "vosstanovit_parol"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::011",
+    "query": "можно побыть у вас оператором",
+    "user_id": "rag-dataset-demo-typical-011",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0002_vakansii_rosmolodezhi"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:vakansii_rosmolodezhi",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0002_vakansii_rosmolodezhi"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "vakansii_rosmolodezhi"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::012",
+    "query": "Где письмо?",
+    "user_id": "rag-dataset-demo-typical-012",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0010_ne_prihodit_pismo_podtverzhdenie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:общее",
+      "source_type:xlsx",
+      "topic:ne_prihodit_pismo_podtverzhdenie",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0010_ne_prihodit_pismo_podtverzhdenie"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "ne_prihodit_pismo_podtverzhdenie"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::013",
+    "query": "Территория смыслов Хотел бы запросить от вас письмо на регион",
+    "user_id": "rag-dataset-demo-typical-013",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0015_pismo_vyzov"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Территория смыслов",
+      "topic:pismo_vyzov",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0015_pismo_vyzov"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "pismo_vyzov"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::014",
+    "query": "Оставить обратную связь о",
+    "user_id": "rag-dataset-demo-typical-014",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0003_ostavit_obratnuyu_svyaz_o"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:ostavit_obratnuyu_svyaz_o",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0003_ostavit_obratnuyu_svyaz_o"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "ostavit_obratnuyu_svyaz_o"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::015",
+    "query": "технические вопросы.языки",
+    "user_id": "rag-dataset-demo-typical-015",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0034_tehnicheskie_voprosy_yazyki"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskie_voprosy_yazyki",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0034_tehnicheskie_voprosy_yazyki"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskie_voprosy_yazyki"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::016",
+    "query": "подтвердить профиль через госуслуги",
+    "user_id": "rag-dataset-demo-typical-016",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0007_verificirovat_akkaunt"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:verificirovat_akkaunt",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0007_verificirovat_akkaunt"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "verificirovat_akkaunt"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::017",
+    "query": "Контакты ответственного лица.",
+    "user_id": "rag-dataset-demo-typical-017",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0004_kontakty_sotrudnikov_rosmolodezhi"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:kontakty_sotrudnikov_rosmolodezhi",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0004_kontakty_sotrudnikov_rosmolodezhi"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "kontakty_sotrudnikov_rosmolodezhi"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::018",
+    "query": "создание кабинета НКО на Госуслугах",
+    "user_id": "rag-dataset-demo-typical-018",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0013_sozdanie_kabinet_vuza_nko"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:общее",
+      "source_type:xlsx",
+      "topic:sozdanie_kabinet_vuza_nko",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0013_sozdanie_kabinet_vuza_nko"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "sozdanie_kabinet_vuza_nko"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::019",
+    "query": "Иволга документы мероприятия",
+    "user_id": "rag-dataset-demo-typical-019",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0035_dokumenty_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Иволга",
+      "topic:dokumenty_meropriyatiya",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0035_dokumenty_meropriyatiya"
+    ],
+    "equivalent_chunk_ids": {
+      "xlsx_category_r0035_dokumenty_meropriyatiya": [
+        "xlsx_category_r0052_pamyatka_uchastnika_foruma"
+      ]
+    },
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "dokumenty_meropriyatiya"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::020",
+    "query": "ознакомиться с причиной отклонения заявки",
+    "user_id": "rag-dataset-demo-typical-020",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0004_otkazali_v_zayavke"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:otkazali_v_zayavke",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0004_otkazali_v_zayavke"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "otkazali_v_zayavke"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::021",
+    "query": "технические вопросы.отвязать гу",
+    "user_id": "rag-dataset-demo-typical-021",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0035_tehnicheskie_voprosy_otvyazat_gu"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskie_voprosy_otvyazat_gu",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0035_tehnicheskie_voprosy_otvyazat_gu"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskie_voprosy_otvyazat_gu"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::022",
+    "query": "Где смотреть статус заявок в",
+    "user_id": "rag-dataset-demo-typical-022",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0009_gde_smotret_status_zayavok_v"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:gde_smotret_status_zayavok_v",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0009_gde_smotret_status_zayavok_v"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "gde_smotret_status_zayavok_v"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::023",
+    "query": "Добрый день",
+    "user_id": "rag-dataset-demo-typical-023",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0015_privetstvie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:privetstvie",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0015_privetstvie"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "privetstvie"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::024",
+    "query": "Возможности бота / abilities",
+    "user_id": "rag-dataset-demo-typical-024",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0021_vozmozhnosti_bota_abilities"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:общее",
+      "source_type:xlsx",
+      "topic:vozmozhnosti_bota_abilities",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0021_vozmozhnosti_bota_abilities"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "vozmozhnosti_bota_abilities"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::025",
+    "query": "Иволга возмещение денежных средств на поездку до мероприятия",
+    "user_id": "rag-dataset-demo-typical-025",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0036_oplata_proezda"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Иволга",
+      "topic:oplata_proezda",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0036_oplata_proezda"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "oplata_proezda"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::026",
+    "query": "как быть с грантовым соглашением, которое было заключено на старые данные",
+    "user_id": "rag-dataset-demo-typical-026",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0005_problemy_s_grantovym_soglasheniem"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:problemy_s_grantovym_soglasheniem",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0005_problemy_s_grantovym_soglasheniem"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "problemy_s_grantovym_soglasheniem"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::027",
+    "query": "технические вопросы.верифицировать другой аккаунт",
+    "user_id": "rag-dataset-demo-typical-027",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0036_tehnicheskie_voprosy_verificirovat_drugoy_akkaunt"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskie_voprosy_verificirovat_drugoy_akkaunt",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0036_tehnicheskie_voprosy_verificirovat_drugoy_akkaunt"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskie_voprosy_verificirovat_drugoy_akkaunt"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::028",
+    "query": "можно ли удалить аккаунт который зарегистрирован на почту",
+    "user_id": "rag-dataset-demo-typical-028",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0011_udalit_akkaunt"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:udalit_akkaunt",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0011_udalit_akkaunt"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "udalit_akkaunt"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::029",
+    "query": "Прощание",
+    "user_id": "rag-dataset-demo-typical-029",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0016_proschanie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:proschanie",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0016_proschanie"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "proschanie"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::030",
+    "query": "как починить телефон",
+    "user_id": "rag-dataset-demo-typical-030",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0022_offtop_ne_po_rosmolodezhi"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:общее",
+      "source_type:xlsx",
+      "topic:offtop_ne_po_rosmolodezhi",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0022_offtop_ne_po_rosmolodezhi"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "offtop_ne_po_rosmolodezhi"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::031",
+    "query": "Иволга Письмо-вьвов",
+    "user_id": "rag-dataset-demo-typical-031",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0037_pismo_vvov"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Иволга",
+      "topic:pismo_vvov",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0037_pismo_vvov"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "pismo_vvov"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::032",
+    "query": "почему нельзя прикрепить файл/отправить на проверку отчет?",
+    "user_id": "rag-dataset-demo-typical-032",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0006_vopros_po_otchetnosti"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:vopros_po_otchetnosti",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0006_vopros_po_otchetnosti"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "vopros_po_otchetnosti"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::033",
+    "query": "технические вопросы.почта физлица и юрлица совпадают",
+    "user_id": "rag-dataset-demo-typical-033",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0037_tehnicheskie_voprosy_pochta_fizlica_i_yurlica_sovpadayut"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskie_voprosy_pochta_fizlica_i_yurlica_sovpadayut",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0037_tehnicheskie_voprosy_pochta_fizlica_i_yurlica_sovpadayut"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskie_voprosy_pochta_fizlica_i_yurlica_sovpadayut"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::034",
+    "query": "изменить данные профиля",
+    "user_id": "rag-dataset-demo-typical-034",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0012_izmenit_dannye_akkaunta"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:izmenit_dannye_akkaunta",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0012_izmenit_dannye_akkaunta"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "izmenit_dannye_akkaunta"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::035",
+    "query": "Жду ответ оператора",
+    "user_id": "rag-dataset-demo-typical-035",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0017_pereklyuchit_na_operatora"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:pereklyuchit_na_operatora",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0017_pereklyuchit_na_operatora"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "pereklyuchit_na_operatora"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::036",
+    "query": "рекомендации.общие",
+    "user_id": "rag-dataset-demo-typical-036",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0033_rekomendacii_obschie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:общее",
+      "source_type:xlsx",
+      "topic:rekomendacii_obschie",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0033_rekomendacii_obschie"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "rekomendacii_obschie"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::037",
+    "query": "Арктика. Лёд тронулся Хотели бы поучаствовать в акции",
+    "user_id": "rag-dataset-demo-typical-037",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0045_podacha_zayavki_na_proekt"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Арктика. Лёд тронулся",
+      "topic:podacha_zayavki_na_proekt",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0045_podacha_zayavki_na_proekt"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "podacha_zayavki_na_proekt"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::038",
+    "query": "Подать заявку на участие",
+    "user_id": "rag-dataset-demo-typical-038",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0007_podat_zayavku_na_uchastie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:podat_zayavku_na_uchastie",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0007_podat_zayavku_na_uchastie"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "podat_zayavku_na_uchastie"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::039",
+    "query": "технические вопросы.двойное гражданство",
+    "user_id": "rag-dataset-demo-typical-039",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0038_tehnicheskie_voprosy_dvoynoe_grazhdanstvo"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskie_voprosy_dvoynoe_grazhdanstvo",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0038_tehnicheskie_voprosy_dvoynoe_grazhdanstvo"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskie_voprosy_dvoynoe_grazhdanstvo"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::040",
+    "query": "Что такое Росмолодёжь?",
+    "user_id": "rag-dataset-demo-typical-040",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0019_chto_takoe_rosmolodezh"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:chto_takoe_rosmolodezh",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0019_chto_takoe_rosmolodezh"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "chto_takoe_rosmolodezh"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::041",
+    "query": "спасибо за",
+    "user_id": "rag-dataset-demo-typical-041",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0018_blagodarnost"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:навигация",
+      "source_type:xlsx",
+      "topic:blagodarnost",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0018_blagodarnost"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "blagodarnost"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::042",
+    "query": "Машук Вышлите пожалуйста положение, в личном кабинете не отображается",
+    "user_id": "rag-dataset-demo-typical-042",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0057_dokumenty_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Машук",
+      "topic:dokumenty_meropriyatiya",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0057_dokumenty_meropriyatiya"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "dokumenty_meropriyatiya"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::043",
+    "query": "при попытке сохранить черновик проекта выдается ошибка",
+    "user_id": "rag-dataset-demo-typical-043",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0008_zapolnit_shablon_proekta"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:гранты",
+      "source_type:xlsx",
+      "topic:zapolnit_shablon_proekta",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0008_zapolnit_shablon_proekta"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "zapolnit_shablon_proekta"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::044",
+    "query": "технические вопросы.как сменить ответственное лицо",
+    "user_id": "rag-dataset-demo-typical-044",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0039_tehnicheskie_voprosy_kak_smenit_otvetstvennoe_lico"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:техподдержка",
+      "source_type:xlsx",
+      "topic:tehnicheskie_voprosy_kak_smenit_otvetstvennoe_lico",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0039_tehnicheskie_voprosy_kak_smenit_otvetstvennoe_lico"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "tehnicheskie_voprosy_kak_smenit_otvetstvennoe_lico"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::045",
+    "query": "как ребенку проявить активное участие",
+    "user_id": "rag-dataset-demo-typical-045",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0020_napravleniya_i_cennosti_rosmola"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:платформа_фгаис",
+      "source_type:xlsx",
+      "topic:napravleniya_i_cennosti_rosmola",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0020_napravleniya_i_cennosti_rosmola"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "napravleniya_i_cennosti_rosmola"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::046",
+    "query": "Машук возмещение денежных средств на поездку до мероприятия",
+    "user_id": "rag-dataset-demo-typical-046",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0058_oplata_proezda"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:xlsx",
+      "forum:Машук",
+      "topic:oplata_proezda",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0058_oplata_proezda"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "oplata_proezda"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::047",
+    "query": "Российский Север Суть форума и направления",
+    "user_id": "rag-dataset-demo-typical-047",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:docx",
+      "forum:Российский Север",
+      "topic:sut_foruma_i_napravleniya",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "sut_foruma_i_napravleniya"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::048",
+    "query": "Российский Север Возрастные ограничения",
+    "user_id": "rag-dataset-demo-typical-048",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_002_vozrastnye_ogranicheniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:docx",
+      "forum:Российский Север",
+      "topic:vozrastnye_ogranicheniya",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_002_vozrastnye_ogranicheniya"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "vozrastnye_ogranicheniya"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::049",
+    "query": "Российский Север Результаты отбора и списки",
+    "user_id": "rag-dataset-demo-typical-049",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_003_rezultaty_otbora_i_spiski"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:docx",
+      "forum:Российский Север",
+      "topic:rezultaty_otbora_i_spiski",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_003_rezultaty_otbora_i_spiski"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "rezultaty_otbora_i_spiski"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::typical::050",
+    "query": "Больше, чем путешествие Суть фестиваля и тематика",
+    "user_id": "rag-dataset-demo-typical-050",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_001_sut_festivalya_i_tematika"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "seed_balanced",
+      "category:форумы",
+      "source_type:docx",
+      "forum:Больше, чем путешествие",
+      "topic:sut_festivalya_i_tematika",
+      "rag_dataset_demo",
+      "demo_group:typical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_001_sut_festivalya_i_tematika"
+    ],
+    "demo_group": "typical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "sut_festivalya_i_tematika"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::001",
+    "query": "Агропродвижение: я запутался, объясни сразу подача заявки, возраст участников?",
+    "user_id": "rag-dataset-demo-atypical-001",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0238_pochemu_otklonili_zayavku",
+      "xlsx_category_r0239_vnesti_izmeneniya_v_zayavku",
+      "xlsx_category_r0232_vozrastnye_ogranicheniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Агропродвижение",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::002",
+    "query": "Подскажи по Амур: подача заявки, возраст участников, оплата проезда и проживания, проживание. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-002",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0221_vnesti_izmeneniya_v_zayavku",
+      "xlsx_category_r0214_vozrastnye_ogranicheniya",
+      "xlsx_category_r0209_oplata_proezda",
+      "xlsx_category_r0213_usloviya_prozhivaniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Амур",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application",
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::003",
+    "query": "Собери в один ответ по форуму Арктика. Лёд тронулся: документы, Иностранные граждане.",
+    "user_id": "rag-dataset-demo-atypical-003",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0484_dokumenty_meropriyatiya",
+      "xlsx_category_r0512_inostrannye_grazhdane"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Арктика. Лёд тронулся",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::004",
+    "query": "Мне нужен не один пункт, а вся картина по Больше, чем путешествие: трансфер, документы, письмо-вызов.",
+    "user_id": "rag-dataset-demo-atypical-004",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_010_spisok_veschey_i_dokumentov",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_005_pismo_vyzov"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Больше, чем путешествие",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "travel"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::005",
+    "query": "Если кратко и по источникам, что известно про Волга: трансфер, документы, письмо-вызов, сертификат?",
+    "user_id": "rag-dataset-demo-atypical-005",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0411_transfer_do_mesta_provedeniya_meropriyatiya",
+      "xlsx_category_r0408_dokumenty_meropriyatiya",
+      "xlsx_category_r0410_pismo_vyzov",
+      "xlsx_category_r0422_mozhno_li_poluchit_sertifikat_za_uchastie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Волга",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "travel",
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::006",
+    "query": "ГосСтарт: я запутался, объясни сразу трансфер, документы?",
+    "user_id": "rag-dataset-demo-atypical-006",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0578_transfer_do_mesta_provedeniya_meropriyatiya",
+      "xlsx_category_r0575_dokumenty_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:ГосСтарт",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "travel"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::007",
+    "query": "Подскажи по День молодёжи: Концепция фестиваля, Положение о фестивале, Посещение фестиваля с детьми. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-007",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0609_koncepciya_festivalya",
+      "xlsx_category_r0610_polozhenie_o_festivale",
+      "xlsx_category_r0612_poseschenie_festivalya_s_detmi"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:День молодёжи",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::008",
+    "query": "Собери в один ответ по форуму Добрино: документы, письмо-вызов, заезд и выезд, программа.",
+    "user_id": "rag-dataset-demo-atypical-008",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0542_spisok_veschey_i_dokumentov",
+      "xlsx_category_r0517_pismo_vyzov",
+      "xlsx_category_r0536_vremya_zaezda_i_vyezda",
+      "xlsx_category_r0539_programma_foruma"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Добрино",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::009",
+    "query": "Мне нужен не один пункт, а вся картина по Истоки: письмо-вызов, сертификат.",
+    "user_id": "rag-dataset-demo-atypical-009",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0118_pismo_vyzov",
+      "xlsx_category_r0130_mozhno_li_poluchit_sertifikat_za_uchastie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Истоки",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::010",
+    "query": "Если кратко и по источникам, что известно про Истоки Школа: сертификат, чат участников?",
+    "user_id": "rag-dataset-demo-atypical-010",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0447_mozhno_li_poluchit_sertifikat_za_uchastie",
+      "xlsx_category_r0448_kogda_budet_sertifikat",
+      "xlsx_category_r0437_dobavlenie_v_chat_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Истоки Школа",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::011",
+    "query": "Каспий: я запутался, объясни сразу чат участников, волонтёры, Результаты РМ, Резервный список?",
+    "user_id": "rag-dataset-demo-atypical-011",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0285_dobavlenie_v_chat_meropriyatiya",
+      "xlsx_category_r0298_volontery_foruma",
+      "xlsx_category_r0289_rezultaty_rm",
+      "xlsx_category_r0290_rezervnyy_spisok"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Каспий",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::012",
+    "query": "Подскажи по Ладога: Результаты РМ, Информация о площадке_медицина. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-012",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0347_rezultaty_rm",
+      "xlsx_category_r0356_informaciya_o_ploschadke_medicina"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Ладога",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::013",
+    "query": "Собери в один ответ по форуму Машук: сертификат, чат участников.",
+    "user_id": "rag-dataset-demo-atypical-013",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0072_mozhno_li_poluchit_sertifikat_za_uchastie",
+      "xlsx_category_r0073_kogda_budet_sertifikat",
+      "xlsx_category_r0061_dobavlenie_v_chat_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Машук",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::014",
+    "query": "Мне нужен не один пункт, а вся картина по На волне: Резервный список, Отказ от участия, Информация о площадке_медицина, даты начала мероприятия.",
+    "user_id": "rag-dataset-demo-atypical-014",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0253_rezervnyy_spisok",
+      "xlsx_category_r0255_otkaz_ot_uchastiya",
+      "xlsx_category_r0262_informaciya_o_ploschadke_medicina",
+      "xlsx_category_r0251_daty_nachala_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:На волне",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::015",
+    "query": "Если кратко и по источникам, что известно про Островa: Отказ от участия, Памятка участника форума?",
+    "user_id": "rag-dataset-demo-atypical-015",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0330_otkaz_ot_uchastiya",
+      "xlsx_category_r0334_pamyatka_uchastnika_foruma"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Островa",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::016",
+    "query": "Российский Север: я запутался, объясни сразу оплата проезда и проживания, питание, трансфер?",
+    "user_id": "rag-dataset-demo-atypical-016",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_006_oplata_proezda_prozhivaniya_i_charter",
+      "docx_forum_rossiyskiy_sever_intenty_011_usloviya_pitaniya",
+      "docx_forum_rossiyskiy_sever_intenty_008_transfer_po_gorodu"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Российский Север",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::017",
+    "query": "Подскажи по Ростов: Резервный список, Отказ от участия, Памятка участника форума, Информация о площадке_медицина. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-017",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0463_rezervnyy_spisok",
+      "xlsx_category_r0465_otkaz_ot_uchastiya",
+      "xlsx_category_r0470_pamyatka_uchastnika_foruma",
+      "xlsx_category_r0472_informaciya_o_ploschadke_medicina"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Ростов",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::018",
+    "query": "Собери в один ответ по форуму ТИМ Бирюса: Памятка участника форума, Информация о площадке_медицина.",
+    "user_id": "rag-dataset-demo-atypical-018",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0105_pamyatka_uchastnika_foruma",
+      "xlsx_category_r0107_informaciya_o_ploschadke_medicina"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:ТИМ Бирюса",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::019",
+    "query": "Мне нужен не один пункт, а вся картина по Таврида: оплата проезда и проживания, проживание, трансфер.",
+    "user_id": "rag-dataset-demo-atypical-019",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0190_oplata_proezda",
+      "xlsx_category_r0194_usloviya_prozhivaniya",
+      "xlsx_category_r0192_transfer_do_mesta_provedeniya_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Таврида",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::020",
+    "query": "Если кратко и по источникам, что известно про Территория смыслов: возраст участников, оплата проезда и проживания, проживание, питание?",
+    "user_id": "rag-dataset-demo-atypical-020",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0019_vozrastnye_ogranicheniya",
+      "xlsx_category_r0014_oplata_proezda",
+      "xlsx_category_r0018_usloviya_prozhivaniya",
+      "xlsx_category_r0031_informaciya_o_ploschadke_pitanie_pite_i"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Территория смыслов",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::021",
+    "query": "Утро: я запутался, объясни сразу Информация о площадке_медицина, Иностранные граждане?",
+    "user_id": "rag-dataset-demo-atypical-021",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0156_informaciya_o_ploschadke_medicina",
+      "xlsx_category_r0158_inostrannye_grazhdane"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Утро",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::022",
+    "query": "Подскажи по Шерегеш: Место проведения, Требования по дресс-коду, Магазин на территории. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-022",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0379_mesto_provedeniya",
+      "xlsx_category_r0382_trebovaniya_po_dress_kodu",
+      "xlsx_category_r0383_magazin_na_territorii"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Шерегеш",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::023",
+    "query": "Собери в один ответ по форуму Шум: подача заявки, возраст участников, оплата проезда и проживания.",
+    "user_id": "rag-dataset-demo-atypical-023",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0553_podacha_zayavki_na_proekt",
+      "xlsx_category_r0555_pochemu_otklonili_zayavku",
+      "xlsx_category_r0549_vozrastnye_ogranicheniya",
+      "xlsx_category_r0545_oplata_proezda"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Шум",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application",
+      "forum",
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::024",
+    "query": "Мне нужен не один пункт, а вся картина по Экосистема: питание, трансфер.",
+    "user_id": "rag-dataset-demo-atypical-024",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0185_informaciya_o_ploschadke_pitanie_pite",
+      "xlsx_category_r0171_transfer_do_mesta_provedeniya_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Экосистема",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::025",
+    "query": "Если кратко и по источникам, что известно про Агропродвижение: Отказ от участия, Памятка участника форума, даты начала мероприятия?",
+    "user_id": "rag-dataset-demo-atypical-025",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0237_otkaz_ot_uchastiya",
+      "xlsx_category_r0242_pamyatka_uchastnika_foruma",
+      "xlsx_category_r0233_daty_nachala_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Агропродвижение",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::026",
+    "query": "Амур: я запутался, объясни сразу подача заявки, возраст участников, оплата проезда и проживания, проживание?",
+    "user_id": "rag-dataset-demo-atypical-026",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0221_vnesti_izmeneniya_v_zayavku",
+      "xlsx_category_r0214_vozrastnye_ogranicheniya",
+      "xlsx_category_r0209_oplata_proezda",
+      "xlsx_category_r0213_usloviya_prozhivaniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Амур",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application",
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::027",
+    "query": "Подскажи по Арктика. Лёд тронулся: Иностранные граждане, О мероприятии. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-027",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0512_inostrannye_grazhdane",
+      "xlsx_category_r0503_o_meropriyatii"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Арктика. Лёд тронулся",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::028",
+    "query": "Собери в один ответ по форуму Больше, чем путешествие: Место проведения (Адрес и координаты), Магазины на территории, Вопросы по здоровью (Медпункт).",
+    "user_id": "rag-dataset-demo-atypical-028",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_006_mesto_provedeniya_adres_i_koordinaty",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_014_magaziny_na_territorii",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_015_voprosy_po_zdorovyu_medpunkt"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Больше, чем путешествие",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::029",
+    "query": "Мне нужен не один пункт, а вся картина по Волга: трансфер, документы, письмо-вызов, сертификат.",
+    "user_id": "rag-dataset-demo-atypical-029",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0411_transfer_do_mesta_provedeniya_meropriyatiya",
+      "xlsx_category_r0408_dokumenty_meropriyatiya",
+      "xlsx_category_r0410_pismo_vyzov",
+      "xlsx_category_r0422_mozhno_li_poluchit_sertifikat_za_uchastie"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Волга",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "travel",
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::030",
+    "query": "Если кратко и по источникам, что известно про ГосСтарт: возраст участников, оплата проезда и проживания?",
+    "user_id": "rag-dataset-demo-atypical-030",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0580_vozrastnye_ogranicheniya",
+      "xlsx_category_r0576_oplata_proezda"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:ГосСтарт",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::031",
+    "query": "День молодёжи: я запутался, объясни сразу программа, Концепция фестиваля?",
+    "user_id": "rag-dataset-demo-atypical-031",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0613_programma_i_artisty",
+      "xlsx_category_r0620_programma_artisty",
+      "xlsx_category_r0609_koncepciya_festivalya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:День молодёжи",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::032",
+    "query": "Подскажи по Добрино: заезд и выезд, программа, сертификат. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-032",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0536_vremya_zaezda_i_vyezda",
+      "xlsx_category_r0539_programma_foruma",
+      "xlsx_category_r0528_mozhno_li_poluchit_sertifikat_za_uchastie",
+      "xlsx_category_r0529_kogda_budet_sertifikat"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Добрино",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::033",
+    "query": "Собери в один ответ по форуму Иволга: Информация о площадке_медицина, даты начала мероприятия.",
+    "user_id": "rag-dataset-demo-atypical-033",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0054_informaciya_o_ploschadke_medicina",
+      "xlsx_category_r0042_daty_nachala_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Иволга",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::034",
+    "query": "Мне нужен не один пункт, а вся картина по Истоки: Памятка участника форума, Информация о площадке_медицина, даты начала мероприятия.",
+    "user_id": "rag-dataset-demo-atypical-034",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0132_pamyatka_uchastnika_foruma",
+      "xlsx_category_r0134_informaciya_o_ploschadke_medicina",
+      "xlsx_category_r0123_daty_nachala_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Истоки",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "documents"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::035",
+    "query": "Если кратко и по источникам, что известно про Истоки Школа: подача заявки, возраст участников, оплата проезда и проживания?",
+    "user_id": "rag-dataset-demo-atypical-035",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0445_pochemu_otklonili_zayavku",
+      "xlsx_category_r0446_vnesti_izmeneniya_v_zayavku",
+      "xlsx_category_r0439_vozrastnye_ogranicheniya",
+      "xlsx_category_r0434_oplata_proezda"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Истоки Школа",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application",
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::036",
+    "query": "Каспий: я запутался, объясни сразу оплата проезда и проживания, проживание?",
+    "user_id": "rag-dataset-demo-atypical-036",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0282_oplata_proezda",
+      "xlsx_category_r0286_usloviya_prozhivaniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Каспий",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::037",
+    "query": "Подскажи по Ладога: подача заявки, возраст участников. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-037",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0349_podacha_zayavki_na_proekt",
+      "xlsx_category_r0352_vnesti_izmeneniya_v_zayavku",
+      "xlsx_category_r0345_vozrastnye_ogranicheniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Ладога",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::038",
+    "query": "Собери в один ответ по форуму Машук: чат участников, волонтёры, Результаты РМ, Резервный список.",
+    "user_id": "rag-dataset-demo-atypical-038",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0061_dobavlenie_v_chat_meropriyatiya",
+      "xlsx_category_r0077_volontery_foruma",
+      "xlsx_category_r0065_rezultaty_rm",
+      "xlsx_category_r0066_rezervnyy_spisok"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Машук",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::039",
+    "query": "Мне нужен не один пункт, а вся картина по На волне: трансфер, документы.",
+    "user_id": "rag-dataset-demo-atypical-039",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0247_transfer_do_mesta_provedeniya_meropriyatiya",
+      "xlsx_category_r0244_dokumenty_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:На волне",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "travel"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::040",
+    "query": "Если кратко и по источникам, что известно про Область будущего: возраст участников, оплата проезда и проживания, проживание?",
+    "user_id": "rag-dataset-demo-atypical-040",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0271_vozrastnye_ogranicheniya",
+      "xlsx_category_r0266_oplata_proezda",
+      "xlsx_category_r0270_usloviya_prozhivaniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Область будущего",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::041",
+    "query": "Островa: я запутался, объясни сразу чат участников, волонтёры, Результаты РМ, Резервный список?",
+    "user_id": "rag-dataset-demo-atypical-041",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0323_dobavlenie_v_chat_meropriyatiya",
+      "xlsx_category_r0337_volontery_foruma",
+      "xlsx_category_r0327_rezultaty_rm",
+      "xlsx_category_r0328_rezervnyy_spisok"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Островa",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::042",
+    "query": "Подскажи по Полюс: сертификат, чат участников. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-042",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0314_mozhno_li_poluchit_sertifikat_za_uchastie",
+      "xlsx_category_r0304_dobavlenie_v_chat_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Полюс",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::043",
+    "query": "Собери в один ответ по форуму Российский Север: возраст участников, оплата проезда и проживания, питание.",
+    "user_id": "rag-dataset-demo-atypical-043",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_002_vozrastnye_ogranicheniya",
+      "docx_forum_rossiyskiy_sever_intenty_006_oplata_proezda_prozhivaniya_i_charter",
+      "docx_forum_rossiyskiy_sever_intenty_011_usloviya_pitaniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Российский Север",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum",
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::044",
+    "query": "Мне нужен не один пункт, а вся картина по Ростов: подача заявки, возраст участников.",
+    "user_id": "rag-dataset-demo-atypical-044",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0464_podacha_zayavki_na_proekt",
+      "xlsx_category_r0466_pochemu_otklonili_zayavku",
+      "xlsx_category_r0467_vnesti_izmeneniya_v_zayavku",
+      "xlsx_category_r0460_vozrastnye_ogranicheniya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Ростов",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "application"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::045",
+    "query": "Если кратко и по источникам, что известно про Студенческий спецназ: чат участников, волонтёры?",
+    "user_id": "rag-dataset-demo-atypical-045",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0392_dobavlenie_v_chat_meropriyatiya",
+      "xlsx_category_r0406_volontery_foruma"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Студенческий спецназ",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": []
+  },
+  {
+    "id": "rag_dataset_demo::atypical::046",
+    "query": "ТИМ Бирюса: я запутался, объясни сразу оплата проезда и проживания, проживание, питание?",
+    "user_id": "rag-dataset-demo-atypical-046",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0089_oplata_proezda",
+      "xlsx_category_r0093_usloviya_prozhivaniya",
+      "xlsx_category_r0106_informaciya_o_ploschadke_pitanie_pite"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:ТИМ Бирюса",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::047",
+    "query": "Подскажи по Таврида: документы, письмо-вызов, сертификат. Что точно известно из базы?",
+    "user_id": "rag-dataset-demo-atypical-047",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0189_dokumenty_meropriyatiya",
+      "xlsx_category_r0191_pismo_vyzov",
+      "xlsx_category_r0203_mozhno_li_poluchit_sertifikat_za_uchastie",
+      "xlsx_category_r0204_kogda_budet_sertifikat"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Таврида",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "documents",
+      "certificate"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::048",
+    "query": "Собери в один ответ по форуму Территория смыслов: чат участников, волонтёры.",
+    "user_id": "rag-dataset-demo-atypical-048",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0017_dobavlenie_v_chat_meropriyatiya",
+      "xlsx_category_r0033_volontery_foruma"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Территория смыслов",
+      "aspects:2",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::049",
+    "query": "Мне нужен не один пункт, а вся картина по Утро: Магазин на территории, Участники с ОВЗ, даты начала мероприятия.",
+    "user_id": "rag-dataset-demo-atypical-049",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0163_magazin_na_territorii",
+      "xlsx_category_r0165_uchastniki_s_ovz",
+      "xlsx_category_r0145_daty_nachala_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Утро",
+      "aspects:3",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "forum"
+    ]
+  },
+  {
+    "id": "rag_dataset_demo::atypical::050",
+    "query": "Если кратко и по источникам, что известно про Шерегеш: оплата проезда и проживания, проживание, питание, трансфер?",
+    "user_id": "rag-dataset-demo-atypical-050",
+    "channel": "api",
+    "expected_chunk_ids": [
+      "xlsx_category_r0360_oplata_proezda",
+      "xlsx_category_r0364_usloviya_prozhivaniya",
+      "xlsx_category_r0375_informaciya_o_ploschadke_pitanie_pite",
+      "xlsx_category_r0362_transfer_do_mesta_provedeniya_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": null,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "atypical",
+      "multi_aspect",
+      "official_sources",
+      "forum:Шерегеш",
+      "aspects:4",
+      "rag_dataset_demo",
+      "demo_group:atypical",
+      "source_basis:rag_dataset_profile"
+    ],
+    "demo_group": "atypical",
+    "source_dataset": "RAG_Dataset.xlsx",
+    "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
+    "topics": [
+      "travel",
+      "accommodation"
+    ]
+  }
+]

@@ -24,6 +24,21 @@ NON_PERSON_NAME_PHRASES = (
     "юридического лица",
     "личный кабинет",
 )
+DOMAIN_NON_PERSON_MARKERS = (
+    "иволга",
+    "машук",
+    "территория смыслов",
+    "форум",
+    "фестивал",
+    "грант",
+    "росмолод",
+    "молодежь россии",
+    "молодёжь россии",
+    "фгаис",
+    "письмо",
+    "письмо-вызов",
+    "документ",
+)
 
 
 @dataclass
@@ -112,4 +127,6 @@ class PIIMasker:
 
 def _is_known_non_person_phrase(value: str) -> bool:
     normalized = value.casefold().replace("ё", "е").strip()
-    return any(phrase in normalized for phrase in NON_PERSON_NAME_PHRASES)
+    return any(phrase in normalized for phrase in NON_PERSON_NAME_PHRASES) or any(
+        marker in normalized for marker in DOMAIN_NON_PERSON_MARKERS
+    )

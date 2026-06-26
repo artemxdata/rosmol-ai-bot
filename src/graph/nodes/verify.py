@@ -358,6 +358,8 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
         for chunk in source_chunks
         if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
     }
+    if len(forums) == 1 and _is_unanchored_forum_specific_question(message):
+        return sorted(forums)
     if len(forums) <= 1 and cited_sources and forums:
         forums = {
             forum
@@ -365,6 +367,27 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
             if (forum := str((chunk.metadata or {}).get("forum_normalized") or "").strip())
         }
     return sorted(forums) if len(forums) > 1 else []
+
+
+def _is_unanchored_forum_specific_question(message: str) -> bool:
+    if "форум" in message or "мероприят" in message:
+        return True
+    return any(
+        marker in message
+        for marker in (
+            "подат",
+            "участ",
+            "регист",
+            "проезд",
+            "прожив",
+            "питан",
+            "трансфер",
+            "документ",
+            "памятк",
+            "заезд",
+            "выезд",
+        )
+    )
 
 
 def _unsupported_directive_markers(
@@ -428,6 +451,8 @@ def _missing_aspect_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
         return []
 
     message = state.get("message_masked") or state.get("message") or ""
+    if _is_feedback_coverage_exempt(message):
+        return []
     questions = _aspect_questions_for_coverage(analysis, message)
     if len(questions) < 2:
         return []
@@ -478,6 +503,24 @@ def _marker_questions_from_message(analysis: object, message: str) -> list[Quest
         for markers, question_text in FALLBACK_QUESTION_MARKERS
         if any(marker in normalized for marker in markers)
     ]
+
+
+def _is_feedback_coverage_exempt(message: str) -> bool:
+    normalized = _normalize(message)
+    if "обратн" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "эксперт",
+            "оценк",
+            "балл",
+            "разбаллов",
+            "куратор",
+            "отзыв",
+            "впечатл",
+        )
+    )
 
 
 def _source_chunks_for_coverage(

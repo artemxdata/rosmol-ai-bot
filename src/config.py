@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     hde_api_key: str = ""
     hde_bot_user_id: str = ""
     hde_request_timeout_seconds: float = Field(default=20.0, ge=1)
+    hde_rate_limit_rpm: int = Field(default=250, ge=1, le=300)
+    hde_rate_limit_remaining_reserve: int = Field(default=30, ge=0, le=300)
+    hde_rate_limit_ban_seconds: int = Field(default=1200, ge=60)
     kb_seed_path: str = "data/knowledge_base_seed.json"
 
     cloud_ru_api_key: str = ""
@@ -55,6 +58,9 @@ class Settings(BaseSettings):
     ml_unload_after_use: bool = False
     ml_unload_embedder_after_use: bool | None = None
     ml_unload_reranker_after_use: bool | None = None
+    ml_prewarm_on_startup: bool = False
+    ml_prewarm_timeout_seconds: float = Field(default=120.0, ge=1)
+    retrieval_strict_forum_stop_min_chunks: int = Field(default=3, ge=1)
 
 
 @lru_cache

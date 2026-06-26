@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import asyncpg
 
 from src.config import get_settings
+
+SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
 
 
 async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
@@ -51,7 +54,7 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
         state.get("max_confidence"),
         state.get("cache_hit", False),
         state.get("generator_model"),
-        state.get("cited_sources") or [],
+        _cited_sources_from_state(state),
         bool(state.get("verifier_triggered")),
         json.dumps(verification.model_dump() if verification else None, ensure_ascii=False),
         state.get("final_response") or state.get("generated_response"),
@@ -67,3 +70,17 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
         settings.prompt_version,
         state.get("error"),
     )
+
+
+def _cited_sources_from_state(state: dict[str, Any]) -> list[str]:
+    cited_sources = [str(item) for item in state.get("cited_sources") or [] if item]
+    if cited_sources:
+        return cited_sources
+    seen: set[str] = set()
+    recovered: list[str] = []
+    for chunk_id in SOURCE_RE.findall(str(state.get("generated_response") or "")):
+        if chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        recovered.append(chunk_id)
+    return recovered

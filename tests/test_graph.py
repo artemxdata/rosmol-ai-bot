@@ -154,6 +154,61 @@ class BroadeningRetriever:
         return []
 
 
+class ExactForumDenseRetriever:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def retrieve(self, query: str, filters: dict, top_k: int):
+        self.calls.append((query, filters, top_k))
+        if filters == {"forum_normalized": "Forum A", "category": "forums"}:
+            return [
+                Chunk(
+                    chunk_id=f"forum_exact_{index}",
+                    text=f"Exact forum source {index}.",
+                    metadata={
+                        "chunk_id": f"forum_exact_{index}",
+                        "forum_normalized": "Forum A",
+                        "category": "forums",
+                    },
+                    score=0.9,
+                )
+                for index in range(3)
+            ]
+        return []
+
+
+class MultiAspectDenseForumRetriever(ExactForumDenseRetriever):
+    async def retrieve(self, query: str, filters: dict, top_k: int):
+        self.calls.append((query, filters, top_k))
+        if filters == {"forum_normalized": "Forum A", "category": "forums"}:
+            return [
+                Chunk(
+                    chunk_id=f"forum_exact_{index}",
+                    text=f"Exact forum source {index}.",
+                    metadata={
+                        "chunk_id": f"forum_exact_{index}",
+                        "forum_normalized": "Forum A",
+                        "category": "forums",
+                    },
+                    score=0.9,
+                )
+                for index in range(3)
+            ]
+        if filters == {"forum_normalized": "Forum A"}:
+            return [
+                Chunk(
+                    chunk_id="forum_broad_multi_aspect",
+                    text="Broad forum source for another requested aspect.",
+                    metadata={
+                        "chunk_id": "forum_broad_multi_aspect",
+                        "forum_normalized": "Forum A",
+                    },
+                    score=0.8,
+                )
+            ]
+        return []
+
+
 class MultiForumRetriever:
     def __init__(self) -> None:
         self.calls = []
@@ -255,6 +310,11 @@ class DroppingExactReranker:
             )
             for index, chunk in enumerate(broad_chunks[:top_k])
         ]
+
+
+class FailingReranker:
+    def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+        raise AssertionError("cross-encoder reranker must not be called")
 
 
 class InputOrderGroupReranker:
@@ -957,6 +1017,78 @@ async def test_analyze_uses_deterministic_safe_offtopic_without_llm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_treats_phone_repair_as_safe_offtopic_without_llm() -> None:
+    result = await analyze_query(
+        {
+            "message": "как починить телефон",
+            "message_masked": "как починить телефон",
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert result["analyzer_mode"] == "deterministic"
+    assert analysis.category == "offtopic"
+    assert analysis.is_offtopic is True
+    assert analysis.should_escalate is False
+    assert route_after_analyze({"analysis": analysis}) == "clarify"
+
+
+@pytest.mark.asyncio
+async def test_analyze_uses_deterministic_fallback_intent_prefixes_without_llm() -> None:
+    tech = await analyze_query(
+        {
+            "message": "технические вопросы.языки",
+            "message_masked": "технические вопросы.языки",
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": FailingLLM(),
+        }
+    )
+    recommendations = await analyze_query(
+        {
+            "message": "рекомендации.общие",
+            "message_masked": "рекомендации.общие",
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert tech["analyzer_mode"] == "deterministic"
+    assert tech["analysis"].category == "техподдержка"
+    assert tech["analysis"].complexity == Complexity.SIMPLE
+    assert recommendations["analyzer_mode"] == "deterministic"
+    assert recommendations["analysis"].category == "общее"
+    assert recommendations["analysis"].complexity == Complexity.SIMPLE
+
+
+@pytest.mark.asyncio
+async def test_analyze_uses_deterministic_common_fallback_intents_without_llm() -> None:
+    cases = [
+        ("Предложение о сотрудничестве", "общее", False),
+        ("Возможности бота / abilities", "общее", False),
+        ("Что такое Росмолодёжь?", "платформа_фгаис", False),
+        ("Оставить обратную связь о сотрудн", "навигация", False),
+        ("Подать заявку на участие", "форумы", True),
+    ]
+
+    for message, category, needs_clarification in cases:
+        result = await analyze_query(
+            {
+                "message": message,
+                "message_masked": message,
+                "routing_hint": {"complexity": "complex"},
+                "llm_client": FailingLLM(),
+            }
+        )
+
+        assert result["analyzer_mode"] == "deterministic"
+        assert result["analysis"].category == category
+        assert result["analysis"].complexity == Complexity.SIMPLE
+        assert result["analysis"].needs_clarification is needs_clarification
+
+
+@pytest.mark.asyncio
 async def test_analyze_uses_deterministic_grant_reporting_without_llm() -> None:
     result = await analyze_query(
         {
@@ -1264,6 +1396,79 @@ async def test_retrieve_adds_one_broader_candidate_layer_after_strict_hit() -> N
 
 
 @pytest.mark.asyncio
+async def test_retrieve_stops_after_dense_strict_forum_hit() -> None:
+    retriever = ExactForumDenseRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[Question(text="Where is the schedule?")],
+            ),
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "forum_exact_0",
+        "forum_exact_1",
+        "forum_exact_2",
+    ]
+    assert retriever.calls == [
+        ("Where is the schedule?", {"forum_normalized": "Forum A", "category": "forums"}, 10)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_keeps_broad_attempts_for_multi_aspect_forum_hit() -> None:
+    retriever = MultiAspectDenseForumRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(text="Where is the schedule?"),
+                    Question(text="Which documents are needed?"),
+                ],
+            ),
+            "retriever": retriever,
+        }
+    )
+
+    assert "forum_broad_multi_aspect" in [
+        chunk.chunk_id for chunk in result["retrieved_chunks"]
+    ]
+    assert ("Where is the schedule?", {"forum_normalized": "Forum A"}, 30) in retriever.calls
+    assert ("Which documents are needed?", {"forum_normalized": "Forum A"}, 30) in retriever.calls
+
+
+@pytest.mark.asyncio
+async def test_retrieve_keeps_broad_attempts_for_collapsed_multi_aspect_message() -> None:
+    retriever = MultiAspectDenseForumRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[Question(text="What is known from the source?")],
+            ),
+            "message_masked": "Forum A: место проведения, требования по дресс-коду, магазин.",
+            "retriever": retriever,
+        }
+    )
+
+    assert "forum_broad_multi_aspect" in [
+        chunk.chunk_id for chunk in result["retrieved_chunks"]
+    ]
+    assert (
+        "What is known from the source?",
+        {"forum_normalized": "Forum A"},
+        30,
+    ) in retriever.calls
+
+
+@pytest.mark.asyncio
 async def test_retrieve_expands_multi_forum_fallback_questions() -> None:
     retriever = MultiForumRetriever()
     result = await retrieve(
@@ -1351,6 +1556,73 @@ async def test_rerank_preserves_sources_for_each_question(
 
     assert [chunk.chunk_id for chunk in result["reranked_chunks"][:2]] == ["docs", "age"]
     assert result["max_confidence"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="amur_docs",
+            text="Документы для форума Амур.",
+            metadata={
+                "intent_name": "Документы",
+                "category": "форумы",
+                "forum_normalized": "Амур",
+            },
+            score=0.96,
+        ),
+        Chunk(
+            chunk_id="amur_transfer",
+            text="Трансфер для форума Амур.",
+            metadata={
+                "intent_name": "Трансфер",
+                "category": "форумы",
+                "forum_normalized": "Амур",
+            },
+            score=0.9,
+        ),
+        Chunk(
+            chunk_id="amur_age",
+            text="Возраст участников форума Амур.",
+            metadata={
+                "intent_name": "Возраст участников",
+                "category": "форумы",
+                "forum_normalized": "Амур",
+            },
+            score=0.9,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Амур: документы, трансфер и возраст участников?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Амур",
+                questions=[
+                    Question(text="Какие документы нужны?"),
+                    Question(text="Есть ли трансфер?"),
+                    Question(text="Какой возраст участников?"),
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    chunk_ids = {chunk.chunk_id for chunk in result["reranked_chunks"]}
+    assert {"amur_docs", "amur_transfer", "amur_age"} <= chunk_ids
+    assert result["max_confidence"] == 0.7
 
 
 @pytest.mark.asyncio
@@ -1858,6 +2130,51 @@ async def test_rerank_keeps_platform_status_source_for_grant_status_question(
     assert result["reranked_chunks"][0].reranker_score >= 0.7
 
 
+@pytest.mark.asyncio
+async def test_rerank_short_circuits_promotable_priority_without_cross_encoder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="generic_status",
+            text="Статусы публикуются после отбора.",
+            metadata={"category": "гранты", "topic": "rezultaty_rm"},
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="status_location",
+            text="Статус заявки можно посмотреть в личном кабинете.",
+            metadata={
+                "category": "платформа_фгаис",
+                "source_category": "fallback",
+                "topic": "gde_smotret_status_zayavok_v",
+                "intent_name": "Где смотреть статус заявок",
+            },
+            score=0.5,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Где смотреть статус заявок",
+            "analysis": QueryAnalysis(category="платформа_фгаис"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "status_location"
+    assert result["reranked_chunks"][0].reranker_score >= 0.7
+
+
 def test_rerank_candidate_prefilter_prioritizes_domain_marker() -> None:
     chunks = [
         Chunk(
@@ -1982,6 +2299,302 @@ def test_rerank_candidate_prefilter_prioritizes_grant_return_intent() -> None:
     candidates = _candidate_chunks_for_question("Как вернуть грантовые средства?", chunks, 2)
 
     assert [chunk.chunk_id for chunk in candidates] == ["grant_return", "generic_grant"]
+
+
+def test_rerank_candidate_prefilter_penalizes_forum_grant_for_unscoped_grant_query() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="forum_grant",
+            text="В рамках форума будет грантовый конкурс.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Добрино",
+                "intent_name": "Условия и сроки участия_гранты",
+                "intent_examples": [
+                    "подскажите пжл когда будет ближайший грантовый конкурс для физических лиц",
+                    "могу ли я подать на грант свой проект?",
+                ],
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="generic_grant_change",
+            text="Чтобы внести изменения в проект, напишите на почту грантового конкурса.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Внести изменения в проект",
+                "topic": "vnesti_izmeneniya_v_proekt",
+            },
+            score=0.2,
+        ),
+    ]
+
+    candidates = _candidate_chunks_for_question(
+        "Гранты для физических лиц Внести изменения в проект",
+        chunks,
+        2,
+    )
+
+    assert candidates[0].chunk_id == "generic_grant_change"
+
+
+@pytest.mark.asyncio
+async def test_rerank_promotes_generic_grant_project_change_before_cross_encoder() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="forum_grant_terms",
+            text="В рамках форума будет проводиться грантовый конкурс.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Добрино",
+                "intent_name": "Условия и сроки участия_гранты",
+                "intent_examples": ["Могу ли я подать на грант свой проект?"],
+                "source_type": "xlsx",
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="generic_grant_change",
+            text="Нужно изменить смету? Напиши на почту grant2024@fadm.gov.ru.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Внести изменения в проект",
+                "topic": "vnesti_izmeneniya_v_proekt",
+                "source_type": "xlsx",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Гранты для физических лиц Внести изменения в проект",
+            "analysis": QueryAnalysis(category="гранты"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "generic_grant_change"
+    assert result["max_confidence"] >= 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_promotes_feedback_source_before_cross_encoder() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="grant_terms",
+            text="Условия участия в грантовом конкурсе.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Условия и сроки участия",
+                "source_type": "xlsx",
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="feedback_organizer",
+            text="Поделись своими впечатлениями, а я передам информацию организаторам.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Оставить обратную связь организаторам",
+                "topic": "ostavit_obratnuyu_svyaz_o",
+                "source_type": "xlsx",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Гранты для физических лиц Оставить обратную связь организаторам",
+            "analysis": QueryAnalysis(category="гранты"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "feedback_organizer"
+    assert result["max_confidence"] >= 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_promotes_expert_feedback_before_leave_feedback() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="feedback_organizer",
+            text="Поделись своими впечатлениями, а я передам информацию организаторам.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Оставить обратную связь организаторам",
+                "topic": "ostavit_obratnuyu_svyaz_o",
+                "source_type": "xlsx",
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="expert_feedback",
+            text="Чтобы получить обратную связь по заявке, зайди в профиль и выбери «Мои заявки».",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Запрос обратной связи куратора",
+                "topic": "zapros_obratnoy_svyazi_kuratora",
+                "source_type": "xlsx",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": (
+                "предоставить подробную обратную связь по результатам "
+                "экспертной оценки моей заявки"
+            ),
+            "analysis": QueryAnalysis(category="гранты"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "expert_feedback"
+    assert result["max_confidence"] >= 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_promotes_password_recovery_before_cross_encoder() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="generic_support",
+            text="Если возникла техническая ошибка, обратитесь в поддержку.",
+            metadata={
+                "category": "платформа_фгаис",
+                "topic": "tehnicheskaya_oshibka",
+                "source_type": "xlsx",
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="password_recovery",
+            text=(
+                "Чтобы восстановить пароль, перейди по ссылке входа "
+                "и нажми «Восстановить пароль»."
+            ),
+            metadata={
+                "category": "платформа_фгаис",
+                "source_category": "fallback",
+                "intent_name": "Восстановить пароль",
+                "topic": "vosstanovit_parol",
+                "source_type": "xlsx",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Восстановить пароль",
+            "analysis": QueryAnalysis(category="платформа_фгаис"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "password_recovery"
+    assert result["max_confidence"] >= 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_promotes_generic_grant_application_before_forum_application() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="forum_application",
+            text="Чтобы подать заявку на форум, выбери событие на сайте.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Утро",
+                "intent_name": "Подача заявки на проект",
+                "topic": "podacha_zayavki_na_proekt",
+                "intent_examples": ["Как подать заявку на участие в конкурсе"],
+                "source_type": "xlsx",
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="generic_grant_application",
+            text="Чтобы подать заявку на участие в гранте, выбери номинацию конкурса.",
+            metadata={
+                "category": "гранты",
+                "source_category": "Гранты для физических лиц",
+                "intent_name": "Подать заявку на участие",
+                "topic": "podat_zayavku_na_uchastie",
+                "source_type": "xlsx",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Гранты для физических лиц Подать заявку на участие",
+            "analysis": QueryAnalysis(category="гранты"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "generic_grant_application"
+    assert result["max_confidence"] >= 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_promotes_forum_invitation_letter_before_cross_encoder() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="ivolga_transfer",
+            text="Трансфер на форум Иволга будет организован от точки сбора.",
+            metadata={
+                "category": "форумы",
+                "forum_normalized": "Иволга",
+                "source_category": "Иволга",
+                "intent_name": "Трансфер",
+                "topic": "transfer_do_mesta_provedeniya_meropriyatiya",
+                "source_type": "xlsx",
+            },
+            score=1.0,
+        ),
+        Chunk(
+            chunk_id="ivolga_invitation",
+            text="Письмо-вызов можно получить по запросу после заполнения формы.",
+            metadata={
+                "category": "форумы",
+                "forum_normalized": "Иволга",
+                "source_category": "Иволга",
+                "intent_name": "Письмо-вызов",
+                "topic": "pismo_vyzov",
+                "source_type": "xlsx",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Иволга Письмо-вызов",
+            "analysis": QueryAnalysis(category="форумы", forum_normalized="Иволга"),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "ivolga_invitation"
+    assert result["max_confidence"] >= 0.7
 
 
 def test_rerank_candidate_prefilter_prefers_same_forum_specific_topic() -> None:
@@ -3983,6 +4596,127 @@ async def test_generate_uses_max_for_single_covered_complex_question(
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_source_chunk_for_single_official_complex_forum_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="ivolga_memo",
+        text="Список всего необходимого будет перечислен в памятке участника форума.",
+        metadata={
+            "source_type": "xlsx",
+            "category": "форумы",
+            "forum_normalized": "Иволга",
+            "topic": "pamyatka_uchastnika_foruma",
+            "intent_examples": ["какие документы и вещи взять с собой"],
+        },
+        score=0.8,
+        reranker_score=0.72,
+    )
+    llm = FailingLLM()
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Иволга",
+                complexity=Complexity.COMPLEX,
+                questions=[Question(text="Какие документы нужны?", forum_normalized="Иволга")],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.72,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["ivolga_memo"]
+    assert "памятке участника" in result["generated_response"]
+
+
+@pytest.mark.parametrize(
+    ("query", "category", "expected_chunk_id", "topic", "answer"),
+    [
+        (
+            "Оставить обратную связь о сотрудн",
+            "навигация",
+            "staff_feedback",
+            "ostavit_obratnuyu_svyaz_o_sotrudn",
+            "Перевожу диалог на оператора",
+        ),
+        (
+            "Предложение о сотрудничестве",
+            "общее",
+            "cooperation",
+            "predlozhenie_sotrudnichestva",
+            "По вопросам сотрудничества напишите на partner@fadm.gov.ru.",
+        ),
+        (
+            "Возможности бота / abilities",
+            "общее",
+            "bot_abilities",
+            "vozmozhnosti_bota_abilities",
+            "Бот информирует о деятельности Росмолодёжи, форумах и грантах.",
+        ),
+        (
+            "Что такое Росмолодёжь?",
+            "платформа_фгаис",
+            "what_is_rosmol",
+            "chto_takoe_rosmolodezh",
+            "Росмолодёжь — федеральный орган исполнительной власти.",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_prioritizes_exact_fallback_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    query: str,
+    category: str,
+    expected_chunk_id: str,
+    topic: str,
+    answer: str,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    competing_chunk = ScoredChunk(
+        chunk_id="competing",
+        text="Мы всегда рады получить обратную связь по мероприятию.",
+        metadata={"source_type": "xlsx", "category": category, "topic": "generic"},
+        score=1.0,
+        reranker_score=0.95,
+    )
+    expected_chunk = ScoredChunk(
+        chunk_id=expected_chunk_id,
+        text=answer,
+        metadata={"source_type": "xlsx", "category": category, "topic": topic},
+        score=0.5,
+        reranker_score=0.5,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category=category,
+                complexity=Complexity.SIMPLE,
+                questions=[Question(text=query, category=category)],
+            ),
+            "reranked_chunks": [competing_chunk, expected_chunk],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == [expected_chunk_id]
+    assert answer in result["generated_response"]
+
+
+@pytest.mark.asyncio
 async def test_generate_returns_source_chunk_for_duplicate_covered_aspect_questions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4108,6 +4842,387 @@ async def test_generate_prefers_unscoped_grant_source_for_generic_grant_question
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["generic_grant_application"]
     assert "ФГАИС" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_generic_grant_source_category_over_forum_grant_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum_grant = ScoredChunk(
+        chunk_id="forum_grant_terms",
+        text="Подать заявку можно на грантовый конкурс форума «Шум».",
+        metadata={
+            "category": "гранты",
+            "source_category": "Шум",
+            "intent_name": "Условия и сроки участия. Гранты",
+        },
+        score=1.0,
+        reranker_score=0.95,
+    )
+    generic_grant = ScoredChunk(
+        chunk_id="generic_grant_application",
+        text="Чтобы подать заявку на участие в гранте, заполните проектную форму на ФГАИС.",
+        metadata={
+            "category": "гранты",
+            "source_category": "Гранты для физических лиц",
+            "intent_name": "Подать заявку на участие",
+        },
+        score=0.8,
+        reranker_score=0.9,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="гранты",
+                questions=[
+                    Question(
+                        text="Гранты для физических лиц Подать заявку на участие",
+                        category="гранты",
+                    )
+                ],
+            ),
+            "reranked_chunks": [forum_grant, generic_grant],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["generic_grant_application"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_grant_project_change_over_grant_terms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    grant_change = ScoredChunk(
+        chunk_id="generic_grant_change",
+        text="Нужно изменить смету? Напиши на почту grant2024@fadm.gov.ru.",
+        metadata={
+            "category": "гранты",
+            "source_category": "Гранты для физических лиц",
+            "intent_name": "Внести изменения в проект",
+            "topic": "vnesti_izmeneniya_v_proekt",
+            "source_type": "xlsx",
+        },
+        score=1.0,
+        reranker_score=0.7,
+    )
+    grant_terms = ScoredChunk(
+        chunk_id="generic_grant_terms",
+        text=(
+            "В конкурсе могут участвовать граждане Российской Федерации от 14 до 35 лет. "
+            "Физическое лицо вправе представить один проект."
+        ),
+        metadata={
+            "category": "гранты",
+            "source_category": "Гранты для физических лиц",
+            "intent_name": "Условия и сроки участия",
+            "topic": "usloviya_i_sroki_uchastiya",
+            "source_type": "xlsx",
+        },
+        score=0.9,
+        reranker_score=0.7,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="гранты",
+                questions=[],
+            ),
+            "message_masked": "Гранты для физических лиц Внести изменения в проект",
+            "reranked_chunks": [grant_change, grant_terms],
+            "max_confidence": 0.7,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["generic_grant_change"]
+    assert "grant2024@fadm.gov.ru" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_source_chunk_for_complex_single_official_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    grant_agreement = ScoredChunk(
+        chunk_id="grant_agreement",
+        text="По вопросам грантового соглашения нужно обратиться к куратору конкурса.",
+        metadata={"category": "гранты", "source_type": "xlsx"},
+        score=0.9,
+        reranker_score=0.85,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="гранты",
+                questions=[
+                    Question(
+                        text="Что делать, если грантовое соглашение на старые данные?",
+                        category="гранты",
+                    )
+                ],
+            ),
+            "reranked_chunks": [grant_agreement],
+            "max_confidence": 0.85,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["grant_agreement"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_municipal_admin_access_over_generic_technical_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    generic_technical = ScoredChunk(
+        chunk_id="generic_technical",
+        text="Очистите кеш и попробуйте зайти с другого устройства.",
+        metadata={"category": "техподдержка", "topic": "tehnicheskaya_oshibka"},
+        score=1.0,
+        reranker_score=0.95,
+    )
+    admin_access = ScoredChunk(
+        chunk_id="municipal_admin_access",
+        text="Для доступа муниципального администратора обратитесь в региональный ОИВ.",
+        metadata={
+            "category": "техподдержка",
+            "topic": "tehnicheskie_voprosy_dostup_municipalnogo_administratora",
+        },
+        score=0.7,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="техподдержка",
+                questions=[
+                    Question(
+                        text="технические вопросы доступ муниципального администратора",
+                        category="техподдержка",
+                    )
+                ],
+            ),
+            "reranked_chunks": [generic_technical, admin_access],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["cited_sources"] == ["municipal_admin_access"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_sport_recommendation_over_generic_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    generic_recommendation = ScoredChunk(
+        chunk_id="recommendation_generic",
+        text="Посмотри все доступные форумы на events.myrosmol.ru/forumy.",
+        metadata={"category": "общее", "topic": "rekomendacii_obschie"},
+        score=1.0,
+        reranker_score=0.95,
+    )
+    sport_recommendation = ScoredChunk(
+        chunk_id="recommendation_sport",
+        text="Для спорта подойдёт смена «Физическая культура и спорт» на форуме «ТИМ Бирюса».",
+        metadata={"category": "платформа_фгаис", "topic": "rekomendacii_sport"},
+        score=0.7,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="платформа_фгаис",
+                questions=[
+                    Question(text="рекомендации спорт", category="платформа_фгаис")
+                ],
+            ),
+            "reranked_chunks": [generic_recommendation, sport_recommendation],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["cited_sources"] == ["recommendation_sport"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_student_recommendation_over_generic_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    generic_recommendation = ScoredChunk(
+        chunk_id="recommendation_generic",
+        text="Посмотри все доступные форумы на events.myrosmol.ru/forumy.",
+        metadata={"category": "общее", "topic": "rekomendacii_obschie"},
+        score=1.0,
+        reranker_score=0.95,
+    )
+    student_recommendation = ScoredChunk(
+        chunk_id="recommendation_student",
+        text=(
+            "Яркие представители студенческих сообществ соберутся на форумах "
+            "«Истоки», «Утро» и «Полюс»."
+        ),
+        metadata={
+            "category": "платформа_фгаис",
+            "topic": "rekomendacii_studenty",
+            "intent_name": "рекомендации.студенты",
+        },
+        score=0.7,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="платформа_фгаис",
+                questions=[
+                    Question(text="рекомендации.студенты", category="платформа_фгаис")
+                ],
+            ),
+            "reranked_chunks": [generic_recommendation, student_recommendation],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["recommendation_student"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_password_recovery_over_generic_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    generic_support = ScoredChunk(
+        chunk_id="generic_support",
+        text="Если возникла техническая ошибка, обратитесь в поддержку.",
+        metadata={"category": "платформа_фгаис", "topic": "tehnicheskaya_oshibka"},
+        score=1.0,
+        reranker_score=0.95,
+    )
+    password_recovery = ScoredChunk(
+        chunk_id="password_recovery",
+        text="Чтобы восстановить пароль, перейди по ссылке входа и нажми «Восстановить пароль».",
+        metadata={
+            "category": "платформа_фгаис",
+            "source_category": "fallback",
+            "intent_name": "Восстановить пароль",
+            "topic": "vosstanovit_parol",
+        },
+        score=0.7,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="платформа_фгаис",
+                questions=[Question(text="Восстановить пароль", category="платформа_фгаис")],
+            ),
+            "reranked_chunks": [generic_support, password_recovery],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["password_recovery"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_forum_invitation_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    transfer = ScoredChunk(
+        chunk_id="ivolga_transfer",
+        text="Трансфер на форум Иволга будет организован от точки сбора.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Иволга",
+            "topic": "transfer_do_mesta_provedeniya_meropriyatiya",
+        },
+        score=1.0,
+        reranker_score=0.95,
+    )
+    invitation = ScoredChunk(
+        chunk_id="ivolga_invitation",
+        text="Письмо-вызов можно получить по запросу после заполнения формы.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Иволга",
+            "intent_name": "Письмо-вызов",
+            "topic": "pismo_vyzov",
+        },
+        score=0.7,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Иволга",
+                questions=[Question(text="Иволга Письмо-вызов", category="форумы")],
+            ),
+            "message_masked": "Иволга Письмо-вызов",
+            "reranked_chunks": [transfer, invitation],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["ivolga_invitation"]
 
 
 @pytest.mark.asyncio

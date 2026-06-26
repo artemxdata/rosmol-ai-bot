@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -110,7 +111,16 @@ def build_embedding_text(record: KBSeedRecord) -> str:
     return "\n\n".join(parts)
 
 
-async def index_kb(path: Path, collection: str, limit: int | None = None) -> None:
+async def index_kb(
+    path: Path,
+    collection: str,
+    limit: int | None = None,
+    *,
+    prune_stale: bool = False,
+) -> None:
+    if prune_stale and limit is not None:
+        raise ValueError("--prune-stale cannot be used with --limit")
+
     settings = get_settings()
     client = AsyncQdrantClient(url=settings.qdrant_url)
     try:
@@ -162,14 +172,60 @@ async def index_kb(path: Path, collection: str, limit: int | None = None) -> Non
             await client.upsert(collection_name=collection, points=points)
             indexed += len(points)
 
+        pruned_stale = 0
+        if prune_stale:
+            pruned_stale = await prune_stale_points(
+                client,
+                collection,
+                {record.chunk_id for record in records},
+            )
+
         elapsed = perf_counter() - started_at
         limit_label = "all" if limit is None else str(limit)
         print(
-            f"indexed={indexed} skipped=0 collection={collection} "
+            f"indexed={indexed} skipped=0 pruned_stale={pruned_stale} collection={collection} "
             f"limit={limit_label} elapsed_sec={elapsed:.2f}"
         )
     finally:
         await client.close()
+
+
+async def prune_stale_points(
+    client: AsyncQdrantClient,
+    collection: str,
+    allowed_chunk_ids: set[str],
+    *,
+    scroll_limit: int = 256,
+    delete_batch_size: int = 256,
+) -> int:
+    stale_point_ids: list[Any] = []
+    next_page_offset: Any = None
+
+    while True:
+        points, next_page_offset = await client.scroll(
+            collection_name=collection,
+            with_payload=["chunk_id"],
+            with_vectors=False,
+            limit=scroll_limit,
+            offset=next_page_offset,
+        )
+        for point in points:
+            payload = getattr(point, "payload", None) or {}
+            chunk_id = payload.get("chunk_id")
+            if not isinstance(chunk_id, str) or chunk_id not in allowed_chunk_ids:
+                stale_point_ids.append(point.id)
+
+        if next_page_offset is None:
+            break
+
+    for offset in range(0, len(stale_point_ids), delete_batch_size):
+        batch = stale_point_ids[offset : offset + delete_batch_size]
+        await client.delete(
+            collection_name=collection,
+            points_selector=models.PointIdsList(points=batch),
+        )
+
+    return len(stale_point_ids)
 
 
 def validate_only(path: Path) -> None:
@@ -219,6 +275,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Index only the first N valid records. Useful for ML smoke tests.",
     )
+    parser.add_argument(
+        "--prune-stale",
+        action="store_true",
+        help=(
+            "After indexing, delete Qdrant points whose chunk_id is not present in the "
+            "current seed. Refuses to run with --limit."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -235,7 +299,14 @@ def main() -> None:
             )
             validate_quality_gate(quality_gate_path)
         try:
-            asyncio.run(index_kb(Path(args.path), args.collection, args.limit))
+            asyncio.run(
+                index_kb(
+                    Path(args.path),
+                    args.collection,
+                    args.limit,
+                    prune_stale=args.prune_stale,
+                )
+            )
         except MLDependencyError as exc:
             print(
                 "ML dependencies are required for indexing. "

@@ -18,6 +18,9 @@ def audit_seed_records(
         *_find_trailing_export_quotes(records),
         *_find_template_artifacts(records),
         *_find_missing_metadata(records),
+        *_find_private_source_references(records),
+        *_find_short_published_texts(records),
+        *_find_offtopic_records_with_context(records),
         *_find_grant_records_with_forum(records),
         *_find_duplicate_texts(records),
         *_find_forum_coverage_findings(
@@ -170,6 +173,8 @@ def _registry_forums(forum_registry: list[dict[str, Any]]) -> set[str]:
         if not isinstance(item, dict):
             continue
         forum = str(item.get("normalized") or item.get("name") or "").strip()
+        if "грант" in forum.casefold():
+            continue
         if forum:
             forums.add(forum)
     return forums
@@ -229,6 +234,71 @@ def _find_missing_metadata(records: list[dict[str, Any]]) -> list[dict[str, Any]
                 }
             )
     return findings
+
+
+def _find_private_source_references(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    private_markers = ("data/private", "data\\private", "tickets", "hde")
+    chunk_ids = [
+        str(record.get("chunk_id"))
+        for record in records
+        if any(
+            marker in str(record.get(field) or "").casefold().replace("\\", "/")
+            for field in ("source_file", "source_path", "source")
+            for marker in private_markers
+        )
+    ]
+    if not chunk_ids:
+        return []
+    return [
+        {
+            "code": "private_source_reference",
+            "severity": "error",
+            "message": "KB record references private ticket/HDE source material",
+            "count": len(chunk_ids),
+            "chunk_ids": chunk_ids[:50],
+        }
+    ]
+
+
+def _find_short_published_texts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    chunk_ids = [
+        str(record.get("chunk_id"))
+        for record in records
+        if str(record.get("status") or "published") == "published"
+        and str(record.get("category") or "") != "навигация"
+        and 0 < _record_char_count(record) < 10
+    ]
+    if not chunk_ids:
+        return []
+    return [
+        {
+            "code": "short_published_text",
+            "severity": "warning",
+            "message": "published non-navigation chunk is very short and may be weak for RAG",
+            "count": len(chunk_ids),
+            "chunk_ids": chunk_ids[:50],
+        }
+    ]
+
+
+def _find_offtopic_records_with_context(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    chunk_ids = [
+        str(record.get("chunk_id"))
+        for record in records
+        if str(record.get("topic") or "") == "offtop_ne_po_rosmolodezhi"
+        and (record.get("forum") or record.get("forum_normalized"))
+    ]
+    if not chunk_ids:
+        return []
+    return [
+        {
+            "code": "offtopic_record_has_context",
+            "severity": "warning",
+            "message": "off-topic fallback record should not carry forum context",
+            "count": len(chunk_ids),
+            "chunk_ids": chunk_ids[:50],
+        }
+    ]
 
 
 def _find_grant_records_with_forum(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

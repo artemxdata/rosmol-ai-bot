@@ -5,7 +5,17 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any
 
-IGNORED_SOURCE_CATEGORY_PREFIXES = {"fallback", "fallback_condition"}
+IGNORED_SOURCE_CATEGORY_PREFIXES = ("fallback", "fallback_condition", "nlu/other")
+DANGLING_QUERY_SUFFIXES = (
+    "в",
+    "во",
+    "на",
+    "о",
+    "об",
+    "по",
+    "к",
+    "с",
+)
 CATEGORY_QUERY_CONFLICT_MARKERS = (
     " смен",
     "смене",
@@ -206,6 +216,7 @@ def _case_from_record(
     require_cited_chunks: bool = False,
 ) -> dict[str, Any]:
     chunk_id = str(record["chunk_id"])
+    expected_behavior = _expected_behavior(record)
     tags = ["seed_balanced", f"category:{record.get('category') or 'unknown'}"]
     source_type = _clean_optional(record.get("source_type"))
     if source_type:
@@ -220,14 +231,15 @@ def _case_from_record(
         "query": seed_smoke_query(record),
         "user_id": f"{user_prefix}-{index}",
         "channel": "api",
-        "expected_chunk_ids": [chunk_id],
+        "expected_chunk_ids": [] if expected_behavior != "answer" else [chunk_id],
         "expected_answer_contains": [],
+        "expected_behavior": expected_behavior,
         "expected_escalated": None,
         "expected_escalation_reason": None,
         "expected_generator_model": None,
         "tags": tags,
     }
-    if require_cited_chunks:
+    if require_cited_chunks and expected_behavior == "answer":
         case["expected_cited_chunk_ids"] = [chunk_id]
     return case
 
@@ -271,12 +283,14 @@ def seed_smoke_query(record: dict[str, Any]) -> str:
     if examples:
         example = _select_seed_example(record, examples)
         prefix = _seed_query_prefix(record)
-        return " ".join(part for part in [str(prefix), example] if part).strip()
+        return _clean_seed_query(" ".join(part for part in [str(prefix), example] if part))
     intent = record.get("intent_name")
     if intent:
-        prefix = _seed_query_prefix(record)
-        return " ".join(part for part in [str(prefix), str(intent)] if part).strip()
-    return str(record.get("text_clean") or "")[:160]
+        prefix = _seed_intent_query_prefix(record)
+        return _clean_seed_query(
+            " ".join(part for part in [str(prefix), str(intent)] if part),
+        )
+    return _clean_seed_query(str(record.get("text_clean") or "")[:160])
 
 
 def _select_seed_example(record: dict[str, Any], examples: list[Any]) -> str:
@@ -300,7 +314,9 @@ def _has_category_query_conflict(example: str) -> bool:
 
 def _seed_query_prefix(record: dict[str, Any]) -> str:
     category = _clean_optional(record.get("category")).casefold()
-    forum = _clean_optional(record.get("forum_normalized"))
+    forum = _clean_optional(record.get("forum_normalized")) or _clean_optional(
+        record.get("forum"),
+    )
     if forum and (not category or category == "форумы"):
         return forum
 
@@ -308,10 +324,47 @@ def _seed_query_prefix(record: dict[str, Any]) -> str:
         return ""
 
     source_category = _clean_optional(record.get("source_category"))
-    if source_category.casefold() in IGNORED_SOURCE_CATEGORY_PREFIXES:
+    if _is_ignored_source_category(source_category):
         return ""
     return source_category
 
 
+def _seed_intent_query_prefix(record: dict[str, Any]) -> str:
+    prefix = _seed_query_prefix(record)
+    if prefix:
+        return prefix
+
+    category = _clean_optional(record.get("category")).casefold()
+    if category and category != "форумы":
+        source_category = _clean_optional(record.get("source_category"))
+        if source_category and not _is_ignored_source_category(source_category):
+            return source_category
+    return ""
+
+
+def _expected_behavior(record: dict[str, Any]) -> str:
+    topic = _clean_optional(record.get("topic")).casefold()
+    if topic == "offtop_ne_po_rosmolodezhi":
+        return "scope_note"
+    if topic == "pereklyuchit_na_operatora":
+        return "escalate"
+    return "answer"
+
+
 def _clean_optional(value: object) -> str:
     return str(value or "").strip()
+
+
+def _clean_seed_query(value: str) -> str:
+    words = value.strip().split()
+    while words and words[-1].casefold().strip(".,;:!?") in DANGLING_QUERY_SUFFIXES:
+        words.pop()
+    return " ".join(words)
+
+
+def _is_ignored_source_category(value: str) -> bool:
+    normalized = value.casefold().strip()
+    return any(
+        normalized == prefix or normalized.startswith(f"{prefix}/")
+        for prefix in IGNORED_SOURCE_CATEGORY_PREFIXES
+    )

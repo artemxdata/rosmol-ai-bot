@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.index_kb import (
     build_embedding_text,
+    prune_stale_points,
     validate_only,
     validate_quality_gate,
     validate_seed_items,
@@ -117,3 +119,49 @@ def test_build_embedding_text_includes_intent_examples_without_changing_answer()
     assert "Интент: Оплата проезда" in embedding_text
     assert "Ответ:\nБилеты до Пятигорска оплачиваются самостоятельно." in embedding_text
     assert record.content == "Билеты до Пятигорска оплачиваются самостоятельно."
+
+
+class FakeQdrantForPrune:
+    def __init__(self) -> None:
+        self.scroll_calls = []
+        self.delete_calls = []
+        self.pages = [
+            [
+                SimpleNamespace(id="keep-point", payload={"chunk_id": "keep"}),
+                SimpleNamespace(id="stale-point", payload={"chunk_id": "stale"}),
+            ],
+            [
+                SimpleNamespace(id="missing-chunk-id", payload={}),
+            ],
+        ]
+
+    async def scroll(self, **kwargs):
+        self.scroll_calls.append(kwargs)
+        page_index = len(self.scroll_calls) - 1
+        next_page_offset = "next" if page_index + 1 < len(self.pages) else None
+        return self.pages[page_index], next_page_offset
+
+    async def delete(self, **kwargs):
+        self.delete_calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_prune_stale_points_removes_only_chunks_missing_from_seed() -> None:
+    qdrant = FakeQdrantForPrune()
+
+    deleted = await prune_stale_points(
+        qdrant,  # type: ignore[arg-type]
+        "knowledge_base",
+        {"keep"},
+        scroll_limit=2,
+        delete_batch_size=1,
+    )
+
+    assert deleted == 2
+    assert len(qdrant.scroll_calls) == 2
+    assert qdrant.scroll_calls[0]["with_payload"] == ["chunk_id"]
+    assert qdrant.scroll_calls[0]["with_vectors"] is False
+    assert [call["points_selector"].points for call in qdrant.delete_calls] == [
+        ["stale-point"],
+        ["missing-chunk-id"],
+    ]
