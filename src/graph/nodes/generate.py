@@ -366,11 +366,13 @@ def select_deterministic_source_chunks(
 
     selected: list[ScoredChunk] = []
     selected_ids: set[str] = set()
+    has_multiple_questions = _has_multiple_distinct_questions(questions)
     original_question = _original_question(analysis, message)
     if original_question is None and len(questions) == 1:
         original_question = questions[0]
-    if _is_specific_technical_question(original_question) or _is_feedback_question(
-        original_question
+    if not has_multiple_questions and (
+        _is_specific_technical_question(original_question)
+        or _is_feedback_question(original_question)
     ):
         specific_raw_source = _specific_source_for_original_question(
             original_question,
@@ -380,44 +382,45 @@ def select_deterministic_source_chunks(
         if specific_raw_source is not None:
             return [specific_raw_source]
 
-    exact_raw_source = _exact_source_for_original_question(
-        original_question,
-        chunks,
-        analysis=analysis,
-        min_intent_score=2,
-    )
-    if exact_raw_source is not None:
-        return [exact_raw_source]
-    specific_raw_source = _specific_source_for_original_question(
-        original_question,
-        chunks,
-        analysis=analysis,
-    )
-    if specific_raw_source is not None:
-        return [specific_raw_source]
-    trusted_raw_answer_bank = _trusted_top_answer_bank_source(
-        chunks,
-        getattr(settings, "reranker_threshold_high", 0.7),
-        analysis=analysis,
-        original_question=original_question,
-        require_original_match=True,
-    )
-    if trusted_raw_answer_bank is not None:
-        return [trusted_raw_answer_bank]
-    trusted_compatible_answer_bank = _trusted_top_compatible_answer_bank_source(
-        chunks,
-        getattr(settings, "reranker_threshold_high", 0.7),
-        analysis=analysis,
-    )
-    if trusted_compatible_answer_bank is not None:
-        return [trusted_compatible_answer_bank]
-    trusted_raw_official = _trusted_top_official_source(
-        chunks,
-        getattr(settings, "reranker_threshold_high", 0.7),
-        analysis=analysis,
-    )
-    if trusted_raw_official is not None and len(questions) == 1:
-        return [trusted_raw_official]
+    if not has_multiple_questions:
+        exact_raw_source = _exact_source_for_original_question(
+            original_question,
+            chunks,
+            analysis=analysis,
+            min_intent_score=2,
+        )
+        if exact_raw_source is not None:
+            return [exact_raw_source]
+        specific_raw_source = _specific_source_for_original_question(
+            original_question,
+            chunks,
+            analysis=analysis,
+        )
+        if specific_raw_source is not None:
+            return [specific_raw_source]
+        trusted_raw_answer_bank = _trusted_top_answer_bank_source(
+            chunks,
+            getattr(settings, "reranker_threshold_high", 0.7),
+            analysis=analysis,
+            original_question=original_question,
+            require_original_match=True,
+        )
+        if trusted_raw_answer_bank is not None:
+            return [trusted_raw_answer_bank]
+        trusted_compatible_answer_bank = _trusted_top_compatible_answer_bank_source(
+            chunks,
+            getattr(settings, "reranker_threshold_high", 0.7),
+            analysis=analysis,
+        )
+        if trusted_compatible_answer_bank is not None:
+            return [trusted_compatible_answer_bank]
+        trusted_raw_official = _trusted_top_official_source(
+            chunks,
+            getattr(settings, "reranker_threshold_high", 0.7),
+            analysis=analysis,
+        )
+        if trusted_raw_official is not None:
+            return [trusted_raw_official]
 
     candidates = _candidate_source_chunks(analysis, chunks)
     if not candidates:
@@ -442,10 +445,7 @@ def select_deterministic_source_chunks(
             question,
             candidates,
         )
-        source_chunk = _exact_source_for_original_question(
-            original_question,
-            question_candidates,
-        )
+        source_chunk = _exact_source_for_original_question(question, question_candidates)
         if source_chunk is not None:
             if source_chunk.chunk_id in selected_ids:
                 continue
@@ -484,6 +484,15 @@ def select_deterministic_source_chunk(
     if len(source_chunks) != 1:
         return None
     return source_chunks[0]
+
+
+def _has_multiple_distinct_questions(questions: list[Question]) -> bool:
+    normalized_questions = {
+        _normalize(question.text)
+        for question in questions
+        if str(question.text or "").strip()
+    }
+    return len(normalized_questions) > 1
 
 
 def build_deterministic_source_response(chunks: list[ScoredChunk] | ScoredChunk) -> str | None:

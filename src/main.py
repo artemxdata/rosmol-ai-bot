@@ -19,6 +19,7 @@ from src.channels.hde import HDEAdapter
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
 from src.config import get_settings
+from src.graph.context import is_context_dependent_followup
 from src.graph.graph import build_graph
 from src.kb.forum_registry import detect_forum_from_text
 from src.llm.client import CloudRuLLMClient
@@ -455,6 +456,7 @@ async def process_message(
 
     routing_hint = estimate_routing_hint(masked_text)
     detected_forum = detect_forum_from_text(message.text)
+    cache_allowed = not is_context_dependent_followup(masked_text, session)
 
     tracer = Tracer()
     state = {
@@ -472,10 +474,11 @@ async def process_message(
         "retriever": fastapi_app.state.retriever,
         "reranker": fastapi_app.state.reranker,
         "cache_hit": False,
+        "cache_allowed": cache_allowed,
     }
 
     cached_response = None
-    if not bypass_cache:
+    if not bypass_cache and cache_allowed:
         cached_response = await _check_cache(
             fastapi_app,
             masked_text,
@@ -527,7 +530,7 @@ async def process_message(
     await fastapi_app.state.sessions.append_turn(session, masked_text, response)
     result["total_latency_ms"] = int((perf_counter() - started_at) * 1000)
     await _update_memory(fastapi_app, user_id_hash, message.channel.value, result)
-    if not bypass_cache:
+    if not bypass_cache and cache_allowed:
         await _save_cache(fastapi_app, masked_text, response, result)
     await _safe_log(fastapi_app, result)
     return response

@@ -5549,6 +5549,67 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
     assert "Победителям оплачивают проезд" in result["generated_response"]
 
 
+@pytest.mark.asyncio
+async def test_generate_selects_source_for_each_multi_aspect_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum = "Амур"
+    application = ScoredChunk(
+        chunk_id="amur_application",
+        text="Обратите внимание: регистрация на форум «Амур» закрыта.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "podacha_zayavki_na_proekt",
+            "intent_name": "Подача заявки на проект",
+            "intent_examples": ["Как подать заявку на форум?"],
+        },
+        score=0.98,
+        reranker_score=0.95,
+    )
+    travel = ScoredChunk(
+        chunk_id="amur_travel",
+        text="Обычно оплата проезда осуществляется за счёт направляющей стороны.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "oplata_proezda",
+            "intent_name": "Оплата проезда",
+        },
+        score=0.72,
+        reranker_score=0.7,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized=forum,
+                questions=[
+                    Question(text="Как подать заявку или зарегистрироваться?", category="форумы"),
+                    Question(text="Кто оплачивает проезд?", category="форумы"),
+                ],
+            ),
+            "message_masked": "Амур: как подать заявку, оплачивается ли проезд?",
+            "reranked_chunks": [application, travel],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["amur_application", "amur_travel"]
+    assert "регистрация на форум «Амур» закрыта" in result["generated_response"]
+    assert "оплата проезда" in result["generated_response"]
+
+
 def test_source_chunk_response_deduplicates_repeated_paragraphs_and_links() -> None:
     chunks = [
         ScoredChunk(

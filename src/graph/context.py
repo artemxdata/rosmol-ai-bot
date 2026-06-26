@@ -72,6 +72,15 @@ def build_contextual_message(
     return f"{forum}: {text}"
 
 
+def is_context_dependent_followup(message: str, session: Session | None) -> bool:
+    text = str(message or "").strip()
+    if not text or not _is_forum_followup(text):
+        return False
+    if detect_forums_from_text(text):
+        return False
+    return bool(last_forum_from_session(session))
+
+
 def last_forum_from_session(session: Session | None) -> str | None:
     if session is None:
         return None

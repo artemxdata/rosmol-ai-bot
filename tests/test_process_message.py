@@ -46,10 +46,13 @@ class FakeRedis:
 
 
 class FakeSessions:
-    def __init__(self) -> None:
+    def __init__(self, session: Session | None = None) -> None:
         self.appended: list[tuple[str, str]] = []
+        self.session = session
 
     async def get_or_create(self, channel: str, user_id: str) -> Session:
+        if self.session is not None:
+            return self.session
         return Session(
             user_id=user_id,
             channel=Channel(channel),
@@ -158,12 +161,13 @@ def _app(
     llm_client: Any | None = None,
     retriever: Any | None = None,
     reranker: Any | None = None,
+    session: Session | None = None,
 ) -> SimpleNamespace:
     state = SimpleNamespace(
         rate_limiter=FakeRateLimiter(allowed),
         pii_masker=FakePIIMasker(masked_text, pii_mapping),
         redis=FakeRedis(),
-        sessions=FakeSessions(),
+        sessions=FakeSessions(session),
         semantic_cache=FakeSemanticCache(cached_response),
         graph=graph or FailingGraph(),
         llm_client=llm_client or object(),
@@ -274,6 +278,44 @@ async def test_process_message_returns_semantic_cache_hit(
     assert response == "Ответ из кэша"
     assert app.state.sessions.appended == [("Кто платит за дорогу?", "Ответ из кэша")]
     assert captured_logs[0]["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_message_skips_cache_for_contextual_followup(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash=hash_user_id(Channel.API.value, "u1"),
+        last_messages=[
+            {
+                "user": "Подскажи по форуму Амур: как подать заявку?",
+                "bot": "Регистрация на форум «Амур» закрыта.",
+            }
+        ],
+    )
+    graph = CapturingGraph("Свежий ответ из graph")
+    app = _app(
+        cached_response="Старый ответ из кэша про проезд",
+        graph=graph,
+        session=session,
+    )
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.API,
+        text="А что делать, если я уже подтвердил участие, но теперь не могу поехать?",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Свежий ответ из graph"
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+    assert graph.seen_state is not None
+    assert graph.seen_state["cache_allowed"] is False
+    assert captured_logs[0]["cache_hit"] is False
 
 
 @pytest.mark.asyncio
