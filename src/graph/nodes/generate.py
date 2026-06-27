@@ -279,7 +279,13 @@ async def _generate_with_llm(
     started_at: float,
 ) -> dict:
     tracer = state.get("trace")
-    model = select_generator_model(analysis.complexity)
+    generator_complexity = _generator_complexity(
+        state,
+        analysis,
+        questions,
+        source_chunks,
+    )
+    model = select_generator_model(generator_complexity)
     try:
         content = await state["llm_client"].generate(
             model=model,
@@ -371,6 +377,21 @@ def _should_synthesize_with_llm(
     if analysis.complexity == Complexity.COMPLEX:
         return True
     return len(source_chunks) > 1 and _has_multiple_distinct_questions(questions)
+
+
+def _generator_complexity(
+    state: BotState,
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+) -> Complexity:
+    if _is_contextual_synthesis_case(state):
+        return Complexity.COMPLEX
+    if analysis.complexity == Complexity.COMPLEX:
+        return Complexity.COMPLEX
+    if len(source_chunks) > 1 and _has_multiple_distinct_questions(questions):
+        return Complexity.COMPLEX
+    return Complexity.SIMPLE
 
 
 def _is_contextual_synthesis_case(state: BotState) -> bool:

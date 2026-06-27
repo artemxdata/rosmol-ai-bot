@@ -3194,6 +3194,58 @@ async def test_generate_synthesizes_multi_aspect_answer_from_sources(
     )
 
     assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert result["generated_response"].startswith("Регистрация закрыта")
+    assert result["cited_sources"] == ["apply", "travel"]
+
+
+@pytest.mark.asyncio
+async def test_generate_synthesizes_simple_multi_aspect_answer_with_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    apply_chunk = ScoredChunk(
+        chunk_id="apply",
+        text="Регистрация на форум закрыта, даты приёма заявок объявят позже.",
+        metadata={"chunk_id": "apply", "category": "форумы", "topic": "podacha_zayavki"},
+        score=0.9,
+        reranker_score=0.9,
+    )
+    travel_chunk = ScoredChunk(
+        chunk_id="travel",
+        text="Проезд обычно оплачивает направляющая сторона или сам участник.",
+        metadata={"chunk_id": "travel", "category": "форумы", "topic": "oplata_proezda"},
+        score=0.8,
+        reranker_score=0.82,
+    )
+    llm = CapturingLLM(
+        "Регистрация закрыта, даты объявят позже. [src:apply]\n\n"
+        "Проезд обычно оплачивает направляющая сторона или сам участник. [src:travel]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Как подать заявку и оплачивается ли проезд?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                complexity=Complexity.SIMPLE,
+                questions=[
+                    Question(text="Как подать заявку?", category="форумы"),
+                    Question(text="Кто оплачивает проезд?", category="форумы"),
+                ],
+            ),
+            "reranked_chunks": [apply_chunk, travel_chunk],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
     assert result["generator_model"] != "source_chunk"
     assert result["generated_response"].startswith("Регистрация закрыта")
     assert result["cited_sources"] == ["apply", "travel"]
