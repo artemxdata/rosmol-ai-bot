@@ -280,6 +280,7 @@ def build_excel_answer_records(
             continue
 
         text_clean = clean_bot_text(answer_raw)
+        text_clean = clean_excel_answer_text(intent, text_clean)
         if not text_clean:
             continue
 
@@ -422,6 +423,12 @@ def clean_bot_text(value: str) -> str:
     lines = [_normalize_plain_text(line) for line in text.split("\n")]
     cleaned = "\n".join(line for line in lines if line).strip()
     return _strip_export_quote_artifact(cleaned)
+
+
+def clean_excel_answer_text(intent: str, text: str) -> str:
+    if slugify(intent) == "gde_nayti_id_profilya":
+        return text.split("\nОшибка входа.", 1)[0].strip()
+    return text
 
 
 def _render_known_random_template(value: str) -> str:

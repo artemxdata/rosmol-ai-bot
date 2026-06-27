@@ -184,19 +184,38 @@ async def run_eval(
     if bypass_cache:
         headers["X-Bypass-Cache"] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    budget_stopped = False
     async with httpx.AsyncClient(transport=transport, timeout=request_timeout) as client:
-        tasks = [
-            _run_case(
-                client=client,
-                target=target,
-                headers=headers,
-                case=case,
-                semaphore=semaphore,
-                trace_pool=trace_pool,
-            )
-            for case in cases
-        ]
-        results = await asyncio.gather(*tasks)
+        if max_llm_cost_rub is None:
+            tasks = [
+                _run_case(
+                    client=client,
+                    target=target,
+                    headers=headers,
+                    case=case,
+                    semaphore=semaphore,
+                    trace_pool=trace_pool,
+                )
+                for case in cases
+            ]
+            results = await asyncio.gather(*tasks)
+        else:
+            # Budget enforcement needs trace usage after each response, so run cases sequentially.
+            results = []
+            sequential_semaphore = asyncio.Semaphore(1)
+            for case in cases:
+                result = await _run_case(
+                    client=client,
+                    target=target,
+                    headers=headers,
+                    case=case,
+                    semaphore=sequential_semaphore,
+                    trace_pool=trace_pool,
+                )
+                results.append(result)
+                if _llm_cost_rub_total(results) > max_llm_cost_rub:
+                    budget_stopped = True
+                    break
 
     if trace_pool:
         await trace_pool.close()
@@ -214,6 +233,10 @@ async def run_eval(
         max_cases=max_cases,
         max_llm_cost_rub=max_llm_cost_rub,
     )
+    if budget_stopped:
+        metrics["cases_original_total"] = original_cases_total
+        metrics["cases_limited"] = True
+        metrics["llm_budget_stopped"] = True
     await asyncio.to_thread(_write_json, output_path, metrics)
     if markdown_path:
         await asyncio.to_thread(_write_markdown, markdown_path, metrics)
@@ -372,6 +395,16 @@ def _apply_run_limits(
     actual_cost = float(metrics.get("llm_estimated_cost_rub") or 0.0)
     metrics["llm_budget_rub"] = max_llm_cost_rub
     metrics["llm_budget_exceeded"] = actual_cost > max_llm_cost_rub
+
+
+def _llm_cost_rub_total(results: list[dict[str, Any]]) -> float:
+    total = 0.0
+    for item in results:
+        try:
+            total += float(item.get("llm_estimated_cost_rub") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return total
 
 
 def score_case(

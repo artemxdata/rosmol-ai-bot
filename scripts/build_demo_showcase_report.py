@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from src.graph.nodes.respond import normalize_final_response
 
 
 def main() -> None:
@@ -102,7 +107,7 @@ def build_markdown(
                 f"- Поведение: `{item.get('observed_behavior')}`",
                 f"- Модель/режим: `{item.get('generator_model')}`",
                 f"- Источники: `{', '.join(item.get('cited_source_ids') or []) or 'нет'}`",
-                f"- Ответ: {_md(item.get('response') or '')}",
+                f"- Ответ: {_md(_display_response(item))}",
                 "",
             ]
         )
@@ -128,7 +133,7 @@ def build_markdown(
                 query=_md(_clip(case.get("query") or item.get("query") or "", 120)),
                 behavior=item.get("observed_behavior"),
                 model=item.get("generator_model"),
-                response=_md(_clip(item.get("response") or "", 180)),
+                response=_md(_clip(_display_response(item), 180)),
                 sources=_md(_clip(", ".join(item.get("cited_source_ids") or []), 160)),
             )
         )
@@ -152,6 +157,10 @@ def build_markdown(
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _display_response(item: dict[str, Any]) -> str:
+    return normalize_final_response(str(item.get("response") or ""))
 
 
 def _group(item: dict[str, Any]) -> str:

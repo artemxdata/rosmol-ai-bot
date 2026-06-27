@@ -1,32 +1,32 @@
 # Ask Eval Report
 
-- Generated: `2026-06-26T13:46:02.487287+00:00`
-- Target: `http://localhost:8001/ask`
+- Generated: `2026-06-27T17:12:55.938555+00:00`
+- Target: `http://127.0.0.1:8001/ask`
 - Cases: `100`
 - Pass rate: `100.0%`
 - HTTP success rate: `100.0%`
-- Expected chunk hit rate: `100.0%`
+- Expected chunk hit rate: `99.0%`
 - Expected or equivalent chunk hit rate: `100.0%`
-- Expected cited chunk hit rate: `97.9%`
+- Expected cited chunk hit rate: `91.5%`
 - Expected cited or equivalent chunk hit rate: `100.0%`
-- Escalation rate: `8.0%`
+- Escalation rate: `9.0%`
 - Behavior match rate: `100.0%`
 - Cache hit rate: `0.0%`
-- Source chunk rate: `95.0%`
+- Source chunk rate: `38.0%`
 - Low-confidence chunk hits: `0` (`0.0%`)
 - Likely infrastructure failure: `False`
-- LLM cost, RUB: `1.563979`
-- LLM budget, RUB: `30.0`
-- LLM budget exceeded: `False`
+- LLM cost, RUB: `90.914489`
+- LLM budget, RUB: `None`
+- LLM budget exceeded: `None`
 
 ## Latency
 
 | Metric | HTTP ms | Trace ms |
 |---|---:|---:|
-| avg | 6464.87 | 5035.87 |
-| p50 | 4431 | 2798 |
-| p95 | 13488 | 9799 |
-| max | 65501 | 65270 |
+| avg | 8206.32 | 8170.09 |
+| p50 | 4118 | 4108 |
+| p95 | 36789 | 36764 |
+| max | 67573 | 67550 |
 
 ## Reranker Score
 

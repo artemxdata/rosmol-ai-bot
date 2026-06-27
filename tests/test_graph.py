@@ -451,6 +451,62 @@ async def test_respond_normalizes_ty_verbs_and_sentence_spacing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_respond_preserves_links_email_and_time_spacing() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Напишите на reportgrant2024@fadm.gov.ru с 09:00 до 18:00."
+                "Профиль: https://myrosmol.ru/profile?section=accounts."
+                "События: events.myrosmol.ru/forumy/. [src:contacts]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == (
+        "Напиши на reportgrant2024@fadm.gov.ru с 09:00 до 18:00. "
+        "Профиль: https://myrosmol.ru/profile?section=accounts. "
+        "События: events.myrosmol.ru/forumy/."
+    )
+
+
+@pytest.mark.asyncio
+async def test_respond_repairs_llm_spacing_inside_structured_tokens() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Свяжись с нами: reportgrant2024@fadm. gov. ru, "
+                "пн-пт 09: 00-18: 00. Кабинет myrosmol. ru/profile? section=accounts. "
+                "[src:contacts]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == (
+        "Свяжись с нами: reportgrant2024@fadm.gov.ru, "
+        "пн-пт 09:00-18:00. Кабинет myrosmol.ru/profile?section=accounts."
+    )
+
+
+@pytest.mark.asyncio
+async def test_respond_normalizes_common_polite_instruction_verbs() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Давайте мы тебе поможем. Выйдите из аккаунта. Войдите через Госуслуги. "
+                "Отмените привязку и повторите попытку. Убедитесь, что вы используете ваш аккаунт. "
+                "Если вы хотите привязать Госуслуги, нажмите кнопку. [src:profile]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == (
+        "Давай мы тебе поможем. Выйди из аккаунта. Войди через Госуслуги. "
+        "Отмени привязку и повтори попытку. Убедись, что ты используешь твой аккаунт. "
+        "Если ты хочешь привязать Госуслуги, нажми кнопку."
+    )
+
+
+@pytest.mark.asyncio
 async def test_escalate_returns_only_safe_note_for_partial_source_coverage() -> None:
     result = await escalate(
         {
@@ -4947,6 +5003,69 @@ async def test_generate_uses_source_chunk_for_single_official_complex_forum_ques
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["ivolga_memo"]
     assert "памятке участника" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_event_overview_source_for_forum_summary_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    overview = ScoredChunk(
+        chunk_id="russian_north_overview",
+        text=(
+            "Форум «Российский Север» — межнациональная площадка для активной молодежи. "
+            "Главная тема — креативные индустрии и сохранение культурного наследия."
+        ),
+        metadata={
+            "source_type": "xlsx",
+            "category": "форумы",
+            "forum_normalized": "Российский Север",
+            "topic": "o_meropriyatii",
+            "intent_name": "Суть форума и направления",
+        },
+        score=0.9,
+        reranker_score=0.91,
+    )
+    programme = ScoredChunk(
+        chunk_id="russian_north_programme",
+        text="Подробная сетка расписания со всеми лекциями откроется за день до начала форума.",
+        metadata={
+            "source_type": "xlsx",
+            "category": "форумы",
+            "forum_normalized": "Российский Север",
+            "topic": "programma_foruma",
+            "intent_name": "Программа форума",
+        },
+        score=0.88,
+        reranker_score=0.9,
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Российский Север Суть форума и направления",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                complexity=Complexity.COMPLEX,
+                forum_normalized="Российский Север",
+                questions=[
+                    Question(
+                        text="Российский Север Суть форума и направления",
+                        category="форумы",
+                        forum_normalized="Российский Север",
+                    )
+                ],
+            ),
+            "reranked_chunks": [programme, overview],
+            "max_confidence": 0.91,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["russian_north_overview"]
 
 
 @pytest.mark.parametrize(

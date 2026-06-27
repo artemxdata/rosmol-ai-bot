@@ -112,6 +112,40 @@ def test_fallback_excel_records_do_not_inherit_forum_metadata() -> None:
     assert records[0]["forum_normalized"] is None
 
 
+def test_excel_records_trim_noisy_profile_id_fallback_answer() -> None:
+    rows = [
+        SpreadsheetRow(
+            "FALLBACK",
+            8,
+            (
+                "",
+                "Где найти ID профиля?",
+                (
+                    "Чтобы скопировать ID профиля, нажмите на кнопку ID — она находится "
+                    "рядом с аватаром в вашем личном кабинете myrosmol.ru/profile.\n"
+                    "Ошибка входа. Данный аккаунт привязан к кабинету другого пользователя.\n"
+                    "Выйдите из аккаунта."
+                ),
+            ),
+        )
+    ]
+
+    records = build_excel_answer_records(
+        rows=rows,
+        sheet_category="fallback",
+        source_file="Новый бот Росмол .xlsx",
+        intent_examples={},
+        registry=[],
+        extraction_date=date(2026, 6, 27),
+    )
+
+    assert records[0]["text_clean"] == (
+        "Чтобы скопировать ID профиля, нажмите на кнопку ID — она находится "
+        "рядом с аватаром в вашем личном кабинете myrosmol.ru/profile."
+    )
+    assert "Ошибка входа" not in records[0]["text_clean"]
+
+
 def test_excel_records_prefer_source_category_forum_over_grant_alias() -> None:
     rows = [
         SpreadsheetRow(

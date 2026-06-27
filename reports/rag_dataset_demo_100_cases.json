@@ -1156,7 +1156,12 @@
     "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
     "topics": [
       "podacha_zayavki_na_proekt"
-    ]
+    ],
+    "equivalent_chunk_ids": {
+      "xlsx_category_r0045_podacha_zayavki_na_proekt": [
+        "xlsx_category_r0493_podacha_zayavki_na_proekt"
+      ]
+    }
   },
   {
     "id": "rag_dataset_demo::typical::038",
@@ -1469,7 +1474,13 @@
     "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
     "topics": [
       "sut_foruma_i_napravleniya"
-    ]
+    ],
+    "equivalent_chunk_ids": {
+      "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya": [
+        "xlsx_category_r0644_o_meropriyatii",
+        "xlsx_category_r0658_programma_foruma"
+      ]
+    }
   },
   {
     "id": "rag_dataset_demo::typical::048",
@@ -1501,7 +1512,12 @@
     "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
     "topics": [
       "vozrastnye_ogranicheniya"
-    ]
+    ],
+    "equivalent_chunk_ids": {
+      "docx_forum_rossiyskiy_sever_intenty_002_vozrastnye_ogranicheniya": [
+        "xlsx_category_r0645_vozrastnye_ogranicheniya"
+      ]
+    }
   },
   {
     "id": "rag_dataset_demo::typical::049",
@@ -1533,7 +1549,12 @@
     "source_basis": "sanitized representative prompt selected from local eval fixtures using the RAG_Dataset typical/atypical profile; raw ticket text is not exported",
     "topics": [
       "rezultaty_otbora_i_spiski"
-    ]
+    ],
+    "equivalent_chunk_ids": {
+      "docx_forum_rossiyskiy_sever_intenty_003_rezultaty_otbora_i_spiski": [
+        "xlsx_category_r0646_rezultaty_rm"
+      ]
+    }
   },
   {
     "id": "rag_dataset_demo::typical::050",

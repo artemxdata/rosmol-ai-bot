@@ -1302,6 +1302,17 @@ def _metadata_matches_specific_question(
             or "вещ" in metadata_haystack
         )
 
+    if _asks_event_overview(question_normalized):
+        return (
+            "o_meropriyatii" in metadata_haystack
+            or "sut_foruma" in metadata_haystack
+            or "sut_festivalya" in metadata_haystack
+            or "tematika" in metadata_haystack
+            or "napravleniya" in metadata_haystack
+            or "о мероприятии" in metadata_haystack
+            or "о форуме" in metadata_haystack
+        )
+
     if _asks_event_dates(question_normalized):
         return (
             "daty_nachala" in metadata_haystack
@@ -1774,6 +1785,27 @@ def _asks_event_dates(question_normalized: str) -> bool:
             "когда начнется",
             "когда начнётся",
         )
+    )
+
+
+def _asks_event_overview(question_normalized: str) -> bool:
+    if "направлен" in question_normalized and "заявк" in question_normalized:
+        return False
+    if any(
+        marker in question_normalized
+        for marker in (
+            "суть форум",
+            "суть мероприятия",
+            "о форуме",
+            "о мероприятии",
+            "что за форум",
+            "что это за форум",
+            "тематика",
+        )
+    ):
+        return True
+    return "направлен" in question_normalized and any(
+        marker in question_normalized for marker in ("форум", "мероприят", "трек")
     )
 
 

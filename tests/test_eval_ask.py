@@ -8,6 +8,7 @@ import pytest
 
 from eval.run_ask import (
     _json_safe,
+    _llm_cost_rub_total,
     _normalize_case,
     _trace_dsn_candidates,
     build_seed_ask_cases,
@@ -98,6 +99,18 @@ def test_json_safe_decodes_asyncpg_json_strings() -> None:
     value = _json_safe('[{"chunk_id": "travel", "score": 0.9}]')
 
     assert value == [{"chunk_id": "travel", "score": 0.9}]
+
+
+def test_llm_cost_rub_total_ignores_missing_and_invalid_values() -> None:
+    assert _llm_cost_rub_total(
+        [
+            {"llm_estimated_cost_rub": "1.25"},
+            {"llm_estimated_cost_rub": 2},
+            {"llm_estimated_cost_rub": None},
+            {"llm_estimated_cost_rub": "not-a-number"},
+            {},
+        ]
+    ) == 3.25
 
 
 def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:

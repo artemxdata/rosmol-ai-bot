@@ -14,6 +14,30 @@ from xml.etree import ElementTree
 
 NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
+CURATED_CASE_EQUIVALENTS = {
+    "seed_balanced::xlsx_category_r0045_podacha_zayavki_na_proekt": {
+        "xlsx_category_r0045_podacha_zayavki_na_proekt": [
+            "xlsx_category_r0493_podacha_zayavki_na_proekt",
+        ],
+    },
+    "seed_balanced::docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya": {
+        "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya": [
+            "xlsx_category_r0644_o_meropriyatii",
+            "xlsx_category_r0658_programma_foruma",
+        ],
+    },
+    "seed_balanced::docx_forum_rossiyskiy_sever_intenty_002_vozrastnye_ogranicheniya": {
+        "docx_forum_rossiyskiy_sever_intenty_002_vozrastnye_ogranicheniya": [
+            "xlsx_category_r0645_vozrastnye_ogranicheniya",
+        ],
+    },
+    "seed_balanced::docx_forum_rossiyskiy_sever_intenty_003_rezultaty_otbora_i_spiski": {
+        "docx_forum_rossiyskiy_sever_intenty_003_rezultaty_otbora_i_spiski": [
+            "xlsx_category_r0646_rezultaty_rm",
+        ],
+    },
+}
+
 EXPECTED_GROUPS = {
     "typical": "Типовой",
     "atypical": "Нетиповой",
@@ -359,7 +383,26 @@ def _curated_case(source_case: dict[str, Any], group: str, index: int) -> dict[s
         "topics": topics,
         "tags": tags,
     }
+    _apply_curated_case_equivalents(case, source_case)
     return case
+
+
+def _apply_curated_case_equivalents(
+    case: dict[str, Any],
+    source_case: dict[str, Any],
+) -> None:
+    equivalents = CURATED_CASE_EQUIVALENTS.get(str(source_case.get("id") or ""))
+    if not equivalents:
+        return
+
+    existing = {
+        str(chunk_id): [str(item) for item in equivalent_ids]
+        for chunk_id, equivalent_ids in (case.get("equivalent_chunk_ids") or {}).items()
+    }
+    for chunk_id, equivalent_ids in equivalents.items():
+        merged = [*existing.get(chunk_id, []), *equivalent_ids]
+        existing[chunk_id] = list(dict.fromkeys(merged))
+    case["equivalent_chunk_ids"] = existing
 
 
 def _topics_from_case(case: dict[str, Any]) -> list[str]:
