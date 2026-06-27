@@ -416,6 +416,41 @@ async def test_respond_preserves_paragraphs_between_multiple_source_chunks() -> 
 
 
 @pytest.mark.asyncio
+async def test_respond_normalizes_user_address_to_ty() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Вы сможете посмотреть статус в вашем личном кабинете. "
+                "Если у вас нет доступа, перейдите в профиль и нажмите кнопку "
+                "обновления. [src:profile]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == (
+        "Ты сможешь посмотреть статус в твоём личном кабинете. "
+        "Если у тебя нет доступа, перейди в профиль и нажми кнопку обновления."
+    )
+
+
+@pytest.mark.asyncio
+async def test_respond_normalizes_ty_verbs_and_sentence_spacing() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Вы приезжаете на площадку за свой счёт."
+                "Этот формат:питание самостоятельно. [src:food]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == (
+        "Ты приезжаешь на площадку за свой счёт. "
+        "Этот формат: питание самостоятельно."
+    )
+
+
+@pytest.mark.asyncio
 async def test_escalate_returns_only_safe_note_for_partial_source_coverage() -> None:
     result = await escalate(
         {
@@ -3198,6 +3233,70 @@ async def test_generate_synthesizes_multi_aspect_answer_from_sources(
     assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["generated_response"].startswith("Регистрация закрыта")
     assert result["cited_sources"] == ["apply", "travel"]
+
+
+@pytest.mark.asyncio
+async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum = "Больше, чем путешествие"
+    transfer = ScoredChunk(
+        chunk_id="transfer",
+        text="Трансфер до площадки фестиваля будет организован для участников.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "transfer",
+            "intent_name": "Трансфер до места проведения мероприятия",
+        },
+        score=0.8,
+        reranker_score=0.7,
+    )
+    food = ScoredChunk(
+        chunk_id="food",
+        text="На площадке фестиваля предусмотрены питание и питьевая вода.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "pitanie_i_pite",
+            "intent_name": "Питание и питье",
+        },
+        score=0.78,
+        reranker_score=0.7,
+    )
+    llm = CapturingLLM("Трансфер будет организован для участников. [src:transfer]")
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized=forum,
+                questions=[
+                    Question(text="Есть ли трансфер?", category="форумы", forum_normalized=forum),
+                    Question(text="Есть ли питание?", category="форумы", forum_normalized=forum),
+                ],
+            ),
+            "message_masked": (
+                "Больше, чем путешествие: если я еду с семьёй, будет ли питание и трансфер?"
+            ),
+            "reranked_chunks": [transfer, food],
+            "max_confidence": 0.7,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["transfer", "food"]
+    assert "Трансфер до площадки фестиваля" in result["generated_response"]
+    assert "питание и питьевая вода" in result["generated_response"]
 
 
 @pytest.mark.asyncio

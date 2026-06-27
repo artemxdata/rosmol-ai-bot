@@ -116,10 +116,13 @@ async def index_kb(
     collection: str,
     limit: int | None = None,
     *,
+    embedding_batch_size: int = 16,
     prune_stale: bool = False,
 ) -> None:
     if prune_stale and limit is not None:
         raise ValueError("--prune-stale cannot be used with --limit")
+    if embedding_batch_size < 1:
+        raise ValueError("--embedding-batch-size must be positive")
 
     settings = get_settings()
     client = AsyncQdrantClient(url=settings.qdrant_url)
@@ -140,28 +143,36 @@ async def index_kb(
         started_at = perf_counter()
         points: list[models.PointStruct] = []
         indexed = 0
-        for record in records:
-            text = record.content
-            embedding_text = build_embedding_text(record)
-            dense, sparse = await asyncio.to_thread(embedder.encode, embedding_text)
-            indices, values = sparse_to_indices_values(sparse)
-            payload = {
-                **record.model_dump(),
-                **build_filter_key_payload(record.model_dump()),
-                "text": text,
-                "embedding_text": embedding_text,
-                "status": record.status,
-            }
-            points.append(
-                models.PointStruct(
-                    id=str(uuid5(NAMESPACE_URL, record.chunk_id)),
-                    vector={
-                        "dense": dense.tolist(),
-                        "sparse": models.SparseVector(indices=indices, values=values),
-                    },
-                    payload=payload,
+        for offset in range(0, len(records), embedding_batch_size):
+            batch = records[offset : offset + embedding_batch_size]
+            embedding_texts = [build_embedding_text(record) for record in batch]
+            encoded_batch = await asyncio.to_thread(embedder.encode_batch, embedding_texts)
+
+            for record, embedding_text, (dense, sparse) in zip(
+                batch,
+                embedding_texts,
+                encoded_batch,
+                strict=True,
+            ):
+                text = record.content
+                indices, values = sparse_to_indices_values(sparse)
+                payload = {
+                    **record.model_dump(),
+                    **build_filter_key_payload(record.model_dump()),
+                    "text": text,
+                    "embedding_text": embedding_text,
+                    "status": record.status,
+                }
+                points.append(
+                    models.PointStruct(
+                        id=str(uuid5(NAMESPACE_URL, record.chunk_id)),
+                        vector={
+                            "dense": dense.tolist(),
+                            "sparse": models.SparseVector(indices=indices, values=values),
+                        },
+                        payload=payload,
+                    )
                 )
-            )
 
             if len(points) >= 64:
                 await client.upsert(collection_name=collection, points=points)
@@ -276,6 +287,12 @@ def parse_args() -> argparse.Namespace:
         help="Index only the first N valid records. Useful for ML smoke tests.",
     )
     parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=16,
+        help="Number of chunks encoded in one bge-m3 call during indexing.",
+    )
+    parser.add_argument(
         "--prune-stale",
         action="store_true",
         help=(
@@ -304,6 +321,7 @@ def main() -> None:
                     Path(args.path),
                     args.collection,
                     args.limit,
+                    embedding_batch_size=args.embedding_batch_size,
                     prune_stale=args.prune_stale,
                 )
             )

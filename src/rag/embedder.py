@@ -35,13 +35,25 @@ class Embedder:
         return self._model
 
     def encode(self, text: str) -> tuple[np.ndarray, dict[str, float]]:
+        return self.encode_batch([text])[0]
+
+    def encode_batch(self, texts: list[str]) -> list[tuple[np.ndarray, dict[str, float]]]:
+        if not texts:
+            return []
         with self._model_lock:
             model = self._load_model()
-            output = model.encode([text], return_dense=True, return_sparse=True)
-        dense = np.asarray(output["dense_vecs"][0], dtype=np.float32)
-        sparse_raw = output["lexical_weights"][0]
-        sparse = {str(key): float(value) for key, value in sparse_raw.items()}
-        return dense, sparse
+            output = model.encode(texts, return_dense=True, return_sparse=True)
+
+        encoded: list[tuple[np.ndarray, dict[str, float]]] = []
+        for dense_raw, sparse_raw in zip(
+            output["dense_vecs"],
+            output["lexical_weights"],
+            strict=True,
+        ):
+            dense = np.asarray(dense_raw, dtype=np.float32)
+            sparse = {str(key): float(value) for key, value in sparse_raw.items()}
+            encoded.append((dense, sparse))
+        return encoded
 
     def unload(self) -> None:
         with self._model_lock:

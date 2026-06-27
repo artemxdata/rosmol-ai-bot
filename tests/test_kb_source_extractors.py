@@ -147,6 +147,63 @@ def test_excel_records_prefer_source_category_forum_over_grant_alias() -> None:
     assert records[0]["forum_normalized"] == "Машук"
 
 
+def test_excel_records_use_source_category_as_forum_when_registry_lacks_event() -> None:
+    rows = [
+        SpreadsheetRow(
+            "category",
+            644,
+            (
+                "Российский Север",
+                "Оплата проезда",
+                "Дорога до Москвы оплачивается участником самостоятельно.",
+            ),
+        )
+    ]
+
+    records = build_excel_answer_records(
+        rows=rows,
+        sheet_category=None,
+        source_file="Новый бот Росмол .xlsx",
+        intent_examples={},
+        registry=[],
+        extraction_date=date(2026, 6, 27),
+    )
+
+    assert records[0]["forum_normalized"] == "Российский Север"
+
+
+def test_excel_records_match_partial_source_category_to_registry_event() -> None:
+    rows = [
+        SpreadsheetRow(
+            "category",
+            100,
+            (
+                "Арктика",
+                "Оплата проезда",
+                "Проезд оплачивается участником самостоятельно.",
+            ),
+        )
+    ]
+    registry = [
+        {
+            "name": "Арктика. Лёд тронулся",
+            "normalized": "Арктика. Лёд тронулся",
+            "aliases": ["форум Арктика. Лёд тронулся"],
+        }
+    ]
+
+    records = build_excel_answer_records(
+        rows=rows,
+        sheet_category=None,
+        source_file="Новый бот Росмол .xlsx",
+        intent_examples={},
+        registry=registry,
+        extraction_date=date(2026, 6, 27),
+    )
+
+    assert records[0]["forum_normalized"] == "Арктика. Лёд тронулся"
+
+
 def test_excel_records_keep_forum_category_when_only_answer_mentions_grants() -> None:
     rows = [
         SpreadsheetRow(

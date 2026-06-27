@@ -248,7 +248,14 @@ async def _generate_with_llm_or_source_fallback(
         source_chunks=source_chunks,
         started_at=started_at,
     )
-    if result.get("escalation_reason") != "llm_generation_failed":
+    should_fallback_to_sources = result.get(
+        "escalation_reason"
+    ) == "llm_generation_failed" or _llm_result_misses_source_coverage(
+        result,
+        questions,
+        source_chunks,
+    )
+    if not should_fallback_to_sources:
         return result
 
     source_response = build_deterministic_source_response(source_chunks)
@@ -256,11 +263,16 @@ async def _generate_with_llm_or_source_fallback(
         return result
 
     tracer = state.get("trace")
+    fallback_reason = (
+        "llm_failed_source_chunk_fallback"
+        if result.get("escalation_reason") == "llm_generation_failed"
+        else "llm_missing_sources_source_chunk_fallback"
+    )
     if tracer:
         tracer.add(
             "generate",
             int((perf_counter() - started_at) * 1000),
-            mode="llm_failed_source_chunk_fallback",
+            mode=fallback_reason,
             chunks=len(source_chunks),
         )
     return {
@@ -268,6 +280,38 @@ async def _generate_with_llm_or_source_fallback(
         "generator_model": "source_chunk",
         "cited_sources": [chunk.chunk_id for chunk in source_chunks],
     }
+
+
+def _llm_result_misses_source_coverage(
+    result: dict,
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+) -> bool:
+    if result.get("should_escalate"):
+        return False
+    if len(source_chunks) <= 1:
+        return False
+
+    cited_ids = set(result.get("cited_sources") or [])
+    if not cited_ids:
+        return True
+
+    cited_chunks = [chunk for chunk in source_chunks if chunk.chunk_id in cited_ids]
+    if not cited_chunks:
+        return True
+
+    distinct_questions = [
+        question
+        for question in questions
+        if str(question.text or "").strip()
+    ]
+    if _has_multiple_distinct_questions(distinct_questions):
+        return any(
+            not any(_source_chunk_covers_question(question, chunk) for chunk in cited_chunks)
+            for question in distinct_questions
+        )
+
+    return any(chunk.chunk_id not in cited_ids for chunk in source_chunks)
 
 
 async def _generate_with_llm(

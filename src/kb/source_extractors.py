@@ -468,7 +468,7 @@ def infer_forum(
 ) -> str | None:
     if "грант" in source_category.casefold():
         return None
-    source_category_match = _match_forum_alias(source_category, registry)
+    source_category_match = _match_source_category_forum(source_category, registry)
     if source_category_match:
         return source_category_match
 
@@ -479,6 +479,26 @@ def infer_forum(
         if alias and alias in haystack:
             return normalized
     return None
+
+
+def _match_source_category_forum(value: str, registry: list[dict[str, Any]]) -> str | None:
+    normalized_value = _normalize_for_match(value)
+    if not normalized_value:
+        return None
+
+    exact_match = _match_forum_alias(value, registry)
+    if exact_match:
+        return exact_match
+
+    for alias, normalized in _registry_forum_aliases(registry):
+        if not alias or "грант" in alias:
+            continue
+        if len(normalized_value) >= 4 and (
+            normalized_value in alias or alias in normalized_value
+        ):
+            return normalized
+
+    return value.strip() or None
 
 
 def _match_forum_alias(value: str, registry: list[dict[str, Any]]) -> str | None:
