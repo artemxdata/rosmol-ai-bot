@@ -141,12 +141,31 @@ async def index_kb(
             records = records[:limit]
 
         started_at = perf_counter()
+        total_records = len(records)
+        limit_label = "all" if limit is None else str(limit)
+        print(
+            f"index_start total={total_records} collection={collection} "
+            f"limit={limit_label} embedding_batch_size={embedding_batch_size}",
+            flush=True,
+        )
         points: list[models.PointStruct] = []
         indexed = 0
         for offset in range(0, len(records), embedding_batch_size):
             batch = records[offset : offset + embedding_batch_size]
+            batch_number = offset // embedding_batch_size + 1
+            print(
+                f"embedding_batch_start batch={batch_number} "
+                f"offset={offset} size={len(batch)} total={total_records}",
+                flush=True,
+            )
             embedding_texts = [build_embedding_text(record) for record in batch]
             encoded_batch = await asyncio.to_thread(embedder.encode_batch, embedding_texts)
+            print(
+                f"embedding_batch_done batch={batch_number} "
+                f"processed={offset + len(batch)}/{total_records} "
+                f"elapsed_sec={perf_counter() - started_at:.2f}",
+                flush=True,
+            )
 
             for record, embedding_text, (dense, sparse) in zip(
                 batch,
@@ -175,13 +194,25 @@ async def index_kb(
                 )
 
             if len(points) >= 64:
+                upsert_count = len(points)
                 await client.upsert(collection_name=collection, points=points)
-                indexed += len(points)
+                indexed += upsert_count
                 points.clear()
+                print(
+                    f"upsert_progress indexed={indexed}/{total_records} "
+                    f"collection={collection} elapsed_sec={perf_counter() - started_at:.2f}",
+                    flush=True,
+                )
 
         if points:
+            upsert_count = len(points)
             await client.upsert(collection_name=collection, points=points)
-            indexed += len(points)
+            indexed += upsert_count
+            print(
+                f"upsert_progress indexed={indexed}/{total_records} "
+                f"collection={collection} elapsed_sec={perf_counter() - started_at:.2f}",
+                flush=True,
+            )
 
         pruned_stale = 0
         if prune_stale:
@@ -192,10 +223,10 @@ async def index_kb(
             )
 
         elapsed = perf_counter() - started_at
-        limit_label = "all" if limit is None else str(limit)
         print(
             f"indexed={indexed} skipped=0 pruned_stale={pruned_stale} collection={collection} "
-            f"limit={limit_label} elapsed_sec={elapsed:.2f}"
+            f"limit={limit_label} elapsed_sec={elapsed:.2f}",
+            flush=True,
         )
     finally:
         await client.close()
