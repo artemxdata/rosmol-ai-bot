@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from hmac import compare_digest
+from ipaddress import ip_address
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -354,7 +355,19 @@ def _should_bypass_cache(request: Request) -> bool:
     requested = (request.headers.get("x-bypass-cache") or "").strip().casefold()
     if requested not in {"1", "true", "yes"}:
         return False
-    return get_settings().app_env == "local"
+    return get_settings().app_env == "local" or _is_loopback_request(request)
+
+
+def _is_loopback_request(request: Request) -> bool:
+    host = (request.url.hostname or "").strip().casefold()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    if not request.client:
+        return False
+    try:
+        return ip_address(request.client.host).is_loopback
+    except ValueError:
+        return False
 
 
 async def process_message(

@@ -306,6 +306,7 @@ async def _generate_with_llm(
             "error": str(exc),
         }
 
+    content = _repair_recipient_drift(content, source_chunks)
     cited_sources = _known_source_refs(content, source_chunks)
     if tracer:
         tracer.add(
@@ -321,6 +322,40 @@ async def _generate_with_llm(
         "generator_model": model,
         "cited_sources": cited_sources,
     }
+
+
+def _repair_recipient_drift(response: str, source_chunks: list[ScoredChunk]) -> str:
+    if not response or not _sources_request_contact_us(source_chunks):
+        return response
+    repaired = response
+    replacements = (
+        (r"\bсообщите\s+организаторам\b", "сообщи нам"),
+        (r"\bсообщи\s+организаторам\b", "сообщи нам"),
+        (r"\bнапишите\s+организаторам\b", "напиши нам"),
+        (r"\bнапиши\s+организаторам\b", "напиши нам"),
+        (r"\bсвяжитесь\s+с\s+организаторами\b", "свяжись с нами"),
+        (r"\bсвяжись\s+с\s+организаторами\b", "свяжись с нами"),
+        (r"\bобратитесь\s+к\s+организаторам\b", "напиши нам"),
+        (r"\bобратись\s+к\s+организаторам\b", "напиши нам"),
+    )
+    for pattern, replacement in replacements:
+        repaired = re.sub(pattern, replacement, repaired, flags=re.IGNORECASE)
+    return repaired
+
+
+def _sources_request_contact_us(source_chunks: list[ScoredChunk]) -> bool:
+    haystack = _normalize(" ".join(chunk.text for chunk in source_chunks))
+    return any(
+        marker in haystack
+        for marker in (
+            "сообщи нам",
+            "сообщите нам",
+            "напиши нам",
+            "напишите нам",
+            "свяжись с нами",
+            "свяжитесь с нами",
+        )
+    )
 
 
 def _should_synthesize_with_llm(

@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from starlette.requests import Request
 
+from src.main import _should_bypass_cache
 from src.main import app as fastapi_app
 
 
@@ -60,3 +62,53 @@ async def test_webhook_requires_token_before_parsing(monkeypatch: pytest.MonkeyP
         response = await client.post("/webhook/vk", json={"object": {"message": {"text": "x"}}})
 
     assert response.status_code == 401
+
+
+def test_bypass_cache_header_allowed_for_loopback_server_tests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(app_env="production"),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/ask",
+            "headers": [
+                (b"host", b"127.0.0.1:8001"),
+                (b"x-bypass-cache", b"true"),
+            ],
+            "client": ("203.0.113.10", 12345),
+            "scheme": "http",
+            "server": ("127.0.0.1", 8001),
+        }
+    )
+
+    assert _should_bypass_cache(request) is True
+
+
+def test_bypass_cache_header_ignored_for_external_production_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(app_env="production"),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/ask",
+            "headers": [
+                (b"host", b"bot.example.test"),
+                (b"x-bypass-cache", b"true"),
+            ],
+            "client": ("203.0.113.10", 12345),
+            "scheme": "https",
+            "server": ("bot.example.test", 443),
+        }
+    )
+
+    assert _should_bypass_cache(request) is False

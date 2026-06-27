@@ -95,6 +95,40 @@ async def test_verifier_escalates_unsupported_registration_instruction() -> None
 
 
 @pytest.mark.asyncio
+async def test_verifier_blocks_organizer_recipient_when_source_says_us() -> None:
+    llm = JudgeLLM('{"has_hallucination": false, "confidence": 1.0}')
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Если уже подтвердили участие, но не можете поехать, "
+                "сообщите организаторам. [src:decline]"
+            ),
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "cited_sources": ["decline"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="decline",
+                    text=(
+                        "Если ты успешно пройдёшь конкурсный отбор, но затем решишь "
+                        "отказаться от участия — пожалуйста, сообщи нам. Мы обязательно поможем!"
+                    ),
+                    metadata={"forum_normalized": "Амур"},
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["verification"].has_hallucination is True
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "unsupported_instruction"
+
+
+@pytest.mark.asyncio
 async def test_verifier_accepts_high_confidence_without_judge() -> None:
     result = await verify(
         {

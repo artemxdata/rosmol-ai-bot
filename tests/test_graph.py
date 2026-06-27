@@ -3223,7 +3223,7 @@ async def test_generate_synthesizes_contextual_followup_from_single_source(
         reranker_score=0.86,
     )
     llm = CapturingLLM(
-        "Если уже подтвердил участие, но не можешь поехать, сообщи нам — "
+        "Если уже подтвердил участие, но не можешь поехать, сообщите организаторам — "
         "мы поможем с отказом от участия. [src:decline]"
     )
 
