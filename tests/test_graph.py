@@ -3151,6 +3151,117 @@ async def test_generate_returns_source_chunk_for_simple_high_confidence(
 
 
 @pytest.mark.asyncio
+async def test_generate_synthesizes_multi_aspect_answer_from_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    apply_chunk = ScoredChunk(
+        chunk_id="apply",
+        text="Регистрация на форум закрыта, даты приёма заявок объявят позже.",
+        metadata={"chunk_id": "apply", "category": "форумы", "topic": "podacha_zayavki"},
+        score=0.9,
+        reranker_score=0.9,
+    )
+    travel_chunk = ScoredChunk(
+        chunk_id="travel",
+        text="Проезд обычно оплачивает направляющая сторона или сам участник.",
+        metadata={"chunk_id": "travel", "category": "форумы", "topic": "oplata_proezda"},
+        score=0.8,
+        reranker_score=0.82,
+    )
+    llm = CapturingLLM(
+        "Регистрация закрыта, даты объявят позже. [src:apply]\n\n"
+        "Проезд обычно оплачивает направляющая сторона или сам участник. [src:travel]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Как подать заявку и оплачивается ли проезд?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                questions=[
+                    Question(text="Как подать заявку?", category="форумы"),
+                    Question(text="Кто оплачивает проезд?", category="форумы"),
+                ],
+            ),
+            "reranked_chunks": [apply_chunk, travel_chunk],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["generator_model"] != "source_chunk"
+    assert result["generated_response"].startswith("Регистрация закрыта")
+    assert result["cited_sources"] == ["apply", "travel"]
+
+
+@pytest.mark.asyncio
+async def test_generate_synthesizes_contextual_followup_from_single_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    decline_chunk = ScoredChunk(
+        chunk_id="decline",
+        text=(
+            "Сейчас регистрация на мероприятие ещё не доступна.\n"
+            "Если ты успешно пройдёшь конкурсный отбор, но затем решишь отказаться "
+            "от участия — пожалуйста, сообщи нам. Мы обязательно поможем!"
+        ),
+        metadata={
+            "chunk_id": "decline",
+            "category": "форумы",
+            "topic": "otkaz_ot_uchastiya",
+        },
+        score=0.86,
+        reranker_score=0.86,
+    )
+    llm = CapturingLLM(
+        "Если уже подтвердил участие, но не можешь поехать, сообщи нам — "
+        "мы поможем с отказом от участия. [src:decline]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": (
+                "А что делать, если я уже подтвердил участие, но теперь не могу поехать?"
+            ),
+            "contextual_message": (
+                "Контекст предыдущего вопроса: форум «Амур».\n"
+                "А что делать, если я уже подтвердил участие, но теперь не могу поехать?"
+            ),
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Амур",
+                questions=[
+                    Question(
+                        text="Что делать, если подтвердил участие, но не могу поехать?",
+                        category="форумы",
+                        forum_normalized="Амур",
+                    )
+                ],
+            ),
+            "reranked_chunks": [decline_chunk],
+            "max_confidence": 0.86,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["generated_response"] == (
+        "Если уже подтвердил участие, но не можешь поехать, сообщи нам — "
+        "мы поможем с отказом от участия. [src:decline]"
+    )
+    assert result["cited_sources"] == ["decline"]
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_masked_message_when_analysis_has_no_questions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

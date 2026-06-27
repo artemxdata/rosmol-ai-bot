@@ -77,6 +77,14 @@ async def generate(state: BotState) -> dict:
             max_confidence,
         )
         if llm_source_chunks:
+            if _should_synthesize_with_llm(state, analysis, questions, llm_source_chunks):
+                return await _generate_with_llm_or_source_fallback(
+                    state=state,
+                    analysis=analysis,
+                    questions=questions,
+                    source_chunks=llm_source_chunks,
+                    started_at=started_at,
+                )
             if _should_use_extractive_multi_source_answer(analysis, llm_source_chunks):
                 source_response = build_deterministic_source_response(llm_source_chunks)
                 if source_response:
@@ -106,6 +114,19 @@ async def generate(state: BotState) -> dict:
             max_confidence,
             _state_message_for_search(state),
         )
+        if source_chunks and _should_synthesize_with_llm(
+            state,
+            analysis,
+            questions,
+            source_chunks,
+        ):
+            return await _generate_with_llm_or_source_fallback(
+                state=state,
+                analysis=analysis,
+                questions=questions,
+                source_chunks=source_chunks,
+                started_at=started_at,
+            )
         if source_chunks and _should_use_extractive_multi_source_answer(analysis, source_chunks):
             source_response = build_deterministic_source_response(source_chunks)
             if source_response:
@@ -164,8 +185,8 @@ async def generate(state: BotState) -> dict:
         _state_message_for_search(state),
     )
     if source_chunks:
-        if _should_generate_with_llm(analysis, source_chunks):
-            return await _generate_with_llm(
+        if _should_synthesize_with_llm(state, analysis, questions, source_chunks):
+            return await _generate_with_llm_or_source_fallback(
                 state=state,
                 analysis=analysis,
                 questions=questions,
@@ -188,7 +209,7 @@ async def generate(state: BotState) -> dict:
 
     llm_source_chunks = _select_llm_source_chunks(analysis, questions, chunks, max_confidence)
     if llm_source_chunks:
-        return await _generate_with_llm(
+        return await _generate_with_llm_or_source_fallback(
             state=state,
             analysis=analysis,
             questions=questions,
@@ -209,6 +230,43 @@ async def generate(state: BotState) -> dict:
         "generated_response": "",
         "generator_model": "source_only",
         "cited_sources": [],
+    }
+
+
+async def _generate_with_llm_or_source_fallback(
+    *,
+    state: BotState,
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+    started_at: float,
+) -> dict:
+    result = await _generate_with_llm(
+        state=state,
+        analysis=analysis,
+        questions=questions,
+        source_chunks=source_chunks,
+        started_at=started_at,
+    )
+    if result.get("escalation_reason") != "llm_generation_failed":
+        return result
+
+    source_response = build_deterministic_source_response(source_chunks)
+    if not source_response:
+        return result
+
+    tracer = state.get("trace")
+    if tracer:
+        tracer.add(
+            "generate",
+            int((perf_counter() - started_at) * 1000),
+            mode="llm_failed_source_chunk_fallback",
+            chunks=len(source_chunks),
+        )
+    return {
+        "generated_response": source_response,
+        "generator_model": "source_chunk",
+        "cited_sources": [chunk.chunk_id for chunk in source_chunks],
     }
 
 
@@ -265,13 +323,27 @@ async def _generate_with_llm(
     }
 
 
-def _should_generate_with_llm(
+def _should_synthesize_with_llm(
+    state: BotState,
     analysis: QueryAnalysis,
+    questions: list[Question],
     source_chunks: list[ScoredChunk],
 ) -> bool:
     if not source_chunks:
         return False
-    return analysis.complexity == Complexity.COMPLEX
+    if _is_contextual_synthesis_case(state):
+        return True
+    if analysis.complexity == Complexity.COMPLEX:
+        return True
+    return len(source_chunks) > 1 and _has_multiple_distinct_questions(questions)
+
+
+def _is_contextual_synthesis_case(state: BotState) -> bool:
+    contextual_message = str(state.get("contextual_message") or "").strip()
+    if not contextual_message:
+        return False
+    original_message = str(state.get("message_masked") or state.get("message") or "").strip()
+    return bool(original_message and contextual_message != original_message)
 
 
 def _should_use_extractive_multi_source_answer(
