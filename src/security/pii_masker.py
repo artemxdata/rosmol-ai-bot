@@ -8,6 +8,7 @@ PHONE_RE = re.compile(
 )
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.IGNORECASE)
 PASSPORT_RE = re.compile(r"(?<!\d)\d{4}\s?\d{6}(?!\d)")
+SNILS_RE = re.compile(r"(?<!\d)\d{3}[-\s]?\d{3}[-\s]?\d{3}[-\s]?\d{2}(?!\d)")
 DATE_RE = re.compile(r"(?<!\d)(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4})(?!\d)")
 NON_PERSON_NAME_PHRASES = (
     "сопровождающее",
@@ -52,6 +53,7 @@ class PIIMasker:
             "phone": "[ТЕЛЕФОН]",
             "email": "[EMAIL]",
             "passport": "[ДОКУМЕНТ]",
+            "snils": "[SNILS]",
             "date": "[ДАТА]",
             "name": "[ИМЯ]",
         }
@@ -65,6 +67,7 @@ class PIIMasker:
             ("email", EMAIL_RE),
             ("phone", PHONE_RE),
             ("passport", PASSPORT_RE),
+            ("snils", SNILS_RE),
             ("date", DATE_RE),
         ):
             masked, found = self._mask_regex(masked, regex, self.placeholders[key])

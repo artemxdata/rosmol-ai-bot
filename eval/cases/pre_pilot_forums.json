@@ -1,0 +1,339 @@
+[
+  {
+    "id": "forum_amur_application_travel_accommodation",
+    "query": "Амур: как подать заявку, кто оплачивает проезд, есть ли проживание и что делать, если я подтвердил участие, но не могу поехать?",
+    "user_id": "pre-pilot-forum_amur_application_travel_accommodation",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0218_podacha_zayavki_na_proekt",
+      "xlsx_category_r0209_oplata_proezda",
+      "xlsx_category_r0213_usloviya_prozhivaniya",
+      "xlsx_category_r0219_otkaz_ot_uchastiya"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0218_podacha_zayavki_na_proekt",
+      "xlsx_category_r0209_oplata_proezda",
+      "xlsx_category_r0213_usloviya_prozhivaniya",
+      "xlsx_category_r0219_otkaz_ot_uchastiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Амур"
+    ]
+  },
+  {
+    "id": "forum_bctp_family_transfer_food",
+    "query": "Больше, чем путешествие: если я еду с семьёй, будет ли питание и трансфер?",
+    "user_id": "pre-pilot-forum_bctp_family_transfer_food",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_011_usloviya_pitaniya_i_tochki_s_vodoy"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_011_usloviya_pitaniya_i_tochki_s_vodoy"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Больше, чем путешествие"
+    ],
+    "equivalent_chunk_ids": {
+      "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya": [
+        "xlsx_category_r0627_transfer_do_mesta_provedeniya_meropriyatiya"
+      ],
+      "docx_festival_bolshe_chem_puteshestvie_intenty_011_usloviya_pitaniya_i_tochki_s_vodoy": [
+        "xlsx_category_r0631_pitanie_i_pite"
+      ]
+    }
+  },
+  {
+    "id": "forum_bctp_documents_health_ovz",
+    "query": "Больше, чем путешествие: какие вещи взять, что с медпунктом и можно ли с ОВЗ?",
+    "user_id": "pre-pilot-forum_bctp_documents_health_ovz",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_010_spisok_veschey_i_dokumentov",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_015_voprosy_po_zdorovyu_medpunkt",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_017_uchastniki_s_ovz"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_festival_bolshe_chem_puteshestvie_intenty_010_spisok_veschey_i_dokumentov",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_015_voprosy_po_zdorovyu_medpunkt",
+      "docx_festival_bolshe_chem_puteshestvie_intenty_017_uchastniki_s_ovz"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Больше, чем путешествие"
+    ],
+    "equivalent_chunk_ids": {
+      "docx_festival_bolshe_chem_puteshestvie_intenty_010_spisok_veschey_i_dokumentov": [
+        "xlsx_category_r0624_dokumenty_meropriyatiya",
+        "xlsx_category_r0641_spisok_veschey_i_dokumentov"
+      ],
+      "docx_festival_bolshe_chem_puteshestvie_intenty_015_voprosy_po_zdorovyu_medpunkt": [
+        "xlsx_category_r0632_informaciya_o_ploschadke_medicina"
+      ],
+      "docx_festival_bolshe_chem_puteshestvie_intenty_017_uchastniki_s_ovz": [
+        "xlsx_category_r0639_uchastniki_s_ovz"
+      ]
+    }
+  },
+  {
+    "id": "forum_north_core_dates_travel",
+    "query": "Российский Север: в чём суть форума, когда он проходит, оплачивается ли дорога и проживание?",
+    "user_id": "pre-pilot-forum_north_core_dates_travel",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya",
+      "docx_forum_rossiyskiy_sever_intenty_007_mesto_i_daty_provedeniya_meropriyatiya",
+      "docx_forum_rossiyskiy_sever_intenty_006_oplata_proezda_prozhivaniya_i_charter"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya",
+      "docx_forum_rossiyskiy_sever_intenty_007_mesto_i_daty_provedeniya_meropriyatiya",
+      "docx_forum_rossiyskiy_sever_intenty_006_oplata_proezda_prozhivaniya_i_charter"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Российский Север"
+    ],
+    "equivalent_chunk_ids": {
+      "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya": [
+        "xlsx_category_r0644_o_meropriyatii"
+      ],
+      "docx_forum_rossiyskiy_sever_intenty_007_mesto_i_daty_provedeniya_meropriyatiya": [
+        "xlsx_category_r0650_daty_nachala_meropriyatiya"
+      ],
+      "docx_forum_rossiyskiy_sever_intenty_006_oplata_proezda_prozhivaniya_i_charter": [
+        "xlsx_category_r0654_usloviya_prozhivaniya"
+      ]
+    }
+  },
+  {
+    "id": "forum_north_chat_foreign_grants",
+    "query": "Российский Север: когда добавят в чат, могут ли участвовать иностранцы и есть ли грантовый конкурс?",
+    "user_id": "pre-pilot-forum_north_chat_foreign_grants",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_004_dobavlenie_v_chat_i_sluzhba_zaboty",
+      "xlsx_category_r0659_inostrannye_grazhdane",
+      "xlsx_category_r0660_rosmolodezh_granty"
+    ],
+    "expected_cited_chunk_ids": [
+      "docx_forum_rossiyskiy_sever_intenty_004_dobavlenie_v_chat_i_sluzhba_zaboty",
+      "xlsx_category_r0659_inostrannye_grazhdane",
+      "xlsx_category_r0660_rosmolodezh_granty"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Российский Север"
+    ],
+    "equivalent_chunk_ids": {
+      "docx_forum_rossiyskiy_sever_intenty_004_dobavlenie_v_chat_i_sluzhba_zaboty": [
+        "xlsx_category_r0647_dobavlenie_v_chat_meropriyatiya"
+      ],
+      "xlsx_category_r0659_inostrannye_grazhdane": [
+        "docx_forum_rossiyskiy_sever_intenty_016_inostrannye_grazhdane"
+      ],
+      "xlsx_category_r0660_rosmolodezh_granty": [
+        "docx_forum_rossiyskiy_sever_intenty_017_rosmolodezh_granty"
+      ]
+    }
+  },
+  {
+    "id": "forum_tavrida_call_letter_certificate",
+    "query": "Таврида: где взять письмо-вызов, когда будет сертификат и можно ли изменить заявку?",
+    "user_id": "pre-pilot-forum_tavrida_call_letter_certificate",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0191_pismo_vyzov",
+      "xlsx_category_r0204_kogda_budet_sertifikat",
+      "xlsx_category_r0202_vnesti_izmeneniya_v_zayavku"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0191_pismo_vyzov",
+      "xlsx_category_r0204_kogda_budet_sertifikat",
+      "xlsx_category_r0202_vnesti_izmeneniya_v_zayavku"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Таврида"
+    ],
+    "equivalent_chunk_ids": {
+      "xlsx_category_r0204_kogda_budet_sertifikat": [
+        "xlsx_category_r0203_mozhno_li_poluchit_sertifikat_za_uchastie"
+      ]
+    }
+  },
+  {
+    "id": "forum_shum_application_dress_code_food",
+    "query": "Шум: как подать заявку, есть ли требования по дресс-коду и как с питанием?",
+    "user_id": "pre-pilot-forum_shum_application_dress_code_food",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0553_podacha_zayavki_na_proekt",
+      "xlsx_category_r0566_trebovaniya_po_dress_kodu",
+      "xlsx_category_r0560_informaciya_o_ploschadke_pitanie_pite"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0553_podacha_zayavki_na_proekt",
+      "xlsx_category_r0566_trebovaniya_po_dress_kodu",
+      "xlsx_category_r0560_informaciya_o_ploschadke_pitanie_pite"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Шум"
+    ]
+  },
+  {
+    "id": "forum_gosstart_confirmation_digital_week",
+    "query": "ГосСтарт: что с подтверждением участия, что такое цифровая неделя и когда начинается мероприятие?",
+    "user_id": "pre-pilot-forum_gosstart_confirmation_digital_week",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0603_podtverzhdenie_uchastiya_i_org_momenty",
+      "xlsx_category_r0604_cifrovaya_nedelya",
+      "xlsx_category_r0581_daty_nachala_meropriyatiya"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0603_podtverzhdenie_uchastiya_i_org_momenty",
+      "xlsx_category_r0604_cifrovaya_nedelya",
+      "xlsx_category_r0581_daty_nachala_meropriyatiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:ГосСтарт"
+    ]
+  },
+  {
+    "id": "forum_territory_docs_transfer",
+    "query": "Территория смыслов: где документы, будет ли трансфер и где посмотреть результаты?",
+    "user_id": "pre-pilot-forum_territory_docs_transfer",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0013_dokumenty_meropriyatiya",
+      "xlsx_category_r0016_transfer_do_mesta_provedeniya_meropriyatiya",
+      "xlsx_category_r0021_rezultaty_rm"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0013_dokumenty_meropriyatiya",
+      "xlsx_category_r0016_transfer_do_mesta_provedeniya_meropriyatiya",
+      "xlsx_category_r0021_rezultaty_rm"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Территория смыслов"
+    ]
+  },
+  {
+    "id": "forum_mashuk_foreign_ovz_program",
+    "query": "Машук: могут ли участвовать иностранные граждане, что с ОВЗ и где программа?",
+    "user_id": "pre-pilot-forum_mashuk_foreign_ovz_program",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0078_inostrannye_grazhdane",
+      "xlsx_category_r0085_uchastniki_s_ovz",
+      "xlsx_category_r0084_programma_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0078_inostrannye_grazhdane",
+      "xlsx_category_r0085_uchastniki_s_ovz",
+      "xlsx_category_r0084_programma_foruma"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:Машук"
+    ]
+  }
+]

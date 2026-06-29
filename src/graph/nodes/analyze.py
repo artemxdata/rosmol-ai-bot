@@ -67,6 +67,7 @@ async def analyze_query(state: BotState) -> dict:
             original_message,
         )
         _apply_forum_category_guardrail(payload, original_message)
+        _ensure_deterministic_questions(payload, masked_message)
         analysis = QueryAnalysis.model_validate(payload)
         analysis = apply_session_context(analysis, masked_message, state.get("session"))
         if tracer:
@@ -171,6 +172,7 @@ def _fallback_analysis(
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
     _apply_forum_category_guardrail(payload, original_message)
+    _ensure_deterministic_questions(payload, masked_message)
     analysis = QueryAnalysis.model_validate(payload)
     analysis = apply_session_context(analysis, masked_message, session)
     if not analysis.category and not analysis.forum_normalized:
@@ -222,11 +224,23 @@ def _is_safe_offtopic(message: str) -> bool:
         "фильм",
         "сериал",
         "починить телефон",
+        "починить экран",
         "чинить телефон",
         "ремонт телефон",
         "сломался телефон",
         "починить айфон",
         "ремонт айфон",
+        "закажи мне такси",
+        "заказать такси",
+        "такси до",
+        "роллы",
+        "пицц",
+        "доставка еды",
+        "иск",
+        "исковое заявление",
+        "в суд",
+        "математик",
+        "задачу по математике",
     )
     return any(marker in normalized for marker in offtopic_markers)
 
@@ -261,6 +275,8 @@ def _is_exact_fallback_intent_message(message: str) -> bool:
 
 def _needs_application_context_clarification(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е")
+    if detect_forums_from_text(message):
+        return False
     if not ("подать" in normalized and "заяв" in normalized and "участ" in normalized):
         return False
     return not any(
@@ -536,6 +552,213 @@ def _propagate_question_defaults(
             question["forum_normalized"] = forum
         if category and (override_category or not question.get("category")):
             question["category"] = category
+
+
+def _ensure_deterministic_questions(payload: dict, message: str) -> None:
+    deterministic_questions = _build_deterministic_questions(payload, message)
+    if not deterministic_questions:
+        return
+
+    existing_questions = list(payload.get("questions") or [])
+    if not existing_questions:
+        payload["questions"] = deterministic_questions
+        _propagate_question_defaults(payload, override_forum=True, override_category=True)
+        return
+
+    seen_topics = {
+        str(question.get("topic") or "").strip()
+        for question in existing_questions
+        if isinstance(question, dict)
+    }
+    seen_texts = {
+        str(question.get("text") or "").strip().casefold().replace("ё", "е")
+        for question in existing_questions
+        if isinstance(question, dict)
+    }
+    for question in deterministic_questions:
+        topic = str(question.get("topic") or "").strip()
+        text = str(question.get("text") or "").strip()
+        normalized_text = text.casefold().replace("ё", "е")
+        if topic and topic in seen_topics:
+            continue
+        if normalized_text and normalized_text in seen_texts:
+            continue
+        existing_questions.append(question)
+        if topic:
+            seen_topics.add(topic)
+        if normalized_text:
+            seen_texts.add(normalized_text)
+
+    payload["questions"] = existing_questions
+    _propagate_question_defaults(payload, override_forum=True, override_category=True)
+
+
+def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
+    category = payload.get("category")
+    forum = payload.get("forum_normalized") or payload.get("forum")
+    normalized = message.casefold().replace("ё", "е")
+    if not forum and category not in {"гранты", "платформа_фгаис", "техподдержка"}:
+        return []
+
+    candidates = [
+        (
+            "kak_zaregistrirovatsya_na_fgais",
+            "Как подать заявку или зарегистрироваться?",
+            ("регистрац", "зарегистр"),
+        ),
+        (
+            "podacha_zayavki_na_proekt",
+            "Как подать заявку?",
+            ("подать заяв", "подача заяв", "подать проект"),
+        ),
+        (
+            "grant_reporting",
+            "Как оформить отчётность по гранту?",
+            ("отчет", "отчетност", "отчёт", "отчётност"),
+        ),
+        ("oplata_proezda", "Оплачивается ли проезд?", ("проезд", "дорог", "билет")),
+        ("usloviya_prozhivaniya", "Какие условия проживания?", ("прожив", "размещен")),
+        (
+            "otkaz_ot_uchastiya",
+            "Что делать, если не получается поехать?",
+            (
+                "не могу поехать",
+                "не смогу поехать",
+                "отказ",
+                "отказаться",
+                "отменить участие",
+                "потом отказаться",
+            ),
+        ),
+        (
+            "vnesti_izmeneniya_v_zayavku",
+            "Можно ли внести изменения в заявку?",
+            ("изменить заявку", "изменить заявк", "внести изменения в заявк", "поменять заявк"),
+        ),
+        ("vozrastnye_ogranicheniya", "Какие возрастные ограничения?", ("возраст", "лет")),
+        (
+            "transfer_do_mesta_provedeniya_meropriyatiya",
+            "Будет ли трансфер?",
+            ("трансфер", "шаттл"),
+        ),
+        ("pismo_vyzov", "Где получить письмо-вызов?", ("письмо-вызов", "письмо вызов")),
+        ("kogda_budet_sertifikat", "Когда будет сертификат?", ("сертификат",)),
+        (
+            "dokumenty_meropriyatiya",
+            "Какие нужны документы или вещи?",
+            ("документ", "вещ", "памятк", "положен"),
+        ),
+        ("rezultaty_rm", "Где посмотреть результаты отбора?", ("результат", "отбор", "списк")),
+        (
+            "informaciya_o_ploschadke_pitanie_pite",
+            "Как организовано питание?",
+            ("питани", "пить", "вода", "меню"),
+        ),
+        (
+            "informaciya_o_ploschadke_medicina",
+            "Есть ли медицинская помощь?",
+            ("медицин", "медпункт", "здоров"),
+        ),
+        ("uchastniki_s_ovz", "Можно ли участвовать с ОВЗ?", ("овз", "ограниченн")),
+        (
+            "inostrannye_grazhdane",
+            "Могут ли участвовать иностранные граждане?",
+            ("иностран", "граждан"),
+        ),
+        ("rosmolodezh_granty", "Есть ли грантовый конкурс?", ("грант", "грантов")),
+        ("trebovaniya_po_dress_kodu", "Есть ли требования по дресс-коду?", ("дресс", "одежд")),
+        ("programma_foruma", "Где посмотреть программу?", ("программ", "расписан")),
+        (
+            "daty_nachala_meropriyatiya",
+            "Когда начинается мероприятие?",
+            ("когда", "дата", "даты", "срок", "начина"),
+        ),
+        ("dobavlenie_v_chat_meropriyatiya", "Когда добавят в чат мероприятия?", ("добав", "чат")),
+        (
+            "podtverzhdenie_uchastiya_i_org_momenty",
+            "Что с подтверждением участия?",
+            ("подтвержд", "подтвердил"),
+        ),
+        ("cifrovaya_nedelya", "Что такое цифровая неделя?", ("цифровая неделя",)),
+        ("gde_nayti_id_profilya", "Где найти ID профиля?", ("id проф", "айди проф", "ид проф")),
+        ("vernut_denezhnye_sredstva", "Как вернуть грантовые средства?", ("вернуть", "средств")),
+    ]
+    questions: list[dict] = []
+    seen_topics: set[str] = set()
+    for topic, text, markers in candidates:
+        if topic in seen_topics:
+            continue
+        if topic == "rosmolodezh_granty" and category == "гранты":
+            continue
+        if topic == "daty_nachala_meropriyatiya" and _has_personal_date_without_event_context(
+            normalized
+        ):
+            continue
+        if topic == "podtverzhdenie_uchastiya_i_org_momenty" and _has_decline_context(
+            normalized
+        ):
+            continue
+        if any(marker in normalized for marker in markers):
+            questions.append(
+                {
+                    "text": text,
+                    "topic": topic,
+                    "category": category,
+                    "forum_normalized": forum,
+                }
+            )
+            seen_topics.add(topic)
+    if questions:
+        return questions
+    return [
+        {
+            "text": message,
+            "topic": None,
+            "category": category,
+            "forum_normalized": forum,
+        }
+    ]
+
+
+def _has_personal_date_without_event_context(normalized: str) -> bool:
+    if "дата рождения" not in normalized and "[дата]" not in normalized:
+        return False
+    return not any(
+        marker in normalized
+        for marker in (
+            "дата форум",
+            "даты форум",
+            "дата меропр",
+            "даты меропр",
+            "когда проходит",
+            "когда начинается",
+            "сроки регистрац",
+            "срок приема",
+            "срок приёма",
+            "заезд",
+            "выезд",
+        )
+    )
+
+
+def _has_decline_context(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "подтвердил участие",
+            "подтвердила участие",
+        )
+    )
 
 
 def _should_force_forum_category(detected_forum: str, message: str) -> bool:

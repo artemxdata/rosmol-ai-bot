@@ -1,0 +1,115 @@
+[
+  {
+    "id": "pii_registration_phone_email",
+    "query": "Меня зовут Иван Петров, телефон +7 999 123-45-67, почта ivan.test@example.com. Как зарегистрироваться на форум?",
+    "user_id": "pre-pilot-pii_registration_phone_email",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0005_kak_zaregistrirovatsya_na_fgais"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0005_kak_zaregistrirovatsya_na_fgais"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [
+      "[EMAIL]"
+    ],
+    "forbidden_message_masked_contains": [
+      "Иван Петров",
+      "+7 999 123-45-67",
+      "ivan.test@example.com"
+    ],
+    "tags": [
+      "pre_pilot",
+      "pii",
+      "registration"
+    ]
+  },
+  {
+    "id": "pii_grants_passport",
+    "query": "У меня паспорт 4510 123456 и СНИЛС 123-456-789 00. Как вернуть грантовые средства?",
+    "user_id": "pre-pilot-pii_grants_passport",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0001_vernut_denezhnye_sredstva"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0001_vernut_denezhnye_sredstva"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [
+      "4510 123456",
+      "123-456-789 00"
+    ],
+    "tags": [
+      "pre_pilot",
+      "pii",
+      "grants"
+    ]
+  },
+  {
+    "id": "pii_profile_id_birthdate",
+    "query": "Моя дата рождения 01.02.2000, где найти ID профиля?",
+    "user_id": "pre-pilot-pii_profile_id_birthdate",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_fallback_r0008_gde_nayti_id_profilya"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0008_gde_nayti_id_profilya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [
+      "01.02.2000"
+    ],
+    "tags": [
+      "pre_pilot",
+      "pii",
+      "profile"
+    ]
+  },
+  {
+    "id": "pii_forum_application_name_phone",
+    "query": "Я Мария Смирнова, мой номер 8 913 222-33-44. Амур: как подать заявку и можно ли потом отказаться?",
+    "user_id": "pre-pilot-pii_forum_application_name_phone",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0218_podacha_zayavki_na_proekt",
+      "xlsx_category_r0219_otkaz_ot_uchastiya"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0218_podacha_zayavki_na_proekt",
+      "xlsx_category_r0219_otkaz_ot_uchastiya"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [
+      "Мария Смирнова",
+      "8 913 222-33-44"
+    ],
+    "tags": [
+      "pre_pilot",
+      "pii",
+      "forums",
+      "forum:Амур"
+    ]
+  }
+]

@@ -39,11 +39,13 @@ def test_normalize_case_accepts_common_fields() -> None:
         "expected_chunk_ids": ["chunk_1"],
         "expected_cited_chunk_ids": [],
         "equivalent_chunk_ids": {},
-            "expected_answer_contains": ["оплачивает самостоятельно"],
-            "expected_behavior": None,
-            "expected_escalated": False,
-            "expected_escalation_reason": None,
-            "expected_generator_model": "source_chunk",
+        "expected_answer_contains": ["оплачивает самостоятельно"],
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "expected_behavior": None,
+        "expected_escalated": False,
+        "expected_escalation_reason": None,
+        "expected_generator_model": "source_chunk",
         "tags": ["travel"],
     }
 
@@ -255,6 +257,35 @@ def test_score_case_accepts_clarify_behavior() -> None:
     assert result["passed"] is True
 
 
+def test_score_case_does_not_treat_supported_answer_wording_as_clarify() -> None:
+    case = _normalize_case(
+        {
+            "id": "sourced-answer-with-clarify-word",
+            "query": "Можно ли с ОВЗ?",
+            "expected_behavior": "answer",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": (
+            "Участники с ОВЗ могут участвовать. Детали можно уточнить через "
+            "Службу Заботы организаторов."
+        ),
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(
+        case,
+        http_result,
+        {"was_escalated": False, "cited_sources": ["ovz"]},
+    )
+
+    assert result["observed_behavior"] == "answer"
+    assert result["passed"] is True
+
+
 def test_score_case_accepts_escalate_behavior() -> None:
     case = _normalize_case(
         {
@@ -275,6 +306,57 @@ def test_score_case_accepts_escalate_behavior() -> None:
 
     assert result["observed_behavior"] == "escalate"
     assert result["passed"] is True
+
+
+def test_score_case_can_require_masked_trace_text() -> None:
+    case = _normalize_case(
+        {
+            "id": "pii-phone",
+            "query": "Мой телефон +7 999 123-45-67, как зарегистрироваться?",
+            "expected_behavior": "answer",
+            "expected_message_masked_contains": ["[ТЕЛЕФОН]"],
+            "forbidden_message_masked_contains": ["+7 999 123-45-67"],
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Ответ по регистрации.",
+        "latency_ms": 120,
+        "error": None,
+    }
+    trace = {"message_masked": "Мой телефон [ТЕЛЕФОН], как зарегистрироваться?"}
+
+    result = score_case(case, http_result, trace)
+
+    assert result["message_masked_contains_match"] is True
+    assert result["message_masked_forbidden_absent_match"] is True
+    assert result["passed"] is True
+
+
+def test_score_case_fails_when_masked_trace_contains_raw_pii() -> None:
+    case = _normalize_case(
+        {
+            "id": "pii-phone",
+            "query": "Мой телефон +7 999 123-45-67, как зарегистрироваться?",
+            "expected_behavior": "answer",
+            "forbidden_message_masked_contains": ["+7 999 123-45-67"],
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Ответ по регистрации.",
+        "latency_ms": 120,
+        "error": None,
+    }
+    trace = {"message_masked": "Мой телефон +7 999 123-45-67, как зарегистрироваться?"}
+
+    result = score_case(case, http_result, trace)
+
+    assert result["message_masked_forbidden_absent_match"] is False
+    assert result["passed"] is False
+    assert "message_masked_forbidden_contains_raw_pii" in result["failure_reasons"]
 
 
 def test_score_case_rejects_behavior_mismatch() -> None:

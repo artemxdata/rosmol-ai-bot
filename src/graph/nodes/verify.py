@@ -4,7 +4,11 @@ import re
 from time import perf_counter
 
 from src.config import get_settings
-from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
+from src.graph.question_utils import (
+    ADDITIONAL_FALLBACK_QUESTION_MARKERS,
+    FALLBACK_QUESTION_MARKERS,
+    build_effective_questions,
+)
 from src.graph.state import BotState
 from src.llm.cascade import select_judge_model
 from src.llm.json_utils import parse_llm_json
@@ -41,7 +45,16 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("положен",),
     ("возраст", "лет"),
     ("трансфер", "автобус", "шаттл"),
-    ("ноутбук", "снаряж", "вещ", "одежд", "взять с собой"),
+    (
+        "ноутбук",
+        "снаряж",
+        "вещ",
+        "одежд",
+        "взять с собой",
+        "dokumenty_meropriyatiya",
+        "spisok_veschey",
+        "pamyatka_uchastnika",
+    ),
     (
         "отказ",
         "отказаться",
@@ -54,6 +67,11 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
         "не смогу приехать",
         "не могу посетить",
         "не смогу посетить",
+        "не получается поехать",
+        "не получается приехать",
+        "не выйдет поехать",
+        "не выйдет приехать",
+        "потом отказаться",
         "подтвердил участие",
         "подтвердила участие",
     ),
@@ -70,6 +88,16 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("результат", "отбор", "одобрен", "статус", "рассмотр"),
     ("сертификат",),
     ("чат", "куратор"),
+    ("медпункт", "медицин", "здоров"),
+    ("овз", "ограниченными возможн", "инвалид"),
+    ("иностран", "иностранц"),
+    ("грантовый конкурс", "гранты", "грантов"),
+    ("цифровая неделя",),
+    ("подтверждение участ",),
+    ("изменить заявку", "изменить заявк", "внести изменения в заявк", "поменять заявк"),
+    ("где посмотреть результ", "результат", "списки", "отбор"),
+    ("в чем суть", "суть форум", "о форуме", "тематик"),
+    ("программ", "расписан"),
     (
         "вернуть грантов",
         "возврат грантов",
@@ -423,8 +451,25 @@ def _unsupported_directive_markers(
     source_chunks = _source_chunks_for_response(response, state, chunks)
     normalized_sources = _normalize(" ".join(chunk.text for chunk in source_chunks))
     return [
-        marker for marker in markers_in_response if marker not in normalized_sources
+        marker
+        for marker in markers_in_response
+        if not _directive_supported_by_sources(marker, normalized_sources)
     ]
+
+
+def _directive_supported_by_sources(marker: str, normalized_sources: str) -> bool:
+    if marker in normalized_sources:
+        return True
+    if marker == "подтвердить участие":
+        return (
+            "подтверд" in normalized_sources or "подтвержд" in normalized_sources
+        ) and "участи" in normalized_sources
+    if marker == "электронную почту":
+        return any(
+            source_marker in normalized_sources
+            for source_marker in ("почт", "email", "e-mail")
+        )
+    return False
 
 
 def _source_chunks_for_response(
@@ -518,7 +563,10 @@ def _marker_questions_from_message(analysis: object, message: str) -> list[Quest
             category=getattr(analysis, "category", None),
             forum_normalized=getattr(analysis, "forum_normalized", None),
         )
-        for markers, question_text in FALLBACK_QUESTION_MARKERS
+        for markers, question_text in (
+            *FALLBACK_QUESTION_MARKERS,
+            *ADDITIONAL_FALLBACK_QUESTION_MARKERS,
+        )
         if any(marker in normalized for marker in markers)
         and not _should_skip_marker_question(question_text, normalized)
     ]
@@ -615,9 +663,20 @@ def _required_marker_groups(question_text: str) -> list[tuple[str, ...]]:
 
 
 def _should_skip_marker_question(question_text: str, normalized_message: str) -> bool:
+    normalized_question = _normalize(question_text)
+    if "документ" in normalized_question and "нуж" in normalized_question:
+        return _has_personal_document_context(
+            normalized_message
+        ) and not _has_event_document_context(normalized_message)
+    if question_text == "Какие даты и сроки?":
+        return _has_personal_date_context(normalized_message) and not _has_event_date_context(
+            normalized_message
+        )
     if not _has_decline_participation_context(normalized_message):
         return False
     if question_text == "Как подать заявку или зарегистрироваться?":
+        return True
+    if question_text == "Что с подтверждением участия?":
         return True
     if question_text != "Кто оплачивает проезд?":
         return False
@@ -652,8 +711,56 @@ def _has_decline_participation_context(normalized_message: str) -> bool:
             "не смогу приехать",
             "не могу посетить",
             "не смогу посетить",
+            "не получается поехать",
+            "не получается приехать",
+            "не выйдет поехать",
+            "не выйдет приехать",
+            "потом отказаться",
             "подтвердил участие",
             "подтвердила участие",
+        )
+    )
+
+
+def _has_personal_document_context(normalized_message: str) -> bool:
+    return any(
+        marker in normalized_message
+        for marker in ("[документ]", "[snils]", "снилс", "паспорт")
+    )
+
+
+def _has_event_document_context(normalized_message: str) -> bool:
+    return any(
+        marker in normalized_message
+        for marker in (
+            "какие документы",
+            "документы нужны",
+            "что взять",
+            "список вещ",
+            "памятк",
+        )
+    )
+
+
+def _has_personal_date_context(normalized_message: str) -> bool:
+    return "дата рождения" in normalized_message or "[дата]" in normalized_message
+
+
+def _has_event_date_context(normalized_message: str) -> bool:
+    return any(
+        marker in normalized_message
+        for marker in (
+            "дата форум",
+            "даты форум",
+            "дата меропр",
+            "даты меропр",
+            "когда проходит",
+            "когда начинается",
+            "сроки регистрац",
+            "срок приема",
+            "срок приёма",
+            "заезд",
+            "выезд",
         )
     )
 

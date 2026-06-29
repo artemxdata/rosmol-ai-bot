@@ -17,6 +17,7 @@ from src.graph.nodes.generate import build_deterministic_source_response, genera
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
 from src.graph.nodes.respond import respond
 from src.graph.nodes.retrieve import retrieve
+from src.graph.nodes.verify import verify
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import build_effective_questions
 from src.models import (
@@ -384,6 +385,84 @@ def test_route_after_verify_preserves_previous_escalation() -> None:
         "verification": VerificationResult(has_hallucination=False),
     }
     assert route_after_verify(state) == "escalate"
+
+
+@pytest.mark.asyncio
+async def test_verify_allows_source_supported_confirmation_instruction() -> None:
+    chunk = ScoredChunk(
+        chunk_id="confirmation",
+        text="Обязательно нужно подтвердить своё участие через личный кабинет.",
+        metadata={"chunk_id": "confirmation", "source_type": "xlsx"},
+        score=0.8,
+        reranker_score=0.8,
+    )
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Ты можешь подтвердить участие в личном кабинете. [src:confirmation]"
+            ),
+            "reranked_chunks": [chunk],
+            "cited_sources": ["confirmation"],
+            "generator_model": "source_chunk",
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+
+
+@pytest.mark.asyncio
+async def test_verify_allows_source_supported_email_instruction() -> None:
+    chunk = ScoredChunk(
+        chunk_id="docs",
+        text="Полный список рекомендаций будет отправлен участникам на электронную почту.",
+        metadata={"chunk_id": "docs", "source_type": "xlsx"},
+        score=0.8,
+        reranker_score=0.8,
+    )
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Список рекомендаций отправят на электронную почту. [src:docs]"
+            ),
+            "reranked_chunks": [chunk],
+            "cited_sources": ["docs"],
+            "generator_model": "source_chunk",
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+
+
+@pytest.mark.asyncio
+async def test_verify_allows_source_supported_plain_email_wording() -> None:
+    chunk = ScoredChunk(
+        chunk_id="results",
+        text="Тебе придёт письмо с результатами отбора на почту, указанную при регистрации.",
+        metadata={"chunk_id": "results", "source_type": "xlsx"},
+        score=0.8,
+        reranker_score=0.8,
+    )
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Результаты отбора придут на электронную почту. [src:results]"
+            ),
+            "reranked_chunks": [chunk],
+            "cited_sources": ["results"],
+            "generator_model": "source_chunk",
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
 
 
 @pytest.mark.asyncio
@@ -854,6 +933,57 @@ def test_session_context_restores_forum_for_followup_from_last_five_turns() -> N
     assert build_contextual_message(message, session, analysis).startswith("Амур: ")
 
 
+def test_session_context_restores_grant_return_for_followup() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        last_messages=[
+            {
+                "user": "Как вернуть грантовые средства?",
+                "bot": "Для возврата грантовых средств напиши на reportgrant2024@fadm.gov.ru.",
+            }
+        ],
+    )
+    message = "А куда именно писать?"
+    analysis = apply_session_context(QueryAnalysis(), message, session)
+
+    assert analysis.category == "гранты"
+    assert analysis.questions[0].topic == "vernut_denezhnye_sredstva"
+    assert build_contextual_message(message, session, analysis).startswith(
+        "Как вернуть грантовые средства?"
+    )
+
+
+def test_contextual_message_keeps_previous_topic_for_elliptical_forum_followup() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        last_messages=[
+            {
+                "user": "Больше, чем путешествие: расскажи про питание и трансфер.",
+                "bot": "Есть трансфер и условия питания зависят от категории.",
+            }
+        ],
+    )
+    message = "А если я еду с семьёй, условия такие же?"
+    analysis = apply_session_context(QueryAnalysis(), message, session)
+    contextual = build_contextual_message(message, session, analysis)
+
+    assert contextual.startswith("Больше, чем путешествие: ")
+    assert "расскажи про питание и трансфер" in contextual
+
+
+def test_effective_questions_ignore_personal_birthdate_as_event_date() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="платформа_фгаис"),
+        "Моя дата рождения [ДАТА], где найти ID профиля?",
+    )
+
+    assert [question.text for question in questions] == ["Где найти ID профиля?"]
+
+
 def test_fallback_questions_do_not_match_hotel_marker_inside_wanted_word() -> None:
     questions = build_effective_questions(
         QueryAnalysis(category="форумы", forum_normalized="Арктика. Лёд тронулся"),
@@ -1060,13 +1190,16 @@ async def test_analyze_uses_deterministic_path_for_clear_forum_query() -> None:
     assert analysis.forum_normalized == "Машук"
     assert analysis.category == "форумы"
     assert analysis.complexity == Complexity.COMPLEX
-    assert analysis.questions == []
+    assert [question.text for question in analysis.questions] == [
+        "Оплачивается ли проезд?",
+        "Какие условия проживания?",
+    ]
     questions = build_effective_questions(
         analysis,
         "Машук кто оплачивает проезд и какие условия проживания?",
     )
     assert [question.text for question in questions] == [
-        "Кто оплачивает проезд?",
+        "Оплачивается ли проезд?",
         "Какие условия проживания?",
     ]
     assert {question.forum_normalized for question in questions} == {"Машук"}
@@ -1088,11 +1221,9 @@ async def test_analyze_uses_deterministic_grant_routing_without_llm() -> None:
     assert result["analyzer_mode"] == "deterministic"
     assert analysis.category == "гранты"
     assert analysis.complexity == Complexity.SIMPLE
-    assert analysis.questions == []
+    assert [question.text for question in analysis.questions] == ["Как подать заявку?"]
     questions = build_effective_questions(analysis, "где подать проект на грант")
-    assert [question.text for question in questions] == [
-        "Как подать заявку или зарегистрироваться?"
-    ]
+    assert [question.text for question in questions] == ["Как подать заявку?"]
     assert questions[0].category == "гранты"
     assert "should_escalate" not in result
 
@@ -2958,6 +3089,87 @@ async def test_rerank_keeps_second_candidate_for_multi_aspect_question(
 
 
 @pytest.mark.asyncio
+async def test_rerank_pins_topic_candidates_for_forum_multi_aspect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    forum = "ГосСтарт"
+    chunks = [
+        Chunk(
+            chunk_id="neighbor_volunteers",
+            text="Волонтёры помогают на площадке форума.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "volontery_foruma",
+            },
+            score=0.99,
+        ),
+        Chunk(
+            chunk_id="confirmation",
+            text="Подтверждение участия проходит в личном кабинете.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "podtverzhdenie_uchastiya_i_org_momenty",
+            },
+            score=0.2,
+        ),
+        Chunk(
+            chunk_id="digital_week",
+            text="Цифровая неделя — это онлайн-этап перед очным мероприятием.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "cifrovaya_nedelya",
+            },
+            score=0.2,
+        ),
+        Chunk(
+            chunk_id="dates",
+            text="Даты начала мероприятия указаны в карточке форума.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "daty_nachala_meropriyatiya",
+            },
+            score=0.2,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": (
+                "ГосСтарт: что с подтверждением участия, "
+                "что такое цифровая неделя и когда начинается мероприятие?"
+            ),
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized=forum,
+                complexity=Complexity.COMPLEX,
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    chunk_ids = {chunk.chunk_id for chunk in result["reranked_chunks"]}
+    assert {"confirmation", "digital_week", "dates"} <= chunk_ids
+    assert "neighbor_volunteers" not in [chunk.chunk_id for chunk in result["reranked_chunks"][:3]]
+
+
+@pytest.mark.asyncio
 async def test_rerank_prefers_official_forum_source_over_answer_bank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3353,6 +3565,63 @@ async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citati
     assert result["cited_sources"] == ["transfer", "food"]
     assert "Трансфер до площадки фестиваля" in result["generated_response"]
     assert "питание и питьевая вода" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_falls_back_to_sources_when_llm_claims_insufficient_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    application = ScoredChunk(
+        chunk_id="application",
+        text="Регистрация на форум закрыта, даты объявят позже.",
+        metadata={
+            "category": "форумы",
+            "source_type": "xlsx",
+            "topic": "podacha_zayavki_na_proekt",
+        },
+        score=0.8,
+        reranker_score=0.7,
+    )
+    decline = ScoredChunk(
+        chunk_id="decline",
+        text="Если не можешь поехать после подтверждения, сообщи нам.",
+        metadata={
+            "category": "форумы",
+            "source_type": "xlsx",
+            "topic": "otkaz_ot_uchastiya",
+        },
+        score=0.8,
+        reranker_score=0.7,
+    )
+    llm = CapturingLLM(
+        "Из представленных источников невозможно ответить на часть вопроса. "
+        "[src:application] [src:decline]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Как подать заявку и что делать, если не могу поехать?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                questions=[
+                    Question(text="Как подать заявку?", category="форумы"),
+                    Question(text="Как отказаться от участия?", category="форумы"),
+                ],
+            ),
+            "reranked_chunks": [application, decline],
+            "max_confidence": 0.7,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["application", "decline"]
+    assert "Передаю обращение" not in result["generated_response"]
 
 
 @pytest.mark.asyncio
@@ -5851,6 +6120,59 @@ async def test_generate_combines_multiple_covered_source_chunks(
 
 
 @pytest.mark.asyncio
+async def test_generate_repairs_known_source_ref_transliteration_typo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk_id = "xlsx_category_r0218_podacha_zayavki_na_proekt"
+    chunk = ScoredChunk(
+        chunk_id=chunk_id,
+        text="После подачи заявки ты сможешь следить за её статусом в личном кабинете.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Амур",
+            "source_type": "xlsx",
+            "topic": "podacha_zayavki_na_proekt",
+        },
+        score=0.9,
+        reranker_score=0.9,
+    )
+    llm = CapturingLLM(
+        "После подачи заявки статус можно смотреть в личном кабинете. "
+        "[src:xlsx_category_r0218_podacha_zayavki_na_projekt]"
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized="Амур",
+                questions=[
+                    Question(
+                        text="Как подать заявку?",
+                        category="форумы",
+                        forum_normalized="Амур",
+                        topic="podacha_zayavki_na_proekt",
+                    )
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert result["cited_sources"] == [chunk_id]
+    assert f"[src:{chunk_id}]" in result["generated_response"]
+    assert "projekt" not in result["generated_response"]
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5989,6 +6311,83 @@ async def test_generate_selects_source_for_each_multi_aspect_question(
     assert result["cited_sources"] == ["amur_application", "amur_travel"]
     assert "регистрация на форум «Амур» закрыта" in result["generated_response"]
     assert "оплата проезда" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_selects_application_and_decline_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum = "Амур"
+    application = ScoredChunk(
+        chunk_id="xlsx_category_r0218_podacha_zayavki_na_proekt",
+        text="Регистрация на форум «Амур» закрыта, статус заявки доступен в кабинете.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "podacha_zayavki_na_proekt",
+        },
+        score=0.9,
+        reranker_score=0.7,
+    )
+    decline = ScoredChunk(
+        chunk_id="xlsx_category_r0219_otkaz_ot_uchastiya",
+        text="Если решишь отказаться от участия, пожалуйста, сообщи нам.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "otkaz_ot_uchastiya",
+        },
+        score=1.0,
+        reranker_score=0.7,
+    )
+    llm = CapturingLLM(
+        "Регистрация закрыта, статус заявки можно смотреть в кабинете. "
+        "[src:xlsx_category_r0218_podacha_zayavki_na_proekt]\n\n"
+        "Если нужно отказаться от участия, сообщи нам. "
+        "[src:xlsx_category_r0219_otkaz_ot_uchastiya]"
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized=forum,
+                questions=[
+                    Question(
+                        text="Как подать заявку?",
+                        category="форумы",
+                        forum_normalized=forum,
+                        topic="podacha_zayavki_na_proekt",
+                    ),
+                    Question(
+                        text="Что делать, если не получается поехать?",
+                        category="форумы",
+                        forum_normalized=forum,
+                        topic="otkaz_ot_uchastiya",
+                    ),
+                ],
+            ),
+            "message_masked": "Амур: как подать заявку и можно ли потом отказаться?",
+            "reranked_chunks": [application, decline],
+            "max_confidence": 0.7,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert "xlsx_category_r0218_podacha_zayavki_na_proekt" in llm.kwargs[0]["user"]
+    assert "xlsx_category_r0219_otkaz_ot_uchastiya" in llm.kwargs[0]["user"]
+    assert result["cited_sources"] == [
+        "xlsx_category_r0218_podacha_zayavki_na_proekt",
+        "xlsx_category_r0219_otkaz_ot_uchastiya",
+    ]
 
 
 def test_source_chunk_response_deduplicates_repeated_paragraphs_and_links() -> None:

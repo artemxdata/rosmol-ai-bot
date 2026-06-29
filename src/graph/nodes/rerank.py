@@ -10,7 +10,7 @@ from src.config import get_settings
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
-from src.models import Chunk, ScoredChunk
+from src.models import Chunk, Question, ScoredChunk
 from src.rag.errors import MLDependencyError
 
 MAX_RERANKED_CHUNKS = 8
@@ -51,6 +51,53 @@ SAFE_CROSS_CATEGORY_ANSWER_BANK_TOPICS = {
     "регистрация_и_заявка",
     "статус_заявки",
 }
+TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}),
+    frozenset(
+        {
+            "transfer_do_mesta_provedeniya",
+            "transfer_do_mesta_provedeniya_meropriyatiya",
+            "transfer_do_ploschadki_festivalya",
+            "transfer_po_gorodu",
+        }
+    ),
+    frozenset(
+        {
+            "usloviya_pitaniya_i_tochki_s_vodoy",
+            "pitanie_i_pite",
+            "pitanie_dlya_vegetariancev",
+            "informaciya_o_ploschadke_pitanie",
+            "informaciya_o_ploschadke_pitanie_pite",
+            "informaciya_o_ploschadke_pitanie_pite_i",
+        }
+    ),
+    frozenset(
+        {
+            "spisok_veschey_i_dokumentov",
+            "dokumenty_meropriyatiya",
+            "pamyatka_uchastnika_foruma",
+        }
+    ),
+    frozenset({"voprosy_po_zdorovyu_medpunkt", "informaciya_o_ploschadke_medicina"}),
+    frozenset({"uchastniki_s_ovz"}),
+    frozenset({"inostrannye_grazhdane"}),
+    frozenset({"sut_foruma_i_napravleniya", "sut_festivalya_i_tematika", "o_meropriyatii"}),
+    frozenset({"mesto_i_daty_provedeniya_meropriyatiya", "daty_nachala_meropriyatiya"}),
+    frozenset({"dobavlenie_v_chat_i_sluzhba_zaboty", "dobavlenie_v_chat_meropriyatiya"}),
+    frozenset({"rosmolodezh_granty", "usloviya_i_sroki_uchastiya_granty"}),
+    frozenset({"pismo_vyzov"}),
+    frozenset({"kogda_budet_sertifikat", "mozhno_li_poluchit_sertifikat_za_uchastie"}),
+    frozenset({"podacha_zayavki_na_proekt", "podat_zayavku_na_uchastie"}),
+    frozenset({"otkaz_ot_uchastiya"}),
+    frozenset({"vnesti_izmeneniya_v_zayavku"}),
+    frozenset({"trebovaniya_po_dress_kodu"}),
+    frozenset({"programma_foruma", "vremya_nachala_i_raspisanie"}),
+    frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
+    frozenset({"cifrovaya_nedelya"}),
+    frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
+    frozenset({"usloviya_prozhivaniya", "oplata_proezda_prozhivaniya_i_charter"}),
+    frozenset({"vozrastnye_ogranicheniya"}),
+)
 
 
 async def rerank(state: BotState) -> dict:
@@ -140,7 +187,7 @@ def _rerank_for_state(
     original_priority_candidate = _priority_source_candidate(query, scoped_chunks)
     questions = (
         [
-            question.text.strip()
+            question
             for question in build_effective_questions(analysis, query)
             if question.text.strip()
         ]
@@ -148,7 +195,8 @@ def _rerank_for_state(
         else []
     )
     if len(questions) <= 1:
-        rerank_query = questions[0] if questions else query
+        question = questions[0] if questions else None
+        rerank_query = question.text.strip() if question else query
         priority_candidate = _priority_source_candidate(
             query,
             scoped_chunks,
@@ -158,6 +206,7 @@ def _rerank_for_state(
             scoped_chunks,
             min(MAX_RERANKED_CHUNKS, max(4, len(scoped_chunks))),
         )
+        candidates = _prepend_topic_candidate(analysis, question, scoped_chunks, candidates)
         if priority_candidate and priority_candidate.chunk_id not in {
             chunk.chunk_id for chunk in candidates
         }:
@@ -204,14 +253,16 @@ def _rerank_for_state(
     group_specs: list[tuple[str, list[Chunk], int]] = []
 
     for question in questions:
+        question_text = question.text.strip()
         candidates = _candidate_chunks_for_question(
-            question,
+            question_text,
             scoped_chunks,
             QUESTION_CANDIDATE_LIMIT,
         )
+        candidates = _prepend_topic_candidate(analysis, question, scoped_chunks, candidates)
         if candidates:
             _append_chunk(selected, seen, _source_candidate(candidates[0]))
-        group_specs.append((question, candidates, per_question_limit))
+        group_specs.append((question_text, candidates, per_question_limit))
 
     target_size = min(MAX_RERANKED_CHUNKS, max(4, len(questions) + 2))
     query_candidates = _candidate_chunks_for_question(query, scoped_chunks, QUERY_CANDIDATE_LIMIT)
@@ -514,6 +565,152 @@ def _is_promotable_priority_candidate(
             priority_candidate,
         )
     )
+
+
+def _prepend_topic_candidate(
+    analysis: Any,
+    question: Question | None,
+    chunks: list[Chunk],
+    candidates: list[Chunk],
+) -> list[Chunk]:
+    topic_candidate = _topic_candidate_for_question(analysis, question, chunks)
+    if topic_candidate is None:
+        return candidates
+    return [
+        topic_candidate,
+        *[chunk for chunk in candidates if chunk.chunk_id != topic_candidate.chunk_id],
+    ]
+
+
+def _topic_candidate_for_question(
+    analysis: Any,
+    question: Question | None,
+    chunks: list[Chunk],
+) -> Chunk | None:
+    if question is None or not chunks:
+        return None
+    question_topic_group = _question_topic_group(question)
+    if not question_topic_group:
+        return None
+
+    matches: list[tuple[int, int, float, int, float, int, Chunk]] = []
+    for index, chunk in enumerate(chunks):
+        topic_rank = _topic_match_rank(question, chunk)
+        if topic_rank > 1 or not _chunk_matches_question_scope(analysis, question, chunk):
+            continue
+        field_score = _metadata_field_score(_tokens(question.text), chunk)
+        matches.append(
+            (
+                topic_rank,
+                _source_type_rank(chunk),
+                -field_score,
+                1 if _is_generic_chunk(chunk) else 0,
+                -float(chunk.score or 0.0),
+                index,
+                chunk,
+            )
+        )
+    if not matches:
+        return None
+    return min(matches)[-1]
+
+
+def _topic_match_rank(question: Question, chunk: Chunk) -> int:
+    question_topic = str(question.topic or "").strip()
+    question_topic_group = _question_topic_group(question)
+    chunk_topic = str((chunk.metadata or {}).get("topic") or "").strip()
+    if not question_topic_group:
+        return 1
+    if question_topic and chunk_topic == question_topic:
+        return 0
+    if _equivalent_topic_group(chunk_topic) == question_topic_group:
+        return 1
+    return 2
+
+
+def _question_topic_group(question: Question) -> str | None:
+    question_topic = str(question.topic or "").strip()
+    if question_topic:
+        return _equivalent_topic_group(question_topic)
+    inferred_topic = _infer_topic_from_question_text(_normalize(question.text))
+    return _equivalent_topic_group(inferred_topic) if inferred_topic else None
+
+
+def _infer_topic_from_question_text(normalized_question: str) -> str | None:
+    if _asks_decline_participation(normalized_question):
+        return "otkaz_ot_uchastiya"
+    if _asks_confirmation_org(normalized_question):
+        return "podtverzhdenie_uchastiya_i_org_momenty"
+    if _asks_digital_week(normalized_question):
+        return "cifrovaya_nedelya"
+    if _asks_event_program(normalized_question):
+        return "programma_foruma"
+    if _asks_forum_grants(normalized_question):
+        return "rosmolodezh_granty"
+    if _asks_event_chat(normalized_question):
+        return "dobavlenie_v_chat_meropriyatiya"
+    if _asks_foreign_citizens(normalized_question):
+        return "inostrannye_grazhdane"
+    if _asks_ovz_participation(normalized_question):
+        return "uchastniki_s_ovz"
+    if _asks_medical_help(normalized_question):
+        return "voprosy_po_zdorovyu_medpunkt"
+    if _asks_application_change(normalized_question):
+        return "vnesti_izmeneniya_v_zayavku"
+    if _asks_selection_results(normalized_question):
+        return "rezultaty_rm"
+    if _asks_event_overview(normalized_question):
+        return "sut_foruma_i_napravleniya"
+    if _asks_invitation_letter(normalized_question):
+        return "pismo_vyzov"
+    if _asks_documents_or_packing(normalized_question):
+        return "pamyatka_uchastnika_foruma"
+    if _asks_transfer(normalized_question):
+        return "transfer_do_mesta_provedeniya_meropriyatiya"
+    if _asks_housing_conditions(normalized_question):
+        return "usloviya_prozhivaniya"
+    if _asks_event_dates(normalized_question):
+        return "daty_nachala_meropriyatiya"
+    if _asks_registration(normalized_question):
+        return "podacha_zayavki_na_proekt"
+    if _asks_grant_application(normalized_question):
+        return "podat_zayavku_na_uchastie"
+    return None
+
+
+def _chunk_matches_question_scope(
+    analysis: Any,
+    question: Question,
+    chunk: Chunk,
+) -> bool:
+    metadata = chunk.metadata or {}
+    forum = str(
+        question.forum_normalized
+        or getattr(analysis, "forum_normalized", None)
+        or ""
+    ).strip()
+    chunk_forum = str(metadata.get("forum_normalized") or "").strip()
+    if forum and chunk_forum and chunk_forum != forum:
+        return False
+
+    category = str(
+        question.category
+        or getattr(analysis, "category", None)
+        or ""
+    ).strip()
+    chunk_category = str(metadata.get("category") or "").strip()
+    if not category or not chunk_category or chunk_category == category:
+        return True
+    if forum and _is_same_forum_compatible_category(category, chunk):
+        return True
+    return _is_compatible_category(category, chunk)
+
+
+def _equivalent_topic_group(topic: str) -> str:
+    for group in TOPIC_EQUIVALENCE_GROUPS:
+        if topic in group:
+            return "|".join(sorted(group))
+    return topic
 
 
 def _candidate_chunks_for_question(
@@ -1038,6 +1235,91 @@ def _asks_profile_id(normalized_question: str) -> bool:
     return any(marker in normalized_question for marker in ("id проф", "айди", "ид проф"))
 
 
+def _asks_decline_participation(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in (
+            "отказ",
+            "отказаться",
+            "отозвать",
+            "отменить участие",
+            "отмена заявки",
+            "не могу поехать",
+            "не смогу поехать",
+            "не могу приехать",
+            "не смогу приехать",
+            "не могу посетить",
+            "не смогу посетить",
+            "не получается поехать",
+            "не получается приехать",
+            "не выйдет поехать",
+            "не выйдет приехать",
+            "подтвердил участие",
+            "подтвердила участие",
+        )
+    )
+
+
+def _asks_medical_help(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("медпункт", "медицин", "здоров")
+    )
+
+
+def _asks_ovz_participation(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("овз", "ограниченными возможн", "инвалид")
+    )
+
+
+def _asks_foreign_citizens(normalized_question: str) -> bool:
+    return any(marker in normalized_question for marker in ("иностран", "иностранц"))
+
+
+def _asks_forum_grants(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("грантовый конкурс", "гранты", "грантов")
+    )
+
+
+def _asks_event_chat(normalized_question: str) -> bool:
+    return "чат" in normalized_question or "куратор" in normalized_question
+
+
+def _asks_selection_results(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("результат", "отбор", "одобрен", "статус", "рассмотр", "списки")
+    )
+
+
+def _asks_application_change(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in (
+            "изменить заявку",
+            "изменить заявк",
+            "внести изменения в заявк",
+            "поменять заявк",
+        )
+    )
+
+
+def _asks_confirmation_org(normalized_question: str) -> bool:
+    return any(marker in normalized_question for marker in ("подтверждени", "подтверд"))
+
+
+def _asks_digital_week(normalized_question: str) -> bool:
+    return "цифровая неделя" in normalized_question
+
+
+def _asks_event_program(normalized_question: str) -> bool:
+    return "программ" in normalized_question or "расписан" in normalized_question
+
+
 def _asks_grant_return(normalized_question: str) -> bool:
     return any(
         marker in normalized_question
@@ -1262,6 +1544,8 @@ def _asks_invitation_letter(normalized_question: str) -> bool:
 def _asks_event_dates(normalized_question: str) -> bool:
     if _asks_arrival_departure(normalized_question):
         return False
+    if "когда добав" in normalized_question and "чат" in normalized_question:
+        return False
     return any(
         marker in normalized_question
         for marker in (
@@ -1277,7 +1561,32 @@ def _asks_event_dates(normalized_question: str) -> bool:
             "когда начинается",
             "когда начнется",
             "когда начнётся",
+            "когда проходит",
+            "когда проводится",
+            "период проведения",
         )
+    )
+
+
+def _asks_event_overview(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in (
+            "в чем суть",
+            "в чём суть",
+            "суть форум",
+            "о форуме",
+            "о мероприятии",
+            "тематик",
+            "направлен",
+        )
+    )
+
+
+def _asks_housing_conditions(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("проживан", "жиль", "гостиниц", "отел", "размещ", "палат")
     )
 
 

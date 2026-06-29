@@ -739,6 +739,65 @@ async def test_verifier_allows_multi_aspect_answer_when_sources_cover_each_aspec
 
 
 @pytest.mark.asyncio
+async def test_verifier_allows_items_coverage_from_document_topic_metadata() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Больше, чем путешествие: какие вещи взять, что с медпунктом и можно ли с ОВЗ?"
+            ),
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Больше, чем путешествие",
+            ),
+            "generated_response": (
+                "Список вещей будет в документах участника. "
+                "На площадке есть медпункт. "
+                "Участники с ОВЗ могут участвовать по правилам источника."
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["docs", "medical", "ovz"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="docs",
+                    text="Документы и список вещей будут доступны участникам.",
+                    metadata={
+                        "forum_normalized": "Больше, чем путешествие",
+                        "topic": "dokumenty_meropriyatiya",
+                        "intent_name": "Документы мероприятия",
+                    },
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="medical",
+                    text="На площадке предусмотрен медпункт.",
+                    metadata={
+                        "forum_normalized": "Больше, чем путешествие",
+                        "topic": "informaciya_o_ploschadke_medicina",
+                        "intent_name": "Информация о площадке. Медицина",
+                    },
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="ovz",
+                    text="Участники с ОВЗ могут участвовать с учётом условий площадки.",
+                    metadata={
+                        "forum_normalized": "Больше, чем путешествие",
+                        "topic": "uchastniki_s_ovz",
+                        "intent_name": "Участники с ОВЗ",
+                    },
+                    reranker_score=0.9,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
 async def test_verifier_does_not_split_expert_feedback_into_application_and_results() -> None:
     result = await verify(
         {

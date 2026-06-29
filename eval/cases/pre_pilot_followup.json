@@ -1,0 +1,204 @@
+[
+  {
+    "id": "followup_amur_refusal_after_context",
+    "tags": [
+      "pre_pilot",
+      "followup",
+      "forum:Амур"
+    ],
+    "turns": [
+      {
+        "id": "followup_amur_refusal_after_context_t1",
+        "query": "Подскажи по форуму Амур: как подать заявку, оплачивается ли проезд?",
+        "user_id": "pre-pilot-followup_amur_refusal_after_context_t1",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0218_podacha_zayavki_na_proekt",
+          "xlsx_category_r0209_oplata_proezda"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0218_podacha_zayavki_na_proekt",
+          "xlsx_category_r0209_oplata_proezda"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:1",
+          "forum:Амур"
+        ]
+      },
+      {
+        "id": "followup_amur_refusal_after_context_t2",
+        "query": "А что делать, если я уже подтвердил участие, но теперь не могу поехать?",
+        "user_id": "pre-pilot-followup_amur_refusal_after_context_t2",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0219_otkaz_ot_uchastiya"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0219_otkaz_ot_uchastiya"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:2",
+          "forum:Амур"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "followup_bctp_family_transfer",
+    "tags": [
+      "pre_pilot",
+      "followup",
+      "forum:Больше, чем путешествие"
+    ],
+    "turns": [
+      {
+        "id": "followup_bctp_family_transfer_t1",
+        "query": "Больше, чем путешествие: расскажи про питание и трансфер.",
+        "user_id": "pre-pilot-followup_bctp_family_transfer_t1",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya",
+          "docx_festival_bolshe_chem_puteshestvie_intenty_011_usloviya_pitaniya_i_tochki_s_vodoy"
+        ],
+        "expected_cited_chunk_ids": [
+          "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya",
+          "docx_festival_bolshe_chem_puteshestvie_intenty_011_usloviya_pitaniya_i_tochki_s_vodoy"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:1",
+          "forum:Больше, чем путешествие"
+        ],
+        "equivalent_chunk_ids": {
+          "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya": [
+            "xlsx_category_r0627_transfer_do_mesta_provedeniya_meropriyatiya"
+          ],
+          "docx_festival_bolshe_chem_puteshestvie_intenty_011_usloviya_pitaniya_i_tochki_s_vodoy": [
+            "xlsx_category_r0631_pitanie_i_pite"
+          ]
+        }
+      },
+      {
+        "id": "followup_bctp_family_transfer_t2",
+        "query": "А если я еду с семьёй, условия такие же?",
+        "user_id": "pre-pilot-followup_bctp_family_transfer_t2",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "docx_festival_bolshe_chem_puteshestvie_intenty_007_oplata_proezda_palatok_i_pitaniya",
+          "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya"
+        ],
+        "expected_cited_chunk_ids": [
+          "docx_festival_bolshe_chem_puteshestvie_intenty_007_oplata_proezda_palatok_i_pitaniya",
+          "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:2",
+          "forum:Больше, чем путешествие"
+        ],
+        "equivalent_chunk_ids": {
+          "docx_festival_bolshe_chem_puteshestvie_intenty_007_oplata_proezda_palatok_i_pitaniya": [
+            "xlsx_category_r0625_oplata_proezda"
+          ],
+          "docx_festival_bolshe_chem_puteshestvie_intenty_008_transfer_do_ploschadki_festivalya": [
+            "xlsx_category_r0627_transfer_do_mesta_provedeniya_meropriyatiya"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "followup_grants_refund_contact",
+    "tags": [
+      "pre_pilot",
+      "followup",
+      "grants"
+    ],
+    "turns": [
+      {
+        "id": "followup_grants_refund_contact_t1",
+        "query": "Как вернуть грантовые средства?",
+        "user_id": "pre-pilot-followup_grants_refund_contact_t1",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0001_vernut_denezhnye_sredstva"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0001_vernut_denezhnye_sredstva"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:1",
+          "grants"
+        ]
+      },
+      {
+        "id": "followup_grants_refund_contact_t2",
+        "query": "А куда именно писать?",
+        "user_id": "pre-pilot-followup_grants_refund_contact_t2",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0001_vernut_denezhnye_sredstva"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0001_vernut_denezhnye_sredstva"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:2",
+          "grants"
+        ]
+      }
+    ]
+  }
+]

@@ -121,6 +121,24 @@ class FakeRetriever:
             Chunk(
                 chunk_id="ctx_travel",
                 text="Проезд участник оплачивает самостоятельно.",
+                metadata={
+                    "chunk_id": "ctx_travel",
+                    "category": "форумы",
+                    "forum_normalized": "Машук",
+                    "topic": "oplata_proezda",
+                    "source_type": "xlsx",
+                },
+                score=0.9,
+            )
+        ]
+
+
+class UnscopedFakeRetriever:
+    async def retrieve(self, query: str, filters: dict[str, Any], top_k: int) -> list[Chunk]:
+        return [
+            Chunk(
+                chunk_id="ctx_travel",
+                text="Проезд участник оплачивает самостоятельно.",
                 metadata={"chunk_id": "ctx_travel"},
                 score=0.9,
             )
@@ -319,6 +337,34 @@ async def test_process_message_skips_cache_for_contextual_followup(
 
 
 @pytest.mark.asyncio
+async def test_process_message_skips_cache_for_grant_followup(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash=hash_user_id(Channel.API.value, "u1"),
+        last_messages=[
+            {
+                "user": "Как вернуть грантовые средства?",
+                "bot": "Для возврата грантовых средств напиши на reportgrant2024@fadm.gov.ru.",
+            }
+        ],
+    )
+    graph = CapturingGraph("Свежий ответ по почте")
+    app = _app(cached_response="Старый ответ из кэша", graph=graph, session=session)
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text="А куда именно писать?")
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Свежий ответ по почте"
+    assert app.state.semantic_cache.check_calls == []
+    assert graph.seen_state is not None
+    assert graph.seen_state["cache_allowed"] is False
+
+
+@pytest.mark.asyncio
 async def test_process_message_bypass_cache_runs_graph_without_cache_read_or_write(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],
@@ -448,7 +494,7 @@ async def test_process_message_low_confidence_graph_path_escalates(
     app = _app(
         graph=build_graph(),
         llm_client=FakeAnalyzerLLM(),
-        retriever=FakeRetriever(),
+        retriever=UnscopedFakeRetriever(),
         reranker=LowConfidenceReranker(),
     )
     message = IncomingMessage(user_id="u1", channel=Channel.API, text="Кто платит за дорогу?")

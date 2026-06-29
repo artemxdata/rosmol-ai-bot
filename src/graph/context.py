@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.kb.forum_registry import detect_forums_from_text
-from src.models import QueryAnalysis, Session
+from src.models import QueryAnalysis, Question, Session
 
 MAX_CONTEXT_TURNS = 5
 
@@ -25,6 +25,21 @@ FOLLOWUP_FORUM_MARKERS: tuple[str, ...] = (
     "не смогу",
     "не получается",
 )
+FOLLOWUP_TOPIC_MARKERS: tuple[str, ...] = (
+    "а куда",
+    "куда именно",
+    "куда писать",
+    "куда отправ",
+    "на какую почту",
+    "какая почта",
+    "где именно",
+    "как именно",
+)
+GRANT_RETURN_QUESTION = Question(
+    text="Как вернуть грантовые средства?",
+    topic="vernut_denezhnye_sredstva",
+    category="гранты",
+)
 
 
 def apply_session_context(
@@ -34,27 +49,39 @@ def apply_session_context(
 ) -> QueryAnalysis:
     if analysis.is_offtopic:
         return analysis
-    if not _is_forum_followup(message):
-        return analysis
-    if analysis.forum_normalized:
-        if analysis.category:
-            return analysis
-        return analysis.model_copy(update={"category": "форумы"})
 
-    forum = last_forum_from_session(session)
-    if not forum:
-        return analysis
+    if _is_forum_followup(message):
+        if analysis.forum_normalized:
+            if analysis.category:
+                return analysis
+            return analysis.model_copy(update={"category": "форумы"})
 
-    category = analysis.category
-    if category in {None, "общее", "навигация"}:
-        category = "форумы"
-    return analysis.model_copy(
-        update={
-            "forum": forum,
-            "forum_normalized": forum,
-            "category": category,
-        }
-    )
+        forum = last_forum_from_session(session)
+        if forum:
+            category = analysis.category
+            if category in {None, "общее", "навигация"}:
+                category = "форумы"
+            return analysis.model_copy(
+                update={
+                    "forum": forum,
+                    "forum_normalized": forum,
+                    "category": category,
+                }
+            )
+
+    if _is_grant_return_followup(message, session):
+        questions = list(analysis.questions or [])
+        if not any(question.topic == GRANT_RETURN_QUESTION.topic for question in questions):
+            questions.insert(0, GRANT_RETURN_QUESTION)
+        return analysis.model_copy(
+            update={
+                "category": "гранты",
+                "questions": questions,
+                "topics": _merge_topics(analysis.topics, [GRANT_RETURN_QUESTION.topic or ""]),
+            }
+        )
+
+    return analysis
 
 
 def build_contextual_message(
@@ -68,17 +95,24 @@ def build_contextual_message(
 
     forum = getattr(analysis, "forum_normalized", None) or last_forum_from_session(session)
     if not forum or _mentions_forum(text, forum) or not _is_forum_followup(text):
+        if _is_grant_return_followup(text, session):
+            return f"{GRANT_RETURN_QUESTION.text} {text}"
         return text
+    previous_user = last_user_message_from_session(session)
+    if previous_user and _needs_previous_topic_context(text):
+        return f"{forum}: {previous_user}. {text}"
     return f"{forum}: {text}"
 
 
 def is_context_dependent_followup(message: str, session: Session | None) -> bool:
     text = str(message or "").strip()
-    if not text or not _is_forum_followup(text):
+    if not text:
         return False
     if detect_forums_from_text(text):
         return False
-    return bool(last_forum_from_session(session))
+    if _is_forum_followup(text) and last_forum_from_session(session):
+        return True
+    return _is_grant_return_followup(text, session)
 
 
 def last_forum_from_session(session: Session | None) -> str | None:
@@ -95,11 +129,101 @@ def last_forum_from_session(session: Session | None) -> str | None:
     return forum or None
 
 
+def last_user_message_from_session(session: Session | None) -> str | None:
+    if session is None:
+        return None
+    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+        text = str(message.get("user") or "").strip()
+        if text:
+            return text
+    return None
+
+
 def _is_forum_followup(message: str) -> bool:
     normalized = _normalize(message)
     if not normalized:
         return False
     return any(marker in normalized for marker in FOLLOWUP_FORUM_MARKERS)
+
+
+def _is_topic_followup(message: str) -> bool:
+    normalized = _normalize(message)
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in FOLLOWUP_TOPIC_MARKERS)
+
+
+def _needs_previous_topic_context(message: str) -> bool:
+    normalized = _normalize(message)
+    if not normalized:
+        return False
+    has_explicit_topic = any(
+        marker in normalized
+        for marker in (
+            "заявк",
+            "проезд",
+            "питани",
+            "трансфер",
+            "прожив",
+            "документ",
+            "мед",
+            "овз",
+            "чат",
+            "грант",
+            "сертификат",
+            "письмо",
+            "программа",
+            "результат",
+            "отказ",
+            "отказаться",
+            "не могу поехать",
+            "не смогу поехать",
+        )
+    )
+    return not has_explicit_topic and any(
+        marker in normalized
+        for marker in ("такие же", "условия", "а если", "для семьи", "с семь")
+    )
+
+
+def _is_grant_return_followup(message: str, session: Session | None) -> bool:
+    return _is_topic_followup(message) and _last_grant_return_from_session(session)
+
+
+def _last_grant_return_from_session(session: Session | None) -> bool:
+    if session is None:
+        return False
+
+    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+        text = _normalize(f"{message.get('user') or ''} {message.get('bot') or ''}")
+        if _has_grant_return_context(text):
+            return True
+
+    last_topics = session.extracted_entities.get("last_topics")
+    if isinstance(last_topics, list):
+        return "vernut_denezhnye_sredstva" in {str(topic) for topic in last_topics}
+    return False
+
+
+def _has_grant_return_context(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "вернуть грантов",
+            "возврат грантов",
+            "грантовые средства",
+            "вернуть денежные средства",
+            "reportgrant",
+        )
+    )
+
+
+def _merge_topics(existing: list[str], additions: list[str]) -> list[str]:
+    topics: list[str] = []
+    for topic in [*existing, *additions]:
+        if topic and topic not in topics:
+            topics.append(topic)
+    return topics
 
 
 def _mentions_forum(message: str, forum: str) -> bool:

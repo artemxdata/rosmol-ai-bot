@@ -1,0 +1,138 @@
+[
+  {
+    "id": "offtopic_weather",
+    "query": "Какая погода завтра в Москве?",
+    "user_id": "pre-pilot-offtopic_weather",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_currency",
+    "query": "Какой курс доллара будет на следующей неделе?",
+    "user_id": "pre-pilot-offtopic_currency",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_taxi",
+    "query": "Закажи мне такси до дома",
+    "user_id": "pre-pilot-offtopic_taxi",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_movie",
+    "query": "Какой фильм посмотреть вечером?",
+    "user_id": "pre-pilot-offtopic_movie",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_math_homework",
+    "query": "Реши задачу по математике за 9 класс",
+    "user_id": "pre-pilot-offtopic_math_homework",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_phone_repair",
+    "query": "Как починить экран телефона?",
+    "user_id": "pre-pilot-offtopic_phone_repair",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_food_delivery",
+    "query": "Где заказать роллы рядом со мной?",
+    "user_id": "pre-pilot-offtopic_food_delivery",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  },
+  {
+    "id": "offtopic_lawyer",
+    "query": "Составь исковое заявление в суд",
+    "user_id": "pre-pilot-offtopic_lawyer",
+    "channel": "api",
+    "expected_behavior": "scope_note",
+    "expected_chunk_ids": [],
+    "expected_cited_chunk_ids": [],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "tags": [
+      "pre_pilot",
+      "off_topic"
+    ]
+  }
+]

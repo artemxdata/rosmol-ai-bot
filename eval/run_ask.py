@@ -76,6 +76,12 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     expected_answer_contains = _string_list(
         raw.get("expected_answer_contains") or raw.get("answer_contains") or []
     )
+    expected_message_masked_contains = _string_list(
+        raw.get("expected_message_masked_contains") or []
+    )
+    forbidden_message_masked_contains = _string_list(
+        raw.get("forbidden_message_masked_contains") or []
+    )
     expected_cited_chunk_ids = _string_list(
         raw.get("expected_cited_chunk_ids") or raw.get("expected_cited_sources") or []
     )
@@ -100,6 +106,8 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         "expected_cited_chunk_ids": expected_cited_chunk_ids,
         "equivalent_chunk_ids": equivalent_chunk_ids,
         "expected_answer_contains": expected_answer_contains,
+        "expected_message_masked_contains": expected_message_masked_contains,
+        "forbidden_message_masked_contains": forbidden_message_masked_contains,
         "expected_behavior": expected_behavior,
         "expected_escalated": raw.get("expected_escalated"),
         "expected_escalation_reason": raw.get("expected_escalation_reason"),
@@ -422,6 +430,8 @@ def score_case(
     expected_cited_chunk_ids = case.get("expected_cited_chunk_ids") or []
     equivalent_chunk_ids = case.get("equivalent_chunk_ids") or {}
     expected_answer_contains = case.get("expected_answer_contains") or []
+    expected_message_masked_contains = case.get("expected_message_masked_contains") or []
+    forbidden_message_masked_contains = case.get("forbidden_message_masked_contains") or []
     expected_behavior = case.get("expected_behavior")
     observed_behavior = _observed_behavior(response_text, trace)
     expected_escalated = case.get("expected_escalated")
@@ -478,6 +488,22 @@ def score_case(
         )
         checks["answer_contains_match"] = answer_contains_match
         required_checks["answer_contains_match"] = answer_contains_match
+    if expected_message_masked_contains:
+        message_masked = str(trace.get("message_masked") or "")
+        masked_contains_match = all(
+            expected in message_masked for expected in expected_message_masked_contains
+        )
+        checks["message_masked_contains_match"] = masked_contains_match
+        required_checks["message_masked_contains_match"] = masked_contains_match
+    if forbidden_message_masked_contains:
+        message_masked = str(trace.get("message_masked") or "")
+        masked_forbidden_absent_match = all(
+            forbidden not in message_masked for forbidden in forbidden_message_masked_contains
+        )
+        checks["message_masked_forbidden_absent_match"] = masked_forbidden_absent_match
+        required_checks["message_masked_forbidden_absent_match"] = (
+            masked_forbidden_absent_match
+        )
     if expected_behavior:
         behavior_match = observed_behavior == expected_behavior
         checks["behavior_match"] = behavior_match
@@ -569,6 +595,13 @@ def score_case(
         "cited_source_types": _cited_source_types(trace, cited_chunk_ids),
         "expected_answer_contains": expected_answer_contains,
         "answer_contains_match": checks.get("answer_contains_match"),
+        "message_masked": trace.get("message_masked"),
+        "expected_message_masked_contains": expected_message_masked_contains,
+        "message_masked_contains_match": checks.get("message_masked_contains_match"),
+        "forbidden_message_masked_contains": forbidden_message_masked_contains,
+        "message_masked_forbidden_absent_match": checks.get(
+            "message_masked_forbidden_absent_match"
+        ),
         "expected_behavior": expected_behavior,
         "observed_behavior": observed_behavior,
         "behavior_match": checks.get("behavior_match"),
@@ -643,6 +676,10 @@ def _failure_reasons(
             reasons.append("expected_chunk_not_cited")
     if required_checks.get("answer_contains_match") is False:
         reasons.append("answer_contains_mismatch")
+    if required_checks.get("message_masked_contains_match") is False:
+        reasons.append("message_masked_contains_mismatch")
+    if required_checks.get("message_masked_forbidden_absent_match") is False:
+        reasons.append("message_masked_forbidden_contains_raw_pii")
     if required_checks.get("behavior_match") is False:
         reasons.append(f"behavior_mismatch:{expected_behavior}!={observed_behavior}")
     if required_checks.get("escalation_match") is False:
@@ -719,7 +756,7 @@ def _observed_behavior(response_text: str, trace: dict[str, Any]) -> str:
     normalized = response_text.casefold().replace("ё", "е")
     if _looks_like_scope_note(normalized):
         return "scope_note"
-    if _looks_like_clarification(normalized):
+    if _looks_like_clarification(normalized) and not trace.get("cited_sources"):
         return "clarify"
     return "answer"
 
@@ -860,7 +897,7 @@ async def _fetch_trace(pool: asyncpg.Pool, request_id: str) -> dict[str, Any] | 
     row = await pool.fetchrow(
         """
         SELECT
-            cache_hit, generator_model, cited_sources, was_escalated,
+            message_masked, cache_hit, generator_model, cited_sources, was_escalated,
             escalation_reason, max_reranker_score, total_latency_ms,
             retrieved_chunks, reranker_scores, trace_events, llm_usage,
             llm_prompt_tokens, llm_completion_tokens, llm_total_tokens,

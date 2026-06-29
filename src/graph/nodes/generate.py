@@ -13,6 +13,20 @@ from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
 
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
+INSUFFICIENT_SOURCE_RESPONSE_RE = re.compile(
+    r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
+    r"в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:достаточных\s+)?(?:данных|сведений)|"
+    r"из\s+(?:представленных|переданных)\s+источников\s+невозможно\s+ответить|"
+    r"источники\s+не\s+(?:содержат|подтверждают)|"
+    r"информации\s+(?:в\s+источниках\s+)?нет|"
+    r"(?:достаточных\s+)?(?:данных|сведений)\s+(?:в\s+источниках\s+)?нет|"
+    r"нет\s+информации\s+о|"
+    r"источник(?:е|ах)\s+отсутств|"
+    r"не\s+указан[аоы]?\s+в\s+(?:предоставленных\s+)?источниках|"
+    r"(?:точной|конкретной)\s+информации[^.!?]{0,160}\s+нет|"
+    r"информаци[яи][^.!?]{0,160}отсутств)",
+    flags=re.IGNORECASE,
+)
 HOUSING_CONDITION_TERMS = (
     "формат проживан",
     "условия проживан",
@@ -100,7 +114,7 @@ async def generate(state: BotState) -> dict:
                         "generator_model": "source_chunk",
                         "cited_sources": [chunk.chunk_id for chunk in llm_source_chunks],
                     }
-            return await _generate_with_llm(
+            return await _generate_with_llm_or_source_fallback(
                 state=state,
                 analysis=analysis,
                 questions=questions,
@@ -254,6 +268,8 @@ async def _generate_with_llm_or_source_fallback(
         result,
         questions,
         source_chunks,
+    ) or _response_signals_insufficient_sources(
+        str(result.get("generated_response") or ""),
     )
     if not should_fallback_to_sources:
         return result
@@ -266,7 +282,13 @@ async def _generate_with_llm_or_source_fallback(
     fallback_reason = (
         "llm_failed_source_chunk_fallback"
         if result.get("escalation_reason") == "llm_generation_failed"
-        else "llm_missing_sources_source_chunk_fallback"
+        else (
+            "llm_insufficient_sources_source_chunk_fallback"
+            if _response_signals_insufficient_sources(
+                str(result.get("generated_response") or "")
+            )
+            else "llm_missing_sources_source_chunk_fallback"
+        )
     )
     if tracer:
         tracer.add(
@@ -280,6 +302,38 @@ async def _generate_with_llm_or_source_fallback(
         "generator_model": "source_chunk",
         "cited_sources": [chunk.chunk_id for chunk in source_chunks],
     }
+
+
+def _response_signals_insufficient_sources(response: str) -> bool:
+    normalized = _normalize(response)
+    if not normalized:
+        return False
+    if INSUFFICIENT_SOURCE_RESPONSE_RE.search(normalized):
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "в источниках нет",
+            "источники не содержат",
+            "источники не подтверждают",
+            "информации нет",
+            "нет информации о",
+            "нет сведений",
+            "недостаточно данных",
+            "недостаточно подтвержден",
+            "недостаточно подтвержд",
+            "нет достаточных",
+            "не хватает данных",
+            "не могу ответить по источникам",
+            "не указан",
+            "не указана",
+            "не указано",
+            "отсутствует в источниках",
+            "неточный ответ",
+            "передаю обращение специалисту",
+            "передаю специалисту",
+        )
+    )
 
 
 def _llm_result_misses_source_coverage(
@@ -357,6 +411,7 @@ async def _generate_with_llm(
         }
 
     content = _repair_recipient_drift(content, source_chunks)
+    content = _repair_source_refs(content, source_chunks)
     cited_sources = _known_source_refs(content, source_chunks)
     if tracer:
         tracer.add(
@@ -391,6 +446,38 @@ def _repair_recipient_drift(response: str, source_chunks: list[ScoredChunk]) -> 
     for pattern, replacement in replacements:
         repaired = re.sub(pattern, replacement, repaired, flags=re.IGNORECASE)
     return repaired
+
+
+def _repair_source_refs(response: str, chunks: list[ScoredChunk]) -> str:
+    if not response:
+        return response
+    known_ids = [chunk.chunk_id for chunk in chunks]
+    known = set(known_ids)
+    aliases: dict[str, str | None] = {}
+    for chunk_id in known_ids:
+        key = _source_ref_key(chunk_id)
+        aliases[key] = chunk_id if key not in aliases else None
+
+    def replace(match: re.Match[str]) -> str:
+        source_id = match.group(1)
+        if source_id in known:
+            return match.group(0)
+        repaired = aliases.get(_source_ref_key(source_id))
+        if not repaired:
+            return match.group(0)
+        return f"[src:{repaired}]"
+
+    return SOURCE_RE.sub(replace, response)
+
+
+def _source_ref_key(source_id: str) -> str:
+    return (
+        str(source_id or "")
+        .strip()
+        .casefold()
+        .replace("ё", "е")
+        .replace("projekt", "proekt")
+    )
 
 
 def _sources_request_contact_us(source_chunks: list[ScoredChunk]) -> bool:
@@ -475,6 +562,14 @@ def _select_llm_source_chunks(
     selected: list[ScoredChunk] = []
     selected_ids: set[str] = set()
     for question in questions:
+        source_chunk = _topic_source_for_question(analysis, question, candidates)
+        if source_chunk is not None:
+            if source_chunk.chunk_id in selected_ids:
+                continue
+            selected.append(source_chunk)
+            selected_ids.add(source_chunk.chunk_id)
+            continue
+
         ranked = _rank_source_candidates_for_question(analysis, question, candidates)
         source_chunk = next(
             (
@@ -612,6 +707,14 @@ def select_deterministic_source_chunks(
     if top_official_source is not None and len(questions) == 1:
         return [top_official_source]
     for question in questions:
+        source_chunk = _topic_source_for_question(analysis, question, candidates)
+        if source_chunk is not None:
+            if source_chunk.chunk_id in selected_ids:
+                continue
+            selected.append(source_chunk)
+            selected_ids.add(source_chunk.chunk_id)
+            continue
+
         question_candidates = _rank_source_candidates_for_question(
             analysis,
             question,
@@ -639,6 +742,32 @@ def select_deterministic_source_chunks(
         selected.append(source_chunk)
         selected_ids.add(source_chunk.chunk_id)
     return selected
+
+
+def _topic_source_for_question(
+    analysis: QueryAnalysis,
+    question: Question,
+    candidates: list[ScoredChunk],
+) -> ScoredChunk | None:
+    if not str(question.topic or "").strip():
+        return None
+    exact_matches = [
+        chunk
+        for chunk in candidates
+        if _source_topic_match_rank(question, chunk) == 0
+        and _chunk_matches_analysis_scope(chunk, analysis)
+    ]
+    if exact_matches:
+        return _rank_source_candidates_for_question(analysis, question, exact_matches)[0]
+    matches = [
+        chunk
+        for chunk in candidates
+        if _source_topic_match_rank(question, chunk) <= 1
+        and _chunk_matches_analysis_scope(chunk, analysis)
+    ]
+    if not matches:
+        return None
+    return _rank_source_candidates_for_question(analysis, question, matches)[0]
 
 
 def select_deterministic_source_chunk(
@@ -839,11 +968,132 @@ def _rank_source_candidates_for_question(
     )
 
 
+TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}),
+    frozenset(
+        {
+            "transfer_do_mesta_provedeniya",
+            "transfer_do_mesta_provedeniya_meropriyatiya",
+            "transfer_do_ploschadki_festivalya",
+            "transfer_po_gorodu",
+        }
+    ),
+    frozenset(
+        {
+            "usloviya_pitaniya_i_tochki_s_vodoy",
+            "pitanie_i_pite",
+            "pitanie_dlya_vegetariancev",
+            "informaciya_o_ploschadke_pitanie",
+            "informaciya_o_ploschadke_pitanie_pite",
+            "informaciya_o_ploschadke_pitanie_pite_i",
+        }
+    ),
+    frozenset(
+        {
+            "spisok_veschey_i_dokumentov",
+            "dokumenty_meropriyatiya",
+            "pamyatka_uchastnika_foruma",
+        }
+    ),
+    frozenset({"voprosy_po_zdorovyu_medpunkt", "informaciya_o_ploschadke_medicina"}),
+    frozenset({"sut_foruma_i_napravleniya", "sut_festivalya_i_tematika", "o_meropriyatii"}),
+    frozenset({"mesto_i_daty_provedeniya_meropriyatiya", "daty_nachala_meropriyatiya"}),
+    frozenset({"dobavlenie_v_chat_i_sluzhba_zaboty", "dobavlenie_v_chat_meropriyatiya"}),
+    frozenset({"rosmolodezh_granty", "usloviya_i_sroki_uchastiya_granty"}),
+    frozenset({"inostrannye_grazhdane"}),
+    frozenset({"uchastniki_s_ovz"}),
+    frozenset({"voprosy_po_zdorovyu_medpunkt", "informaciya_o_ploschadke_medicina"}),
+    frozenset({"kogda_budet_sertifikat", "mozhno_li_poluchit_sertifikat_za_uchastie"}),
+    frozenset({"podacha_zayavki_na_proekt", "podat_zayavku_na_uchastie"}),
+    frozenset({"otkaz_ot_uchastiya"}),
+    frozenset({"vnesti_izmeneniya_v_zayavku"}),
+    frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
+    frozenset({"cifrovaya_nedelya"}),
+    frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
+    frozenset({"usloviya_prozhivaniya", "oplata_proezda_prozhivaniya_i_charter"}),
+    frozenset({"trebovaniya_po_dress_kodu"}),
+    frozenset({"programma_foruma", "vremya_nachala_i_raspisanie"}),
+    frozenset({"vozrastnye_ogranicheniya"}),
+)
+
+
+def _source_topic_match_rank(question: Question, chunk: ScoredChunk) -> int:
+    question_topic = str(question.topic or "").strip()
+    question_topic_group = _question_topic_group(question)
+    chunk_topic = str((chunk.metadata or {}).get("topic") or "").strip()
+    if not question_topic_group:
+        return 1
+    if chunk_topic == question_topic:
+        return 0
+    if _equivalent_topic_group(chunk_topic) == question_topic_group:
+        return 1
+    return 2
+
+
+def _question_topic_group(question: Question) -> str | None:
+    question_topic = str(question.topic or "").strip()
+    if question_topic:
+        return _equivalent_topic_group(question_topic)
+    inferred_topic = _infer_topic_from_question_text(_normalize(question.text))
+    return _equivalent_topic_group(inferred_topic) if inferred_topic else None
+
+
+def _infer_topic_from_question_text(question_normalized: str) -> str | None:
+    if _asks_decline_participation(question_normalized):
+        return "otkaz_ot_uchastiya"
+    if _asks_confirmation_org(question_normalized):
+        return "podtverzhdenie_uchastiya_i_org_momenty"
+    if _asks_digital_week(question_normalized):
+        return "cifrovaya_nedelya"
+    if _asks_event_program(question_normalized):
+        return "programma_foruma"
+    if _asks_age_restrictions(question_normalized):
+        return "vozrastnye_ogranicheniya"
+    if _asks_forum_grants(question_normalized):
+        return "rosmolodezh_granty"
+    if _asks_event_chat(question_normalized):
+        return "dobavlenie_v_chat_meropriyatiya"
+    if _asks_foreign_citizens(question_normalized):
+        return "inostrannye_grazhdane"
+    if _asks_ovz_participation(question_normalized):
+        return "uchastniki_s_ovz"
+    if _asks_medical_help(question_normalized):
+        return "voprosy_po_zdorovyu_medpunkt"
+    if _asks_application_change(question_normalized):
+        return "vnesti_izmeneniya_v_zayavku"
+    if _asks_selection_results(question_normalized):
+        return "rezultaty_rm"
+    if _asks_event_overview(question_normalized):
+        return "sut_foruma_i_napravleniya"
+    if _asks_invitation_letter(question_normalized):
+        return "pismo_vyzov"
+    if _asks_documents_or_packing(question_normalized):
+        return "pamyatka_uchastnika_foruma"
+    if _asks_transfer(question_normalized):
+        return "transfer_do_mesta_provedeniya_meropriyatiya"
+    if _asks_housing_conditions(question_normalized):
+        return "usloviya_prozhivaniya"
+    if _asks_event_dates(question_normalized):
+        return "daty_nachala_meropriyatiya"
+    if _asks_registration(question_normalized):
+        return "podacha_zayavki_na_proekt"
+    if _asks_grant_application(question_normalized):
+        return "podat_zayavku_na_uchastie"
+    return None
+
+
+def _equivalent_topic_group(topic: str) -> str:
+    for group in TOPIC_EQUIVALENCE_GROUPS:
+        if topic in group:
+            return "|".join(sorted(group))
+    return topic
+
+
 def _source_candidate_priority(
     analysis: QueryAnalysis,
     question: Question,
     chunk: ScoredChunk,
-) -> tuple[float, int, int, float, int, int, float]:
+) -> tuple[float, int, int, int, float, int, int, float]:
     if (
         _is_specific_technical_question(question) or _is_feedback_question(question)
     ) and _metadata_matches_specific_question(analysis, question, chunk):
@@ -852,11 +1102,13 @@ def _source_candidate_priority(
         generic_rank = 1 if _is_generic_chunk(chunk) else 0
         unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
         grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
+        topic_rank = _source_topic_match_rank(question, chunk)
         confidence = float(chunk.reranker_score or chunk.score or 0)
         return (
             0,
             unscoped_grant_rank,
             grant_source_category_rank,
+            topic_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -869,12 +1121,25 @@ def _source_candidate_priority(
     generic_rank = 1 if _is_generic_chunk(chunk) else 0
     unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
     grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
+    topic_rank = _source_topic_match_rank(question, chunk)
     confidence = float(chunk.reranker_score or chunk.score or 0)
+    if str(question.topic or "").strip() and topic_rank <= 1:
+        return (
+            0,
+            unscoped_grant_rank,
+            grant_source_category_rank,
+            topic_rank,
+            -field_score,
+            source_rank,
+            generic_rank,
+            -confidence,
+        )
     if intent_score:
         return (
             0,
             unscoped_grant_rank,
             grant_source_category_rank,
+            topic_rank,
             -float(intent_score * 100) - field_score,
             source_rank,
             generic_rank,
@@ -885,6 +1150,7 @@ def _source_candidate_priority(
             1,
             unscoped_grant_rank,
             grant_source_category_rank,
+            topic_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -895,6 +1161,7 @@ def _source_candidate_priority(
             2,
             unscoped_grant_rank,
             grant_source_category_rank,
+            topic_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -904,6 +1171,7 @@ def _source_candidate_priority(
         3,
         unscoped_grant_rank,
         grant_source_category_rank,
+        topic_rank,
         0,
         source_rank,
         generic_rank,
@@ -957,6 +1225,10 @@ def _exact_source_for_original_question(
         for index, chunk in enumerate(chunks)
         if _source_chunk_covers_question(original_question, chunk)
         and (analysis is None or _chunk_matches_analysis_scope(chunk, analysis))
+        and (
+            not str(original_question.topic or "").strip()
+            or _source_topic_match_rank(original_question, chunk) <= 1
+        )
         and _intent_example_match_score(original_question, chunk) >= min_intent_score
         and _adjusted_intent_example_match_score(original_question, chunk) > 0
     ]
@@ -1250,6 +1522,59 @@ def _metadata_matches_specific_question(
             or "отказаться от участия" in _normalize(chunk.text)
         )
 
+    if _asks_medical_help(question_normalized):
+        return (
+            "voprosy_po_zdorovyu_medpunkt" in metadata_haystack
+            or "informaciya_o_ploschadke_medicina" in metadata_haystack
+            or "медпункт" in metadata_haystack
+            or "медицин" in metadata_haystack
+        )
+
+    if _asks_ovz_participation(question_normalized):
+        return "uchastniki_s_ovz" in metadata_haystack or "овз" in metadata_haystack
+
+    if _asks_foreign_citizens(question_normalized):
+        return (
+            "inostrannye_grazhdane" in metadata_haystack
+            or "иностран" in metadata_haystack
+        )
+
+    if _asks_forum_grants(question_normalized):
+        return (
+            "rosmolodezh_granty" in metadata_haystack
+            or "usloviya_i_sroki_uchastiya_granty" in metadata_haystack
+            or "грантов" in metadata_haystack
+        )
+
+    if _asks_event_chat(question_normalized):
+        return (
+            "dobavlenie_v_chat_i_sluzhba_zaboty" in metadata_haystack
+            or "dobavlenie_v_chat_meropriyatiya" in metadata_haystack
+            or "чат" in metadata_haystack
+        )
+
+    if _asks_selection_results(question_normalized):
+        return (
+            "rezultaty_rm" in metadata_haystack
+            or "rezultaty_otbora_i_spiski" in metadata_haystack
+            or "результат" in metadata_haystack
+        )
+
+    if _asks_application_change(question_normalized):
+        return "vnesti_izmeneniya_v_zayavku" in metadata_haystack
+
+    if _asks_confirmation_org(question_normalized):
+        return "podtverzhdenie_uchastiya_i_org_momenty" in metadata_haystack
+
+    if _asks_digital_week(question_normalized):
+        return "cifrovaya_nedelya" in metadata_haystack
+
+    if _asks_event_program(question_normalized):
+        return "programma_foruma" in metadata_haystack
+
+    if _asks_age_restrictions(question_normalized):
+        return "vozrastnye_ogranicheniya" in metadata_haystack or "возраст" in metadata_haystack
+
     if _asks_language_settings(question_normalized):
         return "yazyki" in metadata_haystack or "язык" in metadata_haystack
 
@@ -1512,6 +1837,13 @@ def _asks_housing_conditions(question_normalized: str) -> bool:
     )
 
 
+def _asks_age_restrictions(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("возраст", "сколько лет", "какой возраст", "какие годы")
+    )
+
+
 def _asks_registration(question_normalized: str) -> bool:
     return any(marker in question_normalized for marker in ("регистрац", "зарегистр"))
 
@@ -1535,10 +1867,79 @@ def _asks_decline_participation(question_normalized: str) -> bool:
             "не смогу приехать",
             "не могу посетить",
             "не смогу посетить",
+            "не получается поехать",
+            "не получается приехать",
+            "не выйдет поехать",
+            "не выйдет приехать",
+            "потом отказаться",
             "подтвердил участие",
             "подтвердила участие",
         )
     )
+
+
+def _asks_medical_help(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("медпункт", "медицин", "здоров")
+    )
+
+
+def _asks_ovz_participation(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("овз", "ограниченными возможн", "инвалид")
+    )
+
+
+def _asks_foreign_citizens(question_normalized: str) -> bool:
+    return any(marker in question_normalized for marker in ("иностран", "иностранц"))
+
+
+def _asks_forum_grants(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("грантовый конкурс", "гранты", "грантов")
+    )
+
+
+def _asks_event_chat(question_normalized: str) -> bool:
+    return "чат" in question_normalized or "куратор" in question_normalized
+
+
+def _asks_selection_results(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("где посмотреть результ", "результат", "списки", "отбор")
+    )
+
+
+def _asks_application_change(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in (
+            "изменить заявку",
+            "изменить заявк",
+            "внести изменения в заявк",
+            "поменять заявк",
+        )
+    )
+
+
+def _asks_confirmation_org(question_normalized: str) -> bool:
+    return (
+        "подтверждени" in question_normalized
+        or "подтверд" in question_normalized
+        or "подтвердил участие" in question_normalized
+    )
+
+
+def _asks_digital_week(question_normalized: str) -> bool:
+    return "цифровая неделя" in question_normalized
+
+
+def _asks_event_program(question_normalized: str) -> bool:
+    return "программ" in question_normalized
 
 
 def _asks_grant_return(question_normalized: str) -> bool:
@@ -1769,6 +2170,8 @@ def _asks_invitation_letter(question_normalized: str) -> bool:
 def _asks_event_dates(question_normalized: str) -> bool:
     if _asks_arrival_departure(question_normalized):
         return False
+    if "когда добав" in question_normalized and "чат" in question_normalized:
+        return False
     return any(
         marker in question_normalized
         for marker in (
@@ -1780,10 +2183,13 @@ def _asks_event_dates(question_normalized: str) -> bool:
             "дата начала",
             "когда пройдет",
             "когда пройдёт",
+            "когда проходит",
+            "когда проводится",
             "когда состоится",
             "когда начинается",
             "когда начнется",
             "когда начнётся",
+            "период проведения",
         )
     )
 
