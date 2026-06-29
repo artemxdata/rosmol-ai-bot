@@ -96,9 +96,9 @@ _HTML_TEMPLATE = """
     }
     .topbar {
       min-height: 78px;
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
-      justify-content: space-between;
       gap: 18px;
       padding: 16px 22px;
       background: var(--ink);
@@ -112,26 +112,31 @@ _HTML_TEMPLATE = """
       display: flex;
       align-items: center;
       gap: 16px;
-      min-width: 300px;
+      min-width: 0;
     }
     .logo-mark {
       display: grid;
       place-items: center;
-      width: 174px;
-      height: 46px;
+      width: 218px;
+      height: 58px;
+      flex: 0 0 auto;
       border-radius: 8px;
       background: #fff;
-      padding: 8px 12px;
+      padding: 8px 14px;
     }
     .logo-mark img {
-      width: 148px;
-      height: auto;
+      width: 100%;
+      max-width: 184px;
+      max-height: 40px;
+      height: 100%;
       display: block;
+      object-fit: contain;
     }
     .brand-copy {
       display: flex;
       flex-direction: column;
       gap: 3px;
+      min-width: 0;
     }
     h1 {
       margin: 0;
@@ -143,6 +148,7 @@ _HTML_TEMPLATE = """
       color: #bfd1e6;
       font-size: 12px;
       line-height: 1.3;
+      max-width: 460px;
     }
     .top-actions {
       display: flex;
@@ -150,6 +156,7 @@ _HTML_TEMPLATE = """
       gap: 10px;
       flex-wrap: wrap;
       justify-content: flex-end;
+      max-width: 720px;
     }
     .top-actions button.secondary {
       background: rgba(255, 255, 255, 0.08);
@@ -237,11 +244,17 @@ _HTML_TEMPLATE = """
     }
     .search-grid {
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) 150px 150px 150px auto;
+      grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
       gap: 10px;
       padding: 14px 16px;
       border-bottom: 1px solid var(--line);
       background: var(--surface-2);
+    }
+    .search-grid input,
+    .search-grid select,
+    .search-grid button {
+      width: 100%;
+      min-width: 0;
     }
     .metrics {
       display: grid;
@@ -322,11 +335,13 @@ _HTML_TEMPLATE = """
       align-items: center;
       gap: 6px;
       border-radius: 999px;
-      padding: 4px 9px;
+      padding: 5px 10px;
       background: var(--accent-soft);
       color: var(--accent-2);
       font-size: 12px;
       font-weight: 900;
+      max-width: 100%;
+      white-space: nowrap;
     }
     .badge.status-draft {
       background: #fff8db;
@@ -392,18 +407,93 @@ _HTML_TEMPLATE = """
     }
     .hidden { display: none !important; }
     @media (max-width: 1180px) {
+      .topbar {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+      .top-actions {
+        justify-content: start;
+        max-width: none;
+      }
       .layout { grid-template-columns: 1fr; }
       .table-wrap { max-height: none; }
-      .search-grid { grid-template-columns: 1fr 1fr; }
+      .search-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
-    @media (max-width: 720px) {
-      .topbar { align-items: flex-start; flex-direction: column; }
-      .top-actions { justify-content: flex-start; }
-      .brand { min-width: 0; align-items: flex-start; }
-      .logo-mark { width: 150px; }
-      .logo-mark img { width: 128px; }
+    @media (max-width: 760px) {
+      .topbar { padding: 14px; }
+      .top-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: 100%;
+      }
+      .top-actions .status-pill {
+        grid-column: 1 / -1;
+        justify-content: center;
+      }
+      .top-actions button { width: 100%; }
+      .brand {
+        align-items: center;
+        gap: 12px;
+      }
+      .logo-mark {
+        width: 190px;
+        height: 54px;
+      }
+      .logo-mark img {
+        max-width: 160px;
+        max-height: 36px;
+      }
       .layout { padding: 10px; }
       .search-grid, .metrics, .field-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .table-wrap {
+        overflow: visible;
+        min-height: 0;
+      }
+      table, thead, tbody, tr, th, td {
+        display: block;
+        width: 100%;
+      }
+      thead { display: none; }
+      tbody {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+      tbody tr {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #fff;
+        overflow: hidden;
+      }
+      td {
+        border-bottom: 0;
+        padding: 8px 12px;
+      }
+      td::before {
+        content: attr(data-label);
+        display: block;
+        margin-bottom: 3px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+    }
+    @media (max-width: 520px) {
+      .brand {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .brand-copy h1 { font-size: 22px; }
+      .logo-mark {
+        width: 220px;
+        max-width: 100%;
+      }
+      .top-actions {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -480,8 +570,8 @@ _HTML_TEMPLATE = """
         <table>
           <thead>
             <tr>
-              <th style="width: 27%;">chunk_id</th>
-              <th style="width: 13%;">status</th>
+              <th style="width: 26%;">chunk_id</th>
+              <th style="width: 16%;">status</th>
               <th style="width: 18%;">forum</th>
               <th>preview</th>
             </tr>
@@ -606,10 +696,12 @@ _HTML_TEMPLATE = """
         const tr = document.createElement("tr");
         tr.dataset.chunkId = item.chunk_id;
         tr.innerHTML = `
-          <td class="mono">${escapeHtml(item.chunk_id)}</td>
-          <td><span class="${badgeClass(item.status)}">${escapeHtml(item.status)}</span></td>
-          <td>${escapeHtml(item.forum_normalized)}</td>
-          <td>${escapeHtml(item.text_preview)}</td>
+          <td data-label="chunk_id" class="mono">${escapeHtml(item.chunk_id)}</td>
+          <td data-label="status">
+            <span class="${badgeClass(item.status)}">${escapeHtml(item.status)}</span>
+          </td>
+          <td data-label="forum">${escapeHtml(item.forum_normalized)}</td>
+          <td data-label="preview">${escapeHtml(item.text_preview)}</td>
         `;
         tr.addEventListener("click", () => loadChunk(item.chunk_id, tr));
         tbody.appendChild(tr);
