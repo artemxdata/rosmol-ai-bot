@@ -182,11 +182,15 @@ async def test_admin_kb_page_requires_enabled_admin_token(
 
     assert disabled.status_code == 503
     assert enabled.status_code == 200
-    assert "Knowledge Base Admin" in enabled.text
+    assert "Админка знаний" in enabled.text
     assert "/admin/kb/chunks" in enabled.text
     assert 'id="opsButton"' in enabled.text
     assert 'id="opsDashboard"' in enabled.text
     assert "/admin/kb/ops-report?days=7" in enabled.text
+    assert "Работа бота" in enabled.text
+    assert "Проблемные темы" in enabled.text
+    assert "ожидаемые эскалации" in enabled.text
+    assert "проблемы качества" in enabled.text
 
 
 @pytest.mark.asyncio
@@ -461,7 +465,7 @@ async def test_admin_kb_api_returns_ops_report(
                 "llm_estimated_cost_rub": 1.25,
             }
 
-        async def fetch(self, query: str, days: int) -> list[dict[str, object]]:
+        async def fetch(self, query: str, days: int, *_args: object) -> list[dict[str, object]]:
             assert days == 7
             if "jsonb_array_elements(llm_usage)" in query:
                 return [
@@ -476,6 +480,10 @@ async def test_admin_kb_api_returns_ops_report(
                 ]
             if "routing_hint" in query:
                 return [{"complexity": "complex", "reason": "multi_aspect", "requests": 4}]
+            if "ANY($2::text[])" in query:
+                if "NOT (" in query:
+                    return [{"reason": "partial_source_coverage", "requests": 1}]
+                return [{"reason": "operator_requested", "requests": 1}]
             if "question->>'topic'" in query:
                 return [
                     {
@@ -529,10 +537,14 @@ async def test_admin_kb_api_returns_ops_report(
     assert data["days"] == 7
     assert data["summary"]["request_count"] == 10
     assert data["summary"]["escalation_rate"] == 0.2
+    assert data["summary"]["expected_escalation_rate"] == 0.1
+    assert data["summary"]["quality_issue_rate"] == 0.1
     assert data["summary"]["cache_hit_rate"] == 0.3
     assert data["model_usage"][0]["model"] == "GigaChat/GigaChat-2-Max"
     assert data["routing"][0]["reason"] == "multi_aspect"
     assert data["escalations"][0]["reason"] == "operator_requested"
+    assert data["expected_escalations"][0]["reason"] == "operator_requested"
+    assert data["quality_issue_escalations"][0]["reason"] == "partial_source_coverage"
     assert data["failed_topics"][0]["topic"] == "oplata_proezda"
     assert data["failed_forums"][0]["forum"] == "Амур"
     assert data["recent_escalations"][0]["message_preview"] == "Сложный вопрос"

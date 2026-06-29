@@ -19,7 +19,7 @@ _HTML_TEMPLATE = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Импульс кода | Knowledge Base Admin</title>
+  <title>Импульс кода | Админка знаний</title>
   <style>
     :root {
       color-scheme: light;
@@ -558,7 +558,7 @@ _HTML_TEMPLATE = """
       </div>
       <div class="brand-copy">
         <h1>Админка знаний</h1>
-        <span class="subtitle">RAG-корпус Росмолодёжи · правка чанков · live reindex</span>
+        <span class="subtitle">RAG-корпус Росмолодёжи · правка чанков · обновление индекса</span>
       </div>
     </div>
     <div class="top-actions">
@@ -566,9 +566,9 @@ _HTML_TEMPLATE = """
         <span class="status-dot"></span>
         <span id="authState">проверка доступа</span>
       </span>
-      <button id="validateButton" class="secondary" type="button">Validation</button>
-      <button id="qualityButton" class="secondary" type="button">Quality check</button>
-      <button id="opsButton" class="secondary" type="button">Ops report</button>
+      <button id="validateButton" class="secondary" type="button">Проверка базы</button>
+      <button id="qualityButton" class="secondary" type="button">Отчёт качества</button>
+      <button id="opsButton" class="secondary" type="button">Работа бота</button>
       <button id="logoutButton" class="danger" type="button">Выйти</button>
     </div>
   </header>
@@ -598,9 +598,9 @@ _HTML_TEMPLATE = """
         <input id="searchInput" type="search" placeholder="Поиск: Амур, проезд, сертификат">
         <select id="statusFilter">
           <option value="">Все статусы</option>
-          <option value="published">published</option>
-          <option value="draft">draft</option>
-          <option value="archived">archived</option>
+          <option value="published">Опубликованные</option>
+          <option value="draft">Черновики</option>
+          <option value="archived">Архивные</option>
         </select>
         <input id="forumFilter" type="text" placeholder="Форум">
         <input id="categoryFilter" type="text" placeholder="Категория">
@@ -617,21 +617,21 @@ _HTML_TEMPLATE = """
         </div>
         <div class="metric">
           <span id="metricEval" class="metric-value">-</span>
-          <span class="metric-label">quality report</span>
+          <span class="metric-label">отчёт качества</span>
         </div>
         <div class="metric">
           <span id="metricOps" class="metric-value">-</span>
-          <span class="metric-label">requests, 7d</span>
+          <span class="metric-label">запросов за 7 дней</span>
         </div>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th style="width: 26%;">chunk_id</th>
-              <th style="width: 16%;">status</th>
-              <th style="width: 18%;">forum</th>
-              <th>preview</th>
+              <th style="width: 26%;">ID чанка</th>
+              <th style="width: 16%;">статус</th>
+              <th style="width: 18%;">форум</th>
+              <th>текст</th>
             </tr>
           </thead>
           <tbody id="chunksTable"></tbody>
@@ -647,10 +647,10 @@ _HTML_TEMPLATE = """
             Сохранить и обновить RAG
           </button>
           <button id="reindexButton" class="secondary" type="button" disabled>
-            Только reindex
+            Только обновить индекс
           </button>
           <button id="relatedCasesButton" class="secondary" type="button" disabled>
-            Eval cases
+            Тест-кейсы
           </button>
         </div>
       </div>
@@ -658,7 +658,7 @@ _HTML_TEMPLATE = """
         <div class="editor-actions" style="margin-bottom: 12px;">
           <label class="toggle">
             <input id="reindexToggle" type="checkbox" checked>
-            сразу обновлять Qdrant и сбрасывать semantic cache
+            сразу обновлять Qdrant и сбрасывать семантический кэш
           </label>
           <span id="detailStatus" class="status"></span>
         </div>
@@ -666,15 +666,15 @@ _HTML_TEMPLATE = """
         <div class="field-grid">
           <label for="chunkStatus">Статус</label>
           <select id="chunkStatus" disabled>
-            <option value="published">published</option>
-            <option value="draft">draft</option>
-            <option value="archived">archived</option>
+            <option value="published">Опубликован</option>
+            <option value="draft">Черновик</option>
+            <option value="archived">Архив</option>
           </select>
-          <div class="muted">Forum</div>
+          <div class="muted">Форум</div>
           <div id="chunkForum" class="mono"></div>
-          <div class="muted">Topic</div>
+          <div class="muted">Тема</div>
           <div id="chunkTopic" class="mono"></div>
-          <div class="muted">Source</div>
+          <div class="muted">Источник</div>
           <div id="chunkSource" class="mono"></div>
         </div>
         <textarea
@@ -741,6 +741,15 @@ _HTML_TEMPLATE = """
       if (status === "archived") return "badge status-archived";
       return "badge";
     }
+    function statusLabel(status) {
+      if (status === "published") return "опубликован";
+      if (status === "draft") return "черновик";
+      if (status === "archived") return "архив";
+      return status || "не задан";
+    }
+    function fallbackLabel(value) {
+      return value || "не определено";
+    }
     function escapeHtml(value) {
       return String(value || "")
         .replaceAll("&", "&amp;")
@@ -753,7 +762,7 @@ _HTML_TEMPLATE = """
       return (number * 100).toFixed(1) + "%";
     }
     function formatRub(value) {
-      return Number(value || 0).toFixed(2) + " RUB";
+      return Number(value || 0).toFixed(2) + " ₽";
     }
     function hideOpsDashboard() {
       const dashboard = document.getElementById("opsDashboard");
@@ -767,7 +776,7 @@ _HTML_TEMPLATE = """
       }
       return rows.map((item) => {
         const title = fields.title(item);
-        const count = item.requests !== undefined ? `${item.requests} req` : "";
+        const count = item.requests !== undefined ? `${item.requests} запр.` : "";
         const meta = fields.meta(item);
         const preview = fields.preview ? fields.preview(item) : "";
         return `
@@ -790,53 +799,57 @@ _HTML_TEMPLATE = """
         <div class="ops-kpis">
           <div class="metric">
             <span class="metric-value">${escapeHtml(summary.request_count || 0)}</span>
-            <span class="metric-label">requests, ${escapeHtml(data.days || 7)}d</span>
+            <span class="metric-label">запросов за ${escapeHtml(data.days || 7)} дней</span>
           </div>
           <div class="metric">
-            <span class="metric-value">${escapeHtml(formatPercent(summary.escalation_rate))}</span>
-            <span class="metric-label">escalation rate</span>
+            <span class="metric-value">
+              ${escapeHtml(formatPercent(summary.expected_escalation_rate))}
+            </span>
+            <span class="metric-label">ожидаемые эскалации</span>
           </div>
           <div class="metric">
-            <span class="metric-value">${escapeHtml(formatPercent(summary.cache_hit_rate))}</span>
-            <span class="metric-label">cache hit</span>
+            <span class="metric-value">
+              ${escapeHtml(formatPercent(summary.quality_issue_rate))}
+            </span>
+            <span class="metric-label">проблемы качества</span>
           </div>
           <div class="metric">
             <span class="metric-value">
               ${escapeHtml(formatRub(summary.llm_estimated_cost_rub))}
             </span>
-            <span class="metric-label">LLM cost</span>
+            <span class="metric-label">стоимость LLM</span>
           </div>
         </div>
         <div class="ops-section">
-          <h3>Top failed topics</h3>
+          <h3>Проблемные темы</h3>
           <div class="ops-list">
             ${opsRows(data.failed_topics, {
-              title: (item) => item.topic || "unknown",
+              title: (item) => fallbackLabel(item.topic),
               meta: (item) => [
-                `forum=${item.forum || "unknown"}`,
-                `reason=${item.reason || "unknown"}`,
+                `форум=${fallbackLabel(item.forum)}`,
+                `причина=${fallbackLabel(item.reason)}`,
               ].join(" · "),
             })}
           </div>
         </div>
         <div class="ops-section">
-          <h3>Top failed forums</h3>
+          <h3>Проблемные форумы</h3>
           <div class="ops-list">
             ${opsRows(data.failed_forums, {
-              title: (item) => item.forum || "unknown",
-              meta: (item) => `reason=${item.reason || "unknown"}`,
+              title: (item) => fallbackLabel(item.forum),
+              meta: (item) => `причина=${fallbackLabel(item.reason)}`,
             })}
           </div>
         </div>
         <div class="ops-section">
-          <h3>Recent escalations</h3>
+          <h3>Последние эскалации</h3>
           <div class="ops-list">
             ${opsRows(data.recent_escalations, {
-              title: (item) => item.reason || "unknown",
+              title: (item) => fallbackLabel(item.reason),
               meta: (item) => [
-                item.channel || "unknown",
-                item.forum || "unknown",
-                `${item.total_latency_ms || 0} ms`,
+                fallbackLabel(item.channel),
+                fallbackLabel(item.forum),
+                `${item.total_latency_ms || 0} мс`,
               ].join(" · "),
               preview: (item) => item.message_preview || "",
             })}
@@ -851,12 +864,12 @@ _HTML_TEMPLATE = """
         const tr = document.createElement("tr");
         tr.dataset.chunkId = item.chunk_id;
         tr.innerHTML = `
-          <td data-label="chunk_id" class="mono">${escapeHtml(item.chunk_id)}</td>
-          <td data-label="status">
-            <span class="${badgeClass(item.status)}">${escapeHtml(item.status)}</span>
+          <td data-label="ID чанка" class="mono">${escapeHtml(item.chunk_id)}</td>
+          <td data-label="статус">
+            <span class="${badgeClass(item.status)}">${escapeHtml(statusLabel(item.status))}</span>
           </td>
-          <td data-label="forum">${escapeHtml(item.forum_normalized)}</td>
-          <td data-label="preview">${escapeHtml(item.text_preview)}</td>
+          <td data-label="форум">${escapeHtml(item.forum_normalized)}</td>
+          <td data-label="текст">${escapeHtml(item.text_preview)}</td>
         `;
         tr.addEventListener("click", () => loadChunk(item.chunk_id, tr));
         tbody.appendChild(tr);
@@ -952,7 +965,9 @@ _HTML_TEMPLATE = """
           }
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        const reindex = data.reindex && data.reindex.ok ? " Qdrant обновлён, cache сброшен." : "";
+        const reindex = data.reindex && data.reindex.ok
+          ? " Qdrant обновлён, кэш сброшен."
+          : "";
         setStatus("detailStatus", "Сохранено." + reindex, "ok");
         await loadChunks();
       } catch (error) {
@@ -969,7 +984,7 @@ _HTML_TEMPLATE = """
           {method: "POST", body: "{}"}
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        setStatus("detailStatus", "Qdrant обновлён, semantic cache сброшен", "ok");
+        setStatus("detailStatus", "Qdrant обновлён, семантический кэш сброшен", "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -978,13 +993,13 @@ _HTML_TEMPLATE = """
       if (!selectedChunkId) return;
       try {
         hideOpsDashboard();
-        setStatus("detailStatus", "Загрузка eval cases...");
+        setStatus("detailStatus", "Загрузка тест-кейсов...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/eval-cases",
           {method: "GET"}
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        setStatus("detailStatus", `Eval cases: ${data.total}`, "ok");
+        setStatus("detailStatus", `Тест-кейсов: ${data.total}`, "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -995,7 +1010,7 @@ _HTML_TEMPLATE = """
         const data = await requestJson("/admin/kb/validate", {method: "POST", body: "{}"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         setMetric("metricValid", data.valid_records);
-        setStatus("detailStatus", `KB valid: ${data.valid_records}`, "ok");
+        setStatus("detailStatus", `База валидна: ${data.valid_records}`, "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -1008,9 +1023,9 @@ _HTML_TEMPLATE = """
           body: JSON.stringify({include_latest_eval_report: true}),
         });
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        const report = data.latest_eval_report_exists ? "loaded" : "missing";
+        const report = data.latest_eval_report_exists ? "есть" : "нет";
         setMetric("metricEval", report);
-        setStatus("detailStatus", "Quality check loaded", "ok");
+        setStatus("detailStatus", "Отчёт качества загружен", "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -1024,7 +1039,7 @@ _HTML_TEMPLATE = """
         const requests = summary.request_count || 0;
         const cost = Number(summary.llm_estimated_cost_rub || 0).toFixed(2);
         setMetric("metricOps", requests);
-        setStatus("detailStatus", `Ops loaded: ${requests} requests, ${cost} RUB`, "ok");
+        setStatus("detailStatus", `Работа бота: ${requests} запросов, ${cost} ₽`, "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
