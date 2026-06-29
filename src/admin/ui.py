@@ -392,6 +392,59 @@ _HTML_TEMPLATE = """
       word-break: break-word;
       font-size: 12px;
     }
+    .ops-dashboard {
+      display: grid;
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .ops-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .ops-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .ops-section h3 {
+      margin: 0;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #f7fafc;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .ops-list {
+      display: grid;
+      gap: 0;
+    }
+    .ops-item {
+      display: grid;
+      gap: 4px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .ops-item:last-child { border-bottom: 0; }
+    .ops-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--ink);
+      font-weight: 800;
+    }
+    .ops-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .ops-preview {
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.4;
+    }
     .toggle {
       display: inline-flex;
       align-items: center;
@@ -444,7 +497,7 @@ _HTML_TEMPLATE = """
         max-height: 36px;
       }
       .layout { padding: 10px; }
-      .search-grid, .metrics, .field-grid { grid-template-columns: 1fr; }
+      .search-grid, .metrics, .field-grid, .ops-kpis { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
       .table-wrap {
@@ -629,6 +682,7 @@ _HTML_TEMPLATE = """
           disabled
           placeholder="Выбери чанк слева, чтобы редактировать текст ответа."
         ></textarea>
+        <div id="opsDashboard" class="ops-dashboard hidden"></div>
         <pre id="reportOutput"></pre>
       </div>
     </section>
@@ -693,6 +747,102 @@ _HTML_TEMPLATE = """
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
+    }
+    function formatPercent(value) {
+      const number = Number(value || 0);
+      return (number * 100).toFixed(1) + "%";
+    }
+    function formatRub(value) {
+      return Number(value || 0).toFixed(2) + " RUB";
+    }
+    function hideOpsDashboard() {
+      const dashboard = document.getElementById("opsDashboard");
+      dashboard.classList.add("hidden");
+      dashboard.innerHTML = "";
+    }
+    function opsRows(items, fields) {
+      const rows = (items || []).slice(0, 6);
+      if (!rows.length) {
+        return '<div class="ops-item"><span class="ops-meta">Нет данных</span></div>';
+      }
+      return rows.map((item) => {
+        const title = fields.title(item);
+        const count = item.requests !== undefined ? `${item.requests} req` : "";
+        const meta = fields.meta(item);
+        const preview = fields.preview ? fields.preview(item) : "";
+        return `
+          <div class="ops-item">
+            <div class="ops-line">
+              <span>${escapeHtml(title)}</span>
+              <span>${escapeHtml(count)}</span>
+            </div>
+            ${meta ? `<div class="ops-meta">${escapeHtml(meta)}</div>` : ""}
+            ${preview ? `<div class="ops-preview">${escapeHtml(preview)}</div>` : ""}
+          </div>
+        `;
+      }).join("");
+    }
+    function renderOpsDashboard(data) {
+      const summary = data.summary || {};
+      const dashboard = document.getElementById("opsDashboard");
+      dashboard.classList.remove("hidden");
+      dashboard.innerHTML = `
+        <div class="ops-kpis">
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(summary.request_count || 0)}</span>
+            <span class="metric-label">requests, ${escapeHtml(data.days || 7)}d</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(formatPercent(summary.escalation_rate))}</span>
+            <span class="metric-label">escalation rate</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(formatPercent(summary.cache_hit_rate))}</span>
+            <span class="metric-label">cache hit</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">
+              ${escapeHtml(formatRub(summary.llm_estimated_cost_rub))}
+            </span>
+            <span class="metric-label">LLM cost</span>
+          </div>
+        </div>
+        <div class="ops-section">
+          <h3>Top failed topics</h3>
+          <div class="ops-list">
+            ${opsRows(data.failed_topics, {
+              title: (item) => item.topic || "unknown",
+              meta: (item) => [
+                `forum=${item.forum || "unknown"}`,
+                `reason=${item.reason || "unknown"}`,
+              ].join(" · "),
+            })}
+          </div>
+        </div>
+        <div class="ops-section">
+          <h3>Top failed forums</h3>
+          <div class="ops-list">
+            ${opsRows(data.failed_forums, {
+              title: (item) => item.forum || "unknown",
+              meta: (item) => `reason=${item.reason || "unknown"}`,
+            })}
+          </div>
+        </div>
+        <div class="ops-section">
+          <h3>Recent escalations</h3>
+          <div class="ops-list">
+            ${opsRows(data.recent_escalations, {
+              title: (item) => item.reason || "unknown",
+              meta: (item) => [
+                item.channel || "unknown",
+                item.forum || "unknown",
+                `${item.total_latency_ms || 0} ms`,
+              ].join(" · "),
+              preview: (item) => item.message_preview || "",
+            })}
+          </div>
+        </div>
+      `;
     }
     function renderRows(items) {
       const tbody = document.getElementById("chunksTable");
@@ -759,6 +909,7 @@ _HTML_TEMPLATE = """
     }
     async function loadChunk(chunkId, row) {
       try {
+        hideOpsDashboard();
         selectedChunkId = chunkId;
         document.querySelectorAll("tr.selected").forEach((el) => el.classList.remove("selected"));
         if (row) row.classList.add("selected");
@@ -787,6 +938,7 @@ _HTML_TEMPLATE = """
     async function saveChunk() {
       if (!selectedChunkId) return;
       try {
+        hideOpsDashboard();
         setStatus("detailStatus", "Сохранение...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId),
@@ -810,6 +962,7 @@ _HTML_TEMPLATE = """
     async function reindexChunk() {
       if (!selectedChunkId) return;
       try {
+        hideOpsDashboard();
         setStatus("detailStatus", "Обновление индекса...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/reindex",
@@ -824,6 +977,7 @@ _HTML_TEMPLATE = """
     async function showRelatedCases() {
       if (!selectedChunkId) return;
       try {
+        hideOpsDashboard();
         setStatus("detailStatus", "Загрузка eval cases...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/eval-cases",
@@ -837,6 +991,7 @@ _HTML_TEMPLATE = """
     }
     async function showValidation() {
       try {
+        hideOpsDashboard();
         const data = await requestJson("/admin/kb/validate", {method: "POST", body: "{}"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         setMetric("metricValid", data.valid_records);
@@ -847,6 +1002,7 @@ _HTML_TEMPLATE = """
     }
     async function showQualityCheck() {
       try {
+        hideOpsDashboard();
         const data = await requestJson("/admin/kb/quality-check", {
           method: "POST",
           body: JSON.stringify({include_latest_eval_report: true}),
@@ -863,6 +1019,7 @@ _HTML_TEMPLATE = """
       try {
         const data = await requestJson("/admin/kb/ops-report?days=7", {method: "GET"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        renderOpsDashboard(data);
         const summary = data.summary || {};
         const requests = summary.request_count || 0;
         const cost = Number(summary.llm_estimated_cost_rub || 0).toFixed(2);
@@ -878,8 +1035,8 @@ _HTML_TEMPLATE = """
         loadChunks(),
         showValidation(),
         showQualityCheck(),
-        showOpsReport(),
       ]);
+      await showOpsReport();
     }
     async function checkSession() {
       try {

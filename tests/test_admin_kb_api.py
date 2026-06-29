@@ -184,6 +184,9 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert enabled.status_code == 200
     assert "Knowledge Base Admin" in enabled.text
     assert "/admin/kb/chunks" in enabled.text
+    assert 'id="opsButton"' in enabled.text
+    assert 'id="opsDashboard"' in enabled.text
+    assert "/admin/kb/ops-report?days=7" in enabled.text
 
 
 @pytest.mark.asyncio
