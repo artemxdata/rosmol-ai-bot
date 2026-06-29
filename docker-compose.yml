@@ -131,6 +131,8 @@ services:
       ML_UNLOAD_AFTER_USE: ${ML_UNLOAD_AFTER_USE:-false}
     ports:
       - "127.0.0.1:${APP_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy

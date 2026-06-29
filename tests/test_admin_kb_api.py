@@ -202,16 +202,93 @@ async def test_admin_kb_api_updates_chunk_status_and_text(
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.patch(
             "/admin/kb/chunks/draft_docs",
-            json={"status": "published", "text_clean": "Документы нужно взять по положению."},
+            json={
+                "status": "published",
+                "text_clean": "Документы нужно взять по положению.",
+                "reindex": False,
+            },
             headers={"X-Admin-Token": "admin-secret"},
         )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "published"
-    assert response.json()["text_clean"] == "Документы нужно взять по положению."
+    assert response.json()["record"]["status"] == "published"
+    assert response.json()["record"]["text_clean"] == "Документы нужно взять по положению."
+    assert response.json()["reindex"] is None
     stored = json.loads(seed_path.read_text(encoding="utf-8"))
     assert stored[1]["status"] == "published"
     assert stored[1]["text_clean"] == "Документы нужно взять по положению."
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_reindexes_chunk_after_update_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+    captured: dict[str, str] = {}
+
+    async def fake_reindex(_request, record):
+        captured["chunk_id"] = record["chunk_id"]
+        return {"ok": True, "chunk_id": record["chunk_id"], "collection": "knowledge_base"}
+
+    monkeypatch.setattr("src.main._admin_reindex_record", fake_reindex)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.patch(
+            "/admin/kb/chunks/draft_docs",
+            json={"status": "published"},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    assert captured == {"chunk_id": "draft_docs"}
+    assert response.json()["record"]["status"] == "published"
+    assert response.json()["reindex"] == {
+        "ok": True,
+        "chunk_id": "draft_docs",
+        "collection": "knowledge_base",
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_reindexes_chunk_on_demand(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+    captured: dict[str, str] = {}
+
+    async def fake_reindex(_request, record):
+        captured["chunk_id"] = record["chunk_id"]
+        return {"ok": True, "chunk_id": record["chunk_id"], "collection": "knowledge_base"}
+
+    monkeypatch.setattr("src.main._admin_reindex_record", fake_reindex)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/admin/kb/chunks/travel/reindex",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    assert captured == {"chunk_id": "travel"}
+    assert response.json() == {
+        "ok": True,
+        "chunk_id": "travel",
+        "collection": "knowledge_base",
+    }
 
 
 @pytest.mark.asyncio

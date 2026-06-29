@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
-from src.admin import kb_store, ui
+from src.admin import kb_index, kb_store, ui
 from src.channels.hde import HDEAdapter
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
@@ -36,6 +36,7 @@ from src.logging.tracer import Tracer
 from src.models import Channel, Chunk, IncomingMessage
 from src.rag.cache import SemanticCache
 from src.rag.embedder import Embedder
+from src.rag.errors import MLDependencyError
 from src.rag.reranker import Reranker
 from src.rag.retriever import Retriever
 from src.security import profanity, safety
@@ -103,6 +104,7 @@ class AskPayload(BaseModel):
 class AdminChunkUpdate(BaseModel):
     status: str | None = None
     text_clean: str | None = Field(default=None, max_length=20000)
+    reindex: bool = True
 
 
 class AdminQualityCheckPayload(BaseModel):
@@ -255,17 +257,30 @@ async def admin_update_kb_chunk(
 ) -> dict[str, Any]:
     _require_admin_secret(request)
     try:
-        return await asyncio.to_thread(
+        updated = await asyncio.to_thread(
             kb_store.update_chunk,
             _kb_seed_path(),
             chunk_id,
             status=payload.status,
             text_clean=payload.text_clean,
         )
+        reindex_result = None
+        if payload.reindex:
+            reindex_result = await _admin_reindex_record(request, updated)
+        return {"record": updated, "reindex": reindex_result}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Chunk not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/admin/kb/chunks/{chunk_id}/reindex")
+async def admin_reindex_kb_chunk(chunk_id: str, request: Request) -> dict[str, Any]:
+    _require_admin_secret(request)
+    record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+    return await _admin_reindex_record(request, record)
 
 
 @app.get("/admin/kb/chunks/{chunk_id}/eval-cases")
@@ -387,6 +402,40 @@ async def _run_ml_prewarm(fastapi_app: FastAPI) -> None:
         score=1.0,
     )
     await asyncio.to_thread(fastapi_app.state.reranker.rerank, query, [warm_chunk], 1)
+
+
+async def _admin_reindex_record(request: Request, record: dict[str, Any]) -> dict[str, Any]:
+    settings = get_settings()
+    try:
+        result = await kb_index.upsert_chunk(
+            request.app.state.qdrant,
+            request.app.state.embedder,
+            collection_name=settings.qdrant_knowledge_collection,
+            record_payload=record,
+        )
+    except MLDependencyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ML runtime is required for immediate reindex. "
+                "Open admin through app-ml or run index-kb."
+            ),
+        ) from exc
+
+    forum = str(record.get("forum_normalized") or "").strip()
+    if forum:
+        try:
+            await request.app.state.semantic_cache.invalidate_forum(forum)
+            result["cache_invalidated_forum"] = forum
+        except Exception as exc:
+            logger.warning(
+                "admin_cache_invalidation_failed",
+                chunk_id=record.get("chunk_id"),
+                forum=forum,
+                error=str(exc),
+            )
+            result["cache_invalidation_warning"] = type(exc).__name__
+    return result
 
 
 def _require_optional_secret(

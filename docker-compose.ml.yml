@@ -61,6 +61,7 @@ services:
     ports:
       - "127.0.0.1:${APP_ML_HOST_PORT:-8001}:8000"
     volumes:
+      - ./data:/app/data
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
     depends_on:
@@ -119,10 +120,18 @@ services:
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     volumes:
+      - ./data:/app/data
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
     depends_on:
       qdrant:
+        condition: service_healthy
+
+  nginx:
+    depends_on:
+      app:
+        condition: service_healthy
+      app-ml:
         condition: service_healthy
 
 volumes:
