@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-29T10:51:54.265281+00:00",
+  "generated_at": "2026-06-29T12:32:02.742430+00:00",
   "target": "http://localhost:8001/ask",
   "total_checks_or_turns": 178,
   "total_passed": 178,
@@ -78,6 +78,8 @@
     "atypical_part1": "reports/presentation_quality/atypical_100_presentation_final.json",
     "atypical_part2": "reports/presentation_quality/atypical_100_remaining_24.json",
     "safety": "reports/presentation_quality/safety_hard_topics_presentation_final.json",
-    "controls": "reports/presentation_quality/pre_pilot_controls_final/summary.json"
+    "controls": "reports/presentation_quality/pre_pilot_controls_final/summary.json",
+    "demo_pack_json": "reports/presentation_quality/demo_pack.json",
+    "demo_pack_md": "reports/presentation_quality/demo_pack.md"
   }
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,13 +14,24 @@ REPORT_PATHS = {
     "safety": REPORT_DIR / "safety_hard_topics_presentation_final.json",
     "controls": REPORT_DIR / "pre_pilot_controls_final" / "summary.json",
 }
+CONTROL_REPORT_PATHS = {
+    "off_topic": REPORT_DIR / "pre_pilot_controls_final" / "off_topic_ask_eval.json",
+    "pii": REPORT_DIR / "pre_pilot_controls_final" / "pii_ask_eval.json",
+    "followup": REPORT_DIR / "pre_pilot_controls_final" / "followup_eval.json",
+}
+DEMO_PACK_JSON = REPORT_DIR / "demo_pack.json"
+DEMO_PACK_MD = REPORT_DIR / "demo_pack.md"
 
 
 def main() -> None:
     reports = {name: _read_json(path) for name, path in REPORT_PATHS.items()}
+    control_reports = {name: _read_json(path) for name, path in CONTROL_REPORT_PATHS.items()}
     summary = _build_summary(reports)
+    demo_pack = _build_demo_pack(summary, reports, control_reports)
     _write_json(REPORT_DIR / "presentation_quality_report.json", summary)
+    _write_json(DEMO_PACK_JSON, demo_pack)
     _write_markdown(REPORT_DIR / "presentation_quality_report.md", summary, reports)
+    _write_demo_pack_markdown(DEMO_PACK_MD, demo_pack)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
@@ -103,8 +115,311 @@ def _build_summary(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "cost_rub": _cost(reports["safety"]),
         },
         "controls": controls,
-        "artifacts": {name: str(path).replace("\\", "/") for name, path in REPORT_PATHS.items()},
+        "artifacts": {
+            **{name: str(path).replace("\\", "/") for name, path in REPORT_PATHS.items()},
+            "demo_pack_json": str(DEMO_PACK_JSON).replace("\\", "/"),
+            "demo_pack_md": str(DEMO_PACK_MD).replace("\\", "/"),
+        },
     }
+
+
+def _build_demo_pack(
+    summary: dict[str, Any],
+    reports: dict[str, dict[str, Any]],
+    control_reports: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    sections = [
+        _demo_section(
+            "typical_source_chunk",
+            "Типовые вопросы без LLM",
+            "Показывает, что частые вопросы закрываются готовыми источниками быстро и дёшево.",
+            _pick_preferred_results(
+                reports["typical"],
+                limit=5,
+                preferred_ids=[
+                    "seed_balanced::xlsx_fallback_r0005_kak_zaregistrirovatsya_na_fgais",
+                    "seed_balanced::xlsx_fallback_r0008_gde_nayti_id_profilya",
+                    "seed_balanced::xlsx_category_r0014_oplata_proezda",
+                    "seed_balanced::xlsx_fallback_r0009_gde_smotret_status_zayavok_v",
+                    "seed_balanced::docx_forum_rossiyskiy_sever_intenty_003_rezultaty_otbora_i_spiski",
+                ],
+                predicate=lambda item: item.get("passed")
+                and item.get("generator_model") == "source_chunk",
+            ),
+        ),
+        _demo_section(
+            "complex_max",
+            "Нетиповые и составные вопросы через Max",
+            "Показывает синтез ответа по нескольким найденным чанкам без выдумывания.",
+            _pick_preferred_results(
+                reports["atypical_part1"],
+                reports["atypical_part2"],
+                limit=10,
+                preferred_ids=[
+                    "atypical_multi_aspect::004",
+                    "atypical_multi_aspect::005",
+                    "atypical_multi_aspect::011",
+                    "atypical_multi_aspect::024",
+                    "atypical_multi_aspect::036",
+                    "atypical_multi_aspect::037",
+                    "atypical_multi_aspect::056",
+                    "atypical_multi_aspect::072",
+                    "atypical_multi_aspect::083",
+                    "atypical_multi_aspect::096",
+                ],
+                predicate=lambda item: item.get("passed")
+                and item.get("generator_model") == "GigaChat/GigaChat-2-Max",
+            ),
+        ),
+        _demo_section(
+            "complex_source_chunk",
+            "Сложные вопросы, закрытые источниками без LLM",
+            "Показывает, что Max не вызывается там, где достаточно уверенного RAG-источника.",
+            _pick_preferred_results(
+                reports["atypical_part1"],
+                reports["atypical_part2"],
+                limit=3,
+                preferred_ids=[
+                    "atypical_multi_aspect::016",
+                    "atypical_multi_aspect::043",
+                    "atypical_multi_aspect::051",
+                ],
+                predicate=lambda item: item.get("passed")
+                and item.get("generator_model") == "source_chunk",
+            ),
+        ),
+        _demo_section(
+            "safety",
+            "Жёсткие темы и безопасность",
+            (
+                "Показывает, что суицид, буллинг, угрозы и опасные инструкции "
+                "уходят специалисту до LLM."
+            ),
+            _pick_preferred_results(
+                reports["safety"],
+                limit=4,
+                preferred_ids=[
+                    "safety::self_harm_01",
+                    "safety::bullying_01",
+                    "safety::threat_01",
+                    "safety::dangerous_instruction_01",
+                ],
+                predicate=lambda item: item.get("passed") and item.get("was_escalated"),
+            ),
+        ),
+        _demo_section(
+            "off_topic",
+            "Вопросы вне базы",
+            (
+                "Показывает, что бот не отвечает из головы и просит задать вопрос "
+                "по зоне ответственности."
+            ),
+            _pick_preferred_results(
+                control_reports["off_topic"],
+                limit=3,
+                preferred_ids=[
+                    "offtopic_weather",
+                    "offtopic_currency",
+                    "offtopic_programming",
+                ],
+                predicate=lambda item: item.get("passed")
+                and item.get("observed_behavior") == "scope_note",
+            ),
+        ),
+        _demo_section(
+            "pii",
+            "Персональные данные",
+            "Показывает, что PII маскируется в trace, а ответ строится по источникам.",
+            _pick_preferred_results(
+                control_reports["pii"],
+                limit=3,
+                preferred_ids=[
+                    "pii_registration_phone_email",
+                    "pii_grant_phone",
+                    "pii_forum_status_email",
+                ],
+                predicate=lambda item: item.get("passed"),
+            ),
+        ),
+        _demo_section(
+            "followup_context",
+            "Контекст диалога",
+            "Показывает, что бот удерживает форум и тему в короткой цепочке уточнений.",
+            _pick_preferred_results(
+                control_reports["followup"],
+                limit=4,
+                preferred_ids=[
+                    "followup_amur_refusal_after_context_t1",
+                    "followup_amur_refusal_after_context_t2",
+                    "followup_bctp_family_transfer_t1",
+                    "followup_bctp_family_transfer_t2",
+                ],
+                predicate=lambda item: item.get("passed"),
+            ),
+        ),
+    ]
+    total_cases = sum(len(section["cases"]) for section in sections)
+    passed_cases = sum(
+        1 for section in sections for item in section["cases"] if item.get("passed")
+    )
+    return {
+        "generated_at": summary["generated_at"],
+        "source_report": str(REPORT_DIR / "presentation_quality_report.json").replace("\\", "/"),
+        "total_demo_cases": total_cases,
+        "passed_demo_cases": passed_cases,
+        "pass_rate": passed_cases / total_cases if total_cases else 0,
+        "sections": sections,
+    }
+
+
+def _demo_section(
+    key: str,
+    title: str,
+    purpose: str,
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "purpose": purpose,
+        "cases": [_compact_demo_item(item) for item in results],
+    }
+
+
+def _pick_results(
+    *reports: dict[str, Any],
+    limit: int,
+    predicate: Callable[[dict[str, Any]], bool],
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for report in reports:
+        for item in report.get("results") or []:
+            if predicate(item):
+                selected.append(item)
+            if len(selected) >= limit:
+                return selected
+    return selected
+
+
+def _pick_preferred_results(
+    *reports: dict[str, Any],
+    limit: int,
+    preferred_ids: list[str],
+    predicate: Callable[[dict[str, Any]], bool],
+) -> list[dict[str, Any]]:
+    all_results = [item for report in reports for item in report.get("results") or []]
+    by_id = {str(item.get("id")): item for item in all_results}
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item_id in preferred_ids:
+        item = by_id.get(item_id)
+        if item and predicate(item):
+            selected.append(item)
+            seen.add(item_id)
+        if len(selected) >= limit:
+            return selected
+    for item in all_results:
+        item_id = str(item.get("id"))
+        if item_id not in seen and predicate(item):
+            selected.append(item)
+            seen.add(item_id)
+        if len(selected) >= limit:
+            return selected
+    return selected
+
+
+def _compact_demo_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "query": item.get("query"),
+        "response": item.get("response"),
+        "passed": item.get("passed"),
+        "expected_behavior": item.get("expected_behavior"),
+        "observed_behavior": item.get("observed_behavior"),
+        "was_escalated": item.get("was_escalated"),
+        "escalation_reason": item.get("escalation_reason"),
+        "generator_model": item.get("generator_model") or "none",
+        "latency_ms": item.get("trace_total_latency_ms") or item.get("latency_ms"),
+        "cost_rub": round(_item_cost(item), 6),
+        "sources": item.get("cited_source_ids") or [],
+        "masked_message": item.get("message_masked"),
+        "tags": item.get("tags") or [],
+    }
+
+
+def _write_demo_pack_markdown(path: Path, demo_pack: dict[str, Any]) -> None:
+    lines = [
+        "# Pre-pilot demo pack",
+        "",
+        f"- Сформировано: `{demo_pack['generated_at']}`",
+        f"- Источник метрик: `{demo_pack['source_report']}`",
+        f"- Демо-кейсы: `{demo_pack['passed_demo_cases']}/{demo_pack['total_demo_cases']}` "
+        f"(`{_pct(demo_pack['pass_rate'])}`)",
+        "",
+        "## Как показывать",
+        "",
+        "1. Открой этот файл рядом с админкой знаний и тестовым каналом HDE.",
+        "2. Сначала покажи итоговые метрики из `presentation_quality_report.md`.",
+        (
+            "3. Затем пройди по разделам ниже: типовой ответ, сложный ответ, "
+            "safety, вне базы, PII, контекст."
+        ),
+        (
+            "4. Для каждого кейса обращай внимание на `Модель`, `Источники`, "
+            "`Эскалация`, `Latency` и `Стоимость`."
+        ),
+        (
+            "5. Если руководитель просит живой прогон, бери вопрос из поля `Вопрос` "
+            "и отправляй его в `/ask` или тестовый HDE-канал."
+        ),
+        "",
+        "## Что доказывает пакет",
+        "",
+        "- Бот не отвечает вне базы и не выдумывает факты.",
+        "- Простые вопросы закрываются дешёвым `source_chunk`.",
+        "- Сложные вопросы синтезируются через Max только по найденным источникам.",
+        "- Жёсткие safety-сценарии уходят специалисту до LLM.",
+        "- Персональные данные маскируются в trace.",
+        "- Follow-up держит короткий контекст диалога.",
+        "",
+    ]
+    for section in demo_pack["sections"]:
+        lines.extend(_demo_section_lines(section))
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _demo_section_lines(section: dict[str, Any]) -> list[str]:
+    lines = [
+        f"## {section['title']}",
+        "",
+        section["purpose"],
+        "",
+    ]
+    for index, item in enumerate(section["cases"], start=1):
+        sources = ", ".join(item.get("sources") or []) or "-"
+        lines.extend(
+            [
+                f"### {index}. {item.get('id')}",
+                "",
+                f"- Pass: `{item.get('passed')}`",
+                f"- Поведение: `{item.get('observed_behavior') or '-'}`",
+                f"- Модель: `{item.get('generator_model') or '-'}`",
+                f"- Эскалация: `{item.get('was_escalated')}`",
+                f"- Причина эскалации: `{item.get('escalation_reason') or '-'}`",
+                f"- Latency trace: `{item.get('latency_ms') or '-'} ms`",
+                f"- Стоимость LLM: `{item.get('cost_rub') or 0} RUB`",
+                f"- Источники: `{sources}`",
+                "",
+                f"**Вопрос:** {_clip(item.get('query'), 500)}",
+                "",
+                f"**Ответ:** {_clip(item.get('response'), 900)}",
+                "",
+            ]
+        )
+        masked = item.get("masked_message")
+        if masked and masked != item.get("query"):
+            lines.extend([f"**Masked trace:** {_clip(masked, 500)}", ""])
+    return lines
 
 
 def _write_markdown(
@@ -284,6 +599,12 @@ def _escalation_count(report: dict[str, Any]) -> int:
 
 def _cost(report: dict[str, Any]) -> float:
     return float(report.get("llm_estimated_cost_rub") or 0)
+
+
+def _item_cost(item: dict[str, Any]) -> float:
+    if item.get("llm_estimated_cost_rub") is not None:
+        return float(item.get("llm_estimated_cost_rub") or 0)
+    return sum(float(event.get("estimated_cost_rub") or 0) for event in item.get("llm_usage") or [])
 
 
 def _pct(value: float | None) -> str:

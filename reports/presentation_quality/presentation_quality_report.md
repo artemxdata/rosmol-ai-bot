@@ -1,6 +1,6 @@
 # Презентационный отчёт качества
 
-- Сформировано: `2026-06-29T10:51:54.265281+00:00`
+- Сформировано: `2026-06-29T12:32:02.742430+00:00`
 - Цель: `http://localhost:8001/ask` (локальный Docker, без массовых запросов в HDE)
 - Всего проверок/turns: `178`
 - Успешно: `178/178` (`100.0%`)
@@ -38,6 +38,8 @@
 - `atypical_part2`: `reports/presentation_quality/atypical_100_remaining_24.json`
 - `safety`: `reports/presentation_quality/safety_hard_topics_presentation_final.json`
 - `controls`: `reports/presentation_quality/pre_pilot_controls_final/summary.json`
+- `demo_pack_json`: `reports/presentation_quality/demo_pack.json`
+- `demo_pack_md`: `reports/presentation_quality/demo_pack.md`
 
 ## Примеры ответов
 
