@@ -27,6 +27,24 @@ def test_fallback_analysis_builds_multi_aspect_forum_questions() -> None:
     }
 
 
+def test_fallback_analysis_routes_items_documents_to_packing_topic() -> None:
+    analysis = _fallback_analysis(
+        "Больше, чем путешествие: какие вещи взять, что с медпунктом и можно ли с ОВЗ?",
+        "Больше, чем путешествие: какие вещи взять, что с медпунктом и можно ли с ОВЗ?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    topics = {question.topic for question in analysis.questions}
+    assert topics >= {
+        "spisok_veschey_i_dokumentov",
+        "informaciya_o_ploschadke_medicina",
+        "uchastniki_s_ovz",
+    }
+    assert "dokumenty_meropriyatiya" not in topics
+
+
 def test_deterministic_questions_are_merged_with_partial_llm_questions() -> None:
     payload = {
         "forum_normalized": "Таврида",
