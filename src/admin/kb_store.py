@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,67 @@ def update_chunk(
     return target
 
 
+def validate_seed(path: Path) -> dict[str, Any]:
+    records = load_seed_records(path)
+    validate_seed_items(records)
+    return {
+        "ok": True,
+        "path": str(path),
+        "valid_records": len(records),
+        "status_counts": _count_field(records, "status", default="published"),
+        "category_counts": _count_field(records, "category"),
+        "forum_counts": _count_field(records, "forum_normalized"),
+        "source_type_counts": _count_field(records, "source_type"),
+    }
+
+
+def find_related_eval_cases(
+    cases_dir: Path,
+    chunk_id: str,
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    if not cases_dir.exists():
+        return {"chunk_id": chunk_id, "total": 0, "limit": limit, "items": []}
+
+    matches: list[dict[str, Any]] = []
+    for path in sorted(cases_dir.glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        for case in _iter_eval_cases(payload):
+            if chunk_id not in _case_chunk_ids(case):
+                continue
+            matches.append(_compact_eval_case(case, source_file=path.name))
+
+    return {
+        "chunk_id": chunk_id,
+        "total": len(matches),
+        "limit": limit,
+        "items": matches[:limit],
+    }
+
+
+def load_quality_report(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("quality report must contain a JSON object")
+    return payload
+
+
+def build_quality_check(
+    seed_path: Path,
+    *,
+    report_path: Path,
+) -> dict[str, Any]:
+    validation = validate_seed(seed_path)
+    report_exists = report_path.exists()
+    report = load_quality_report(report_path) if report_exists else None
+    return {
+        "validation": validation,
+        "latest_eval_report": report,
+        "latest_eval_report_exists": report_exists,
+    }
+
+
 def load_seed_records(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, list):
@@ -138,6 +200,70 @@ def _search_haystack(record: dict[str, Any]) -> str:
     examples = record.get("intent_examples") or []
     values.extend(examples if isinstance(examples, list) else [])
     return " ".join(str(value or "") for value in values).casefold()
+
+
+def _count_field(
+    records: list[dict[str, Any]],
+    field: str,
+    *,
+    default: str = "unknown",
+) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for record in records:
+        value = str(record.get(field) or default).strip() or default
+        counter[value] += 1
+    return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _iter_eval_cases(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        return []
+
+    cases: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        turns = item.get("turns")
+        if isinstance(turns, list):
+            for turn in turns:
+                if isinstance(turn, dict):
+                    merged = dict(turn)
+                    merged["conversation_id"] = item.get("id")
+                    cases.append(merged)
+            continue
+        cases.append(item)
+    return cases
+
+
+def _case_chunk_ids(case: dict[str, Any]) -> set[str]:
+    chunk_ids: set[str] = set()
+    for key in ("expected_chunk_ids", "expected_cited_chunk_ids"):
+        values = case.get(key)
+        if isinstance(values, list):
+            chunk_ids.update(str(value) for value in values if value)
+
+    equivalent = case.get("equivalent_chunk_ids")
+    if isinstance(equivalent, dict):
+        chunk_ids.update(str(key) for key in equivalent if key)
+        for values in equivalent.values():
+            if isinstance(values, list):
+                chunk_ids.update(str(value) for value in values if value)
+            elif values:
+                chunk_ids.add(str(values))
+    return chunk_ids
+
+
+def _compact_eval_case(case: dict[str, Any], *, source_file: str) -> dict[str, Any]:
+    return {
+        "id": case.get("id"),
+        "conversation_id": case.get("conversation_id"),
+        "source_file": source_file,
+        "query": case.get("query"),
+        "expected_behavior": case.get("expected_behavior"),
+        "expected_chunk_ids": case.get("expected_chunk_ids") or [],
+        "expected_cited_chunk_ids": case.get("expected_cited_chunk_ids") or [],
+        "tags": case.get("tags") or [],
+    }
 
 
 def _preview(text: str, *, limit: int = 180) -> str:

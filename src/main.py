@@ -10,12 +10,13 @@ from typing import Any
 
 import asyncpg
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
-from src.admin import kb_store
+from src.admin import kb_store, ui
 from src.channels.hde import HDEAdapter
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
@@ -104,6 +105,10 @@ class AdminChunkUpdate(BaseModel):
     text_clean: str | None = Field(default=None, max_length=20000)
 
 
+class AdminQualityCheckPayload(BaseModel):
+    include_latest_eval_report: bool = True
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -160,6 +165,12 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
     return {"request_id": str(message.request_id), "response": response}
 
 
+@app.get("/admin/kb", response_class=HTMLResponse)
+async def admin_kb_page() -> HTMLResponse:
+    _require_admin_enabled()
+    return HTMLResponse(content=ui.ADMIN_KB_HTML)
+
+
 @app.get("/admin/kb/chunks")
 async def admin_list_kb_chunks(
     request: Request,
@@ -185,6 +196,46 @@ async def admin_list_kb_chunks(
         limit=limit,
         offset=offset,
     )
+
+
+@app.post("/admin/kb/validate")
+async def admin_validate_kb_seed(request: Request) -> dict[str, Any]:
+    _require_admin_secret(request)
+    try:
+        return await asyncio.to_thread(kb_store.validate_seed, _kb_seed_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/admin/kb/eval-report")
+async def admin_get_kb_eval_report(request: Request) -> dict[str, Any]:
+    _require_admin_secret(request)
+    report_path = _admin_quality_report_path()
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Quality report not found")
+    try:
+        return await asyncio.to_thread(kb_store.load_quality_report, report_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/admin/kb/quality-check")
+async def admin_run_kb_quality_check(
+    payload: AdminQualityCheckPayload,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    report_path = _admin_quality_report_path()
+    if not payload.include_latest_eval_report:
+        return {"validation": await asyncio.to_thread(kb_store.validate_seed, _kb_seed_path())}
+    try:
+        return await asyncio.to_thread(
+            kb_store.build_quality_check,
+            _kb_seed_path(),
+            report_path=report_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/admin/kb/chunks/{chunk_id}")
@@ -215,6 +266,23 @@ async def admin_update_kb_chunk(
         raise HTTPException(status_code=404, detail="Chunk not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/admin/kb/chunks/{chunk_id}/eval-cases")
+async def admin_get_kb_chunk_eval_cases(
+    chunk_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    if await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id) is None:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+    return await asyncio.to_thread(
+        kb_store.find_related_eval_cases,
+        _admin_eval_cases_dir(),
+        chunk_id,
+        limit=limit,
+    )
 
 
 @app.post("/webhook/vk")
@@ -341,14 +409,28 @@ def _require_optional_secret(
 
 
 def _require_admin_secret(request: Request) -> None:
+    expected = _require_admin_enabled()
+    _require_optional_secret(request, expected, "x-admin-token")
+
+
+def _require_admin_enabled() -> str:
     expected = (getattr(get_settings(), "admin_auth_token", "") or "").strip()
     if not expected:
         raise HTTPException(status_code=503, detail="Admin API is disabled")
-    _require_optional_secret(request, expected, "x-admin-token")
+    return expected
 
 
 def _kb_seed_path() -> Path:
     return Path(getattr(get_settings(), "kb_seed_path", "data/knowledge_base_seed.json"))
+
+
+def _admin_eval_cases_dir() -> Path:
+    return Path(getattr(get_settings(), "admin_eval_cases_dir", "eval/cases"))
+
+
+def _admin_quality_report_path() -> Path:
+    default = "reports/pre_pilot_quality_suite/summary.json"
+    return Path(getattr(get_settings(), "admin_quality_report_path", default))
 
 
 def _should_bypass_cache(request: Request) -> bool:
