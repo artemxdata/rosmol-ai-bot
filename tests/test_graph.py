@@ -1042,6 +1042,34 @@ def test_effective_questions_keep_reimbursement_documents_when_user_asked_them()
     ]
 
 
+def test_effective_questions_drop_grant_return_for_travel_reimbursement() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(
+            category="форумы",
+            forum_normalized="Студенческий спецназ",
+            questions=[
+                Question(
+                    text="Оплачивается ли проезд?",
+                    topic="oplata_proezda",
+                    category="форумы",
+                    forum_normalized="Студенческий спецназ",
+                ),
+                Question(
+                    text="Как вернуть грантовые средства?",
+                    topic="vernut_denezhnye_sredstva",
+                    category="гранты",
+                    forum_normalized=None,
+                ),
+            ],
+        ),
+        "Студенческий спецназ возмещение денежных средств на проезд до мероприятия",
+    )
+
+    assert [(question.text, question.topic) for question in questions] == [
+        ("Оплачивается ли проезд?", "oplata_proezda")
+    ]
+
+
 def test_apply_deterministic_forum_uses_registry_alias() -> None:
     payload = _coerce_analysis_payload(
         {
@@ -5275,6 +5303,55 @@ async def test_generate_uses_source_chunk_for_single_official_complex_forum_ques
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_source_chunk_for_single_official_complex_topic_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="student_special_forces_travel",
+        text=(
+            "Проезд до места проведения слёта и обратно оплачивает направляющая "
+            "сторона или участник самостоятельно."
+        ),
+        metadata={
+            "source_type": "xlsx",
+            "category": "форумы",
+            "forum_normalized": "Студенческий спецназ",
+            "topic": "oplata_proezda",
+        },
+        score=0.82,
+        reranker_score=0.74,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Студенческий спецназ",
+                complexity=Complexity.COMPLEX,
+                questions=[
+                    Question(
+                        text="Оплачивается ли проезд?",
+                        topic="oplata_proezda",
+                        category="форумы",
+                        forum_normalized="Студенческий спецназ",
+                    )
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.74,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["student_special_forces_travel"]
+
+
+@pytest.mark.asyncio
 async def test_generate_prefers_event_overview_source_for_forum_summary_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6147,6 +6224,8 @@ async def test_generate_repairs_known_source_ref_transliteration_typo(
 
     result = await generate(
         {
+            "message_masked": "А статус где смотреть?",
+            "contextual_message": "Амур: как подать заявку? А статус где смотреть?",
             "analysis": QueryAnalysis(
                 complexity=Complexity.COMPLEX,
                 category="форумы",

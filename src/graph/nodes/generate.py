@@ -505,9 +505,22 @@ def _should_synthesize_with_llm(
         return False
     if _is_contextual_synthesis_case(state):
         return True
+    if _can_answer_from_single_official_source(questions, source_chunks):
+        return False
     if analysis.complexity == Complexity.COMPLEX:
         return True
     return len(source_chunks) > 1 and _has_multiple_distinct_questions(questions)
+
+
+def _can_answer_from_single_official_source(
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+) -> bool:
+    if len(source_chunks) != 1:
+        return False
+    if _source_type_rank(source_chunks[0]) != 0:
+        return False
+    return not _has_multiple_distinct_questions(questions)
 
 
 def _generator_complexity(

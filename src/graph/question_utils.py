@@ -406,6 +406,13 @@ def _filter_inferred_aspect_questions(
     filtered: list[Question] = []
     normalized_message = message.casefold().replace("ё", "е")
     for question in questions:
+        if _should_drop_grant_return_for_travel_reimbursement(
+            question,
+            questions,
+            normalized_message,
+            category=category,
+        ):
+            continue
         if _should_skip_fallback_question(
             question.text,
             normalized_message,
@@ -422,6 +429,43 @@ def _filter_inferred_aspect_questions(
                 continue
         filtered.append(question)
     return filtered
+
+
+def _should_drop_grant_return_for_travel_reimbursement(
+    question: Question,
+    questions: list[Question],
+    normalized_message: str,
+    *,
+    category: str | None,
+) -> bool:
+    if category == "гранты":
+        return False
+    if question.topic != "vernut_denezhnye_sredstva":
+        return False
+    if any(marker in normalized_message for marker in ("грант", "грантов")):
+        return False
+    has_travel_question = any(
+        candidate is not question and candidate.topic == "oplata_proezda"
+        for candidate in questions
+    )
+    if not has_travel_question:
+        return False
+    return any(
+        marker in normalized_message
+        for marker in (
+            "проезд",
+            "поездк",
+            "дорог",
+            "билет",
+            "трансфер",
+            "чартер",
+            "доезд",
+            "доехать",
+            "добраться",
+            "самолет",
+            "самолёт",
+        )
+    )
 
 
 def _append_missing_fallback_questions(
