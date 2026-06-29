@@ -36,6 +36,7 @@ from src.llm.usage import (
 from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
 from src.models import Channel, Chunk, IncomingMessage
+from src.ops.reports import build_trace_report
 from src.rag.cache import SemanticCache
 from src.rag.embedder import Embedder
 from src.rag.errors import MLDependencyError
@@ -257,6 +258,19 @@ async def admin_get_kb_eval_report(request: Request) -> dict[str, Any]:
         return await asyncio.to_thread(kb_store.load_quality_report, report_path)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/admin/kb/ops-report")
+async def admin_get_ops_report(
+    request: Request,
+    days: int = Query(default=7, ge=1, le=90),
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Postgres pool is not initialized")
+    async with pool.acquire() as conn:
+        return await build_trace_report(conn, days)
 
 
 @app.post("/admin/kb/quality-check")

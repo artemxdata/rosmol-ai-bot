@@ -258,7 +258,7 @@ _HTML_TEMPLATE = """
     }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
       padding: 14px 16px;
       border-bottom: 1px solid var(--line);
@@ -515,6 +515,7 @@ _HTML_TEMPLATE = """
       </span>
       <button id="validateButton" class="secondary" type="button">Validation</button>
       <button id="qualityButton" class="secondary" type="button">Quality check</button>
+      <button id="opsButton" class="secondary" type="button">Ops report</button>
       <button id="logoutButton" class="danger" type="button">Выйти</button>
     </div>
   </header>
@@ -564,6 +565,10 @@ _HTML_TEMPLATE = """
         <div class="metric">
           <span id="metricEval" class="metric-value">-</span>
           <span class="metric-label">quality report</span>
+        </div>
+        <div class="metric">
+          <span id="metricOps" class="metric-value">-</span>
+          <span class="metric-label">requests, 7d</span>
         </div>
       </div>
       <div class="table-wrap">
@@ -854,9 +859,27 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", error.message, "error");
       }
     }
+    async function showOpsReport() {
+      try {
+        const data = await requestJson("/admin/kb/ops-report?days=7", {method: "GET"});
+        document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        const summary = data.summary || {};
+        const requests = summary.request_count || 0;
+        const cost = Number(summary.llm_estimated_cost_rub || 0).toFixed(2);
+        setMetric("metricOps", requests);
+        setStatus("detailStatus", `Ops loaded: ${requests} requests, ${cost} RUB`, "ok");
+      } catch (error) {
+        setStatus("detailStatus", error.message, "error");
+      }
+    }
     async function boot() {
       setAuthenticated(true);
-      await Promise.allSettled([loadChunks(), showValidation(), showQualityCheck()]);
+      await Promise.allSettled([
+        loadChunks(),
+        showValidation(),
+        showQualityCheck(),
+        showOpsReport(),
+      ]);
     }
     async function checkSession() {
       try {
@@ -878,6 +901,7 @@ _HTML_TEMPLATE = """
     document.getElementById("relatedCasesButton").addEventListener("click", showRelatedCases);
     document.getElementById("validateButton").addEventListener("click", showValidation);
     document.getElementById("qualityButton").addEventListener("click", showQualityCheck);
+    document.getElementById("opsButton").addEventListener("click", showOpsReport);
     checkSession();
   </script>
 </body>

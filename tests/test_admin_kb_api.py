@@ -432,6 +432,84 @@ async def test_admin_kb_api_returns_latest_eval_report(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_api_returns_ops_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+
+    class FakeConn:
+        async def fetchrow(self, _query: str, days: int) -> dict[str, object]:
+            assert days == 7
+            return {
+                "request_count": 10,
+                "escalated_count": 2,
+                "cache_hit_count": 3,
+                "avg_latency_ms": 1200,
+                "p95_latency_ms": 3400.0,
+                "llm_prompt_tokens": 100,
+                "llm_completion_tokens": 50,
+                "llm_total_tokens": 150,
+                "llm_estimated_cost_rub": 1.25,
+            }
+
+        async def fetch(self, query: str, days: int) -> list[dict[str, object]]:
+            assert days == 7
+            if "jsonb_array_elements" in query:
+                return [
+                    {
+                        "model": "GigaChat/GigaChat-2-Max",
+                        "calls": 2,
+                        "prompt_tokens": 100,
+                        "completion_tokens": 50,
+                        "total_tokens": 150,
+                        "estimated_cost_rub": 1.25,
+                    }
+                ]
+            if "routing_hint" in query:
+                return [{"complexity": "complex", "reason": "multi_aspect", "requests": 4}]
+            return [{"reason": "operator_requested", "requests": 2}]
+
+    class FakeAcquire:
+        async def __aenter__(self) -> FakeConn:
+            return FakeConn()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class FakePool:
+        def acquire(self) -> FakeAcquire:
+            return FakeAcquire()
+
+    monkeypatch.setattr(fastapi_app.state, "pg_pool", FakePool(), raising=False)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        unauthorized = await client.get("/admin/kb/ops-report")
+        response = await client.get(
+            "/admin/kb/ops-report",
+            params={"days": 7},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    data = response.json()
+    assert data["days"] == 7
+    assert data["summary"]["request_count"] == 10
+    assert data["summary"]["escalation_rate"] == 0.2
+    assert data["summary"]["cache_hit_rate"] == 0.3
+    assert data["model_usage"][0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert data["routing"][0]["reason"] == "multi_aspect"
+    assert data["escalations"][0]["reason"] == "operator_requested"
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_api_returns_related_eval_cases(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
