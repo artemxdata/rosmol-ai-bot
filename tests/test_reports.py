@@ -21,7 +21,7 @@ class FakeConn:
         }
 
     async def fetch(self, query: str, days: int) -> list[dict[str, object]]:
-        if "jsonb_array_elements" in query:
+        if "jsonb_array_elements(llm_usage)" in query:
             return [
                 {
                     "model": "GigaChat/GigaChat-2-Max",
@@ -34,6 +34,29 @@ class FakeConn:
             ]
         if "routing_hint" in query:
             return [{"complexity": "complex", "reason": "personal_condition", "requests": 7}]
+        if "question->>'topic'" in query:
+            return [
+                {
+                    "topic": "oplata_proezda",
+                    "forum": "Амур",
+                    "reason": "partial_source_coverage",
+                    "requests": 2,
+                }
+            ]
+        if "message_preview" in query:
+            return [
+                {
+                    "timestamp": "2026-06-29 12:00:00+00",
+                    "channel": "api",
+                    "forum": "Амур",
+                    "reason": "partial_source_coverage",
+                    "message_preview": "Сложный вопрос",
+                    "response_preview": "Передаю специалисту",
+                    "total_latency_ms": 1200,
+                }
+            ]
+        if "query_analysis->>'forum_normalized'" in query:
+            return [{"forum": "Амур", "reason": "partial_source_coverage", "requests": 2}]
         return [{"reason": "low_confidence", "requests": 2}]
 
 
@@ -45,6 +68,9 @@ async def test_build_trace_report_computes_rates() -> None:
     assert report["summary"]["cache_hit_rate"] == 0.3
     assert report["model_usage"][0]["model"] == "GigaChat/GigaChat-2-Max"
     assert report["routing"][0]["reason"] == "personal_condition"
+    assert report["failed_topics"][0]["topic"] == "oplata_proezda"
+    assert report["failed_forums"][0]["forum"] == "Амур"
+    assert report["recent_escalations"][0]["message_preview"] == "Сложный вопрос"
 
 
 def test_format_trace_report_includes_key_sections() -> None:
@@ -62,6 +88,9 @@ def test_format_trace_report_includes_key_sections() -> None:
         "model_usage": [],
         "routing": [],
         "escalations": [],
+        "failed_topics": [],
+        "failed_forums": [],
+        "recent_escalations": [],
     }
 
     text = format_trace_report(report)
@@ -70,6 +99,8 @@ def test_format_trace_report_includes_key_sections() -> None:
     assert "Model Usage" in text
     assert "Routing" in text
     assert "Escalations" in text
+    assert "Failed Topics" in text
+    assert "Failed Forums" in text
 
 
 def test_report_traces_rewrites_docker_postgres_host_for_local_cli() -> None:

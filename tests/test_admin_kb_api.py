@@ -460,7 +460,7 @@ async def test_admin_kb_api_returns_ops_report(
 
         async def fetch(self, query: str, days: int) -> list[dict[str, object]]:
             assert days == 7
-            if "jsonb_array_elements" in query:
+            if "jsonb_array_elements(llm_usage)" in query:
                 return [
                     {
                         "model": "GigaChat/GigaChat-2-Max",
@@ -473,6 +473,29 @@ async def test_admin_kb_api_returns_ops_report(
                 ]
             if "routing_hint" in query:
                 return [{"complexity": "complex", "reason": "multi_aspect", "requests": 4}]
+            if "question->>'topic'" in query:
+                return [
+                    {
+                        "topic": "oplata_proezda",
+                        "forum": "Амур",
+                        "reason": "partial_source_coverage",
+                        "requests": 2,
+                    }
+                ]
+            if "message_preview" in query:
+                return [
+                    {
+                        "timestamp": "2026-06-29 12:00:00+00",
+                        "channel": "api",
+                        "forum": "Амур",
+                        "reason": "partial_source_coverage",
+                        "message_preview": "Сложный вопрос",
+                        "response_preview": "Передаю специалисту",
+                        "total_latency_ms": 1200,
+                    }
+                ]
+            if "query_analysis->>'forum_normalized'" in query:
+                return [{"forum": "Амур", "reason": "partial_source_coverage", "requests": 2}]
             return [{"reason": "operator_requested", "requests": 2}]
 
     class FakeAcquire:
@@ -507,6 +530,9 @@ async def test_admin_kb_api_returns_ops_report(
     assert data["model_usage"][0]["model"] == "GigaChat/GigaChat-2-Max"
     assert data["routing"][0]["reason"] == "multi_aspect"
     assert data["escalations"][0]["reason"] == "operator_requested"
+    assert data["failed_topics"][0]["topic"] == "oplata_proezda"
+    assert data["failed_forums"][0]["forum"] == "Амур"
+    assert data["recent_escalations"][0]["message_preview"] == "Сложный вопрос"
 
 
 @pytest.mark.asyncio

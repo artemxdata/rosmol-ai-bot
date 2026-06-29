@@ -37,6 +37,9 @@ async def build_trace_report(conn: Any, days: int) -> dict[str, Any]:
         "model_usage": [dict(row) for row in await _fetch_model_usage(conn, days)],
         "routing": [dict(row) for row in await _fetch_routing(conn, days)],
         "escalations": [dict(row) for row in await _fetch_escalations(conn, days)],
+        "failed_topics": [dict(row) for row in await _fetch_failed_topics(conn, days)],
+        "failed_forums": [dict(row) for row in await _fetch_failed_forums(conn, days)],
+        "recent_escalations": [dict(row) for row in await _fetch_recent_escalations(conn, days)],
     }
 
 
@@ -63,6 +66,12 @@ def format_trace_report(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Escalations")
     lines.extend(_format_rows(report["escalations"], empty="- no escalations"))
+    lines.append("")
+    lines.append("Failed Topics")
+    lines.extend(_format_rows(report.get("failed_topics", []), empty="- no failed topics"))
+    lines.append("")
+    lines.append("Failed Forums")
+    lines.extend(_format_rows(report.get("failed_forums", []), empty="- no failed forums"))
     return "\n".join(lines)
 
 
@@ -118,6 +127,74 @@ async def _fetch_escalations(conn: Any, days: int) -> list[Any]:
           AND was_escalated
         GROUP BY reason
         ORDER BY requests DESC, reason
+        """,
+        days,
+    )
+
+
+async def _fetch_failed_topics(conn: Any, days: int) -> list[Any]:
+    return await conn.fetch(
+        """
+        SELECT
+            COALESCE(question->>'topic', 'unknown') AS topic,
+            COALESCE(query_analysis->>'forum_normalized', query_analysis->>'forum', 'unknown')
+                AS forum,
+            COALESCE(escalation_reason, 'unknown') AS reason,
+            COUNT(*)::int AS requests
+        FROM request_traces
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE
+                WHEN jsonb_typeof(query_analysis->'questions') = 'array'
+                    THEN query_analysis->'questions'
+                ELSE '[]'::jsonb
+            END
+        ) AS question ON TRUE
+        WHERE timestamp >= NOW() - ($1::int * INTERVAL '1 day')
+          AND was_escalated
+        GROUP BY topic, forum, reason
+        ORDER BY requests DESC, topic, forum
+        LIMIT 20
+        """,
+        days,
+    )
+
+
+async def _fetch_failed_forums(conn: Any, days: int) -> list[Any]:
+    return await conn.fetch(
+        """
+        SELECT
+            COALESCE(query_analysis->>'forum_normalized', query_analysis->>'forum', 'unknown')
+                AS forum,
+            COALESCE(escalation_reason, 'unknown') AS reason,
+            COUNT(*)::int AS requests
+        FROM request_traces
+        WHERE timestamp >= NOW() - ($1::int * INTERVAL '1 day')
+          AND was_escalated
+        GROUP BY forum, reason
+        ORDER BY requests DESC, forum
+        LIMIT 20
+        """,
+        days,
+    )
+
+
+async def _fetch_recent_escalations(conn: Any, days: int) -> list[Any]:
+    return await conn.fetch(
+        """
+        SELECT
+            timestamp,
+            channel,
+            COALESCE(query_analysis->>'forum_normalized', query_analysis->>'forum', 'unknown')
+                AS forum,
+            COALESCE(escalation_reason, 'unknown') AS reason,
+            LEFT(COALESCE(message_masked, ''), 240) AS message_preview,
+            LEFT(COALESCE(response_text, ''), 240) AS response_preview,
+            total_latency_ms
+        FROM request_traces
+        WHERE timestamp >= NOW() - ($1::int * INTERVAL '1 day')
+          AND was_escalated
+        ORDER BY timestamp DESC
+        LIMIT 20
         """,
         days,
     )
