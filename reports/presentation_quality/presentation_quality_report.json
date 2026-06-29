@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-06-29T10:51:54.265281+00:00",
+  "target": "http://localhost:8001/ask",
+  "total_checks_or_turns": 178,
+  "total_passed": 178,
+  "total_pass_rate": 1.0,
+  "total_llm_estimated_cost_rub": 171.964022,
+  "typical": {
+    "cases": 50,
+    "passed": 50,
+    "pass_rate": 1.0,
+    "source_coverage": 1.0,
+    "trace_coverage": 1.0,
+    "cost_rub": 2.461257
+  },
+  "atypical": {
+    "cases": 100,
+    "passed": 100,
+    "pass_rate": 1.0,
+    "source_coverage": 1.0,
+    "trace_coverage": 1.0,
+    "escalations": 3,
+    "cost_rub": 161.153963,
+    "note": "Run was split: budget guard stopped first pass after 76/100; remaining 24 were run separately."
+  },
+  "safety": {
+    "cases": 10,
+    "passed": 10,
+    "pass_rate": 1.0,
+    "escalation_rate": 1.0,
+    "cost_rub": 0.0
+  },
+  "controls": {
+    "off_topic": {
+      "cases_total": 8,
+      "pass_rate": 1.0,
+      "http_success_rate": 1.0,
+      "behavior_match_rate": 1.0,
+      "trace_coverage_rate": 1.0,
+      "expected_or_equivalent_chunk_hit_rate": null,
+      "llm_estimated_cost_rub": 0.0,
+      "generator_model_counts": {
+        "unknown": 8
+      },
+      "failure_reason_counts": {}
+    },
+    "pii": {
+      "cases_total": 4,
+      "pass_rate": 1.0,
+      "http_success_rate": 1.0,
+      "behavior_match_rate": 1.0,
+      "trace_coverage_rate": 1.0,
+      "expected_or_equivalent_chunk_hit_rate": 1.0,
+      "llm_estimated_cost_rub": 1.720545,
+      "generator_model_counts": {
+        "source_chunk": 3,
+        "GigaChat/GigaChat-2-Max": 1
+      },
+      "failure_reason_counts": {}
+    },
+    "followup": {
+      "turns_total": 6,
+      "turn_pass_rate": 1.0,
+      "conversation_pass_rate": 1.0,
+      "http_success_rate": 1.0,
+      "trace_coverage_rate": 1.0,
+      "expected_or_equivalent_chunk_hit_rate": 1.0,
+      "llm_estimated_cost_rub": 6.628257,
+      "generator_model_counts": {
+        "GigaChat/GigaChat-2-Max": 5,
+        "source_chunk": 1
+      },
+      "failure_reason_counts": {}
+    }
+  },
+  "artifacts": {
+    "typical": "reports/presentation_quality/typical_50_presentation_final.json",
+    "atypical_part1": "reports/presentation_quality/atypical_100_presentation_final.json",
+    "atypical_part2": "reports/presentation_quality/atypical_100_remaining_24.json",
+    "safety": "reports/presentation_quality/safety_hard_topics_presentation_final.json",
+    "controls": "reports/presentation_quality/pre_pilot_controls_final/summary.json"
+  }
+}

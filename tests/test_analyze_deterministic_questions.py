@@ -86,6 +86,21 @@ def test_fallback_analysis_marks_everyday_requests_as_offtopic() -> None:
         assert analysis.needs_clarification is True
 
 
+def test_fallback_analysis_does_not_treat_forum_result_lists_as_offtopic() -> None:
+    analysis = _fallback_analysis(
+        "Российский Север Результаты отбора и списки",
+        "Российский Север Результаты отбора и списки",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.is_offtopic is False
+    assert analysis.category == "форумы"
+    assert analysis.forum_normalized == "Российский Север"
+    assert [question.topic for question in analysis.questions] == ["rezultaty_rm"]
+
+
 def test_fallback_analysis_does_not_treat_birthdate_as_event_date() -> None:
     analysis = _fallback_analysis(
         "Моя дата рождения 01.02.2000, где найти ID профиля?",
