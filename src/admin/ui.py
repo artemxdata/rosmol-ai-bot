@@ -23,174 +23,267 @@ _HTML_TEMPLATE = """
   <style>
     :root {
       color-scheme: light;
-      --bg: #f4f7fb;
+      --ink: #061d39;
+      --ink-2: #0b315f;
+      --bg: #eef3f8;
       --surface: #ffffff;
-      --surface-soft: #f8fafc;
-      --line: #dbe3ee;
-      --text: #091a2f;
-      --muted: #65758b;
-      --brand: #061d39;
-      --accent: #087b8f;
-      --accent-soft: #e5f6f8;
+      --surface-2: #f7fafc;
+      --line: #d7e1ec;
+      --muted: #64748b;
+      --text: #102033;
+      --accent: #fbdb24;
+      --accent-2: #0b7f96;
+      --accent-soft: #e6f7fa;
       --danger: #b42318;
       --ok: #027a48;
-      --shadow: 0 10px 30px rgba(7, 29, 57, 0.08);
+      --shadow: 0 18px 45px rgba(6, 29, 57, 0.12);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Inter, Arial, sans-serif;
-      background: var(--bg);
+      background:
+        linear-gradient(180deg, rgba(6, 29, 57, 0.08), transparent 260px),
+        var(--bg);
       color: var(--text);
+      font-family: Inter, Arial, sans-serif;
       font-size: 14px;
+      letter-spacing: 0;
     }
-    header {
+    button, input, select, textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+    button {
+      min-height: 40px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 9px 13px;
+      background: var(--ink);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.04); }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    button.primary {
+      background: var(--accent);
+      color: var(--ink);
+    }
+    button.secondary {
+      background: #fff;
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    button.danger {
+      background: #fff;
+      border-color: #f2b8b5;
+      color: var(--danger);
+    }
+    input, select, textarea {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--text);
+      padding: 10px 12px;
+      min-height: 40px;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: 3px solid rgba(11, 127, 150, 0.16);
+      border-color: var(--accent-2);
+    }
+    .topbar {
+      min-height: 78px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 18px;
-      padding: 18px 22px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.94);
+      padding: 16px 22px;
+      background: var(--ink);
+      color: #fff;
       position: sticky;
       top: 0;
-      z-index: 3;
-      backdrop-filter: blur(12px);
+      z-index: 5;
+      box-shadow: 0 12px 30px rgba(6, 29, 57, 0.2);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 14px;
-      min-width: 260px;
+      gap: 16px;
+      min-width: 300px;
     }
-    .brand img {
-      width: 138px;
+    .logo-mark {
+      display: grid;
+      place-items: center;
+      width: 174px;
+      height: 46px;
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px 12px;
+    }
+    .logo-mark img {
+      width: 148px;
       height: auto;
       display: block;
     }
-    .brand-title {
+    .brand-copy {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
     }
     h1 {
       margin: 0;
-      color: var(--brand);
-      font-size: 18px;
-      font-weight: 800;
-      letter-spacing: 0;
+      font-size: 19px;
+      line-height: 1.1;
+      font-weight: 900;
     }
     .subtitle {
-      color: var(--muted);
+      color: #bfd1e6;
       font-size: 12px;
+      line-height: 1.3;
     }
-    main {
-      display: grid;
-      grid-template-columns: minmax(440px, 0.95fr) minmax(520px, 1.25fr);
-      gap: 18px;
-      padding: 18px;
-    }
-    section {
-      min-width: 0;
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }
-    .toolbar, .actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      padding: 14px;
-      border-bottom: 1px solid var(--line);
-      background: var(--surface);
-    }
-    .header-actions {
+    .top-actions {
       display: flex;
       align-items: center;
       gap: 10px;
       flex-wrap: wrap;
       justify-content: flex-end;
     }
-    .stack { padding: 14px; }
-    input, select, textarea, button {
-      font: inherit;
-      border-radius: 6px;
-    }
-    input, select, textarea {
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--text);
-      padding: 10px 11px;
-    }
-    input:focus, select:focus, textarea:focus {
-      outline: 3px solid rgba(8, 123, 143, 0.16);
-      border-color: var(--accent);
-    }
-    button {
-      border: 1px solid var(--accent);
-      background: var(--accent);
+    .top-actions button.secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.18);
       color: #fff;
-      padding: 10px 13px;
-      cursor: pointer;
-      font-weight: 700;
     }
-    button.secondary {
-      background: #fff;
-      color: var(--accent);
+    .top-actions button.primary {
+      box-shadow: 0 0 0 1px rgba(251, 219, 36, 0.25);
     }
-    button.ghost {
-      border-color: var(--line);
-      background: #fff;
-      color: var(--brand);
-    }
-    button:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-    label.toggle {
+    .status-pill {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      color: var(--muted);
-      user-select: none;
+      gap: 7px;
+      min-height: 34px;
+      border-radius: 999px;
+      padding: 6px 11px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #e8f1fb;
+      font-size: 12px;
+      font-weight: 800;
     }
-    label.toggle input { width: 16px; height: 16px; }
-    #tokenInput { width: 310px; }
-    #searchInput { min-width: 260px; flex: 1; }
-    #forumFilter, #categoryFilter { width: 180px; }
-    .status {
-      min-height: 22px;
-      color: var(--muted);
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
     }
-    .status.error { color: var(--danger); }
-    .status.ok { color: var(--ok); }
+    .auth {
+      max-width: 560px;
+      margin: 58px auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .auth-head {
+      padding: 24px;
+      background: linear-gradient(135deg, var(--ink), var(--ink-2));
+      color: #fff;
+    }
+    .auth-head h2 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    .auth-head p {
+      margin: 0;
+      color: #c9d8e8;
+      line-height: 1.45;
+    }
+    .auth-body {
+      padding: 22px;
+      display: grid;
+      gap: 12px;
+    }
+    .auth-body input { width: 100%; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(420px, 0.88fr) minmax(560px, 1.18fr);
+      gap: 18px;
+      padding: 18px;
+    }
+    .panel {
+      min-width: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .panel-title {
+      margin: 0;
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 900;
+    }
+    .search-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 150px 150px 150px auto;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
     .metrics {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 10px;
-      padding: 14px;
-      background: var(--surface-soft);
+      padding: 14px 16px;
       border-bottom: 1px solid var(--line);
+      background: #fff;
     }
     .metric {
+      min-height: 78px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 10px;
-      background: #fff;
+      padding: 12px;
+      background:
+        linear-gradient(135deg, rgba(251, 219, 36, 0.16), transparent 70%),
+        var(--surface-2);
     }
     .metric-value {
       display: block;
-      font-size: 20px;
-      font-weight: 800;
-      color: var(--brand);
-      margin-bottom: 3px;
+      color: var(--ink);
+      font-size: 23px;
+      font-weight: 900;
+      line-height: 1;
+      margin-bottom: 8px;
     }
     .metric-label {
       color: var(--muted);
       font-size: 12px;
+      font-weight: 700;
+    }
+    .status {
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .status.error { color: var(--danger); }
+    .status.ok { color: var(--ok); }
+    .table-wrap {
+      max-height: calc(100vh - 324px);
+      min-height: 360px;
+      overflow: auto;
     }
     table {
       width: 100%;
@@ -199,37 +292,81 @@ _HTML_TEMPLATE = """
     }
     th, td {
       border-bottom: 1px solid var(--line);
-      padding: 10px 12px;
+      padding: 11px 12px;
       vertical-align: top;
       text-align: left;
       word-break: break-word;
     }
     th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #f2f6fa;
       color: var(--muted);
       font-size: 12px;
-      font-weight: 800;
-      background: var(--surface-soft);
+      font-weight: 900;
     }
     tbody tr { cursor: pointer; }
-    tr:hover td { background: #f2fbfd; }
+    tbody tr:hover td { background: #f5fbfc; }
     tr.selected td {
       background: var(--accent-soft);
-      border-bottom-color: #bde8ee;
+      border-bottom-color: #bce5ec;
     }
     .mono {
-      font-family: Consolas, monospace;
+      font-family: Consolas, "Courier New", monospace;
       font-size: 12px;
     }
     .muted { color: var(--muted); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: var(--accent-soft);
+      color: var(--accent-2);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .badge.status-draft {
+      background: #fff8db;
+      color: #8a6500;
+    }
+    .badge.status-archived {
+      background: #f1f5f9;
+      color: #64748b;
+    }
+    .editor-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .editor-body {
+      padding: 16px;
+    }
+    .field-grid {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 10px 12px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .detail-title {
+      margin: 0 0 14px;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 900;
+    }
     #textClean {
       width: 100%;
-      min-height: 320px;
+      min-height: 360px;
       resize: vertical;
-      line-height: 1.5;
+      line-height: 1.55;
       font-size: 15px;
     }
     pre {
-      max-height: 320px;
+      max-height: 300px;
       overflow: auto;
       margin: 14px 0 0;
       background: #07152a;
@@ -238,58 +375,82 @@ _HTML_TEMPLATE = """
       border-radius: 8px;
       white-space: pre-wrap;
       word-break: break-word;
+      font-size: 12px;
     }
-    .field-grid {
-      display: grid;
-      grid-template-columns: 120px 1fr;
-      gap: 9px 12px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .detail-title {
-      margin: 0 0 12px;
-      color: var(--brand);
-      font-size: 17px;
-      font-weight: 800;
-    }
-    .badge {
+    .toggle {
       display: inline-flex;
       align-items: center;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      padding: 4px 9px;
-      font-size: 12px;
-      font-weight: 800;
+      gap: 8px;
+      color: var(--muted);
+      font-weight: 700;
+      user-select: none;
     }
-    @media (max-width: 1060px) {
-      main { grid-template-columns: 1fr; }
-      header { align-items: flex-start; flex-direction: column; }
-      .header-actions { justify-content: flex-start; }
-      #tokenInput { width: min(100%, 360px); }
-      .metrics { grid-template-columns: 1fr; }
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      min-height: 16px;
+    }
+    .hidden { display: none !important; }
+    @media (max-width: 1180px) {
+      .layout { grid-template-columns: 1fr; }
+      .table-wrap { max-height: none; }
+      .search-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 720px) {
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .top-actions { justify-content: flex-start; }
+      .brand { min-width: 0; align-items: flex-start; }
+      .logo-mark { width: 150px; }
+      .logo-mark img { width: 128px; }
+      .layout { padding: 10px; }
+      .search-grid, .metrics, .field-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <header>
+  <header class="topbar">
     <div class="brand">
-      <img src="__LOGO_DATA_URI__" alt="Импульс кода">
-      <div class="brand-title">
+      <div class="logo-mark">
+        <img src="__LOGO_DATA_URI__" alt="Импульс кода">
+      </div>
+      <div class="brand-copy">
         <h1>Админка знаний</h1>
-        <span class="subtitle">RAG-корпус Росмолодёжи · Knowledge Base Admin</span>
+        <span class="subtitle">RAG-корпус Росмолодёжи · правка чанков · live reindex</span>
       </div>
     </div>
-    <div class="header-actions">
-      <input id="tokenInput" type="password" autocomplete="off" placeholder="ADMIN_AUTH_TOKEN">
-      <button id="saveTokenButton" type="button">Сохранить токен</button>
+    <div class="top-actions">
+      <span class="status-pill">
+        <span class="status-dot"></span>
+        <span id="authState">проверка доступа</span>
+      </span>
       <button id="validateButton" class="secondary" type="button">Validation</button>
       <button id="qualityButton" class="secondary" type="button">Quality check</button>
+      <button id="logoutButton" class="danger" type="button">Выйти</button>
     </div>
   </header>
-  <main>
-    <section>
-      <div class="toolbar">
+
+  <section id="authPanel" class="auth hidden">
+    <div class="auth-head">
+      <h2>Вход в админку</h2>
+      <p>
+        Токен вводится один раз. Сервер сохранит безопасную HttpOnly-cookie,
+        сам токен не попадёт в HTML и не будет храниться в JavaScript.
+      </p>
+    </div>
+    <div class="auth-body">
+      <input id="tokenInput" type="password" autocomplete="off" placeholder="ADMIN_AUTH_TOKEN">
+      <button id="loginButton" class="primary" type="button">Войти</button>
+      <div id="authStatus" class="status"></div>
+    </div>
+  </section>
+
+  <main id="appShell" class="layout hidden">
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">База знаний</h2>
+        <div id="listStatus" class="status"></div>
+      </div>
+      <div class="search-grid">
         <input id="searchInput" type="search" placeholder="Поиск: Амур, проезд, сертификат">
         <select id="statusFilter">
           <option value="">Все статусы</option>
@@ -297,14 +458,14 @@ _HTML_TEMPLATE = """
           <option value="draft">draft</option>
           <option value="archived">archived</option>
         </select>
-        <input id="forumFilter" type="text" placeholder="forum">
-        <input id="categoryFilter" type="text" placeholder="category">
+        <input id="forumFilter" type="text" placeholder="Форум">
+        <input id="categoryFilter" type="text" placeholder="Категория">
         <button id="loadButton" type="button">Найти</button>
       </div>
       <div class="metrics">
         <div class="metric">
           <span id="metricFound" class="metric-value">-</span>
-          <span class="metric-label">найдено</span>
+          <span class="metric-label">найдено по фильтру</span>
         </div>
         <div class="metric">
           <span id="metricValid" class="metric-value">-</span>
@@ -315,39 +476,44 @@ _HTML_TEMPLATE = """
           <span class="metric-label">quality report</span>
         </div>
       </div>
-      <div class="stack">
-        <div id="listStatus" class="status"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 27%;">chunk_id</th>
+              <th style="width: 13%;">status</th>
+              <th style="width: 18%;">forum</th>
+              <th>preview</th>
+            </tr>
+          </thead>
+          <tbody id="chunksTable"></tbody>
+        </table>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th style="width: 28%;">chunk_id</th>
-            <th style="width: 14%;">status</th>
-            <th style="width: 18%;">forum</th>
-            <th>preview</th>
-          </tr>
-        </thead>
-        <tbody id="chunksTable"></tbody>
-      </table>
     </section>
-    <section>
-      <div class="actions">
-        <button id="saveChunkButton" type="button" disabled>
-          Сохранить и обновить индекс
-        </button>
-        <button id="reindexButton" class="secondary" type="button" disabled>
-          Обновить индекс
-        </button>
-        <button id="relatedCasesButton" class="ghost" type="button" disabled>
-          Eval cases
-        </button>
-        <label class="toggle">
-          <input id="reindexToggle" type="checkbox" checked>
-          сразу обновлять RAG
-        </label>
-        <span id="detailStatus" class="status"></span>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Редактор чанка</h2>
+        <div class="editor-actions">
+          <button id="saveChunkButton" class="primary" type="button" disabled>
+            Сохранить и обновить RAG
+          </button>
+          <button id="reindexButton" class="secondary" type="button" disabled>
+            Только reindex
+          </button>
+          <button id="relatedCasesButton" class="secondary" type="button" disabled>
+            Eval cases
+          </button>
+        </div>
       </div>
-      <div class="stack">
+      <div class="editor-body">
+        <div class="editor-actions" style="margin-bottom: 12px;">
+          <label class="toggle">
+            <input id="reindexToggle" type="checkbox" checked>
+            сразу обновлять Qdrant и сбрасывать semantic cache
+          </label>
+          <span id="detailStatus" class="status"></span>
+        </div>
         <h2 id="detailTitle" class="detail-title muted">Чанк не выбран</h2>
         <div class="field-grid">
           <label for="chunkStatus">Статус</label>
@@ -363,24 +529,19 @@ _HTML_TEMPLATE = """
           <div class="muted">Source</div>
           <div id="chunkSource" class="mono"></div>
         </div>
-        <textarea id="textClean" disabled></textarea>
+        <textarea
+          id="textClean"
+          disabled
+          placeholder="Выбери чанк слева, чтобы редактировать текст ответа."
+        ></textarea>
         <pre id="reportOutput"></pre>
       </div>
     </section>
   </main>
+
   <script>
     let selectedChunkId = "";
-    const tokenInput = document.getElementById("tokenInput");
-    tokenInput.value = sessionStorage.getItem("adminToken") || "";
 
-    function token() {
-      return tokenInput.value.trim();
-    }
-    function headers(json = true) {
-      const result = {"X-Admin-Token": token()};
-      if (json) result["Content-Type"] = "application/json";
-      return result;
-    }
     function setStatus(id, message, cls = "") {
       const el = document.getElementById(id);
       el.className = "status " + cls;
@@ -389,10 +550,21 @@ _HTML_TEMPLATE = """
     function setMetric(id, value) {
       document.getElementById(id).textContent = String(value);
     }
+    function setAuthenticated(isAuthenticated) {
+      document.getElementById("authPanel").classList.toggle("hidden", isAuthenticated);
+      document.getElementById("appShell").classList.toggle("hidden", !isAuthenticated);
+      document.getElementById("authState").textContent = isAuthenticated
+        ? "доступ открыт"
+        : "нужен вход";
+    }
     async function requestJson(path, options = {}) {
       const response = await fetch(path, {
+        credentials: "same-origin",
         ...options,
-        headers: {...headers(options.body !== undefined), ...(options.headers || {})},
+        headers: {
+          ...(options.body !== undefined ? {"Content-Type": "application/json"} : {}),
+          ...(options.headers || {}),
+        },
       });
       const text = await response.text();
       let payload = {};
@@ -400,6 +572,9 @@ _HTML_TEMPLATE = """
         try { payload = JSON.parse(text); } catch { payload = {raw: text}; }
       }
       if (!response.ok) {
+        if (response.status === 401) {
+          setAuthenticated(false);
+        }
         const detail = payload.detail || payload.raw || response.statusText;
         throw new Error(String(detail));
       }
@@ -412,6 +587,18 @@ _HTML_TEMPLATE = """
       }
       return search.toString();
     }
+    function badgeClass(status) {
+      if (status === "draft") return "badge status-draft";
+      if (status === "archived") return "badge status-archived";
+      return "badge";
+    }
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
     function renderRows(items) {
       const tbody = document.getElementById("chunksTable");
       tbody.innerHTML = "";
@@ -419,14 +606,41 @@ _HTML_TEMPLATE = """
         const tr = document.createElement("tr");
         tr.dataset.chunkId = item.chunk_id;
         tr.innerHTML = `
-          <td class="mono">${item.chunk_id || ""}</td>
-          <td><span class="badge">${item.status || ""}</span></td>
-          <td>${item.forum_normalized || ""}</td>
-          <td>${item.text_preview || ""}</td>
+          <td class="mono">${escapeHtml(item.chunk_id)}</td>
+          <td><span class="${badgeClass(item.status)}">${escapeHtml(item.status)}</span></td>
+          <td>${escapeHtml(item.forum_normalized)}</td>
+          <td>${escapeHtml(item.text_preview)}</td>
         `;
         tr.addEventListener("click", () => loadChunk(item.chunk_id, tr));
         tbody.appendChild(tr);
       }
+    }
+    async function login() {
+      const token = document.getElementById("tokenInput").value.trim();
+      if (!token) {
+        setStatus("authStatus", "Вставь ADMIN_AUTH_TOKEN.", "error");
+        return;
+      }
+      try {
+        setStatus("authStatus", "Проверяю доступ...");
+        await requestJson("/admin/kb/login", {
+          method: "POST",
+          body: JSON.stringify({token}),
+        });
+        document.getElementById("tokenInput").value = "";
+        setAuthenticated(true);
+        await boot();
+      } catch (error) {
+        setStatus("authStatus", error.message, "error");
+      }
+    }
+    async function logout() {
+      try {
+        await requestJson("/admin/kb/logout", {method: "POST", body: "{}"});
+      } catch {
+        // Ignore logout transport errors; local UI still must close the session state.
+      }
+      setAuthenticated(false);
     }
     async function loadChunks() {
       try {
@@ -449,9 +663,7 @@ _HTML_TEMPLATE = """
     async function loadChunk(chunkId, row) {
       try {
         selectedChunkId = chunkId;
-        document.querySelectorAll("tr.selected").forEach((el) => {
-          el.classList.remove("selected");
-        });
+        document.querySelectorAll("tr.selected").forEach((el) => el.classList.remove("selected"));
         if (row) row.classList.add("selected");
         setStatus("detailStatus", "Загрузка...");
         const data = await requestJson(
@@ -462,7 +674,7 @@ _HTML_TEMPLATE = """
         document.getElementById("chunkStatus").value = data.status || "published";
         document.getElementById("chunkStatus").disabled = false;
         document.getElementById("chunkForum").textContent = data.forum_normalized || "";
-        document.getElementById("chunkTopic").textContent = data.topic || "";
+        document.getElementById("chunkTopic").textContent = data.topic || data.intent_name || "";
         document.getElementById("chunkSource").textContent = data.source_type || "";
         document.getElementById("textClean").value = data.text_clean || data.text || "";
         document.getElementById("textClean").disabled = false;
@@ -491,7 +703,7 @@ _HTML_TEMPLATE = """
           }
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        const reindex = data.reindex && data.reindex.ok ? " RAG обновлён." : "";
+        const reindex = data.reindex && data.reindex.ok ? " Qdrant обновлён, cache сброшен." : "";
         setStatus("detailStatus", "Сохранено." + reindex, "ok");
         await loadChunks();
       } catch (error) {
@@ -507,7 +719,7 @@ _HTML_TEMPLATE = """
           {method: "POST", body: "{}"}
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        setStatus("detailStatus", "RAG-индекс обновлён", "ok");
+        setStatus("detailStatus", "Qdrant обновлён, semantic cache сброшен", "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -550,17 +762,31 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", error.message, "error");
       }
     }
+    async function boot() {
+      setAuthenticated(true);
+      await Promise.allSettled([loadChunks(), showValidation(), showQualityCheck()]);
+    }
+    async function checkSession() {
+      try {
+        await requestJson("/admin/kb/validate", {method: "POST", body: "{}"});
+        await boot();
+      } catch {
+        setAuthenticated(false);
+      }
+    }
 
-    document.getElementById("saveTokenButton").addEventListener("click", () => {
-      sessionStorage.setItem("adminToken", token());
-      setStatus("listStatus", "Токен сохранён", "ok");
+    document.getElementById("loginButton").addEventListener("click", login);
+    document.getElementById("tokenInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") login();
     });
+    document.getElementById("logoutButton").addEventListener("click", logout);
     document.getElementById("loadButton").addEventListener("click", loadChunks);
     document.getElementById("saveChunkButton").addEventListener("click", saveChunk);
     document.getElementById("reindexButton").addEventListener("click", reindexChunk);
     document.getElementById("relatedCasesButton").addEventListener("click", showRelatedCases);
     document.getElementById("validateButton").addEventListener("click", showValidation);
     document.getElementById("qualityButton").addEventListener("click", showQualityCheck);
+    checkSession();
   </script>
 </body>
 </html>

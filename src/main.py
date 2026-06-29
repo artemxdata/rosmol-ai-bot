@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 from contextlib import asynccontextmanager
 from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time
 from typing import Any
 
 import asyncpg
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
@@ -85,6 +87,9 @@ vk_adapter = VKAdapter()
 max_adapter = MaxAdapter()
 hde_adapter = HDEAdapter()
 
+ADMIN_SESSION_COOKIE = "rosmol_admin_session"
+ADMIN_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+
 
 class AskPayload(BaseModel):
     user_id: str = Field(default="local", min_length=1, max_length=200)
@@ -105,6 +110,10 @@ class AdminChunkUpdate(BaseModel):
     status: str | None = None
     text_clean: str | None = Field(default=None, max_length=20000)
     reindex: bool = True
+
+
+class AdminLoginPayload(BaseModel):
+    token: str = Field(min_length=1, max_length=10000)
 
 
 class AdminQualityCheckPayload(BaseModel):
@@ -171,6 +180,35 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
 async def admin_kb_page() -> HTMLResponse:
     _require_admin_enabled()
     return HTMLResponse(content=ui.ADMIN_KB_HTML)
+
+
+@app.post("/admin/kb/login")
+async def admin_kb_login(
+    payload: AdminLoginPayload,
+    request: Request,
+    response: Response,
+) -> dict[str, bool]:
+    expected = _require_admin_enabled()
+    if not compare_digest(payload.token.strip(), expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        _make_admin_session_cookie(expected),
+        max_age=ADMIN_SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=_is_https_request(request),
+        path="/admin/kb",
+    )
+    return {"ok": True}
+
+
+@app.post("/admin/kb/logout")
+async def admin_kb_logout(response: Response) -> dict[str, bool]:
+    _require_admin_enabled()
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path="/admin/kb")
+    return {"ok": True}
 
 
 @app.get("/admin/kb/chunks")
@@ -459,6 +497,8 @@ def _require_optional_secret(
 
 def _require_admin_secret(request: Request) -> None:
     expected = _require_admin_enabled()
+    if _has_valid_admin_session(request, expected):
+        return
     _require_optional_secret(request, expected, "x-admin-token")
 
 
@@ -467,6 +507,43 @@ def _require_admin_enabled() -> str:
     if not expected:
         raise HTTPException(status_code=503, detail="Admin API is disabled")
     return expected
+
+
+def _make_admin_session_cookie(secret: str) -> str:
+    issued_at = str(int(time()))
+    signature = _admin_session_signature(secret, issued_at)
+    return f"{issued_at}.{signature}"
+
+
+def _has_valid_admin_session(request: Request, secret: str) -> bool:
+    raw_cookie = (request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+    if not raw_cookie or "." not in raw_cookie:
+        return False
+
+    issued_at, provided_signature = raw_cookie.split(".", 1)
+    try:
+        issued_at_int = int(issued_at)
+    except ValueError:
+        return False
+
+    if issued_at_int < int(time()) - ADMIN_SESSION_TTL_SECONDS:
+        return False
+
+    expected_signature = _admin_session_signature(secret, issued_at)
+    return compare_digest(provided_signature, expected_signature)
+
+
+def _admin_session_signature(secret: str, issued_at: str) -> str:
+    return hmac.new(
+        key=secret.encode("utf-8"),
+        msg=issued_at.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+
+
+def _is_https_request(request: Request) -> bool:
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").strip().lower()
+    return request.url.scheme == "https" or forwarded_proto == "https"
 
 
 def _kb_seed_path() -> Path:

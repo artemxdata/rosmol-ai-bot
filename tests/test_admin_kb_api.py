@@ -187,6 +187,54 @@ async def test_admin_kb_page_requires_enabled_admin_token(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_login_sets_session_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        unauthorized = await client.get("/admin/kb/chunks")
+        login = await client.post("/admin/kb/login", json={"token": "admin-secret"})
+        authorized = await client.get("/admin/kb/chunks")
+
+    assert unauthorized.status_code == 401
+    assert login.status_code == 200
+    assert login.json() == {"ok": True}
+    assert "rosmol_admin_session" in client.cookies
+    assert authorized.status_code == 200
+    assert authorized.json()["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_login_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        login = await client.post("/admin/kb/login", json={"token": "wrong-secret"})
+        authorized = await client.get("/admin/kb/chunks")
+
+    assert login.status_code == 401
+    assert "rosmol_admin_session" not in client.cookies
+    assert authorized.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_api_updates_chunk_status_and_text(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
