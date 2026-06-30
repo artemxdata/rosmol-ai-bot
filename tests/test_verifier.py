@@ -10,9 +10,11 @@ class JudgeLLM:
     def __init__(self, payload: str) -> None:
         self.payload = payload
         self.calls = 0
+        self.requests: list[dict] = []
 
     async def generate(self, **kwargs) -> str:
         self.calls += 1
+        self.requests.append(kwargs)
         return self.payload
 
 
@@ -340,6 +342,71 @@ async def test_verifier_judges_llm_generation_even_with_high_confidence() -> Non
     assert result["verification"].has_hallucination is False
     assert result["verification"].triggered_llm_judge is True
     assert result["verifier_triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_verifier_skips_judge_for_high_confidence_official_llm_answer() -> None:
+    llm = JudgeLLM('{"has_hallucination": true, "confidence": 0.0}')
+
+    result = await verify(
+        {
+            "generated_response": "Ответ по официальному источнику. [src:ctx_1]",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "cited_sources": ["ctx_1"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="ctx_1",
+                    text="Официальный источник.",
+                    metadata={"source_type": "xlsx"},
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["verification"].has_hallucination is False
+    assert result["verification"].triggered_llm_judge is False
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_judge_uses_only_cited_sources() -> None:
+    llm = JudgeLLM('{"has_hallucination": false, "confidence": 0.91, "details": "grounded"}')
+
+    result = await verify(
+        {
+            "generated_response": "Answer from cited source. [src:ctx_1]",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "cited_sources": ["ctx_1"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="ctx_1",
+                    text="Cited source text.",
+                    metadata={},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="ctx_2",
+                    text="Uncited source text should not be sent to judge.",
+                    metadata={},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert llm.calls == 1
+    assert llm.requests[0]["max_tokens"] == 200
+    assert "[src:ctx_1]" in llm.requests[0]["user"]
+    assert "Cited source text." in llm.requests[0]["user"]
+    assert "ctx_2" not in llm.requests[0]["user"]
+    assert "Uncited source text" not in llm.requests[0]["user"]
 
 
 @pytest.mark.asyncio

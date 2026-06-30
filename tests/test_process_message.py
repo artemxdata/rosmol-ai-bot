@@ -266,6 +266,32 @@ async def test_process_message_safety_escalates_before_graph(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "На площадке ко мне применили силу, помоги решить вопрос",
+        "Ко мне пристают на площадке, я не чувствую себя в безопасности",
+    ],
+)
+async def test_process_message_abuse_safety_escalates_before_graph(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+    text: str,
+) -> None:
+    app = _app()
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Передаю обращение специалисту."
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "safety_abuse"
+    assert captured_logs[0]["message_masked"] == text
+    assert app.state.sessions.appended == []
+    assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
 async def test_process_message_operator_request_escalates_before_cache_and_graph(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],

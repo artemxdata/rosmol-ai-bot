@@ -100,3 +100,63 @@ def test_cloud_ru_client_summarizes_unauthorized() -> None:
 
     assert CloudRuLLMClient._summarize_exception(exc) == "Unauthorized"
     assert CloudRuLLMClient._is_retryable(exc) is False
+
+
+def test_cloud_ru_client_uses_latency_guardrail_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.llm.client.get_settings",
+        lambda: _settings(
+            cloud_ru_request_timeout_seconds=7,
+            cloud_ru_max_retries=1,
+        ),
+    )
+
+    client = CloudRuLLMClient(api_key="cloud-key")
+
+    assert client.timeout == 7
+    assert client.max_retries == 1
+
+
+@pytest.mark.asyncio
+async def test_cloud_ru_client_respects_retry_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    request = httpx.Request("POST", "https://foundation-models.api.cloud.ru/v1/chat/completions")
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, *args, **kwargs) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(503, request=request, text="temporary failure")
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "src.llm.client.get_settings",
+        lambda: _settings(
+            cloud_ru_request_timeout_seconds=7,
+            cloud_ru_max_retries=2,
+        ),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("src.llm.client.asyncio.sleep", fake_sleep)
+
+    client = CloudRuLLMClient(api_key="cloud-key")
+
+    with pytest.raises(RuntimeError, match="Cloud.ru LLM request failed after retries"):
+        await client.generate(model="model", system="system", user="user")
+
+    assert calls == 2

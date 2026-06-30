@@ -16,14 +16,26 @@ class CloudRuLLMClient:
         self,
         api_key: str | None = None,
         chat_completions_url: str | None = None,
-        timeout: float = 30.0,
+        timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> None:
         settings = get_settings()
         self.api_key = self._normalize_secret(api_key or settings.cloud_ru_api_key)
         self.chat_completions_url = self._normalize_url(
             chat_completions_url or settings.cloud_ru_chat_completions_url
         )
-        self.timeout = timeout
+        self.timeout = float(
+            timeout
+            if timeout is not None
+            else getattr(settings, "cloud_ru_request_timeout_seconds", 12.0)
+        )
+        self.max_retries = int(
+            max_retries
+            if max_retries is not None
+            else getattr(settings, "cloud_ru_max_retries", 2)
+        )
+        if self.max_retries < 1:
+            self.max_retries = 1
 
     async def generate(
         self,
@@ -38,7 +50,7 @@ class CloudRuLLMClient:
             raise RuntimeError("CLOUD_RU_API_KEY is not configured")
 
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(self.max_retries):
             try:
                 return await self._generate_once(
                     model=model,
@@ -50,8 +62,15 @@ class CloudRuLLMClient:
                 )
             except Exception as exc:
                 last_error = exc
-                if not self._is_retryable(exc) or attempt == 2:
+                if not self._is_retryable(exc) or attempt == self.max_retries - 1:
                     break
+                logger.warning(
+                    "cloud_ru_llm_retry",
+                    model=model,
+                    attempt=attempt + 1,
+                    max_retries=self.max_retries,
+                    error=self._summarize_exception(exc),
+                )
                 await asyncio.sleep(0.5 * (2**attempt))
         raise RuntimeError(
             f"Cloud.ru LLM request failed after retries: {self._summarize_exception(last_error)}"

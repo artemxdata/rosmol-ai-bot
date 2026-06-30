@@ -1926,6 +1926,78 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
 
 
 @pytest.mark.asyncio
+async def test_rerank_uses_exact_topic_fast_path_for_trusted_non_forum_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="fgais_registration",
+            text="Пройти регистрацию в ФГАИС можно на странице регистрации.",
+            metadata={
+                "category": "платформа_фгаис",
+                "topic": "kak_zaregistrirovatsya_na_fgais",
+                "source_type": "xlsx",
+            },
+            score=0.08,
+        ),
+        Chunk(
+            chunk_id="forum_registration",
+            text="Подать заявку на конкретный форум можно после открытия регистрации.",
+            metadata={
+                "category": "форумы",
+                "forum_normalized": "Амур",
+                "topic": "kak_zaregistrirovatsya_na_fgais",
+                "source_type": "xlsx",
+            },
+            score=0.7,
+        ),
+        Chunk(
+            chunk_id="unrelated",
+            text="Другой текст.",
+            metadata={
+                "category": "платформа_фгаис",
+                "topic": "drugoy_vopros",
+                "source_type": "xlsx",
+            },
+            score=0.9,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": (
+                "Меня зовут [ИМЯ], телефон [ТЕЛЕФОН]. "
+                "Как зарегистрироваться на форум?"
+            ),
+            "analyzer_mode": "deterministic",
+            "analysis": QueryAnalysis(
+                category="платформа_фгаис",
+                questions=[
+                    Question(
+                        text="Как зарегистрироваться в ФГАИС?",
+                        category="платформа_фгаис",
+                        topic="kak_zaregistrirovatsya_na_fgais",
+                    )
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == ["fgais_registration"]
+    assert result["max_confidence"] == 0.7
+
+
+@pytest.mark.asyncio
 async def test_rerank_pins_original_exact_match_for_multi_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

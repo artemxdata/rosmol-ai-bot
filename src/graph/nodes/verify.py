@@ -17,6 +17,7 @@ from src.models import Question, ScoredChunk, VerificationResult
 
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
+OFFICIAL_SOURCE_TYPES = {"xlsx", "docx"}
 NO_QUESTION_RE = re.compile(
     r"(пока\s+нет\s+вопрос|задайте\s+(?:ваш\s+)?вопрос|готов\s+помочь.*задайте)",
     flags=re.IGNORECASE,
@@ -342,12 +343,13 @@ async def verify(state: BotState) -> dict:
 
     try:
         model = select_judge_model()
+        judge_chunks = _source_chunks_for_response(response, state, chunks)
         judge_raw = await state["llm_client"].generate(
             model=model,
             system=LLM_JUDGE_SYSTEM,
-            user=build_judge_user(response, chunks),
+            user=build_judge_user(response, judge_chunks),
             response_format="json",
-            max_tokens=500,
+            max_tokens=200,
         )
         data = parse_llm_json(judge_raw)
         result = VerificationResult.model_validate({**data, "triggered_llm_judge": True})
@@ -789,10 +791,32 @@ def _normalize(text: str) -> str:
 
 def _can_skip_llm_judge(state: BotState, confidence: float) -> bool:
     if state.get("generator_model") != "source_chunk":
-        return False
+        return _can_skip_official_llm_judge(state, confidence)
     return confidence >= get_settings().reranker_threshold_high
+
+
+def _can_skip_official_llm_judge(state: BotState, confidence: float) -> bool:
+    if confidence < get_settings().reranker_threshold_high:
+        return False
+    model = state.get("generator_model")
+    if not model or model in {"source_chunk", "source_only"}:
+        return False
+    cited_sources = set(state.get("cited_sources") or SOURCE_RE.findall(
+        str(state.get("generated_response") or "")
+    ))
+    if not cited_sources:
+        return False
+    chunks = state.get("reranked_chunks", [])
+    cited_chunks = [chunk for chunk in chunks if chunk.chunk_id in cited_sources]
+    if len(cited_chunks) != len(cited_sources):
+        return False
+    return all(_source_type(chunk) in OFFICIAL_SOURCE_TYPES for chunk in cited_chunks)
 
 
 def _requires_source_citations(state: BotState) -> bool:
     model = state.get("generator_model")
     return bool(model and model not in {"source_chunk", "source_only"})
+
+
+def _source_type(chunk: ScoredChunk) -> str:
+    return str((chunk.metadata or {}).get("source_type") or "").strip().casefold()

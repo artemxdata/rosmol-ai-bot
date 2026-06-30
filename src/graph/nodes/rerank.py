@@ -194,6 +194,17 @@ def _rerank_for_state(
         if analysis
         else []
     )
+    exact_topic_candidates = _exact_topic_fast_path_candidates(
+        state,
+        analysis,
+        questions,
+        scoped_chunks,
+    )
+    if exact_topic_candidates:
+        return _boost_source_only_confidence(
+            [_source_candidate(chunk) for chunk in exact_topic_candidates]
+        )[:MAX_RERANKED_CHUNKS]
+
     if len(questions) <= 1:
         question = questions[0] if questions else None
         rerank_query = question.text.strip() if question else query
@@ -515,6 +526,81 @@ def _source_only_fast_path_allowed(analysis: Any, scoped_chunks: list[Chunk]) ->
     if not forum or category != "\u0444\u043e\u0440\u0443\u043c\u044b":
         return False
     return any(_chunk_matches_exact_forum(chunk, forum) for chunk in scoped_chunks)
+
+
+def _exact_topic_fast_path_candidates(
+    state: BotState,
+    analysis: Any,
+    questions: list[Question],
+    scoped_chunks: list[Chunk],
+) -> list[Chunk]:
+    if not _has_trusted_topic_analysis(state) or not analysis or not questions:
+        return []
+    if any(not str(question.topic or "").strip() for question in questions):
+        return []
+
+    selected: list[Chunk] = []
+    seen: set[str] = set()
+    for question in questions:
+        matches = [
+            chunk
+            for chunk in scoped_chunks
+            if _chunk_matches_exact_question_topic(analysis, question, chunk)
+        ]
+        if not matches:
+            return []
+        candidate = _best_exact_topic_candidate(question.text, matches)
+        if candidate.chunk_id in seen:
+            continue
+        selected.append(candidate)
+        seen.add(candidate.chunk_id)
+    return selected
+
+
+def _has_trusted_topic_analysis(state: BotState) -> bool:
+    return state.get("analyzer_mode") == "deterministic" or bool(
+        state.get("analyzer_fallback")
+    )
+
+
+def _chunk_matches_exact_question_topic(
+    analysis: Any,
+    question: Question,
+    chunk: Chunk,
+) -> bool:
+    metadata = chunk.metadata or {}
+    if str(metadata.get("source_type") or "").strip() not in {"xlsx", "docx"}:
+        return False
+    if str(metadata.get("topic") or "").strip() != str(question.topic or "").strip():
+        return False
+
+    category = str(question.category or getattr(analysis, "category", None) or "").strip()
+    chunk_category = str(metadata.get("category") or "").strip()
+    if category and chunk_category != category:
+        return False
+
+    forum = str(
+        question.forum_normalized or getattr(analysis, "forum_normalized", None) or ""
+    ).strip()
+    chunk_forum = str(metadata.get("forum_normalized") or "").strip()
+    if forum:
+        return chunk_forum == forum
+    if category == "форумы":
+        return False
+    return not chunk_forum
+
+
+def _best_exact_topic_candidate(question: str, matches: list[Chunk]) -> Chunk:
+    ranked = _candidate_chunks_for_question(question, matches, 1)
+    if ranked:
+        return ranked[0]
+    return max(
+        matches,
+        key=lambda chunk: (
+            _source_reliability_score(chunk),
+            float(chunk.score or 0.0),
+        ),
+    )
 
 
 def _chunk_matches_exact_forum(chunk: Chunk, forum: str) -> bool:

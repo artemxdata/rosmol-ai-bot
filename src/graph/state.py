@@ -18,6 +18,8 @@ class BotState(TypedDict, total=False):
     routing_hint: dict[str, Any]
     session: Session
     analysis: QueryAnalysis
+    analyzer_mode: str
+    analyzer_fallback: bool
     metadata_filter: dict[str, Any]
     retrieved_chunks: list[Chunk]
     reranked_chunks: list[ScoredChunk]

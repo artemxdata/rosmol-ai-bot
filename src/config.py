@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     cloud_ru_model_simple_output_price_rub_per_million: float = Field(default=0.0, ge=0)
     cloud_ru_model_complex_input_price_rub_per_million: float = Field(default=569.34, ge=0)
     cloud_ru_model_complex_output_price_rub_per_million: float = Field(default=569.34, ge=0)
+    cloud_ru_request_timeout_seconds: float = Field(default=12.0, ge=1)
+    cloud_ru_max_retries: int = Field(default=2, ge=1, le=5)
 
     postgres_dsn: str = "postgresql://rosmol:rosmol@localhost:5432/rosmol_ai_bot"
     redis_url: str = "redis://localhost:6379/0"

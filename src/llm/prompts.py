@@ -68,9 +68,10 @@ def build_generator_user(
 ) -> str:
     sources = []
     for idx, chunk in enumerate(chunks, start=1):
+        metadata = _compact_source_metadata(chunk.metadata)
         sources.append(
             f"[src:{chunk.chunk_id}] Источник {idx}\n"
-            f"Метаданные: {chunk.metadata}\n"
+            f"Метаданные: {metadata}\n"
             f"Текст: {chunk.text}"
         )
     return "\n\n".join(
@@ -96,3 +97,19 @@ def build_judge_user(response: str, sources: list[Chunk]) -> str:
             "\n\n".join(f"[src:{chunk.chunk_id}] {chunk.text}" for chunk in sources),
         ]
     )
+
+
+def _compact_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = (
+        "forum_normalized",
+        "category",
+        "topic",
+        "source_type",
+        "source_category",
+        "intent_name",
+    )
+    return {
+        key: value
+        for key in allowed_keys
+        if (value := metadata.get(key)) not in (None, "", [], {})
+    }
