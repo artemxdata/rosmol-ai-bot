@@ -1744,6 +1744,85 @@ async def test_retrieve_keeps_broad_attempts_for_multi_aspect_forum_hit() -> Non
 
 
 @pytest.mark.asyncio
+async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> None:
+    class ExactTopicRetriever:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.calls.append((query, filters, top_k))
+            if filters == {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "schedule",
+            }:
+                return [
+                    Chunk(
+                        chunk_id="schedule_exact",
+                        text="Schedule source.",
+                        metadata={"chunk_id": "schedule_exact"},
+                        score=0.9,
+                    )
+                ]
+            if filters == {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "documents",
+            }:
+                return [
+                    Chunk(
+                        chunk_id="documents_exact",
+                        text="Documents source.",
+                        metadata={"chunk_id": "documents_exact"},
+                        score=0.9,
+                    )
+                ]
+            if filters == {"forum_normalized": "Forum A"}:
+                return [
+                    Chunk(
+                        chunk_id="broad_extra",
+                        text="Broad fallback source.",
+                        metadata={"chunk_id": "broad_extra"},
+                        score=0.8,
+                    )
+                ]
+            return []
+
+    retriever = ExactTopicRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(text="Where is the schedule?", topic="schedule"),
+                    Question(text="Which documents are needed?", topic="documents"),
+                ],
+            ),
+            "message_masked": "Forum A: schedule and documents.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "schedule_exact",
+        "documents_exact",
+    ]
+    assert retriever.calls == [
+        (
+            "Where is the schedule?",
+            {"forum_normalized": "Forum A", "category": "forums", "topic": "schedule"},
+            10,
+        ),
+        (
+            "Which documents are needed?",
+            {"forum_normalized": "Forum A", "category": "forums", "topic": "documents"},
+            10,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_retrieve_keeps_broad_attempts_for_collapsed_multi_aspect_message() -> None:
     retriever = MultiAspectDenseForumRetriever()
     result = await retrieve(
@@ -3653,6 +3732,10 @@ async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citati
             ),
             "message_masked": (
                 "Больше, чем путешествие: если я еду с семьёй, будет ли питание и трансфер?"
+            ),
+            "contextual_message": (
+                "Больше, чем путешествие: если я еду с семьёй, будет ли питание и трансфер?"
+                " Предыдущий вопрос был про условия участия."
             ),
             "reranked_chunks": [transfer, food],
             "max_confidence": 0.7,
@@ -6404,6 +6487,79 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
 
 
 @pytest.mark.asyncio
+async def test_generate_skips_llm_for_exact_official_topic_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum = "День молодёжи"
+    chunks = [
+        ScoredChunk(
+            chunk_id="registration",
+            text="Зарегистрируйся на День молодёжи через чат-бот в MAX.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "registraciya_na_meropriyatie",
+            },
+            score=0.9,
+            reranker_score=0.8,
+        ),
+        ScoredChunk(
+            chunk_id="program",
+            text="Программа Дня молодёжи будет опубликована ближе к дате события.",
+            metadata={
+                "forum_normalized": forum,
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "programma_i_artisty",
+            },
+            score=0.9,
+            reranker_score=0.8,
+        ),
+    ]
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized=forum,
+                questions=[
+                    Question(
+                        text="Как зарегистрироваться?",
+                        topic="registraciya_na_meropriyatie",
+                        category="форумы",
+                        forum_normalized=forum,
+                    ),
+                    Question(
+                        text="Где посмотреть программу?",
+                        topic="programma_i_artisty",
+                        category="форумы",
+                        forum_normalized=forum,
+                    ),
+                ],
+            ),
+            "message_masked": (
+                "День молодёжи: как зарегистрироваться "
+                "и где программа?"
+            ),
+            "reranked_chunks": chunks,
+            "max_confidence": 0.8,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["registration", "program"]
+    assert "MAX" in result["generated_response"]
+    assert "Программа" in result["generated_response"]
+
+
+@pytest.mark.asyncio
 async def test_generate_selects_source_for_each_multi_aspect_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6526,6 +6682,10 @@ async def test_generate_selects_application_and_decline_sources(
                 ],
             ),
             "message_masked": "Амур: как подать заявку и можно ли потом отказаться?",
+            "contextual_message": (
+                "Амур: как подать заявку и можно ли потом отказаться?"
+                " Предыдущий вопрос был про подтверждение участия."
+            ),
             "reranked_chunks": [application, decline],
             "max_confidence": 0.7,
             "llm_client": llm,

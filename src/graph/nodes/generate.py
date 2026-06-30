@@ -505,6 +505,8 @@ def _should_synthesize_with_llm(
         return False
     if _is_contextual_synthesis_case(state):
         return True
+    if _should_use_extractive_multi_source_answer(analysis, source_chunks):
+        return False
     if _can_answer_from_single_official_source(questions, source_chunks):
         return False
     if analysis.complexity == Complexity.COMPLEX:

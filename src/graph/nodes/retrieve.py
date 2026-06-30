@@ -166,6 +166,14 @@ def _should_continue_filter_attempts(
     allow_strict_forum_stop: bool,
 ) -> bool:
     if (
+        attempt_index == 0
+        and filters.get("topic")
+        and filters.get("forum_normalized")
+        and filters.get("category")
+        and attempt_chunks
+    ):
+        return False
+    if (
         allow_strict_forum_stop
         and attempt_index == 0
         and filters.get("forum_normalized")
@@ -203,6 +211,9 @@ def _questions_with_original_message(
 ) -> list[Question]:
     text = str(message or "").strip()
     if not text:
+        return questions
+
+    if any(question.topic for question in questions):
         return questions
 
     normalized_text = _normalize_question_text(text)
