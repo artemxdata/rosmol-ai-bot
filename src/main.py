@@ -318,7 +318,12 @@ async def admin_update_kb_chunk(
         )
         reindex_result = None
         if payload.reindex:
-            reindex_result = await _admin_reindex_record(request, updated)
+            try:
+                reindex_result = await _admin_reindex_record(request, updated)
+            except HTTPException as exc:
+                reindex_result = _admin_reindex_error(updated, exc)
+            except Exception as exc:
+                reindex_result = _admin_reindex_unexpected_error(updated, exc)
         return {"record": updated, "reindex": reindex_result}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Chunk not found") from exc
@@ -469,8 +474,8 @@ async def _admin_reindex_record(request: Request, record: dict[str, Any]) -> dic
         raise HTTPException(
             status_code=503,
             detail=(
-                "ML runtime is required for immediate reindex. "
-                "Open admin through app-ml or run index-kb."
+                "Для немедленного обновления индекса нужен ML-сервис. "
+                "Открой админку через app-ml или запусти отдельную индексацию."
             ),
         ) from exc
 
@@ -488,6 +493,36 @@ async def _admin_reindex_record(request: Request, record: dict[str, Any]) -> dic
             )
             result["cache_invalidation_warning"] = type(exc).__name__
     return result
+
+
+def _admin_reindex_error(record: dict[str, Any], exc: HTTPException) -> dict[str, Any]:
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    logger.warning(
+        "admin_reindex_after_save_failed",
+        chunk_id=record.get("chunk_id"),
+        status_code=exc.status_code,
+        detail=detail,
+    )
+    return {
+        "ok": False,
+        "chunk_id": record.get("chunk_id"),
+        "status_code": exc.status_code,
+        "error": detail,
+    }
+
+
+def _admin_reindex_unexpected_error(record: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    logger.exception(
+        "admin_reindex_after_save_unexpected_failed",
+        chunk_id=record.get("chunk_id"),
+        error_type=type(exc).__name__,
+    )
+    return {
+        "ok": False,
+        "chunk_id": record.get("chunk_id"),
+        "status_code": 500,
+        "error": f"Ошибка обновления индекса: {type(exc).__name__}",
+    }
 
 
 def _require_optional_secret(

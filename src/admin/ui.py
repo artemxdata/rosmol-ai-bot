@@ -292,6 +292,7 @@ _HTML_TEMPLATE = """
       font-size: 13px;
     }
     .status.error { color: var(--danger); }
+    .status.warn { color: #8a6500; }
     .status.ok { color: var(--ok); }
     .table-wrap {
       max-height: calc(100vh - 324px);
@@ -706,28 +707,70 @@ _HTML_TEMPLATE = """
         ? "доступ открыт"
         : "нужен вход";
     }
-    async function requestJson(path, options = {}) {
-      const response = await fetch(path, {
-        credentials: "same-origin",
-        ...options,
-        headers: {
-          ...(options.body !== undefined ? {"Content-Type": "application/json"} : {}),
-          ...(options.headers || {}),
-        },
-      });
-      const text = await response.text();
-      let payload = {};
-      if (text) {
-        try { payload = JSON.parse(text); } catch { payload = {raw: text}; }
-      }
-      if (!response.ok) {
-        if (response.status === 401) {
-          setAuthenticated(false);
+    function adminErrorMessage(status, detail) {
+      const raw = String(detail || "").trim();
+      if (status === 503) {
+        if (raw.includes("Service Unavailable") || raw.includes("ML") || raw.includes("индекс")) {
+          return (
+            "ML-сервис для обновления индекса временно недоступен. " +
+            "Текст мог сохраниться, но RAG-индекс нужно обновить после восстановления app-ml."
+          );
         }
-        const detail = payload.detail || payload.raw || response.statusText;
-        throw new Error(String(detail));
+        return "Сервис временно недоступен. Проверь app-ml и повтори действие.";
       }
-      return payload;
+      if (status === 504) {
+        return (
+          "Операция заняла слишком много времени. " +
+          "Проверь, сохранился ли текст, затем обнови индекс."
+        );
+      }
+      return raw || "Неизвестная ошибка";
+    }
+    function setEditorBusy(isBusy) {
+      if (!selectedChunkId) return;
+      document.getElementById("saveChunkButton").disabled = isBusy;
+      document.getElementById("reindexButton").disabled = isBusy;
+      document.getElementById("relatedCasesButton").disabled = isBusy;
+      document.getElementById("textClean").disabled = isBusy;
+      document.getElementById("chunkStatus").disabled = isBusy;
+    }
+    async function requestJson(path, options = {}) {
+      const timeoutMs = options.timeoutMs || 240000;
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(path, {
+          credentials: "same-origin",
+          ...options,
+          signal: controller.signal,
+          headers: {
+            ...(options.body !== undefined ? {"Content-Type": "application/json"} : {}),
+            ...(options.headers || {}),
+          },
+        }).catch((error) => {
+          if (error.name === "AbortError") {
+            throw new Error(
+              "Запрос не завершился за 4 минуты. Проверь состояние сервиса и повтори действие."
+            );
+          }
+          throw error;
+        });
+        const text = await response.text();
+        let payload = {};
+        if (text) {
+          try { payload = JSON.parse(text); } catch { payload = {raw: text}; }
+        }
+        if (!response.ok) {
+          if (response.status === 401) {
+            setAuthenticated(false);
+          }
+          const detail = payload.detail || payload.raw || response.statusText;
+          throw new Error(adminErrorMessage(response.status, detail));
+        }
+        return payload;
+      } finally {
+        window.clearTimeout(timer);
+      }
     }
     function queryString(params) {
       const search = new URLSearchParams();
@@ -952,7 +995,14 @@ _HTML_TEMPLATE = """
       if (!selectedChunkId) return;
       try {
         hideOpsDashboard();
-        setStatus("detailStatus", "Сохранение...");
+        setEditorBusy(true);
+        const shouldReindex = document.getElementById("reindexToggle").checked;
+        setStatus(
+          "detailStatus",
+          shouldReindex
+            ? "Сохраняю текст и обновляю RAG-индекс. Это может занять до минуты..."
+            : "Сохраняю текст без обновления индекса..."
+        );
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId),
           {
@@ -960,25 +1010,37 @@ _HTML_TEMPLATE = """
             body: JSON.stringify({
               status: document.getElementById("chunkStatus").value,
               text_clean: document.getElementById("textClean").value,
-              reindex: document.getElementById("reindexToggle").checked,
+              reindex: shouldReindex,
             }),
           }
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        const reindex = data.reindex && data.reindex.ok
-          ? " Qdrant обновлён, кэш сброшен."
-          : "";
-        setStatus("detailStatus", "Сохранено." + reindex, "ok");
+        if (data.reindex && data.reindex.ok === false) {
+          const reason = data.reindex.error || "индекс не обновлён";
+          setStatus(
+            "detailStatus",
+            "Текст сохранён, но RAG-индекс не обновлён: " + reason,
+            "warn"
+          );
+        } else {
+          const reindex = data.reindex && data.reindex.ok
+            ? " Qdrant обновлён, кэш сброшен."
+            : "";
+          setStatus("detailStatus", "Сохранено." + reindex, "ok");
+        }
         await loadChunks();
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
+      } finally {
+        setEditorBusy(false);
       }
     }
     async function reindexChunk() {
       if (!selectedChunkId) return;
       try {
         hideOpsDashboard();
-        setStatus("detailStatus", "Обновление индекса...");
+        setEditorBusy(true);
+        setStatus("detailStatus", "Обновляю RAG-индекс и сбрасываю semantic cache...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/reindex",
           {method: "POST", body: "{}"}
@@ -987,6 +1049,8 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", "Qdrant обновлён, семантический кэш сброшен", "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
+      } finally {
+        setEditorBusy(false);
       }
     }
     async function showRelatedCases() {

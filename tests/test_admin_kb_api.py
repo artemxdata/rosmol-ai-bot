@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from src.main import app as fastapi_app
 
@@ -309,6 +310,86 @@ async def test_admin_kb_api_reindexes_chunk_after_update_by_default(
         "chunk_id": "draft_docs",
         "collection": "knowledge_base",
     }
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_keeps_saved_text_when_reindex_after_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+
+    async def fake_reindex(_request, _record):
+        raise HTTPException(status_code=503, detail="ML service is unavailable")
+
+    monkeypatch.setattr("src.main._admin_reindex_record", fake_reindex)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.patch(
+            "/admin/kb/chunks/draft_docs",
+            json={
+                "status": "published",
+                "text_clean": "Новый текст сохранён, но индекс временно недоступен.",
+            },
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["record"]["text_clean"] == "Новый текст сохранён, но индекс временно недоступен."
+    assert payload["record"]["status"] == "published"
+    assert payload["reindex"] == {
+        "ok": False,
+        "chunk_id": "draft_docs",
+        "status_code": 503,
+        "error": "ML service is unavailable",
+    }
+    stored = json.loads(seed_path.read_text(encoding="utf-8"))
+    assert stored[1]["text_clean"] == "Новый текст сохранён, но индекс временно недоступен."
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_keeps_saved_text_when_reindex_after_update_crashes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+
+    async def fake_reindex(_request, _record):
+        raise RuntimeError("qdrant timeout")
+
+    monkeypatch.setattr("src.main._admin_reindex_record", fake_reindex)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.patch(
+            "/admin/kb/chunks/draft_docs",
+            json={"text_clean": "Текст сохранён даже при сбое Qdrant."},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["record"]["text_clean"] == "Текст сохранён даже при сбое Qdrant."
+    assert payload["reindex"] == {
+        "ok": False,
+        "chunk_id": "draft_docs",
+        "status_code": 500,
+        "error": "Ошибка обновления индекса: RuntimeError",
+    }
+    stored = json.loads(seed_path.read_text(encoding="utf-8"))
+    assert stored[1]["text_clean"] == "Текст сохранён даже при сбое Qdrant."
 
 
 @pytest.mark.asyncio
