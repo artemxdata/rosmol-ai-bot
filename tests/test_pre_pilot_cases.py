@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 
 from eval.pre_pilot_cases import build_pre_pilot_case_sets
+from src.graph.question_utils import build_effective_questions
+from src.models import QueryAnalysis
 
 
 def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> None:
@@ -41,3 +43,26 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
         for item in values
     }
     assert "xlsx_category_r0627_transfer_do_mesta_provedeniya_meropriyatiya" in equivalent_ids
+
+    youth_day_case = next(
+        case for case in forums if case["id"] == "forum_youth_day_registration_program_children"
+    )
+    assert "forum:День молодёжи" in youth_day_case["tags"]
+    assert {
+        "xlsx_category_r0608_registraciya_na_meropriyatie",
+        "xlsx_category_r0615_vremya_nachala_i_raspisanie",
+        "xlsx_category_r0613_programma_i_artisty",
+        "xlsx_category_r0612_poseschenie_festivalya_s_detmi",
+    }.issubset(set(youth_day_case["expected_chunk_ids"]))
+
+
+def test_effective_questions_keep_youth_day_program_and_children_aspects() -> None:
+    analysis = QueryAnalysis(category="форумы", forum_normalized="День молодёжи")
+    questions = build_effective_questions(
+        analysis,
+        "День молодёжи: где посмотреть программу и можно ли прийти с ребёнком?",
+    )
+
+    question_texts = {question.text for question in questions}
+    assert "Где посмотреть программу и артистов?" in question_texts
+    assert "Можно ли прийти с ребёнком или детьми?" in question_texts

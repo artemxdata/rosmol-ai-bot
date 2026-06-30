@@ -164,3 +164,30 @@ git pull --ff-only
 ```
 
 Важно: rollback не должен менять `.env`, секреты, Docker volumes Postgres/Qdrant/Redis и production-данные.
+
+## 6. One-command final acceptance
+
+Перед демонстрацией можно прогнать весь локальный release gate одной командой:
+
+```powershell
+.venv\Scripts\python.exe scripts\run_acceptance.py `
+  --target http://localhost:8001/ask `
+  --max-llm-cost-rub 80
+```
+
+Команда проверяет:
+
+- `ruff check .`;
+- `pytest`;
+- `scripts/index_kb.py --validate-only`;
+- `/ready` для обычного и ML-контура;
+- pre-pilot quality suite без массовых запросов в HDE.
+
+Итоговые файлы:
+
+- `reports/final_acceptance/summary.md`;
+- `reports/final_acceptance/summary.json`;
+- `reports/pre_pilot_quality_suite/summary.md`;
+- `reports/pre_pilot_quality_suite/summary.json`.
+
+Критерий допуска к показу: `reports/final_acceptance/summary.json` содержит `"passed": true`.

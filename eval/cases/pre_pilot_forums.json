@@ -335,5 +335,49 @@
       "multi_aspect",
       "forum:Машук"
     ]
+  },
+  {
+    "id": "forum_youth_day_registration_program_children",
+    "query": "День молодёжи: как зарегистрироваться, когда проходит событие, где посмотреть программу и можно ли прийти с ребёнком?",
+    "user_id": "pre-pilot-forum_youth_day_registration_program_children",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "xlsx_category_r0608_registraciya_na_meropriyatie",
+      "xlsx_category_r0615_vremya_nachala_i_raspisanie",
+      "xlsx_category_r0613_programma_i_artisty",
+      "xlsx_category_r0612_poseschenie_festivalya_s_detmi"
+    ],
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0608_registraciya_na_meropriyatie",
+      "xlsx_category_r0615_vremya_nachala_i_raspisanie",
+      "xlsx_category_r0613_programma_i_artisty",
+      "xlsx_category_r0612_poseschenie_festivalya_s_detmi"
+    ],
+    "expected_answer_contains": [],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "forums",
+      "multi_aspect",
+      "forum:День молодёжи"
+    ],
+    "equivalent_chunk_ids": {
+      "xlsx_category_r0615_vremya_nachala_i_raspisanie": [
+        "xlsx_category_r0613_programma_i_artisty",
+        "xlsx_category_r0620_programma_artisty"
+      ],
+      "xlsx_category_r0613_programma_i_artisty": [
+        "xlsx_category_r0615_vremya_nachala_i_raspisanie",
+        "xlsx_category_r0620_programma_artisty"
+      ],
+      "xlsx_category_r0612_poseschenie_festivalya_s_detmi": [
+        "xlsx_category_r0607_registraciya_detey"
+      ]
+    }
   }
 ]

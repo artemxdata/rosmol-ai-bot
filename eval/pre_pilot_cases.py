@@ -158,7 +158,15 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"podacha_zayavki_na_proekt", "podat_zayavku_na_uchastie"}),
     frozenset({"otkaz_ot_uchastiya"}),
     frozenset({"trebovaniya_po_dress_kodu"}),
-    frozenset({"programma_foruma", "vremya_nachala_i_raspisanie"}),
+    frozenset(
+        {
+            "programma_foruma",
+            "programma_i_artisty",
+            "programma_artisty",
+            "vremya_nachala_i_raspisanie",
+        }
+    ),
+    frozenset({"poseschenie_festivalya_s_detmi", "registraciya_detey"}),
     frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
     frozenset({"cifrovaya_nedelya"}),
     frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
@@ -337,6 +345,20 @@ def _forum_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
                 index.by_forum_topic("Машук", "programma_foruma"),
             ],
             tags=["pre_pilot", "forums", "multi_aspect", "forum:Машук"],
+        ),
+        _answer_case(
+            "forum_youth_day_registration_program_children",
+            (
+                "День молодёжи: как зарегистрироваться, когда проходит событие, "
+                "где посмотреть программу и можно ли прийти с ребёнком?"
+            ),
+            [
+                index.by_forum_topic("День молодёжи", "registraciya_na_meropriyatie"),
+                index.by_forum_topic("День молодёжи", "vremya_nachala_i_raspisanie"),
+                index.by_forum_topic("День молодёжи", "programma_i_artisty"),
+                index.by_forum_topic("День молодёжи", "poseschenie_festivalya_s_detmi"),
+            ],
+            tags=["pre_pilot", "forums", "multi_aspect", "forum:День молодёжи"],
         ),
     ]
 

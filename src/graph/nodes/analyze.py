@@ -685,6 +685,16 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
         ),
         ("rosmolodezh_granty", "Есть ли грантовый конкурс?", ("грант", "грантов")),
         ("trebovaniya_po_dress_kodu", "Есть ли требования по дресс-коду?", ("дресс", "одежд")),
+        (
+            "poseschenie_festivalya_s_detmi",
+            "Можно ли прийти с ребёнком или детьми?",
+            ("ребен", "ребён", "деть", "дети", "детьми"),
+        ),
+        (
+            "programma_i_artisty",
+            "Где посмотреть программу и артистов?",
+            ("программ", "артист"),
+        ),
         ("programma_foruma", "Где посмотреть программу?", ("программ", "расписан")),
         (
             "daty_nachala_meropriyatiya",

@@ -91,7 +91,15 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"otkaz_ot_uchastiya"}),
     frozenset({"vnesti_izmeneniya_v_zayavku"}),
     frozenset({"trebovaniya_po_dress_kodu"}),
-    frozenset({"programma_foruma", "vremya_nachala_i_raspisanie"}),
+    frozenset(
+        {
+            "programma_foruma",
+            "programma_i_artisty",
+            "programma_artisty",
+            "vremya_nachala_i_raspisanie",
+        }
+    ),
+    frozenset({"poseschenie_festivalya_s_detmi", "registraciya_detey"}),
     frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
     frozenset({"cifrovaya_nedelya"}),
     frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
@@ -729,6 +737,8 @@ def _infer_topic_from_question_text(normalized_question: str) -> str | None:
         return "podtverzhdenie_uchastiya_i_org_momenty"
     if _asks_digital_week(normalized_question):
         return "cifrovaya_nedelya"
+    if _asks_child_visit(normalized_question):
+        return "poseschenie_festivalya_s_detmi"
     if _asks_event_program(normalized_question):
         return "programma_foruma"
     if _asks_forum_grants(normalized_question):
@@ -1400,6 +1410,13 @@ def _asks_confirmation_org(normalized_question: str) -> bool:
 
 def _asks_digital_week(normalized_question: str) -> bool:
     return "цифровая неделя" in normalized_question
+
+
+def _asks_child_visit(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in ("ребен", "ребён", "дети", "детьми", "ребенком", "ребёнком")
+    )
 
 
 def _asks_event_program(normalized_question: str) -> bool:
