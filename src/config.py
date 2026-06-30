@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     hde_rate_limit_remaining_reserve: int = Field(default=30, ge=0, le=300)
     hde_rate_limit_ban_seconds: int = Field(default=1200, ge=60)
     kb_seed_path: str = "data/knowledge_base_seed.json"
+    admin_quality_report_path: str = "reports/presentation_quality/presentation_quality_report.json"
 
     cloud_ru_api_key: str = ""
     cloud_ru_chat_completions_url: str = (

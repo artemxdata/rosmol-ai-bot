@@ -97,6 +97,7 @@ services:
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
       WEBHOOK_AUTH_TOKEN: ${WEBHOOK_AUTH_TOKEN:-}
       ADMIN_AUTH_TOKEN: ${ADMIN_AUTH_TOKEN:-}
+      ADMIN_QUALITY_REPORT_PATH: ${ADMIN_QUALITY_REPORT_PATH:-reports/presentation_quality/presentation_quality_report.json}
       HDE_TRIGGER_PREFIX: ${HDE_TRIGGER_PREFIX:-}
       HDE_BASE_URL: ${HDE_BASE_URL:-}
       HDE_API_EMAIL: ${HDE_API_EMAIL:-}

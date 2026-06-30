@@ -604,7 +604,7 @@ def _admin_eval_cases_dir() -> Path:
 
 
 def _admin_quality_report_path() -> Path:
-    default = "reports/pre_pilot_quality_suite/summary.json"
+    default = "reports/presentation_quality/presentation_quality_report.json"
     return Path(getattr(get_settings(), "admin_quality_report_path", default))
 
 

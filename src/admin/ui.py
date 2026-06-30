@@ -398,6 +398,11 @@ _HTML_TEMPLATE = """
       gap: 12px;
       margin: 14px 0;
     }
+    .quality-dashboard {
+      display: grid;
+      gap: 12px;
+      margin: 14px 0;
+    }
     .ops-kpis {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -445,6 +450,22 @@ _HTML_TEMPLATE = """
       color: var(--text);
       font-size: 13px;
       line-height: 1.4;
+    }
+    .quality-note {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .quality-ok {
+      color: var(--ok);
+      font-weight: 900;
+    }
+    .quality-bad {
+      color: var(--danger);
+      font-weight: 900;
     }
     .toggle {
       display: inline-flex;
@@ -683,6 +704,7 @@ _HTML_TEMPLATE = """
           disabled
           placeholder="Выбери чанк слева, чтобы редактировать текст ответа."
         ></textarea>
+        <div id="qualityDashboard" class="quality-dashboard hidden"></div>
         <div id="opsDashboard" class="ops-dashboard hidden"></div>
         <pre id="reportOutput"></pre>
       </div>
@@ -801,6 +823,9 @@ _HTML_TEMPLATE = """
         .replaceAll('"', "&quot;");
     }
     function formatPercent(value) {
+      if (value === null || value === undefined || value === "") {
+        return "n/a";
+      }
       const number = Number(value || 0);
       return (number * 100).toFixed(1) + "%";
     }
@@ -811,6 +836,15 @@ _HTML_TEMPLATE = """
       const dashboard = document.getElementById("opsDashboard");
       dashboard.classList.add("hidden");
       dashboard.innerHTML = "";
+    }
+    function hideQualityDashboard() {
+      const dashboard = document.getElementById("qualityDashboard");
+      dashboard.classList.add("hidden");
+      dashboard.innerHTML = "";
+    }
+    function hideReportDashboards() {
+      hideOpsDashboard();
+      hideQualityDashboard();
     }
     function opsRows(items, fields) {
       const rows = (items || []).slice(0, 6);
@@ -900,6 +934,114 @@ _HTML_TEMPLATE = """
         </div>
       `;
     }
+    function qualityCasesCount(name, section) {
+      if (!section) return 0;
+      if (name === "followup") return section.turns_total || 0;
+      return section.cases_total || section.cases || 0;
+    }
+    function qualityPassRate(name, section) {
+      if (!section) return null;
+      if (name === "followup") return section.turn_pass_rate;
+      return section.pass_rate;
+    }
+    function qualitySectionTitle(name) {
+      const titles = {
+        forums: "Форумы и составные вопросы",
+        safety: "Safety-сценарии",
+        off_topic: "Вопросы вне базы",
+        pii: "Персональные данные",
+        followup: "Контекст диалога",
+        typical: "Типовые вопросы",
+        atypical: "Нетиповые вопросы",
+        controls: "Контрольные проверки",
+      };
+      return titles[name] || name;
+    }
+    function qualitySections(report) {
+      if (!report) return [];
+      if (report.sections) {
+        return Object.entries(report.sections).map(([name, section]) => ({name, section}));
+      }
+      const names = ["typical", "atypical", "safety"];
+      const items = names
+        .filter((name) => report[name])
+        .map((name) => ({name, section: report[name]}));
+      if (report.controls) {
+        for (const [name, section] of Object.entries(report.controls)) {
+          items.push({name, section});
+        }
+      }
+      return items;
+    }
+    function renderQualityDashboard(data) {
+      const validation = data.validation || {};
+      const report = data.latest_eval_report || {};
+      const reportExists = Boolean(data.latest_eval_report_exists);
+      const passed = reportExists ? Boolean(report.passed ?? report.total_pass_rate >= 0.9) : false;
+      const totalChecks = report.total_checks_or_turns || report.cases_total || "-";
+      const passRate = report.total_pass_rate ?? report.pass_rate;
+      const cost = report.llm_estimated_cost_rub ?? report.total_llm_estimated_cost_rub ?? 0;
+      const dashboard = document.getElementById("qualityDashboard");
+      dashboard.classList.remove("hidden");
+      const sectionRows = qualitySections(report).map(({name, section}) => {
+        const failures = section.failure_reason_counts || {};
+        const failureText = Object.keys(failures).length
+          ? Object.entries(failures).map(([key, value]) => `${key}: ${value}`).join(", ")
+          : "ошибок нет";
+        return `
+          <div class="ops-item">
+            <div class="ops-line">
+              <span>${escapeHtml(qualitySectionTitle(name))}</span>
+              <span>${escapeHtml(formatPercent(qualityPassRate(name, section)))}</span>
+            </div>
+            <div class="ops-meta">
+              кейсов: ${escapeHtml(qualityCasesCount(name, section))} ·
+              trace: ${escapeHtml(formatPercent(section.trace_coverage_rate))} ·
+              стоимость: ${escapeHtml(formatRub(section.llm_estimated_cost_rub))}
+            </div>
+            <div class="ops-preview">${escapeHtml(failureText)}</div>
+          </div>
+        `;
+      }).join("");
+      dashboard.innerHTML = `
+        <div class="ops-kpis">
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(validation.valid_records || "-")}</span>
+            <span class="metric-label">валидных чанков</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(totalChecks)}</span>
+            <span class="metric-label">проверок в отчёте</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(formatPercent(passRate))}</span>
+            <span class="metric-label">pass rate</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(formatRub(cost))}</span>
+            <span class="metric-label">стоимость LLM</span>
+          </div>
+        </div>
+        <div class="quality-note">
+          Статус отчёта:
+          <span class="${passed ? "quality-ok" : "quality-bad"}">
+            ${passed ? "пройден" : (reportExists ? "требует внимания" : "отчёт не найден")}
+          </span>.
+          Проверка базы показывает, что seed валиден, а отчёт качества показывает,
+          как бот прошёл форумы, safety, off-topic, PII и follow-up без массовых запросов в HDE.
+        </div>
+        <div class="ops-section">
+          <h3>Блоки quality gate</h3>
+          <div class="ops-list">
+            ${sectionRows || [
+              '<div class="ops-item">',
+              '<span class="ops-meta">Отчёт качества ещё не сформирован</span>',
+              '</div>',
+            ].join("")}
+          </div>
+        </div>
+      `;
+    }
     function renderRows(items) {
       const tbody = document.getElementById("chunksTable");
       tbody.innerHTML = "";
@@ -965,7 +1107,7 @@ _HTML_TEMPLATE = """
     }
     async function loadChunk(chunkId, row) {
       try {
-        hideOpsDashboard();
+        hideReportDashboards();
         selectedChunkId = chunkId;
         document.querySelectorAll("tr.selected").forEach((el) => el.classList.remove("selected"));
         if (row) row.classList.add("selected");
@@ -994,7 +1136,7 @@ _HTML_TEMPLATE = """
     async function saveChunk() {
       if (!selectedChunkId) return;
       try {
-        hideOpsDashboard();
+        hideReportDashboards();
         setEditorBusy(true);
         const shouldReindex = document.getElementById("reindexToggle").checked;
         setStatus(
@@ -1038,7 +1180,7 @@ _HTML_TEMPLATE = """
     async function reindexChunk() {
       if (!selectedChunkId) return;
       try {
-        hideOpsDashboard();
+        hideReportDashboards();
         setEditorBusy(true);
         setStatus("detailStatus", "Обновляю RAG-индекс и сбрасываю semantic cache...");
         const data = await requestJson(
@@ -1056,7 +1198,7 @@ _HTML_TEMPLATE = """
     async function showRelatedCases() {
       if (!selectedChunkId) return;
       try {
-        hideOpsDashboard();
+        hideReportDashboards();
         setStatus("detailStatus", "Загрузка тест-кейсов...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/eval-cases",
@@ -1070,7 +1212,7 @@ _HTML_TEMPLATE = """
     }
     async function showValidation() {
       try {
-        hideOpsDashboard();
+        hideReportDashboards();
         const data = await requestJson("/admin/kb/validate", {method: "POST", body: "{}"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         setMetric("metricValid", data.valid_records);
@@ -1087,6 +1229,7 @@ _HTML_TEMPLATE = """
           body: JSON.stringify({include_latest_eval_report: true}),
         });
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        renderQualityDashboard(data);
         const report = data.latest_eval_report_exists ? "есть" : "нет";
         setMetric("metricEval", report);
         setStatus("detailStatus", "Отчёт качества загружен", "ok");
@@ -1096,6 +1239,7 @@ _HTML_TEMPLATE = """
     }
     async function showOpsReport() {
       try {
+        hideQualityDashboard();
         const data = await requestJson("/admin/kb/ops-report?days=7", {method: "GET"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         renderOpsDashboard(data);
