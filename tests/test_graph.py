@@ -1823,6 +1823,66 @@ async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> No
 
 
 @pytest.mark.asyncio
+async def test_retrieve_runs_shared_broad_fallback_once_for_missing_topics() -> None:
+    class MissingTopicRetriever:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.calls.append((query, filters, top_k))
+            if filters == {"forum_normalized": "Forum A"}:
+                return [
+                    Chunk(
+                        chunk_id="shared_broad_source",
+                        text="Broad fallback source.",
+                        metadata={"chunk_id": "shared_broad_source"},
+                        score=0.8,
+                    )
+                ]
+            return []
+
+    retriever = MissingTopicRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(text="Where is the schedule?", topic="schedule"),
+                    Question(text="Which documents are needed?", topic="documents"),
+                ],
+            ),
+            "message_masked": "Forum A: schedule and documents.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "shared_broad_source"
+    ]
+    assert retriever.calls == [
+        (
+            "Where is the schedule?",
+            {"forum_normalized": "Forum A", "category": "forums", "topic": "schedule"},
+            10,
+        ),
+        (
+            "Which documents are needed?",
+            {"forum_normalized": "Forum A", "category": "forums", "topic": "documents"},
+            10,
+        ),
+        (
+            "Forum A: schedule and documents.",
+            {"forum_normalized": "Forum A", "category": "forums"},
+            30,
+        ),
+        ("Forum A: schedule and documents.", {"forum_normalized": "Forum A"}, 30),
+        ("Forum A: schedule and documents.", {"category": "forums"}, 30),
+        ("Forum A: schedule and documents.", {}, 30),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_retrieve_keeps_broad_attempts_for_collapsed_multi_aspect_message() -> None:
     retriever = MultiAspectDenseForumRetriever()
     result = await retrieve(
