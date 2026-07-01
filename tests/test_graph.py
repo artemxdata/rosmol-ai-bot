@@ -5782,6 +5782,10 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
             ),
             "reranked_chunks": chunks,
             "max_confidence": 0.7,
+            "message_masked": (
+                "День молодёжи: как зарегистрироваться, когда проходит событие, "
+                "где посмотреть программу и можно ли прийти с ребёнком?"
+            ),
             "llm_client": FailingLLM(),
         }
     )

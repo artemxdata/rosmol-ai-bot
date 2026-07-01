@@ -806,6 +806,40 @@ async def test_verifier_allows_multi_aspect_answer_when_sources_cover_each_aspec
 
 
 @pytest.mark.asyncio
+async def test_verifier_allows_date_marker_coverage_from_topic_alias() -> None:
+    result = await verify(
+        {
+            "message_masked": "День молодёжи: когда проходит событие?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="День молодёжи",
+            ),
+            "generated_response": "27 июня 2026 года по всей стране пройдёт День молодёжи.",
+            "generator_model": "source_chunk",
+            "cited_sources": ["date"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="date",
+                    text="27 июня 2026 года по всей стране пройдёт День молодёжи.",
+                    metadata={
+                        "source_type": "xlsx",
+                        "category": "форумы",
+                        "forum_normalized": "День молодёжи",
+                        "topic": "sut_festivalya_i_data",
+                    },
+                    reranker_score=0.9,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_items_coverage_from_document_topic_metadata() -> None:
     result = await verify(
         {

@@ -117,6 +117,17 @@ COVERAGE_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("отчет", "отчетност", "отчёт", "отчётност"),
     ("id не", "id проф", "айди", "ид проф"),
 )
+DATE_COVERAGE_MARKERS = frozenset(("дата", "даты", "срок", "заезд", "выезд"))
+DATE_TOPIC_ALIASES = frozenset(
+    {
+        "daty_nachala_meropriyatiya",
+        "mesto_i_daty_provedeniya_meropriyatiya",
+        "mesto_i_ploschadka_provedeniya",
+        "vremya_nachala_i_raspisanie",
+        "sut_festivalya_i_data",
+    }
+)
+
 FORUM_SPECIFIC_MARKERS = (
     "дата",
     "даты",
@@ -621,7 +632,7 @@ def _question_has_source_coverage(question: Question, chunks: list[ScoredChunk])
     if required_markers:
         normalized_haystack = _normalize(haystack)
         return all(
-            any(marker in normalized_haystack for marker in markers)
+            _marker_group_has_source_coverage(markers, normalized_haystack)
             for markers in required_markers
         )
 
@@ -630,6 +641,17 @@ def _question_has_source_coverage(question: Question, chunks: list[ScoredChunk])
         return True
     overlap = question_tokens & _tokens(haystack)
     return len(overlap) >= min(2, len(question_tokens))
+
+
+def _marker_group_has_source_coverage(
+    markers: tuple[str, ...],
+    normalized_haystack: str,
+) -> bool:
+    if any(marker in DATE_COVERAGE_MARKERS for marker in markers) and any(
+        alias in normalized_haystack for alias in DATE_TOPIC_ALIASES
+    ):
+        return True
+    return any(marker in normalized_haystack for marker in markers)
 
 
 def _chunk_matches_question_forum(chunk: ScoredChunk, question: Question) -> bool:

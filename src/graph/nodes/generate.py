@@ -1055,6 +1055,16 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"vozrastnye_ogranicheniya"}),
 )
 
+DATE_TOPIC_ALIASES = frozenset(
+    {
+        "daty_nachala_meropriyatiya",
+        "mesto_i_daty_provedeniya_meropriyatiya",
+        "mesto_i_ploschadka_provedeniya",
+        "vremya_nachala_i_raspisanie",
+        "sut_festivalya_i_data",
+    }
+)
+
 
 def _source_topic_match_rank(question: Question, chunk: ScoredChunk) -> int:
     question_topic = str(question.topic or "").strip()
@@ -1114,7 +1124,7 @@ def _infer_topic_from_question_text(question_normalized: str) -> str | None:
         return "transfer_do_mesta_provedeniya_meropriyatiya"
     if _asks_housing_conditions(question_normalized):
         return "usloviya_prozhivaniya"
-    if _asks_event_dates(question_normalized):
+    if _asks_event_dates_or_marker(question_normalized):
         return "daty_nachala_meropriyatiya"
     if _asks_registration(question_normalized):
         return "podacha_zayavki_na_proekt"
@@ -1679,11 +1689,11 @@ def _metadata_matches_specific_question(
             or "о форуме" in metadata_haystack
         )
 
-    if _asks_event_dates(question_normalized):
+    if _asks_event_dates_or_marker(question_normalized):
         return (
-            "daty_nachala" in metadata_haystack
+            _chunk_has_date_topic_alias(chunk)
+            or "daty_nachala" in metadata_haystack
             or "mesto_i_daty" in metadata_haystack
-            or "sut_festivalya_i_data" in metadata_haystack
             or ("даты" in metadata_haystack and "мероприят" in metadata_haystack)
         )
 
@@ -1824,6 +1834,8 @@ def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> boo
         return True
     if _asks_housing_conditions(question_normalized):
         return _chunk_has_housing_conditions(chunk)
+    if _asks_event_date_marker(question_normalized):
+        return _chunk_has_date_topic_alias(chunk)
 
     haystack = _source_coverage_haystack(chunk)
     for markers, _question_text in FALLBACK_QUESTION_MARKERS:
@@ -2242,6 +2254,18 @@ def _asks_event_dates(question_normalized: str) -> bool:
     )
 
 
+def _asks_event_dates_or_marker(question_normalized: str) -> bool:
+    return _asks_event_dates(question_normalized) or _asks_event_date_marker(
+        question_normalized
+    )
+
+
+def _asks_event_date_marker(question_normalized: str) -> bool:
+    return ("дата" in question_normalized or "даты" in question_normalized) and (
+        "срок" in question_normalized
+    )
+
+
 def _asks_event_overview(question_normalized: str) -> bool:
     if "направлен" in question_normalized and "заявк" in question_normalized:
         return False
@@ -2330,6 +2354,15 @@ def _chunk_has_housing_conditions(chunk: ScoredChunk) -> bool:
         return True
     haystack = _normalize(chunk.text)
     return any(term in haystack for term in HOUSING_CONDITION_TERMS)
+
+
+def _chunk_has_date_topic_alias(chunk: ScoredChunk) -> bool:
+    metadata = chunk.metadata or {}
+    topic = str(metadata.get("topic") or "").strip()
+    if topic in DATE_TOPIC_ALIASES:
+        return True
+    metadata_haystack = _metadata_haystack(chunk)
+    return any(alias in metadata_haystack for alias in DATE_TOPIC_ALIASES)
 
 
 def _metadata_haystack(chunk: ScoredChunk) -> str:
