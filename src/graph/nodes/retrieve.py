@@ -71,8 +71,13 @@ async def retrieve(state: BotState) -> dict:
 
     chunks = []
     used_filters: list[dict] = []
+    topic_question_count = sum(1 for question in questions if question.topic)
     needs_shared_broad_fallback = False
     for question in questions:
+        if topic_question_count > 1 and not question.topic:
+            needs_shared_broad_fallback = True
+            continue
+
         question_filters = {
             **filters,
             "topic": question.topic,
@@ -84,7 +89,7 @@ async def retrieve(state: BotState) -> dict:
             retrieval_query = expand_query_aliases(question.text)
             strict_topic_only = _should_defer_broad_topic_attempts(
                 question_filters,
-                questions,
+                topic_question_count,
             )
             strict_found = False
             for attempt_index, candidate_filters in enumerate(_filter_attempts(question_filters)):
@@ -92,19 +97,22 @@ async def retrieve(state: BotState) -> dict:
                     break
                 used_filters.append(candidate_filters)
                 top_k = _top_k_for_attempt(candidate_filters, attempt_index)
-                attempt_chunks = await state["retriever"].retrieve(
+                attempt_chunks, used_metadata_lookup = await _retrieve_attempt(
+                    state["retriever"],
                     retrieval_query,
                     candidate_filters,
                     top_k=top_k,
                 )
-                keyword_chunks = await _keyword_recall_candidates(
-                    state["retriever"],
-                    retrieval_query,
-                    candidate_filters,
-                    attempt_index=attempt_index,
-                    tracer=tracer,
-                    started_at=started_at,
-                )
+                keyword_chunks = []
+                if not (used_metadata_lookup and attempt_chunks):
+                    keyword_chunks = await _keyword_recall_candidates(
+                        state["retriever"],
+                        retrieval_query,
+                        candidate_filters,
+                        attempt_index=attempt_index,
+                        tracer=tracer,
+                        started_at=started_at,
+                    )
                 if attempt_index == 0 and (attempt_chunks or keyword_chunks):
                     strict_found = True
                 found.extend(attempt_chunks)
@@ -213,12 +221,24 @@ def _filter_attempts(filters: dict) -> list[dict]:
 
 def _should_defer_broad_topic_attempts(
     filters: dict,
-    questions: list[Question],
+    topic_question_count: int,
 ) -> bool:
     if not filters.get("topic"):
         return False
-    topic_question_count = sum(1 for question in questions if question.topic)
     return topic_question_count > 1
+
+
+async def _retrieve_attempt(
+    retriever: object,
+    query: str,
+    filters: dict,
+    *,
+    top_k: int,
+) -> tuple[list, bool]:
+    retrieve_by_metadata = getattr(retriever, "retrieve_by_metadata", None)
+    if filters.get("topic") and callable(retrieve_by_metadata):
+        return await retrieve_by_metadata(filters, top_k=top_k), True
+    return await retriever.retrieve(query, filters, top_k=top_k), False
 
 
 def _should_continue_filter_attempts(

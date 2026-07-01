@@ -50,9 +50,11 @@ class FakeScrollQdrant(FakeQdrant):
     def __init__(self) -> None:
         super().__init__()
         self.scroll_kwargs = None
+        self.scroll_calls = []
 
     async def scroll(self, **kwargs):
         self.scroll_kwargs = kwargs
+        self.scroll_calls.append(kwargs)
 
         class Point:
             def __init__(self, point_id: str, payload: dict) -> None:
@@ -118,6 +120,36 @@ async def test_retriever_reuses_query_embedding_for_filter_attempts() -> None:
     await retriever.retrieve("статус заявки", {}, top_k=5)
 
     assert embedder.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_retriever_metadata_lookup_does_not_embed_query() -> None:
+    qdrant = FakeScrollQdrant()
+    embedder = FakeEmbedder()
+    retriever = Retriever(
+        qdrant,
+        embedder,  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    chunks = await retriever.retrieve_by_metadata(
+        {"category": "форумы", "forum_normalized": "День молодёжи", "topic": "programma"},
+        top_k=3,
+    )
+
+    assert chunks
+    assert embedder.calls == 0
+    assert qdrant.scroll_kwargs is not None
+    assert qdrant.scroll_kwargs["collection_name"] == "knowledge_base_sandbox"
+    assert qdrant.scroll_kwargs["limit"] == 3
+    field_keys = [
+        condition.key
+        for condition in qdrant.scroll_kwargs["scroll_filter"].must
+        if hasattr(condition, "key")
+    ]
+    assert "category_key" in field_keys
+    assert "forum_key" in field_keys
+    assert "topic_key" in field_keys
 
 
 @pytest.mark.asyncio

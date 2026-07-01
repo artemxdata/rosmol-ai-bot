@@ -90,6 +90,32 @@ class Retriever:
             )
         return chunks
 
+    async def retrieve_by_metadata(
+        self,
+        filters: dict[str, Any] | None = None,
+        top_k: int = 10,
+    ) -> list[Chunk]:
+        points, _ = await self.qdrant.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=build_filter(filters or {}),
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        chunks: list[Chunk] = []
+        for point in points:
+            payload = point.payload or {}
+            chunks.append(
+                Chunk(
+                    chunk_id=str(payload.get("chunk_id") or point.id),
+                    text=str(payload.get("text_clean") or payload.get("text") or ""),
+                    metadata=payload,
+                    score=1.0,
+                )
+            )
+        return chunks
+
     async def _encode_query(self, query: str) -> tuple[Any, dict[str, float]]:
         cached = self._query_vector_cache.get(query)
         if cached is not None:

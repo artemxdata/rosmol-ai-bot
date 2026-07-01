@@ -1823,6 +1823,61 @@ async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> No
 
 
 @pytest.mark.asyncio
+async def test_retrieve_uses_metadata_lookup_for_exact_topic_attempts() -> None:
+    class MetadataTopicRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = []
+            self.metadata_calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.semantic_calls.append((query, filters, top_k))
+            return []
+
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            self.metadata_calls.append((filters, top_k))
+            return [
+                Chunk(
+                    chunk_id=f"{filters['topic']}_exact",
+                    text=f"{filters['topic']} source.",
+                    metadata={"chunk_id": f"{filters['topic']}_exact"},
+                    score=1.0,
+                )
+            ]
+
+    retriever = MetadataTopicRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(text="Where is the schedule?", topic="schedule"),
+                    Question(text="Which documents are needed?", topic="documents"),
+                ],
+            ),
+            "message_masked": "Forum A: schedule and documents.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "schedule_exact",
+        "documents_exact",
+    ]
+    assert retriever.semantic_calls == []
+    assert retriever.metadata_calls == [
+        (
+            {"forum_normalized": "Forum A", "category": "forums", "topic": "schedule"},
+            10,
+        ),
+        (
+            {"forum_normalized": "Forum A", "category": "forums", "topic": "documents"},
+            10,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_retrieve_runs_shared_broad_fallback_once_for_missing_topics() -> None:
     class MissingTopicRetriever:
         def __init__(self) -> None:
@@ -1850,6 +1905,7 @@ async def test_retrieve_runs_shared_broad_fallback_once_for_missing_topics() -> 
                 questions=[
                     Question(text="Where is the schedule?", topic="schedule"),
                     Question(text="Which documents are needed?", topic="documents"),
+                    Question(text="What is known from the source?"),
                 ],
             ),
             "message_masked": "Forum A: schedule and documents.",
