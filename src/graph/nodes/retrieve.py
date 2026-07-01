@@ -15,57 +15,43 @@ KEYWORD_RECALL_TOP_K = 6
 KEYWORD_RECALL_SCAN_LIMIT = 2048
 OFFICIAL_KEYWORD_SOURCE_TYPES = ("xlsx", "docx")
 FALLBACK_KEYWORD_SOURCE_TYPES = ("ticket_answer_bank",)
-TOPIC_LOOKUP_ALIAS_GROUPS: tuple[frozenset[str], ...] = (
-    frozenset(
-        {
-            "kak_zaregistrirovatsya_na_fgais",
-            "registraciya_na_meropriyatie",
-            "registraciya_bez_max",
-            "podacha_zayavki_na_proekt",
-            "podat_zayavku_na_uchastie",
-        }
+TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
+    (
+        "kak_zaregistrirovatsya_na_fgais",
+        "registraciya_na_meropriyatie",
+        "registraciya_bez_max",
+        "podacha_zayavki_na_proekt",
+        "podat_zayavku_na_uchastie",
     ),
-    frozenset(
-        {
-            "programma_foruma",
-            "programma_i_artisty",
-            "programma_artisty",
-            "vremya_nachala_i_raspisanie",
-        }
+    (
+        "programma_foruma",
+        "programma_i_artisty",
+        "programma_artisty",
+        "vremya_nachala_i_raspisanie",
     ),
-    frozenset(
-        {
-            "daty_nachala_meropriyatiya",
-            "mesto_i_daty_provedeniya_meropriyatiya",
-            "mesto_i_ploschadka_provedeniya",
-            "vremya_nachala_i_raspisanie",
-            "sut_festivalya_i_data",
-        }
+    (
+        "daty_nachala_meropriyatiya",
+        "vremya_nachala_i_raspisanie",
+        "sut_festivalya_i_data",
+        "mesto_i_daty_provedeniya_meropriyatiya",
+        "mesto_i_ploschadka_provedeniya",
     ),
-    frozenset(
-        {
-            "poseschenie_festivalya_s_detmi",
-            "registraciya_detey",
-        }
+    (
+        "poseschenie_festivalya_s_detmi",
+        "registraciya_detey",
     ),
-    frozenset(
-        {
-            "dokumenty_meropriyatiya",
-            "spisok_veschey_i_dokumentov",
-            "pamyatka_uchastnika_foruma",
-        }
+    (
+        "dokumenty_meropriyatiya",
+        "spisok_veschey_i_dokumentov",
+        "pamyatka_uchastnika_foruma",
     ),
-    frozenset(
-        {
-            "usloviya_prozhivaniya",
-            "oplata_proezda_prozhivaniya_i_charter",
-        }
+    (
+        "usloviya_prozhivaniya",
+        "oplata_proezda_prozhivaniya_i_charter",
     ),
-    frozenset(
-        {
-            "otkaz_ot_uchastiya",
-            "kolichestvo_person_otmena_registracii",
-        }
+    (
+        "otkaz_ot_uchastiya",
+        "kolichestvo_person_otmena_registracii",
     ),
 )
 MULTI_ASPECT_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
@@ -309,7 +295,7 @@ def _topic_lookup_aliases(topic: str) -> list[str]:
         return []
     for group in TOPIC_LOOKUP_ALIAS_GROUPS:
         if topic in group:
-            return [candidate for candidate in sorted(group) if candidate != topic]
+            return [candidate for candidate in group if candidate != topic]
     return []
 
 

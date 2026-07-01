@@ -1909,12 +1909,21 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         score=1.0,
                     )
                 ]
-            if topic == "sut_festivalya_i_data":
+            if topic == "vremya_nachala_i_raspisanie":
                 return [
                     Chunk(
                         chunk_id="date_alias",
                         text="Date source.",
                         metadata={"chunk_id": "date_alias", "topic": topic},
+                        score=1.0,
+                    )
+                ]
+            if topic == "mesto_i_ploschadka_provedeniya":
+                return [
+                    Chunk(
+                        chunk_id="place_alias",
+                        text="Place source.",
+                        metadata={"chunk_id": "place_alias", "topic": topic},
                         score=1.0,
                     )
                 ]
@@ -1953,7 +1962,8 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
     assert "programma_foruma" in metadata_topics
     assert "programma_i_artisty" in metadata_topics
     assert "daty_nachala_meropriyatiya" in metadata_topics
-    assert "sut_festivalya_i_data" in metadata_topics
+    assert "vremya_nachala_i_raspisanie" in metadata_topics
+    assert "mesto_i_ploschadka_provedeniya" not in metadata_topics
 
 
 @pytest.mark.asyncio
