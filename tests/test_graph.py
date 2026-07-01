@@ -1878,6 +1878,71 @@ async def test_retrieve_uses_metadata_lookup_for_exact_topic_attempts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> None:
+    class AliasMetadataRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = []
+            self.metadata_calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.semantic_calls.append((query, filters, top_k))
+            return []
+
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            self.metadata_calls.append((filters, top_k))
+            topic = filters.get("topic")
+            if topic == "registraciya_na_meropriyatie":
+                return [
+                    Chunk(
+                        chunk_id="registration_alias",
+                        text="Registration source.",
+                        metadata={"chunk_id": "registration_alias", "topic": topic},
+                        score=1.0,
+                    )
+                ]
+            if topic == "programma_i_artisty":
+                return [
+                    Chunk(
+                        chunk_id="program_alias",
+                        text="Program source.",
+                        metadata={"chunk_id": "program_alias", "topic": topic},
+                        score=1.0,
+                    )
+                ]
+            return []
+
+    retriever = AliasMetadataRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(
+                        text="How do I register?",
+                        topic="kak_zaregistrirovatsya_na_fgais",
+                    ),
+                    Question(text="Where is the program?", topic="programma_foruma"),
+                ],
+            ),
+            "message_masked": "Forum A: registration and program.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "registration_alias",
+        "program_alias",
+    ]
+    assert retriever.semantic_calls == []
+    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    assert "kak_zaregistrirovatsya_na_fgais" in metadata_topics
+    assert "registraciya_na_meropriyatie" in metadata_topics
+    assert "programma_foruma" in metadata_topics
+    assert "programma_i_artisty" in metadata_topics
+
+
+@pytest.mark.asyncio
 async def test_retrieve_runs_shared_broad_fallback_once_for_missing_topics() -> None:
     class MissingTopicRetriever:
         def __init__(self) -> None:
