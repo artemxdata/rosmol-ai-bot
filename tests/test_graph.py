@@ -5689,6 +5689,109 @@ async def test_generate_uses_source_chunk_for_single_official_complex_topic_matc
 
 
 @pytest.mark.asyncio
+async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunks = [
+        ScoredChunk(
+            chunk_id="registration",
+            text="Регистрация проходит через чат-бот MAX.",
+            metadata={
+                "source_type": "xlsx",
+                "category": "форумы",
+                "forum_normalized": "День молодёжи",
+                "topic": "registraciya_na_meropriyatie",
+            },
+            score=1.0,
+            reranker_score=0.7,
+        ),
+        ScoredChunk(
+            chunk_id="children",
+            text="Дети до 13 лет могут посетить событие с родителями.",
+            metadata={
+                "source_type": "xlsx",
+                "category": "форумы",
+                "forum_normalized": "День молодёжи",
+                "topic": "poseschenie_festivalya_s_detmi",
+            },
+            score=1.0,
+            reranker_score=0.7,
+        ),
+        ScoredChunk(
+            chunk_id="program",
+            text="Программа появится в билете после регистрации ближе к дате события.",
+            metadata={
+                "source_type": "xlsx",
+                "category": "форумы",
+                "forum_normalized": "День молодёжи",
+                "topic": "programma_i_artisty",
+            },
+            score=1.0,
+            reranker_score=0.7,
+        ),
+        ScoredChunk(
+            chunk_id="date",
+            text="27 июня 2026 года по всей стране пройдёт День молодёжи.",
+            metadata={
+                "source_type": "xlsx",
+                "category": "форумы",
+                "forum_normalized": "День молодёжи",
+                "topic": "sut_festivalya_i_data",
+            },
+            score=1.0,
+            reranker_score=0.7,
+        ),
+    ]
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="День молодёжи",
+                complexity=Complexity.COMPLEX,
+                questions=[
+                    Question(
+                        text="Как зарегистрироваться?",
+                        topic="kak_zaregistrirovatsya_na_fgais",
+                        category="форумы",
+                        forum_normalized="День молодёжи",
+                    ),
+                    Question(
+                        text="Можно ли прийти с ребёнком?",
+                        topic="poseschenie_festivalya_s_detmi",
+                        category="форумы",
+                        forum_normalized="День молодёжи",
+                    ),
+                    Question(
+                        text="Где посмотреть программу?",
+                        topic="programma_foruma",
+                        category="форумы",
+                        forum_normalized="День молодёжи",
+                    ),
+                    Question(
+                        text="Когда проходит событие?",
+                        topic="daty_nachala_meropriyatiya",
+                        category="форумы",
+                        forum_normalized="День молодёжи",
+                    ),
+                ],
+            ),
+            "reranked_chunks": chunks,
+            "max_confidence": 0.7,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["registration", "children", "program", "date"]
+    assert "Передаю обращение" not in result["generated_response"]
+
+
+@pytest.mark.asyncio
 async def test_generate_prefers_event_overview_source_for_forum_summary_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1012,15 +1012,31 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     ),
     frozenset({"voprosy_po_zdorovyu_medpunkt", "informaciya_o_ploschadke_medicina"}),
     frozenset({"sut_foruma_i_napravleniya", "sut_festivalya_i_tematika", "o_meropriyatii"}),
-    frozenset({"mesto_i_daty_provedeniya_meropriyatiya", "daty_nachala_meropriyatiya"}),
+    frozenset(
+        {
+            "daty_nachala_meropriyatiya",
+            "mesto_i_daty_provedeniya_meropriyatiya",
+            "mesto_i_ploschadka_provedeniya",
+            "vremya_nachala_i_raspisanie",
+            "sut_festivalya_i_data",
+        }
+    ),
     frozenset({"dobavlenie_v_chat_i_sluzhba_zaboty", "dobavlenie_v_chat_meropriyatiya"}),
     frozenset({"rosmolodezh_granty", "usloviya_i_sroki_uchastiya_granty"}),
     frozenset({"inostrannye_grazhdane"}),
     frozenset({"uchastniki_s_ovz"}),
     frozenset({"voprosy_po_zdorovyu_medpunkt", "informaciya_o_ploschadke_medicina"}),
     frozenset({"kogda_budet_sertifikat", "mozhno_li_poluchit_sertifikat_za_uchastie"}),
-    frozenset({"podacha_zayavki_na_proekt", "podat_zayavku_na_uchastie"}),
-    frozenset({"otkaz_ot_uchastiya"}),
+    frozenset(
+        {
+            "kak_zaregistrirovatsya_na_fgais",
+            "registraciya_na_meropriyatie",
+            "registraciya_bez_max",
+            "podacha_zayavki_na_proekt",
+            "podat_zayavku_na_uchastie",
+        }
+    ),
+    frozenset({"otkaz_ot_uchastiya", "kolichestvo_person_otmena_registracii"}),
     frozenset({"vnesti_izmeneniya_v_zayavku"}),
     frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
     frozenset({"cifrovaya_nedelya"}),
