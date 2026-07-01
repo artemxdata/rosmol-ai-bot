@@ -1923,6 +1923,7 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         topic="kak_zaregistrirovatsya_na_fgais",
                     ),
                     Question(text="Where is the program?", topic="programma_foruma"),
+                    Question(text="What else is known from the source?"),
                 ],
             ),
             "message_masked": "Forum A: registration and program.",

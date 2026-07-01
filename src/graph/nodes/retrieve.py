@@ -128,7 +128,6 @@ async def retrieve(state: BotState) -> dict:
     needs_shared_broad_fallback = False
     for question in questions:
         if topic_question_count > 1 and not question.topic:
-            needs_shared_broad_fallback = True
             continue
 
         question_filters = {
