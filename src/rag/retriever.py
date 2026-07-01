@@ -95,13 +95,22 @@ class Retriever:
         filters: dict[str, Any] | None = None,
         top_k: int = 10,
     ) -> list[Chunk]:
+        filters = filters or {}
         points, _ = await self.qdrant.scroll(
             collection_name=self.collection_name,
-            scroll_filter=build_filter(filters or {}),
+            scroll_filter=build_filter(filters),
             limit=top_k,
             with_payload=True,
             with_vectors=False,
         )
+        if not points and _can_fallback_to_raw_metadata_filter(filters):
+            points, _ = await self.qdrant.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=build_filter(filters, use_stable_keys=False),
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+            )
 
         chunks: list[Chunk] = []
         for point in points:
@@ -200,37 +209,61 @@ class Retriever:
         return payloads
 
 
-def build_filter(filters: dict[str, Any]) -> models.Filter:
+def build_filter(filters: dict[str, Any], *, use_stable_keys: bool = True) -> models.Filter:
     must: list[models.Condition] = [
         models.FieldCondition(key="status", match=models.MatchValue(value="published"))
     ]
 
     forum = filters.get("forum_normalized")
     if forum:
-        must.append(
-            models.FieldCondition(
-                key="forum_key",
-                match=models.MatchValue(value=stable_text_filter_key(forum)),
+        if use_stable_keys:
+            must.append(
+                models.FieldCondition(
+                    key="forum_key",
+                    match=models.MatchValue(value=stable_text_filter_key(forum)),
+                )
             )
-        )
+        else:
+            must.append(
+                models.FieldCondition(
+                    key="forum_normalized",
+                    match=models.MatchValue(value=forum),
+                )
+            )
 
     category = filters.get("category")
     if category:
-        must.append(
-            models.FieldCondition(
-                key="category_key",
-                match=models.MatchValue(value=category_filter_key(category)),
+        if use_stable_keys:
+            must.append(
+                models.FieldCondition(
+                    key="category_key",
+                    match=models.MatchValue(value=category_filter_key(category)),
+                )
             )
-        )
+        else:
+            must.append(
+                models.FieldCondition(
+                    key="category",
+                    match=models.MatchValue(value=category),
+                )
+            )
 
     topic = filters.get("topic")
     if topic:
-        must.append(
-            models.FieldCondition(
-                key="topic_key",
-                match=models.MatchValue(value=stable_text_filter_key(topic)),
+        if use_stable_keys:
+            must.append(
+                models.FieldCondition(
+                    key="topic_key",
+                    match=models.MatchValue(value=stable_text_filter_key(topic)),
+                )
             )
-        )
+        else:
+            must.append(
+                models.FieldCondition(
+                    key="topic",
+                    match=models.MatchValue(value=topic),
+                )
+            )
 
     for key in ("forum_key", "category_key", "topic_key"):
         value = filters.get(key)
@@ -248,6 +281,10 @@ def build_filter(filters: dict[str, Any]) -> models.Filter:
         models.IsNullCondition(is_null=models.PayloadField(key="valid_to")),
     ]
     return models.Filter(must=must, should=should)
+
+
+def _can_fallback_to_raw_metadata_filter(filters: dict[str, Any]) -> bool:
+    return any(filters.get(key) for key in ("forum_normalized", "category", "topic"))
 
 
 def _keyword_score(

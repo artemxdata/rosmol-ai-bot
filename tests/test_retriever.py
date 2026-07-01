@@ -88,6 +88,40 @@ class FakeScrollQdrant(FakeQdrant):
         )
 
 
+class FakeRawFallbackScrollQdrant(FakeQdrant):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scroll_calls = []
+
+    async def scroll(self, **kwargs):
+        self.scroll_calls.append(kwargs)
+
+        class Point:
+            def __init__(self, point_id: str, payload: dict) -> None:
+                self.id = point_id
+                self.payload = payload
+
+        if len(self.scroll_calls) == 1:
+            return ([], None)
+
+        return (
+            [
+                Point(
+                    "date",
+                    {
+                        "chunk_id": "date",
+                        "source_type": "xlsx",
+                        "category": "форумы",
+                        "forum_normalized": "День молодёжи",
+                        "topic": "sut_festivalya_i_data",
+                        "text_clean": "27 июня 2026 года пройдёт День молодёжи.",
+                    },
+                )
+            ],
+            None,
+        )
+
+
 @pytest.mark.asyncio
 async def test_retriever_applies_filter_to_prefetches() -> None:
     qdrant = FakeQdrant()
@@ -150,6 +184,46 @@ async def test_retriever_metadata_lookup_does_not_embed_query() -> None:
     assert "category_key" in field_keys
     assert "forum_key" in field_keys
     assert "topic_key" in field_keys
+
+
+@pytest.mark.asyncio
+async def test_retriever_metadata_lookup_falls_back_to_raw_payload_fields() -> None:
+    qdrant = FakeRawFallbackScrollQdrant()
+    embedder = FakeEmbedder()
+    retriever = Retriever(
+        qdrant,
+        embedder,  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    chunks = await retriever.retrieve_by_metadata(
+        {
+            "category": "форумы",
+            "forum_normalized": "День молодёжи",
+            "topic": "sut_festivalya_i_data",
+        },
+        top_k=3,
+    )
+
+    assert [chunk.chunk_id for chunk in chunks] == ["date"]
+    assert embedder.calls == 0
+    assert len(qdrant.scroll_calls) == 2
+    first_field_keys = [
+        condition.key
+        for condition in qdrant.scroll_calls[0]["scroll_filter"].must
+        if hasattr(condition, "key")
+    ]
+    second_field_keys = [
+        condition.key
+        for condition in qdrant.scroll_calls[1]["scroll_filter"].must
+        if hasattr(condition, "key")
+    ]
+    assert "forum_key" in first_field_keys
+    assert "category_key" in first_field_keys
+    assert "topic_key" in first_field_keys
+    assert "forum_normalized" in second_field_keys
+    assert "category" in second_field_keys
+    assert "topic" in second_field_keys
 
 
 @pytest.mark.asyncio

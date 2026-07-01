@@ -1909,6 +1909,15 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         score=1.0,
                     )
                 ]
+            if topic == "sut_festivalya_i_data":
+                return [
+                    Chunk(
+                        chunk_id="date_alias",
+                        text="Date source.",
+                        metadata={"chunk_id": "date_alias", "topic": topic},
+                        score=1.0,
+                    )
+                ]
             return []
 
     retriever = AliasMetadataRetriever()
@@ -1923,6 +1932,7 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         topic="kak_zaregistrirovatsya_na_fgais",
                     ),
                     Question(text="Where is the program?", topic="programma_foruma"),
+                    Question(text="When does it take place?", topic="daty_nachala_meropriyatiya"),
                     Question(text="What else is known from the source?"),
                 ],
             ),
@@ -1934,6 +1944,7 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
     assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
         "registration_alias",
         "program_alias",
+        "date_alias",
     ]
     assert retriever.semantic_calls == []
     metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
@@ -1941,6 +1952,8 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
     assert "registraciya_na_meropriyatie" in metadata_topics
     assert "programma_foruma" in metadata_topics
     assert "programma_i_artisty" in metadata_topics
+    assert "daty_nachala_meropriyatiya" in metadata_topics
+    assert "sut_festivalya_i_data" in metadata_topics
 
 
 @pytest.mark.asyncio
