@@ -7068,6 +7068,22 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
         score=0.82,
         reranker_score=0.77,
     )
+    dates = ScoredChunk(
+        chunk_id="amur_dates",
+        text=(
+            "❗️Актуальные даты проведения форума «Амур» будут объявлены в 2026 году. "
+            "Пожалуйста, ожидай обновлений на платформе «Росмолодёжь.Форумы»."
+        ),
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "daty_nachala_meropriyatiya",
+            "intent_name": "Даты начала мероприятия",
+        },
+        score=0.81,
+        reranker_score=0.76,
+    )
     generate_node = importlib.import_module("src.graph.nodes.generate")
     expected_questions = [
         Question(
@@ -7095,7 +7111,7 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
         for chunk in generate_node._select_llm_source_chunks(
             analysis,
             expected_questions,
-            [application, results],
+            [application, results, dates],
             0.95,
         )
     ] == ["amur_application"]
@@ -7104,7 +7120,7 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
         {
             "analysis": analysis,
             "message_masked": "Амур: как подать заявку и когда будут известны сроки отбора?",
-            "reranked_chunks": [application, results],
+            "reranked_chunks": [application, results, dates],
             "max_confidence": 0.95,
             "llm_client": FailingLLM(),
         }
@@ -7114,6 +7130,7 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
     assert result["cited_sources"] == ["amur_application"]
     assert "результатах отбора" in result["generated_response"]
     assert "amur_results" not in result["generated_response"]
+    assert "amur_dates" not in result["generated_response"]
 
 
 @pytest.mark.asyncio

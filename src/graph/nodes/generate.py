@@ -811,7 +811,10 @@ def _is_redundant_source_chunk(chunk: ScoredChunk, selected: list[ScoredChunk]) 
     for existing in selected:
         if not _chunks_share_response_scope(chunk, existing):
             continue
-        if _source_text_overlap(chunk.text, existing.text) >= 0.72:
+        text_overlap = _source_text_overlap(chunk.text, existing.text)
+        if text_overlap >= 0.72:
+            return True
+        if text_overlap >= 0.58 and _chunks_share_future_date_notice(chunk, existing):
             return True
     return False
 
@@ -833,6 +836,13 @@ def _source_text_overlap(left: str, right: str) -> float:
     if len(left_tokens) < 6 or len(right_tokens) < 6:
         return 0.0
     return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+
+
+def _chunks_share_future_date_notice(left: ScoredChunk, right: ScoredChunk) -> bool:
+    left_text = _normalize(left.text)
+    right_text = _normalize(right.text)
+    required_markers = ("актуальные даты", "будут объявлены")
+    return all(marker in left_text and marker in right_text for marker in required_markers)
 
 
 def _content_tokens(text: str) -> set[str]:
