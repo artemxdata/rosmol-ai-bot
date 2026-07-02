@@ -946,6 +946,35 @@ def test_session_context_restores_forum_for_followup_from_last_five_turns() -> N
     assert build_contextual_message(message, session, analysis).startswith("Амур: ")
 
 
+def test_session_context_clears_forum_clarification_when_forum_is_known() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        last_messages=[
+            {
+                "user": "Российский Север: где проходит форум?",
+                "bot": "Форум «Российский Север» пройдёт в Салехарде.",
+            }
+        ],
+    )
+    analysis = QueryAnalysis(
+        category="форумы",
+        needs_clarification=True,
+        clarification_question=(
+            "Уточни, пожалуйста, о каком форуме или мероприятии речь? "
+            "У разных событий условия могут отличаться."
+        ),
+    )
+
+    analysis = apply_session_context(analysis, "Я участник, что дальше?", session)
+
+    assert analysis.forum_normalized == "Российский Север"
+    assert analysis.category == "форумы"
+    assert analysis.needs_clarification is False
+    assert analysis.clarification_question is None
+
+
 def test_session_context_restores_grant_return_for_followup() -> None:
     session = Session(
         user_id="u1",

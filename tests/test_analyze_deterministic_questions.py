@@ -51,6 +51,22 @@ def test_fallback_analysis_clarifies_forum_specific_question_without_forum() -> 
     assert analysis.questions == []
 
 
+def test_fallback_analysis_clarifies_generic_participant_next_step_without_forum() -> None:
+    analysis = _fallback_analysis(
+        "Я участник, что дальше?",
+        "Я участник, что дальше?",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.category == "форумы"
+    assert analysis.clarification_question is not None
+    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.questions == []
+
+
 def test_fallback_analysis_routes_general_grants_to_terms_topic() -> None:
     analysis = _fallback_analysis(
         "Гранты для физлиц",

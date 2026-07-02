@@ -386,6 +386,8 @@ def _needs_forum_context_clarification(message: str) -> bool:
         return False
     if any(marker in normalized for marker in ("грант", "фгаис", "росмолод")):
         return False
+    if _needs_participant_event_context_clarification(normalized):
+        return True
     markers = (
         "фельдшер",
         "медпункт",
@@ -403,6 +405,33 @@ def _needs_forum_context_clarification(message: str) -> bool:
         "чат участников",
     )
     return any(marker in normalized for marker in markers)
+
+
+def _needs_participant_event_context_clarification(normalized: str) -> bool:
+    if "участ" not in normalized:
+        return False
+    participant_markers = (
+        "я участник",
+        "я участница",
+        "стал участник",
+        "стала участниц",
+        "прошел отбор",
+        "прошёл отбор",
+        "прошла отбор",
+        "подтвердил участие",
+        "подтвердила участие",
+    )
+    next_step_markers = (
+        "что дальше",
+        "дальше что",
+        "что теперь",
+        "следующ",
+        "какие дальнейшие",
+        "что делать",
+    )
+    return any(marker in normalized for marker in participant_markers) and any(
+        marker in normalized for marker in next_step_markers
+    )
 
 
 def _infer_category_from_message(message: str) -> str | None:

@@ -61,11 +61,24 @@ def apply_session_context(
             category = analysis.category
             if category in {None, "общее", "навигация"}:
                 category = "форумы"
+            clears_forum_clarification = (
+                analysis.needs_clarification
+                and analysis.clarification_question is not None
+                and "о каком форуме" in analysis.clarification_question.casefold()
+            )
             return analysis.model_copy(
                 update={
                     "forum": forum,
                     "forum_normalized": forum,
                     "category": category,
+                    "needs_clarification": (
+                        False if clears_forum_clarification else analysis.needs_clarification
+                    ),
+                    "clarification_question": (
+                        None
+                        if clears_forum_clarification
+                        else analysis.clarification_question
+                    ),
                 }
             )
 
