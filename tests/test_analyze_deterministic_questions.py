@@ -45,6 +45,21 @@ def test_fallback_analysis_routes_items_documents_to_packing_topic() -> None:
     assert "dokumenty_meropriyatiya" not in topics
 
 
+def test_fallback_analysis_keeps_forum_location_as_separate_aspect() -> None:
+    analysis = _fallback_analysis(
+        "Российский Север: какие документы нужны участнику и где будет проходить форум?",
+        "Российский Север: какие документы нужны участнику и где будет проходить форум?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Российский Север"
+    topics = {question.topic for question in analysis.questions}
+    assert "spisok_veschey_i_dokumentov" in topics
+    assert "daty_nachala_meropriyatiya" in topics
+
+
 def test_deterministic_questions_are_merged_with_partial_llm_questions() -> None:
     payload = {
         "forum_normalized": "Таврида",

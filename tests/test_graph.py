@@ -5819,6 +5819,87 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
 
 
 @pytest.mark.asyncio
+async def test_generate_covers_documents_and_location_for_forum_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunks = [
+        ScoredChunk(
+            chunk_id="russian_north_documents",
+            text=(
+                "Давай соберём твой чемодан правильно! "
+                "Возьми паспорт, личные документы и справку от врача."
+            ),
+            metadata={
+                "source_type": "xlsx",
+                "category": "форумы",
+                "forum_normalized": "Российский Север",
+                "topic": "dokumenty_meropriyatiya",
+            },
+            score=1.0,
+            reranker_score=0.7,
+        ),
+        ScoredChunk(
+            chunk_id="russian_north_dates_place",
+            text=(
+                "Форум «Российский Север» пройдёт в городе Салехард, "
+                "Ямало-Ненецкий автономный округ, с 17 по 20 ноября 2026 года."
+            ),
+            metadata={
+                "source_type": "xlsx",
+                "category": "форумы",
+                "forum_normalized": "Российский Север",
+                "topic": "mesto_i_daty_provedeniya_meropriyatiya",
+            },
+            score=1.0,
+            reranker_score=0.7,
+        ),
+    ]
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Российский Север",
+                complexity=Complexity.COMPLEX,
+                questions=[
+                    Question(
+                        text="Какие документы нужны?",
+                        topic="spisok_veschey_i_dokumentov",
+                        category="форумы",
+                        forum_normalized="Российский Север",
+                    ),
+                    Question(
+                        text="Где проходит мероприятие?",
+                        topic="daty_nachala_meropriyatiya",
+                        category="форумы",
+                        forum_normalized="Российский Север",
+                    ),
+                ],
+            ),
+            "reranked_chunks": chunks,
+            "max_confidence": 0.7,
+            "message_masked": (
+                "Российский Север: какие документы нужны участнику "
+                "и где будет проходить форум?"
+            ),
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == [
+        "russian_north_documents",
+        "russian_north_dates_place",
+    ]
+    assert "Салехард" in result["generated_response"]
+    assert "Передаю обращение" not in result["generated_response"]
+
+
+@pytest.mark.asyncio
 async def test_generate_prefers_event_overview_source_for_forum_summary_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
