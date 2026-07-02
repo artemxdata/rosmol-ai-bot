@@ -195,6 +195,9 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert "проблемы качества" in enabled.text
     assert "Блоки quality gate" in enabled.text
     assert "pass rate" in enabled.text
+    assert "Сохранение не подтверждено" in enabled.text
+    assert "Текст сохранён, но RAG-индекс не обновлён" in enabled.text
+    assert "Операция не завершилась за" in enabled.text
 
 
 @pytest.mark.asyncio

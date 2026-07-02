@@ -731,8 +731,14 @@ _HTML_TEMPLATE = """
     }
     function adminErrorMessage(status, detail) {
       const raw = String(detail || "").trim();
+      const normalized = raw.toLowerCase();
       if (status === 503) {
-        if (raw.includes("Service Unavailable") || raw.includes("ML") || raw.includes("индекс")) {
+        if (
+          normalized.includes("service unavailable") ||
+          normalized.includes("ml") ||
+          normalized.includes("index") ||
+          normalized.includes("индекс")
+        ) {
           return (
             "ML-сервис для обновления индекса временно недоступен. " +
             "Текст мог сохраниться, но RAG-индекс нужно обновить после восстановления app-ml."
@@ -747,6 +753,31 @@ _HTML_TEMPLATE = """
         );
       }
       return raw || "Неизвестная ошибка";
+    }
+    function transportErrorMessage(error, timeoutMs) {
+      if (error.name === "AbortError") {
+        const seconds = Math.round(timeoutMs / 1000);
+        return (
+          `Операция не завершилась за ${seconds} сек. ` +
+          "Проверь статус сервисов и повтори действие. " +
+          "Если это сохранение текста, открой чанк заново: " +
+          "текст мог сохраниться, а индекс мог не обновиться."
+        );
+      }
+      const raw = String(error.message || error || "").trim();
+      const normalized = raw.toLowerCase();
+      if (
+        normalized.includes("failed to fetch") ||
+        normalized.includes("networkerror") ||
+        normalized.includes("service unavailable") ||
+        normalized.includes("load failed")
+      ) {
+        return (
+          "Админка временно не получила ответ от сервиса. " +
+          "Проверь /ready и app-ml, затем обнови страницу или повтори действие."
+        );
+      }
+      return raw || "Не удалось выполнить запрос к админке.";
     }
     function setEditorBusy(isBusy) {
       if (!selectedChunkId) return;
@@ -770,12 +801,7 @@ _HTML_TEMPLATE = """
             ...(options.headers || {}),
           },
         }).catch((error) => {
-          if (error.name === "AbortError") {
-            throw new Error(
-              "Запрос не завершился за 4 минуты. Проверь состояние сервиса и повтори действие."
-            );
-          }
-          throw error;
+          throw new Error(transportErrorMessage(error, timeoutMs));
         });
         const text = await response.text();
         let payload = {};
@@ -1149,6 +1175,7 @@ _HTML_TEMPLATE = """
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId),
           {
             method: "PATCH",
+            timeoutMs: shouldReindex ? 90000 : 30000,
             body: JSON.stringify({
               status: document.getElementById("chunkStatus").value,
               text_clean: document.getElementById("textClean").value,
@@ -1161,7 +1188,9 @@ _HTML_TEMPLATE = """
           const reason = data.reindex.error || "индекс не обновлён";
           setStatus(
             "detailStatus",
-            "Текст сохранён, но RAG-индекс не обновлён: " + reason,
+            "Текст сохранён, но RAG-индекс не обновлён: " +
+              reason +
+              ". Нажми «Только обновить индекс», когда app-ml будет готов.",
             "warn"
           );
         } else {
@@ -1172,7 +1201,13 @@ _HTML_TEMPLATE = """
         }
         await loadChunks();
       } catch (error) {
-        setStatus("detailStatus", error.message, "error");
+        setStatus(
+          "detailStatus",
+          "Сохранение не подтверждено: " +
+            error.message +
+            " Открой этот чанк заново и проверь текст перед повторной правкой.",
+          "error"
+        );
       } finally {
         setEditorBusy(false);
       }
@@ -1185,7 +1220,7 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", "Обновляю RAG-индекс и сбрасываю semantic cache...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/reindex",
-          {method: "POST", body: "{}"}
+          {method: "POST", body: "{}", timeoutMs: 90000}
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         setStatus("detailStatus", "Qdrant обновлён, семантический кэш сброшен", "ok");
