@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 
 import pytest
@@ -863,6 +864,18 @@ def test_fallback_questions_prefer_arrival_departure_over_generic_dates() -> Non
     )
 
     assert [question.text for question in questions] == ["Когда заезд и выезд?"]
+
+
+def test_fallback_questions_map_selection_deadline_to_results_not_event_dates() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Амур"),
+        "Амур: как подать заявку и когда будут известны сроки отбора?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как подать заявку или зарегистрироваться?",
+        "Когда будут результаты отбора?",
+    ]
 
 
 def test_fallback_questions_map_rejected_application() -> None:
@@ -7011,6 +7024,96 @@ async def test_generate_selects_source_for_each_multi_aspect_question(
     assert result["cited_sources"] == ["amur_application", "amur_travel"]
     assert "регистрация на форум «Амур» закрыта" in result["generated_response"]
     assert "оплата проезда" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_aspect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    forum = "Амур"
+    application = ScoredChunk(
+        chunk_id="amur_application",
+        text=(
+            "Обратите внимание: регистрация на форум «Амур» закрыта. "
+            "Сроки приёма заявок и оповещения о результатах отбора будут известны позднее. "
+            "После подачи заявки ты сможешь следить за её статусом в личном кабинете."
+        ),
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "podacha_zayavki_na_proekt",
+            "intent_name": "Подача заявки на проект",
+        },
+        score=0.98,
+        reranker_score=0.95,
+    )
+    results = ScoredChunk(
+        chunk_id="amur_results",
+        text=(
+            "Актуальные даты проведения форума «Амур» будут объявлены в 2026 году, "
+            "сроки приёма заявок и оповещения о результатах отбора будут известны позже."
+        ),
+        metadata={
+            "category": "форумы",
+            "forum_normalized": forum,
+            "source_type": "xlsx",
+            "topic": "rezultaty_rm",
+            "intent_name": "Результаты РМ",
+        },
+        score=0.82,
+        reranker_score=0.77,
+    )
+    generate_node = importlib.import_module("src.graph.nodes.generate")
+    expected_questions = [
+        Question(
+            text="Как подать заявку?",
+            category="форумы",
+            forum_normalized=forum,
+            topic="podacha_zayavki_na_proekt",
+        ),
+        Question(
+            text="Когда будут результаты отбора?",
+            category="форумы",
+            forum_normalized=forum,
+            topic="rezultaty_rm",
+        ),
+    ]
+    analysis = QueryAnalysis(
+        complexity=Complexity.COMPLEX,
+        category="форумы",
+        forum_normalized=forum,
+        questions=expected_questions,
+    )
+
+    assert [
+        chunk.chunk_id
+        for chunk in generate_node._select_llm_source_chunks(
+            analysis,
+            expected_questions,
+            [application, results],
+            0.95,
+        )
+    ] == ["amur_application"]
+
+    result = await generate(
+        {
+            "analysis": analysis,
+            "message_masked": "Амур: как подать заявку и когда будут известны сроки отбора?",
+            "reranked_chunks": [application, results],
+            "max_confidence": 0.95,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["amur_application"]
+    assert "результатах отбора" in result["generated_response"]
+    assert "amur_results" not in result["generated_response"]
 
 
 @pytest.mark.asyncio

@@ -494,9 +494,11 @@ def _append_missing_fallback_questions(
     forum_normalized: str | None,
 ) -> None:
     seen = {question.text.casefold().replace("ё", "е") for question in questions}
+    seen_aspects = {_fallback_question_aspect_key(question.text) for question in questions}
     for text in detected_texts:
         key = text.casefold().replace("ё", "е")
-        if key in seen:
+        aspect_key = _fallback_question_aspect_key(text)
+        if key in seen or aspect_key in seen_aspects:
             continue
         detected_marker_groups = _matched_marker_group_indexes(text, category=category)
         if detected_marker_groups and any(
@@ -513,6 +515,7 @@ def _append_missing_fallback_questions(
             )
         )
         seen.add(key)
+        seen_aspects.add(aspect_key)
 
 
 def _matched_marker_group_indexes(
@@ -605,13 +608,23 @@ def _fallback_questions_from_message(
 ) -> list[str]:
     normalized = message.casefold().replace("ё", "е")
     questions: list[str] = []
+    seen_aspects: set[str] = set()
     for markers, question in _fallback_marker_groups(extra_markers, category=category):
         if any(marker in normalized for marker in markers):
             if _should_skip_fallback_question(question, normalized, category=category):
                 continue
-            if question not in questions:
+            aspect_key = _fallback_question_aspect_key(question)
+            if question not in questions and aspect_key not in seen_aspects:
                 questions.append(question)
+                seen_aspects.add(aspect_key)
     return questions
+
+
+def _fallback_question_aspect_key(question: str) -> str:
+    normalized = question.casefold().replace("ё", "е")
+    if "результат" in normalized and "отбор" in normalized:
+        return "selection_results"
+    return normalized
 
 
 def _fallback_marker_groups(
@@ -655,6 +668,8 @@ def _should_skip_fallback_question(
         ) and not _has_event_document_context(normalized_message)
     if question == "Какие даты и сроки?":
         if "когда добав" in normalized_message and "чат" in normalized_message:
+            return True
+        if _has_selection_result_context(normalized_message):
             return True
         has_arrival_departure_context = any(
             marker in normalized_message
@@ -788,6 +803,18 @@ def _has_event_document_context(normalized_message: str) -> bool:
             "памятк",
         )
     )
+
+
+def _has_selection_result_context(normalized_message: str) -> bool:
+    has_selection_context = any(
+        marker in normalized_message
+        for marker in ("отбор", "конкурс", "результат", "резерв", "список", "списки")
+    )
+    has_timing_context = any(
+        marker in normalized_message
+        for marker in ("срок", "когда", "оповещ", "известн", "результат")
+    )
+    return has_selection_context and has_timing_context
 
 
 def _has_personal_date_context(normalized_message: str) -> bool:

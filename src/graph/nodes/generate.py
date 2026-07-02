@@ -577,9 +577,12 @@ def _select_llm_source_chunks(
     selected: list[ScoredChunk] = []
     selected_ids: set[str] = set()
     for question in questions:
+        if _selected_source_chunks_cover_question(question, selected):
+            continue
+
         source_chunk = _topic_source_for_question(analysis, question, candidates)
         if source_chunk is not None:
-            if source_chunk.chunk_id in selected_ids:
+            if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
                 continue
             selected.append(source_chunk)
             selected_ids.add(source_chunk.chunk_id)
@@ -600,7 +603,7 @@ def _select_llm_source_chunks(
         )
         if source_chunk is None:
             return []
-        if source_chunk.chunk_id in selected_ids:
+        if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
             continue
         selected.append(source_chunk)
         selected_ids.add(source_chunk.chunk_id)
@@ -722,9 +725,12 @@ def select_deterministic_source_chunks(
     if top_official_source is not None and len(questions) == 1:
         return [top_official_source]
     for question in questions:
+        if _selected_source_chunks_cover_question(question, selected):
+            continue
+
         source_chunk = _topic_source_for_question(analysis, question, candidates)
         if source_chunk is not None:
-            if source_chunk.chunk_id in selected_ids:
+            if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
                 continue
             selected.append(source_chunk)
             selected_ids.add(source_chunk.chunk_id)
@@ -737,7 +743,7 @@ def select_deterministic_source_chunks(
         )
         source_chunk = _exact_source_for_original_question(question, question_candidates)
         if source_chunk is not None:
-            if source_chunk.chunk_id in selected_ids:
+            if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
                 continue
             selected.append(source_chunk)
             selected_ids.add(source_chunk.chunk_id)
@@ -752,11 +758,98 @@ def select_deterministic_source_chunks(
         )
         if source_chunk is None:
             return []
-        if source_chunk.chunk_id in selected_ids:
+        if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
             continue
         selected.append(source_chunk)
         selected_ids.add(source_chunk.chunk_id)
     return selected
+
+
+def _selected_source_chunks_cover_question(
+    question: Question,
+    selected: list[ScoredChunk],
+) -> bool:
+    return any(_source_chunk_strictly_covers_question(question, chunk) for chunk in selected)
+
+
+def _source_chunk_strictly_covers_question(question: Question, chunk: ScoredChunk) -> bool:
+    if _intent_example_matches_question(question, chunk):
+        return True
+
+    if question.forum_normalized:
+        chunk_forum = str((chunk.metadata or {}).get("forum_normalized") or "").strip()
+        if chunk_forum and chunk_forum != question.forum_normalized:
+            return False
+
+    question_normalized = _normalize(question.text)
+    if _metadata_matches_specific_question(
+        QueryAnalysis(
+            category=question.category,
+            forum_normalized=question.forum_normalized,
+        ),
+        question,
+        chunk,
+    ):
+        return True
+
+    if _asks_selection_results(question_normalized):
+        haystack = _source_coverage_haystack(chunk)
+        return "результат" in haystack and "отбор" in haystack
+
+    return False
+
+
+def _should_skip_selected_source_chunk(
+    chunk: ScoredChunk,
+    selected: list[ScoredChunk],
+    selected_ids: set[str],
+) -> bool:
+    return chunk.chunk_id in selected_ids or _is_redundant_source_chunk(chunk, selected)
+
+
+def _is_redundant_source_chunk(chunk: ScoredChunk, selected: list[ScoredChunk]) -> bool:
+    for existing in selected:
+        if not _chunks_share_response_scope(chunk, existing):
+            continue
+        if _source_text_overlap(chunk.text, existing.text) >= 0.72:
+            return True
+    return False
+
+
+def _chunks_share_response_scope(left: ScoredChunk, right: ScoredChunk) -> bool:
+    left_metadata = left.metadata or {}
+    right_metadata = right.metadata or {}
+    for key in ("category", "forum_normalized"):
+        left_value = str(left_metadata.get(key) or "").strip()
+        right_value = str(right_metadata.get(key) or "").strip()
+        if left_value and right_value and left_value != right_value:
+            return False
+    return True
+
+
+def _source_text_overlap(left: str, right: str) -> float:
+    left_tokens = _content_tokens(left)
+    right_tokens = _content_tokens(right)
+    if len(left_tokens) < 6 or len(right_tokens) < 6:
+        return 0.0
+    return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+
+
+def _content_tokens(text: str) -> set[str]:
+    stopwords = {
+        "будет",
+        "будут",
+        "после",
+        "этого",
+        "форум",
+        "форума",
+        "мероприятие",
+        "мероприятия",
+        "платформе",
+        "росмолодежь",
+        "росмолодёжь",
+    }
+    return {token for token in _tokens(text) if token not in stopwords}
 
 
 def _topic_source_for_question(
