@@ -14,6 +14,10 @@ def test_detect_forum_from_text_ignores_partial_word_matches() -> None:
     assert detect_forum_from_text("Шумный город без названия форума") is None
 
 
+def test_detect_forum_from_text_handles_ivolga_genitive_case() -> None:
+    assert detect_forum_from_text("Какая программа форума Иволги?") == "Иволга"
+
+
 def test_detect_forums_from_text_returns_all_registry_matches_once() -> None:
     forums = detect_forums_from_text(
         "Чем отличаются Машук и Территория смыслов по проживанию?"

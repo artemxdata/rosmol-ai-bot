@@ -17,6 +17,15 @@ OFFICIAL_KEYWORD_SOURCE_TYPES = ("xlsx", "docx")
 FALLBACK_KEYWORD_SOURCE_TYPES = ("ticket_answer_bank",)
 TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     (
+        "o_meropriyatii",
+        "sut_foruma_i_napravleniya",
+        "sut_festivalya_i_tematika",
+        "sut_festivalya_i_data",
+        "daty_nachala_meropriyatiya",
+        "mesto_i_daty_provedeniya_meropriyatiya",
+        "mesto_i_ploschadka_provedeniya",
+    ),
+    (
         "kak_zaregistrirovatsya_na_fgais",
         "registraciya_na_meropriyatie",
         "registraciya_bez_max",

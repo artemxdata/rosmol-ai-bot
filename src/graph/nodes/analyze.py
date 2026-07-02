@@ -137,16 +137,27 @@ def _fallback_analysis(
     is_offtopic = _is_safe_offtopic(masked_message)
     if is_offtopic:
         category = "offtopic"
+    is_generic_help = _is_generic_help_request(masked_message)
+    if is_generic_help and not category:
+        category = "общее"
+    needs_forum_context = _needs_forum_context_clarification(masked_message)
+    if needs_forum_context and not category:
+        category = "форумы"
     complexity = _complexity_from_routing_hint(routing_hint)
     if _has_feedback_context(masked_message):
         complexity = Complexity.SIMPLE
     if _is_exact_fallback_intent_message(masked_message):
         complexity = Complexity.SIMPLE
-    needs_clarification = is_offtopic or _needs_application_context_clarification(
-        masked_message
+    needs_application_context = _needs_application_context_clarification(masked_message)
+    needs_clarification = (
+        is_offtopic or is_generic_help or needs_application_context or needs_forum_context
     )
     clarification_question = (
-        "Уточни, пожалуйста, речь о форуме, мероприятии или грантовом конкурсе?"
+        _build_clarification_question(
+            is_generic_help=is_generic_help,
+            needs_application_context=needs_application_context,
+            needs_forum_context=needs_forum_context,
+        )
         if needs_clarification and not is_offtopic
         else None
     )
@@ -186,6 +197,10 @@ def _is_operator_request(message: str) -> bool:
 
 def _is_safe_offtopic(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е")
+    if ("контрольн" in normalized and "точк" in normalized) or any(
+        marker in normalized for marker in ("окно отчета", "окно отчёта")
+    ):
+        return False
     in_scope_markers = (
         "форум",
         "мероприят",
@@ -256,6 +271,64 @@ def _should_force_simple_support_query(category: str | None, message: str) -> bo
     return True
 
 
+def _is_generic_help_request(message: str) -> bool:
+    if _is_operator_request(message):
+        return False
+    normalized = message.casefold().replace("ё", "е").strip()
+    normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return False
+    words = re.findall(r"[\w-]+", normalized, flags=re.UNICODE)
+    exact_phrases = {
+        "помогите",
+        "помогите пожалуйста",
+        "нужна помощь",
+        "нужна консультация",
+        "есть вопрос",
+        "подскажите",
+        "добрый день помогите",
+        "здравствуйте помогите",
+    }
+    if normalized in exact_phrases:
+        return True
+    if len(words) <= 4 and any(
+        marker in normalized
+        for marker in (
+            "помогите",
+            "нужна помощь",
+            "есть вопрос",
+            "подскажите",
+        )
+    ):
+        return True
+    return False
+
+
+def _build_clarification_question(
+    *,
+    is_generic_help: bool,
+    needs_application_context: bool,
+    needs_forum_context: bool,
+) -> str:
+    if needs_application_context:
+        return (
+            "Уточни, пожалуйста, о какой заявке речь: на конкретный форум/мероприятие "
+            "или на грантовый конкурс?"
+        )
+    if needs_forum_context:
+        return (
+            "Уточни, пожалуйста, о каком форуме или мероприятии речь? "
+            "У разных событий условия могут отличаться."
+        )
+    if is_generic_help:
+        return (
+            "Уточни, пожалуйста, вопрос: это про форум, мероприятие, ФГАИС "
+            "«Молодёжь России» или грантовый конкурс?"
+        )
+    return "Уточни, пожалуйста, речь о форуме, мероприятии или грантовом конкурсе?"
+
+
 def _is_exact_fallback_intent_message(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е").strip()
     return normalized.startswith(("технические вопросы.", "рекомендации.")) or any(
@@ -276,20 +349,60 @@ def _needs_application_context_clarification(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е")
     if detect_forums_from_text(message):
         return False
-    if not ("подать" in normalized and "заяв" in normalized and "участ" in normalized):
+    has_application_request = "заяв" in normalized and any(
+        marker in normalized
+        for marker in (
+            "как подать",
+            "подать",
+            "подач",
+            "отправить",
+            "оформить",
+            "создать",
+            "заполнить",
+        )
+    )
+    has_cancel_request = "заяв" in normalized and any(
+        marker in normalized
+        for marker in ("отмен", "отозв", "удал")
+    )
+    if not (has_application_request or has_cancel_request):
         return False
-    return not any(
+    if any(
         marker in normalized
         for marker in (
             "грант",
             "проект",
-            "форум",
-            "мероприят",
-            "фестивал",
             "фгаис",
             "росмолод",
         )
+    ):
+        return False
+    return True
+
+
+def _needs_forum_context_clarification(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е")
+    if detect_forums_from_text(message):
+        return False
+    if any(marker in normalized for marker in ("грант", "фгаис", "росмолод")):
+        return False
+    markers = (
+        "фельдшер",
+        "медпункт",
+        "медицин",
+        "питани",
+        "прожив",
+        "трансфер",
+        "письмо-вызов",
+        "письмо вызов",
+        "сертификат",
+        "справк",
+        "памятк",
+        "положение",
+        "программа форума",
+        "чат участников",
     )
+    return any(marker in normalized for marker in markers)
 
 
 def _infer_category_from_message(message: str) -> str | None:
@@ -307,6 +420,8 @@ def _infer_category_from_message(message: str) -> str | None:
     if "что такое росмолод" in normalized or "кто такие росмолод" in normalized:
         return "платформа_фгаис"
     if _needs_application_context_clarification(normalized):
+        return "форумы"
+    if _needs_forum_context_clarification(normalized):
         return "форумы"
     if _has_feedback_context(normalized):
         return "гранты"
@@ -333,8 +448,27 @@ def _infer_category_from_message(message: str) -> str | None:
         "проект" in normalized
         and any(marker in normalized for marker in ("подать", "заявк", "отправ"))
         and not any(marker in normalized for marker in ("форум", "фестивал", "мероприят"))
+        and not any(
+            marker in normalized
+            for marker in (
+                "не могу выбрать",
+                "не могу отправить",
+                "не могу сохранить",
+                "не могу заполнить",
+            )
+        )
     ):
         return "гранты"
+    if any(
+        marker in normalized
+        for marker in (
+            "не могу выбрать",
+            "не могу отправить",
+            "не могу сохранить",
+            "не могу заполнить",
+        )
+    ):
+        return "техподдержка"
     if any(
         word in normalized
         for word in (
@@ -352,6 +486,10 @@ def _infer_category_from_message(message: str) -> str | None:
             "ошиб",
             "баг",
             "не работает",
+            "не могу выбрать",
+            "не могу отправить",
+            "не могу сохранить",
+            "не могу заполнить",
             "не получается войти",
             "не получается выбрать",
             "не получается отправить",
@@ -598,6 +736,15 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     normalized = message.casefold().replace("ё", "е")
     if not forum and category not in {"гранты", "платформа_фгаис", "техподдержка"}:
         return []
+    if category == "гранты" and _is_general_grant_info_query(normalized):
+        return [
+            {
+                "text": "Какие условия участия в грантовом конкурсе?",
+                "topic": "usloviya_i_sroki_uchastiya",
+                "category": category,
+                "forum_normalized": forum,
+            }
+        ]
 
     candidates = [
         (
@@ -752,6 +899,15 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             seen_topics.add(topic)
     if questions:
         return questions
+    if _is_general_forum_info_query(message, str(forum or "")):
+        return [
+            {
+                "text": "Что это за форум?",
+                "topic": "o_meropriyatii",
+                "category": category,
+                "forum_normalized": forum,
+            }
+        ]
     return [
         {
             "text": message,
@@ -760,6 +916,81 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "forum_normalized": forum,
         }
     ]
+
+
+def _is_general_forum_info_query(message: str, forum: str) -> bool:
+    if not forum:
+        return False
+    normalized = message.casefold().replace("ё", "е")
+    explicit_markers = (
+        "расскажи",
+        "что такое",
+        "что за",
+        "подробнее",
+        "информация",
+        "о форуме",
+        "про форум",
+        "суть форум",
+        "тематика",
+    )
+    if any(marker in normalized for marker in explicit_markers):
+        return True
+
+    words = re.findall(r"[\w-]+", normalized, flags=re.UNICODE)
+    forum_words = set(
+        re.findall(r"[\w-]+", forum.casefold().replace("ё", "е"), flags=re.UNICODE)
+    )
+    filler_words = {
+        "форум",
+        "про",
+        "о",
+        "об",
+        "это",
+        "что",
+        "такое",
+        "за",
+        "расскажи",
+        "подскажи",
+        "пожалуйста",
+    }
+    meaningful_words = [
+        word for word in words if word not in forum_words and word not in filler_words
+    ]
+    return len(words) <= 5 and not meaningful_words
+
+
+def _is_general_grant_info_query(normalized: str) -> bool:
+    if "грант" not in normalized:
+        return False
+    if any(
+        marker in normalized
+        for marker in (
+            "отчет",
+            "отчёт",
+            "соглашени",
+            "возврат",
+            "вернуть",
+            "отклони",
+            "обратн",
+            "результат",
+            "заявк",
+            "проект",
+            "смет",
+        )
+    ):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "физлиц",
+            "физических лиц",
+            "услов",
+            "срок",
+            "участв",
+            "кто может",
+            "для кого",
+        )
+    )
 
 
 def _has_personal_date_without_event_context(normalized: str) -> bool:

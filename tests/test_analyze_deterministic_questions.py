@@ -3,6 +3,126 @@ from __future__ import annotations
 from src.graph.nodes.analyze import _ensure_deterministic_questions, _fallback_analysis
 
 
+def test_fallback_analysis_clarifies_generic_application_request() -> None:
+    analysis = _fallback_analysis(
+        "Как подать заявку?",
+        "Как подать заявку?",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.category == "форумы"
+    assert analysis.clarification_question is not None
+    assert "о какой заявке" in analysis.clarification_question
+    assert analysis.questions == []
+
+
+def test_fallback_analysis_clarifies_generic_help_request() -> None:
+    analysis = _fallback_analysis(
+        "Помогите",
+        "Помогите",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.category == "общее"
+    assert analysis.clarification_question is not None
+    assert "ФГАИС" in analysis.clarification_question
+    assert analysis.questions == []
+
+
+def test_fallback_analysis_clarifies_forum_specific_question_without_forum() -> None:
+    analysis = _fallback_analysis(
+        "Будет ли организован фельдшерский пункт?",
+        "Будет ли организован фельдшерский пункт?",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.category == "форумы"
+    assert analysis.clarification_question is not None
+    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.questions == []
+
+
+def test_fallback_analysis_routes_general_grants_to_terms_topic() -> None:
+    analysis = _fallback_analysis(
+        "Гранты для физлиц",
+        "Гранты для физлиц",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.category == "гранты"
+    assert [question.topic for question in analysis.questions] == [
+        "usloviya_i_sroki_uchastiya"
+    ]
+
+
+def test_fallback_analysis_keeps_control_point_report_in_grants_scope() -> None:
+    analysis = _fallback_analysis(
+        "До сих пор не проверена ни одна контрольная точка, и окно отчета недоступно",
+        "До сих пор не проверена ни одна контрольная точка, и окно отчета недоступно",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.is_offtopic is False
+    assert analysis.category == "гранты"
+    assert [question.topic for question in analysis.questions] == ["grant_reporting"]
+
+
+def test_fallback_analysis_routes_project_selection_error_to_support() -> None:
+    analysis = _fallback_analysis(
+        "Не могу выбрать проект при заполнении заявки",
+        "Не могу выбрать проект при заполнении заявки",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.category == "техподдержка"
+    assert analysis.complexity.value == "simple"
+
+
+def test_fallback_analysis_routes_general_forum_question_to_overview_topic() -> None:
+    analysis = _fallback_analysis(
+        "Расскажи про Машук",
+        "Расскажи про Машук",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Машук"
+    assert analysis.category == "форумы"
+    assert [question.topic for question in analysis.questions] == ["o_meropriyatii"]
+
+
+def test_fallback_analysis_detects_ivolga_application_alias() -> None:
+    analysis = _fallback_analysis(
+        "Как подать заявку на Иволгу?",
+        "Как подать заявку на Иволгу?",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is False
+    assert analysis.forum_normalized == "Иволга"
+    assert [question.topic for question in analysis.questions] == [
+        "podacha_zayavki_na_proekt"
+    ]
+
+
 def test_fallback_analysis_builds_multi_aspect_forum_questions() -> None:
     analysis = _fallback_analysis(
         "Амур: как подать заявку, кто оплачивает проезд и что делать, если не могу поехать?",
