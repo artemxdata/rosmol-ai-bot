@@ -51,6 +51,10 @@ SAFE_CROSS_CATEGORY_ANSWER_BANK_TOPICS = {
     "регистрация_и_заявка",
     "статус_заявки",
 }
+HOUSING_COMPATIBLE_TRAVEL_TOPICS = frozenset(
+    {"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}
+)
+HOUSING_TEXT_MARKERS = ("прожив", "размещ", "жиль", "жить")
 TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}),
     frozenset(
@@ -76,6 +80,10 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
             "spisok_veschey_i_dokumentov",
             "dokumenty_meropriyatiya",
             "pamyatka_uchastnika_foruma",
+            "programma_foruma",
+            "programma_i_artisty",
+            "programma_artisty",
+            "vremya_nachala_i_raspisanie",
         }
     ),
     frozenset({"voprosy_po_zdorovyu_medpunkt", "informaciya_o_ploschadke_medicina"}),
@@ -91,14 +99,6 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"otkaz_ot_uchastiya"}),
     frozenset({"vnesti_izmeneniya_v_zayavku"}),
     frozenset({"trebovaniya_po_dress_kodu"}),
-    frozenset(
-        {
-            "programma_foruma",
-            "programma_i_artisty",
-            "programma_artisty",
-            "vremya_nachala_i_raspisanie",
-        }
-    ),
     frozenset({"poseschenie_festivalya_s_detmi", "registraciya_detey"}),
     frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
     frozenset({"cifrovaya_nedelya"}),
@@ -719,6 +719,8 @@ def _topic_match_rank(question: Question, chunk: Chunk) -> int:
         return 0
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
         return 1
+    if _is_housing_compatible_travel_source(question_topic_group, chunk_topic, chunk.text):
+        return 1
     return 2
 
 
@@ -728,6 +730,19 @@ def _question_topic_group(question: Question) -> str | None:
         return _equivalent_topic_group(question_topic)
     inferred_topic = _infer_topic_from_question_text(_normalize(question.text))
     return _equivalent_topic_group(inferred_topic) if inferred_topic else None
+
+
+def _is_housing_compatible_travel_source(
+    question_topic_group: str | None,
+    chunk_topic: str,
+    chunk_text: str,
+) -> bool:
+    if question_topic_group != _equivalent_topic_group("usloviya_prozhivaniya"):
+        return False
+    if chunk_topic not in HOUSING_COMPATIBLE_TRAVEL_TOPICS:
+        return False
+    normalized_text = _normalize(chunk_text)
+    return any(marker in normalized_text for marker in HOUSING_TEXT_MARKERS)
 
 
 def _infer_topic_from_question_text(normalized_question: str) -> str | None:

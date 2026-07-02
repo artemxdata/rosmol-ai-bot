@@ -18,6 +18,10 @@ def test_detect_forum_from_text_handles_ivolga_genitive_case() -> None:
     assert detect_forum_from_text("Какая программа форума Иволги?") == "Иволга"
 
 
+def test_detect_forum_from_text_handles_volga_accusative_case() -> None:
+    assert detect_forum_from_text("Расскажи про Волгу") == "Волга"
+
+
 def test_detect_forums_from_text_returns_all_registry_matches_once() -> None:
     forums = detect_forums_from_text(
         "Чем отличаются Машук и Территория смыслов по проживанию?"

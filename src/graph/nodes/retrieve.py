@@ -22,6 +22,7 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
         "sut_festivalya_i_tematika",
         "sut_festivalya_i_data",
         "daty_nachala_meropriyatiya",
+        "vremya_nachala_i_raspisanie",
         "mesto_i_daty_provedeniya_meropriyatiya",
         "mesto_i_ploschadka_provedeniya",
     ),
@@ -37,6 +38,7 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
         "programma_i_artisty",
         "programma_artisty",
         "vremya_nachala_i_raspisanie",
+        "dokumenty_meropriyatiya",
     ),
     (
         "daty_nachala_meropriyatiya",
@@ -57,6 +59,15 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     (
         "usloviya_prozhivaniya",
         "oplata_proezda_prozhivaniya_i_charter",
+        "oplata_proezda",
+    ),
+    (
+        "usloviya_pitaniya_i_tochki_s_vodoy",
+        "pitanie_i_pite",
+        "pitanie_dlya_vegetariancev",
+        "informaciya_o_ploschadke_pitanie",
+        "informaciya_o_ploschadke_pitanie_pite",
+        "informaciya_o_ploschadke_pitanie_pite_i",
     ),
     (
         "otkaz_ot_uchastiya",

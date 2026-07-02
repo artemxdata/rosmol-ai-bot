@@ -627,7 +627,7 @@ async def test_escalate_asks_for_forum_when_context_is_ambiguous() -> None:
 
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "ambiguous_forum_context"
-    assert "Уточните" in result["final_response"]
+    assert "Уточни" in result["final_response"]
     assert "название форума" in result["final_response"]
 
 
@@ -1977,6 +1977,167 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
     assert "daty_nachala_meropriyatiya" in metadata_topics
     assert "vremya_nachala_i_raspisanie" in metadata_topics
     assert "mesto_i_ploschadka_provedeniya" not in metadata_topics
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_document_topic_alias_for_program_questions() -> None:
+    class ProgramDocumentAliasRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = []
+            self.metadata_calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.semantic_calls.append((query, filters, top_k))
+            return []
+
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            self.metadata_calls.append((filters, top_k))
+            topic = filters.get("topic")
+            if topic == "dokumenty_meropriyatiya":
+                return [
+                    Chunk(
+                        chunk_id="program_from_documents",
+                        text="Program is published in the event document channel.",
+                        metadata={
+                            "chunk_id": "program_from_documents",
+                            "topic": topic,
+                        },
+                        score=1.0,
+                    )
+                ]
+            return []
+
+    retriever = ProgramDocumentAliasRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(text="Where can I find the program?", topic="programma_foruma"),
+                ],
+            ),
+            "message_masked": "Forum A: program.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "program_from_documents"
+    ]
+    assert retriever.semantic_calls == []
+    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    assert metadata_topics == [
+        "programma_foruma",
+        "programma_i_artisty",
+        "programma_artisty",
+        "vremya_nachala_i_raspisanie",
+        "dokumenty_meropriyatiya",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_food_topic_alias_for_platform_food_questions() -> None:
+    class FoodAliasRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = []
+            self.metadata_calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.semantic_calls.append((query, filters, top_k))
+            return []
+
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            self.metadata_calls.append((filters, top_k))
+            topic = filters.get("topic")
+            if topic == "informaciya_o_ploschadke_pitanie":
+                return [
+                    Chunk(
+                        chunk_id="food_alias_source",
+                        text="Food source from the event platform topic.",
+                        metadata={
+                            "chunk_id": "food_alias_source",
+                            "topic": topic,
+                        },
+                        score=1.0,
+                    )
+                ]
+            return []
+
+    retriever = FoodAliasRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(
+                        text="How is food organized?",
+                        topic="informaciya_o_ploschadke_pitanie_pite",
+                    ),
+                ],
+            ),
+            "message_masked": "Forum A: food.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "food_alias_source"
+    ]
+    assert retriever.semantic_calls == []
+    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    assert "informaciya_o_ploschadke_pitanie_pite" in metadata_topics
+    assert "informaciya_o_ploschadke_pitanie" in metadata_topics
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_travel_topic_alias_for_housing_questions() -> None:
+    class HousingTravelAliasRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = []
+            self.metadata_calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.semantic_calls.append((query, filters, top_k))
+            return []
+
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            self.metadata_calls.append((filters, top_k))
+            topic = filters.get("topic")
+            if topic == "oplata_proezda":
+                return [
+                    Chunk(
+                        chunk_id="travel_with_housing",
+                        text="Travel, transfer, housing and food are covered by organizers.",
+                        metadata={"chunk_id": "travel_with_housing", "topic": topic},
+                        score=1.0,
+                    )
+                ]
+            return []
+
+    retriever = HousingTravelAliasRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(text="Where will participants live?", topic="usloviya_prozhivaniya"),
+                ],
+            ),
+            "message_masked": "Forum A: housing.",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "travel_with_housing"
+    ]
+    assert retriever.semantic_calls == []
+    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    assert "usloviya_prozhivaniya" in metadata_topics
+    assert "oplata_proezda" in metadata_topics
 
 
 @pytest.mark.asyncio
@@ -5673,6 +5834,106 @@ async def test_generate_uses_source_chunk_for_single_official_complex_forum_ques
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["ivolga_memo"]
     assert "памятке участника" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_treats_event_documents_as_program_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="ivolga_program_document",
+        text="The forum program is published in the official participant channel every day.",
+        metadata={
+            "source_type": "xlsx",
+            "category": "forums",
+            "forum_normalized": "Ivolga",
+            "topic": "dokumenty_meropriyatiya",
+            "intent_examples": ["where is the forum program"],
+        },
+        score=0.8,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="forums",
+                forum_normalized="Ivolga",
+                complexity=Complexity.COMPLEX,
+                questions=[
+                    Question(
+                        text="Where can I find the forum program?",
+                        topic="programma_foruma",
+                        category="forums",
+                        forum_normalized="Ivolga",
+                    )
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.72,
+            "message_masked": "Ivolga: where can I find the forum program?",
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["ivolga_program_document"]
+    assert "official participant channel" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_accepts_travel_source_when_it_explicitly_covers_housing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="ivolga_travel_housing",
+        text=(
+            "Travel is paid separately. Transfer, проживание and food are fully covered "
+            "by organizers."
+        ),
+        metadata={
+            "source_type": "xlsx",
+            "category": "forums",
+            "forum_normalized": "Ivolga",
+            "topic": "oplata_proezda",
+        },
+        score=0.8,
+        reranker_score=0.72,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="forums",
+                forum_normalized="Ivolga",
+                complexity=Complexity.COMPLEX,
+                questions=[
+                    Question(
+                        text="Where will participants live?",
+                        topic="usloviya_prozhivaniya",
+                        category="forums",
+                        forum_normalized="Ivolga",
+                    )
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.72,
+            "message_masked": "Ivolga: where will participants live?",
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["ivolga_travel_housing"]
+    assert "fully covered" in result["generated_response"]
 
 
 @pytest.mark.asyncio

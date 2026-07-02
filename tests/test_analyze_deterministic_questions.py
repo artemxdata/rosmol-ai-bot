@@ -107,6 +107,34 @@ def test_fallback_analysis_routes_general_forum_question_to_overview_topic() -> 
     assert [question.topic for question in analysis.questions] == ["o_meropriyatii"]
 
 
+def test_fallback_analysis_routes_inflected_forum_name_to_overview_topic() -> None:
+    analysis = _fallback_analysis(
+        "Расскажи про Волгу",
+        "Расскажи про Волгу",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Волга"
+    assert analysis.category == "форумы"
+    assert [question.topic for question in analysis.questions] == ["o_meropriyatii"]
+
+
+def test_fallback_analysis_routes_homoglyph_forum_name_to_overview_topic() -> None:
+    analysis = _fallback_analysis(
+        "Острова",
+        "Острова",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Островa"
+    assert analysis.category == "форумы"
+    assert [question.topic for question in analysis.questions] == ["o_meropriyatii"]
+
+
 def test_fallback_analysis_detects_ivolga_application_alias() -> None:
     analysis = _fallback_analysis(
         "Как подать заявку на Иволгу?",
@@ -163,6 +191,21 @@ def test_fallback_analysis_routes_items_documents_to_packing_topic() -> None:
         "uchastniki_s_ovz",
     }
     assert "dokumenty_meropriyatiya" not in topics
+
+
+def test_fallback_analysis_routes_food_verb_to_food_topic() -> None:
+    analysis = _fallback_analysis(
+        "Скажите, пожалуйста, где будут жить участники иВолги, и где они будут питаться?",
+        "Скажите, пожалуйста, где будут жить участники иВолги, и где они будут питаться?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Иволга"
+    topics = {question.topic for question in analysis.questions}
+    assert "usloviya_prozhivaniya" in topics
+    assert "informaciya_o_ploschadke_pitanie_pite" in topics
 
 
 def test_fallback_analysis_keeps_forum_location_as_separate_aspect() -> None:

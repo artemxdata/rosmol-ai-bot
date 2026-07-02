@@ -763,7 +763,11 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             ("отчет", "отчетност", "отчёт", "отчётност"),
         ),
         ("oplata_proezda", "Оплачивается ли проезд?", ("проезд", "дорог", "билет")),
-        ("usloviya_prozhivaniya", "Какие условия проживания?", ("прожив", "размещен")),
+        (
+            "usloviya_prozhivaniya",
+            "Какие условия проживания?",
+            ("прожив", "размещен", "жить", "жиль"),
+        ),
         (
             "otkaz_ot_uchastiya",
             "Что делать, если не получается поехать?",
@@ -817,7 +821,7 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
         (
             "informaciya_o_ploschadke_pitanie_pite",
             "Как организовано питание?",
-            ("питани", "пить", "вода", "меню"),
+            ("питани", "питат", "покорм", "еда", "пить", "вода", "меню"),
         ),
         (
             "informaciya_o_ploschadke_medicina",
@@ -921,7 +925,7 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
 def _is_general_forum_info_query(message: str, forum: str) -> bool:
     if not forum:
         return False
-    normalized = message.casefold().replace("ё", "е")
+    normalized = _normalize_forum_info_match_text(message)
     explicit_markers = (
         "расскажи",
         "что такое",
@@ -938,7 +942,7 @@ def _is_general_forum_info_query(message: str, forum: str) -> bool:
 
     words = re.findall(r"[\w-]+", normalized, flags=re.UNICODE)
     forum_words = set(
-        re.findall(r"[\w-]+", forum.casefold().replace("ё", "е"), flags=re.UNICODE)
+        re.findall(r"[\w-]+", _normalize_forum_info_match_text(forum), flags=re.UNICODE)
     )
     filler_words = {
         "форум",
@@ -957,6 +961,28 @@ def _is_general_forum_info_query(message: str, forum: str) -> bool:
         word for word in words if word not in forum_words and word not in filler_words
     ]
     return len(words) <= 5 and not meaningful_words
+
+
+def _normalize_forum_info_match_text(value: str) -> str:
+    latin_to_cyrillic_lookalikes = str.maketrans(
+        {
+            "a": "а",
+            "e": "е",
+            "o": "о",
+            "p": "р",
+            "c": "с",
+            "x": "х",
+            "y": "у",
+            "k": "к",
+            "m": "м",
+            "h": "н",
+            "t": "т",
+            "b": "в",
+        }
+    )
+    return str(value or "").casefold().replace("ё", "е").translate(
+        latin_to_cyrillic_lookalikes
+    )
 
 
 def _is_general_grant_info_query(normalized: str) -> bool:
