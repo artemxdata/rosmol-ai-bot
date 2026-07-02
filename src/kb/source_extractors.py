@@ -422,13 +422,30 @@ def clean_bot_text(value: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = [_normalize_plain_text(line) for line in text.split("\n")]
     cleaned = "\n".join(line for line in lines if line).strip()
-    return _strip_export_quote_artifact(cleaned)
+    cleaned = _strip_export_quote_artifact(cleaned)
+    return _fix_known_text_artifacts(cleaned)
 
 
 def clean_excel_answer_text(intent: str, text: str) -> str:
     if slugify(intent) == "gde_nayti_id_profilya":
         return text.split("\nОшибка входа.", 1)[0].strip()
     return text
+
+
+def _fix_known_text_artifacts(value: str) -> str:
+    replacements = (
+        ("Паспорт иличные документы", "Паспорт и личные документы"),
+        ("поздее", "позднее"),
+        ("Актуалльные", "Актуальные"),
+        ("момеент", "момент"),
+        ("регисттрация", "регистрация"),
+        ("регистрация форум", "регистрация на форум"),
+        ("деньмолодёжи. рф", "деньмолодёжи.рф"),
+        ("деньмолодежи. рф", "деньмолодежи.рф"),
+    )
+    for source, target in replacements:
+        value = value.replace(source, target)
+    return re.sub(r"(?<=[А-Яа-яЁё]):(?=[А-Яа-яЁё])", ": ", value)
 
 
 def _render_known_random_template(value: str) -> str:

@@ -34,6 +34,20 @@ def test_clean_bot_text_renders_known_random_template_deterministically() -> Non
     )
 
 
+def test_clean_bot_text_fixes_known_source_artifacts() -> None:
+    assert clean_bot_text(
+        "❗️Обрати внимание:сейчас регистрация форум «Амур» закрыта.<br>"
+        "Актуалльные даты будут известны поздее.<br>"
+        "Паспорт иличные документы.<br>"
+        "⚡️Важный момеент: сделать это возможно."
+    ) == (
+        "❗️Обрати внимание: сейчас регистрация на форум «Амур» закрыта.\n"
+        "Актуальные даты будут известны позднее.\n"
+        "Паспорт и личные документы.\n"
+        "⚡️Важный момент: сделать это возможно."
+    )
+
+
 def test_read_xlsx_sheets_reads_inline_strings(tmp_path: Path) -> None:
     xlsx = tmp_path / "source.xlsx"
     _write_minimal_xlsx(xlsx)
