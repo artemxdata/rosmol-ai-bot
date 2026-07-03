@@ -290,6 +290,90 @@ async def test_verifier_allows_unscoped_technical_application_issue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_skips_judge_for_low_confidence_official_technical_fallback() -> None:
+    llm = JudgeLLM('{"has_hallucination": true, "confidence": 0}')
+
+    result = await verify(
+        {
+            "message_masked": "Не могу выбрать проект при заполнении заявки",
+            "analysis": QueryAnalysis(category="техподдержка"),
+            "generated_response": (
+                "Сожалеем, что пришлось столкнуться с техническими сложностями. "
+                "Попробуй выполнить следующие действия: очисти кеш и cookie браузера, "
+                "открой сайт в другом браузере, попробуй зайти с другого устройства, "
+                "убедись, что VPN выключен, подожди некоторое время и повтори попытку. "
+                "Если ошибка сохраняется, опиши текстом, на каком этапе возникает ошибка "
+                "и какой текст ошибки отображается."
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["technical_error"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="technical_error",
+                    text=(
+                        "Сожалеем, что пришлось столкнуться с техническими сложностями. "
+                        "Попробуй выполнить следующие действия: очисти кеш и cookie браузера, "
+                        "открой сайт в другом браузере, попробуй зайти с другого устройства, "
+                        "убедись, что VPN выключен, подожди некоторое время и повтори попытку. "
+                        "Если ошибка сохраняется, опиши текстом: на каком этапе возникает ошибка, "
+                        "какой текст ошибки отображается, что именно не загружается, "
+                        "не сохраняется или не отправляется."
+                    ),
+                    metadata={
+                        "category": "техподдержка",
+                        "topic": "tehnicheskaya_oshibka",
+                        "source_type": "xlsx",
+                        "intent_examples": [
+                            "Не получается выбрать направление",
+                            "При подаче заявки возникает ошибка",
+                            "Не могу завершить заполнение заявки",
+                        ],
+                    },
+                    reranker_score=0.001,
+                )
+            ],
+            "max_confidence": 0.015,
+            "llm_client": llm,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+    assert llm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_verifier_escalates_unanchored_forum_call_letter_source() -> None:
+    result = await verify(
+        {
+            "message_masked": "Можно получить письмо-вызов на форум для работы?",
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": (
+                "Нужно официальное письмо-вызов? Заполни форму участника. "
+                "[src:dobrino_call_letter]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["dobrino_call_letter"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="dobrino_call_letter",
+                    text="Письмо-вызов для форума «Добрино» можно получить через форму.",
+                    metadata={"category": "форумы", "forum_normalized": "Добрино"},
+                    reranker_score=0.7,
+                )
+            ],
+            "max_confidence": 0.7,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
 async def test_verifier_uses_answer_bank_intent_examples_for_coverage() -> None:
     result = await verify(
         {
@@ -826,6 +910,40 @@ async def test_verifier_allows_date_marker_coverage_from_topic_alias() -> None:
                         "category": "форумы",
                         "forum_normalized": "День молодёжи",
                         "topic": "sut_festivalya_i_data",
+                    },
+                    reranker_score=0.9,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+    assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_overview_marker_coverage_from_topic_alias() -> None:
+    result = await verify(
+        {
+            "message_masked": "Российский Север: в чём суть форума?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Российский Север",
+            ),
+            "generated_response": "Форум посвящён развитию молодых специалистов Севера.",
+            "generator_model": "source_chunk",
+            "cited_sources": ["overview"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="overview",
+                    text="Форум посвящён развитию молодых специалистов Севера.",
+                    metadata={
+                        "source_type": "xlsx",
+                        "category": "форумы",
+                        "forum_normalized": "Российский Север",
+                        "topic": "o_meropriyatii",
                     },
                     reranker_score=0.9,
                 ),

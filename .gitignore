@@ -24,6 +24,7 @@ RAG_Dataset*
 *.xls
 *.docx
 *.doc
+Ошибки бота*.pdf
 
 # runtime artifacts
 logs/

@@ -19,6 +19,11 @@ DEFAULT_READY_URLS = (
     "http://localhost:8080/ready",
     "http://localhost:8001/ready",
 )
+DEFAULT_RUFF_TIMEOUT_SEC = 120
+DEFAULT_PYTEST_TIMEOUT_SEC = 240
+DEFAULT_KB_TIMEOUT_SEC = 120
+DEFAULT_READY_TIMEOUT_SEC = 30
+DEFAULT_QUALITY_TIMEOUT_SEC = 900
 
 
 @dataclass
@@ -41,6 +46,11 @@ def main() -> None:
     parser.add_argument("--target", default="http://localhost:8001/ask")
     parser.add_argument("--max-llm-cost-rub", type=float, default=80.0)
     parser.add_argument("--ready-url", action="append", dest="ready_urls")
+    parser.add_argument("--ruff-timeout-sec", type=int, default=DEFAULT_RUFF_TIMEOUT_SEC)
+    parser.add_argument("--pytest-timeout-sec", type=int, default=DEFAULT_PYTEST_TIMEOUT_SEC)
+    parser.add_argument("--kb-timeout-sec", type=int, default=DEFAULT_KB_TIMEOUT_SEC)
+    parser.add_argument("--ready-timeout-sec", type=int, default=DEFAULT_READY_TIMEOUT_SEC)
+    parser.add_argument("--quality-timeout-sec", type=int, default=DEFAULT_QUALITY_TIMEOUT_SEC)
     parser.add_argument("--skip-ruff", action="store_true")
     parser.add_argument("--skip-pytest", action="store_true")
     parser.add_argument("--skip-ready", action="store_true")
@@ -52,21 +62,29 @@ def main() -> None:
 
     steps: list[StepResult] = []
     if not args.skip_ruff:
-        steps.append(_run_command("ruff", [_ruff_command(), "check", "."], timeout_sec=120))
+        steps.append(
+            _run_command("ruff", [_ruff_command(), "check", "."], timeout_sec=args.ruff_timeout_sec)
+        )
     if not args.skip_pytest:
-        steps.append(_run_command("pytest", [sys.executable, "-m", "pytest"], timeout_sec=240))
+        steps.append(
+            _run_command(
+                "pytest",
+                [sys.executable, "-m", "pytest"],
+                timeout_sec=args.pytest_timeout_sec,
+            )
+        )
 
     steps.append(
         _run_command(
             "kb_validation",
             [sys.executable, "scripts/index_kb.py", "--validate-only"],
-            timeout_sec=120,
+            timeout_sec=args.kb_timeout_sec,
         )
     )
 
     if not args.skip_ready:
         ready_urls = tuple(args.ready_urls or DEFAULT_READY_URLS)
-        steps.append(_check_ready(ready_urls))
+        steps.append(_check_ready(ready_urls, timeout_sec=args.ready_timeout_sec))
 
     quality_summary: dict[str, Any] | None = None
     if not args.skip_quality:
@@ -85,7 +103,7 @@ def main() -> None:
         quality_result = _run_command(
             "pre_pilot_quality_suite",
             quality_cmd,
-            timeout_sec=900,
+            timeout_sec=args.quality_timeout_sec,
         )
         steps.append(quality_result)
         summary_path = quality_output_dir / "summary.json"
@@ -105,7 +123,7 @@ def main() -> None:
         encoding="utf-8",
     )
     _write_markdown(output_dir / "summary.md", report)
-    print(json.dumps(_compact_report(report), ensure_ascii=False, indent=2))
+    print(json.dumps(_compact_report(report, output_dir=output_dir), ensure_ascii=False, indent=2))
     if not report["passed"]:
         raise SystemExit(1)
 
@@ -151,13 +169,17 @@ def _run_command(name: str, command: list[str], *, timeout_sec: int) -> StepResu
         )
 
 
-def _check_ready(urls: tuple[str, ...]) -> StepResult:
+def _check_ready(
+    urls: tuple[str, ...],
+    *,
+    timeout_sec: int = DEFAULT_READY_TIMEOUT_SEC,
+) -> StepResult:
     started = perf_counter()
     checks: list[dict[str, Any]] = []
     ok = True
     for url in urls:
         try:
-            with urlopen(url, timeout=30) as response:
+            with urlopen(url, timeout=timeout_sec) as response:
                 body = response.read().decode("utf-8", errors="replace")
             payload = json.loads(body)
             item_ok = response.status == 200 and payload.get("status") == "ready"
@@ -230,7 +252,11 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def _compact_report(report: dict[str, Any]) -> dict[str, Any]:
+def _compact_report(
+    report: dict[str, Any],
+    *,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+) -> dict[str, Any]:
     quality = report.get("quality_summary") or {}
     return {
         "passed": report["passed"],
@@ -238,7 +264,7 @@ def _compact_report(report: dict[str, Any]) -> dict[str, Any]:
         "quality_passed": quality.get("passed"),
         "quality_cost_rub": quality.get("llm_estimated_cost_rub"),
         "quality_sections": quality.get("completed_sections"),
-        "report": str(DEFAULT_OUTPUT_DIR / "summary.md").replace("\\", "/"),
+        "report": str(output_dir / "summary.md").replace("\\", "/"),
     }
 
 

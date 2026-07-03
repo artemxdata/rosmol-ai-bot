@@ -153,8 +153,25 @@ DATE_TOPIC_ALIASES = frozenset(
         "sut_festivalya_i_data",
     }
 )
+OVERVIEW_COVERAGE_MARKERS = frozenset(
+    (
+        "в чем суть",
+        "суть форум",
+        "о форуме",
+        "тематик",
+    )
+)
+OVERVIEW_TOPIC_ALIASES = frozenset(
+    {
+        "o_meropriyatii",
+        "sut_foruma_i_napravleniya",
+        "sut_festivalya_i_tematika",
+        "sut_festivalya_i_data",
+    }
+)
 
 FORUM_SPECIFIC_MARKERS = (
+    "форум",
     "дата",
     "даты",
     "мероприят",
@@ -677,6 +694,10 @@ def _marker_group_has_source_coverage(
         alias in normalized_haystack for alias in DATE_TOPIC_ALIASES
     ):
         return True
+    if any(marker in OVERVIEW_COVERAGE_MARKERS for marker in markers) and any(
+        alias in normalized_haystack for alias in OVERVIEW_TOPIC_ALIASES
+    ):
+        return True
     return any(marker in normalized_haystack for marker in markers)
 
 
@@ -840,7 +861,40 @@ def _normalize(text: str) -> str:
 def _can_skip_llm_judge(state: BotState, confidence: float) -> bool:
     if state.get("generator_model") != "source_chunk":
         return _can_skip_official_llm_judge(state, confidence)
-    return confidence >= get_settings().reranker_threshold_high
+    if confidence >= get_settings().reranker_threshold_high:
+        return True
+    return _can_skip_low_confidence_technical_source_chunk(state)
+
+
+def _can_skip_low_confidence_technical_source_chunk(state: BotState) -> bool:
+    """Allow deterministic official tech-support fallbacks without an LLM judge.
+
+    These chunks are intentionally generic and often receive a low reranker score, but
+    they are still safe when the answer is directly copied from the cited official
+    source and the user question overlaps with the chunk's examples/topic.
+    """
+    response = str(state.get("generated_response") or "")
+    cited_sources = set(state.get("cited_sources") or SOURCE_RE.findall(response))
+    if not response or not cited_sources:
+        return False
+
+    chunks = state.get("reranked_chunks", [])
+    cited_chunks = [chunk for chunk in chunks if chunk.chunk_id in cited_sources]
+    if len(cited_chunks) != len(cited_sources):
+        return False
+    if not cited_chunks or not all(_is_technical_support_chunk(chunk) for chunk in cited_chunks):
+        return False
+    if not _response_supported_by_sources(response, cited_chunks):
+        return False
+
+    message = _state_message_for_search(state)
+    if not message:
+        return True
+    question = Question(
+        text=message,
+        category=getattr(state.get("analysis"), "category", None),
+    )
+    return _question_has_source_coverage(question, cited_chunks)
 
 
 def _can_skip_official_llm_judge(state: BotState, confidence: float) -> bool:
@@ -868,3 +922,39 @@ def _requires_source_citations(state: BotState) -> bool:
 
 def _source_type(chunk: ScoredChunk) -> str:
     return str((chunk.metadata or {}).get("source_type") or "").strip().casefold()
+
+
+def _is_technical_support_chunk(chunk: ScoredChunk) -> bool:
+    metadata = chunk.metadata or {}
+    haystack = _normalize(
+        " ".join(
+            str(value or "")
+            for value in (
+                chunk.chunk_id,
+                metadata.get("category"),
+                metadata.get("topic"),
+                metadata.get("intent_name"),
+                metadata.get("source_category"),
+            )
+        )
+    )
+    return (
+        _source_type(chunk) in OFFICIAL_SOURCE_TYPES
+        and (
+            "техподдерж" in haystack
+            or "техническ" in haystack
+            or "tehnichesk" in haystack
+            or "technical" in haystack
+        )
+    )
+
+
+def _response_supported_by_sources(response: str, chunks: list[ScoredChunk]) -> bool:
+    response_tokens = _tokens(SOURCE_RE.sub(" ", response))
+    if not response_tokens:
+        return False
+    source_tokens = _tokens(" ".join(chunk.text for chunk in chunks))
+    if not source_tokens:
+        return False
+    overlap = response_tokens & source_tokens
+    return len(overlap) / len(response_tokens) >= 0.7

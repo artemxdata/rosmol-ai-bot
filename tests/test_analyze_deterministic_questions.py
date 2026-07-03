@@ -239,6 +239,47 @@ def test_fallback_analysis_keeps_forum_location_as_separate_aspect() -> None:
     assert "daty_nachala_meropriyatiya" in topics
 
 
+def test_fallback_analysis_keeps_forum_overview_with_other_aspects() -> None:
+    message = (
+        "Российский Север: в чём суть форума, когда он проходит, "
+        "оплачивается ли дорога и проживание?"
+    )
+    analysis = _fallback_analysis(
+        message,
+        message,
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Российский Север"
+    topics = {question.topic for question in analysis.questions}
+    assert topics >= {
+        "o_meropriyatii",
+        "daty_nachala_meropriyatiya",
+        "oplata_proezda",
+        "usloviya_prozhivaniya",
+    }
+
+
+def test_fallback_analysis_routes_where_are_documents_to_event_documents() -> None:
+    analysis = _fallback_analysis(
+        "Территория смыслов: где документы, будет ли трансфер и где посмотреть результаты?",
+        "Территория смыслов: где документы, будет ли трансфер и где посмотреть результаты?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "Территория смыслов"
+    topics = {question.topic for question in analysis.questions}
+    assert topics >= {
+        "dokumenty_meropriyatiya",
+        "transfer_do_mesta_provedeniya_meropriyatiya",
+        "rezultaty_rm",
+    }
+
+
 def test_deterministic_questions_are_merged_with_partial_llm_questions() -> None:
     payload = {
         "forum_normalized": "Таврида",
