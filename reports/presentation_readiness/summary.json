@@ -1,0 +1,105 @@
+{
+  "generated_at": "2026-07-03T17:19:42.625018+00:00",
+  "ready_for_leadership_demo": true,
+  "decision": "ready",
+  "gates": [
+    {
+      "name": "final_acceptance_passed",
+      "ok": true,
+      "description": "Полный локальный acceptance gate должен быть зелёным."
+    },
+    {
+      "name": "presentation_quality_100_percent",
+      "ok": true,
+      "description": "Pass rate презентационного отчёта качества должен быть >= 100%."
+    },
+    {
+      "name": "pre_demo_smoke_100_percent",
+      "ok": true,
+      "description": "Быстрый pre-demo smoke должен иметь pass rate >= 100%."
+    },
+    {
+      "name": "trace_required_and_available",
+      "ok": true,
+      "description": "Pre-demo smoke должен проверять trace, источники, эскалации и PII masking."
+    }
+  ],
+  "inputs": {
+    "final_acceptance": {
+      "title": "Final acceptance",
+      "path": "reports/final_acceptance/summary.json",
+      "exists": true,
+      "error": ""
+    },
+    "presentation_quality": {
+      "title": "Presentation quality",
+      "path": "reports/presentation_quality/presentation_quality_report.json",
+      "exists": true,
+      "error": ""
+    },
+    "pre_demo_smoke": {
+      "title": "Pre-demo smoke",
+      "path": "reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.json",
+      "exists": true,
+      "error": ""
+    }
+  },
+  "metrics": {
+    "final_acceptance": {
+      "passed": true,
+      "generated_at": "2026-07-03T13:32:42.838447+00:00",
+      "target": "http://localhost:8001/ask",
+      "steps_total": 5,
+      "failed_steps": [],
+      "quality_suite_passed": true
+    },
+    "presentation_quality": {
+      "generated_at": "2026-06-29T12:32:02.742430+00:00",
+      "target": "http://localhost:8001/ask",
+      "total_checks_or_turns": 178,
+      "total_passed": 178,
+      "total_pass_rate": 1.0,
+      "typical_pass_rate": 1.0,
+      "atypical_pass_rate": 1.0,
+      "safety_pass_rate": 1.0,
+      "llm_estimated_cost_rub": 171.964022
+    },
+    "pre_demo_smoke": {
+      "generated_at": "2026-07-03T17:19:26.105258+00:00",
+      "target": "http://localhost:8001/ask",
+      "cases_total": 12,
+      "passed": 12,
+      "pass_rate": 1.0,
+      "require_trace": true,
+      "trace_error": null,
+      "failed": [],
+      "llm_estimated_cost_rub": 0.0
+    }
+  },
+  "demo_links": {
+    "admin_panel": "http://139.100.225.44/admin/kb",
+    "local_admin_panel": "http://127.0.0.1/admin/kb",
+    "quality_report": "reports/presentation_quality/presentation_quality_report.md",
+    "demo_pack": "reports/presentation_quality/demo_pack.md",
+    "pre_demo_smoke": "reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.md",
+    "demo_runbook": "docs/presentation_demo_runbook.md"
+  },
+  "demo_scope": {
+    "included": [
+      "RAG-бот на утверждённой статической базе знаний.",
+      "Админ-панель для поиска, правки чанков, validation, quality и ops-отчётов.",
+      "FastAPI /ask API, trace, cited sources, PII masking и safety escalation.",
+      "Тестовый HDE/VK-контур только для коротких smoke-проверок."
+    ],
+    "not_in_monday_demo": [
+      "Yonote/live DB synchronization. Это следующий этап после презентации.",
+      "Массовое production-включение HDE. У HDE общий лимит 300 RPM.",
+      "Рассылки и маркетинговые кампании. Это отдельный модуль consent/opt-out/audit."
+    ]
+  },
+  "commands": {
+    "local_pre_demo_smoke": ".venv\\Scripts\\python.exe scripts\\run_pre_demo_smoke.py --target http://localhost:8001/ask --output-dir reports/presentation_quality/pre_demo_smoke_latest --fail-under 1.0",
+    "build_readiness": ".venv\\Scripts\\python.exe scripts\\build_presentation_readiness.py",
+    "full_acceptance": ".venv\\Scripts\\python.exe scripts\\run_acceptance.py --target http://localhost:8001/ask --max-llm-cost-rub 80"
+  }
+}
