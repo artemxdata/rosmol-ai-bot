@@ -30,6 +30,21 @@ Quality suite:
 
 Критерий: `summary.json` должен иметь `passed=true`, без остановки по бюджету.
 
+Быстрый преддемо smoke после локального Docker-запуска:
+
+```powershell
+.venv\Scripts\python.exe scripts\run_pre_demo_smoke.py `
+  --target http://localhost:8001/ask `
+  --output-dir reports/presentation_quality/pre_demo_smoke_latest `
+  --fail-under 1.0
+```
+
+Он проверяет короткий набор показательных сценариев: составные вопросы по форумам, ФГАИС,
+гранты, off-topic, operator requested, safety и PII masking. Отчёты появляются в:
+
+- `reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.md`;
+- `reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.json`.
+
 Админка по умолчанию показывает tracked презентационный отчёт:
 `reports/presentation_quality/presentation_quality_report.json`. Если нужен другой файл,
 задай `ADMIN_QUALITY_REPORT_PATH=<path>` в `.env` и пересоздай `app/app-ml`.

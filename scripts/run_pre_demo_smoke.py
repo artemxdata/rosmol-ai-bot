@@ -17,7 +17,8 @@ import asyncpg
 import httpx
 
 DEFAULT_TARGET = "http://127.0.0.1:8001/ask"
-DEFAULT_OUTPUT_DIR = Path("reports/presentation_quality/pre_demo_smoke_20260702")
+DEFAULT_OUTPUT_DIR = Path("reports/presentation_quality/pre_demo_smoke_latest")
+DEFAULT_FAIL_UNDER = 1.0
 
 BAD_ANSWER_MARKERS = (
     "По части вопроса в базе знаний нет достаточных подтверждённых данных",
@@ -201,6 +202,10 @@ def _pii_ok(case: dict[str, Any], trace: dict[str, Any]) -> bool:
 async def _fetch_trace(pool: asyncpg.Pool | None, request_id: str) -> dict[str, Any]:
     if pool is None or not request_id:
         return {}
+    try:
+        request_uuid = UUID(request_id)
+    except ValueError:
+        return {}
     row = await pool.fetchrow(
         """
         select request_id, timestamp, message_masked, response_text,
@@ -209,7 +214,7 @@ async def _fetch_trace(pool: asyncpg.Pool | None, request_id: str) -> dict[str, 
         from request_traces
         where request_id = $1
         """,
-        request_id,
+        request_uuid,
     )
     return dict(row) if row else {}
 
@@ -221,6 +226,7 @@ async def _run_case(
     headers: dict[str, str],
     case: dict[str, Any],
     pool: asyncpg.Pool | None,
+    require_trace: bool = True,
 ) -> dict[str, Any]:
     started = perf_counter()
     status: int | None = None
@@ -247,7 +253,7 @@ async def _run_case(
     trace = await _fetch_trace(pool, request_id)
     checks = {
         "http_ok": status == 200,
-        "trace_found": bool(trace),
+        "trace_found": bool(trace) if require_trace else True,
         "behavior_ok": _expected_behavior_ok(case, response_text, trace),
         "contains_ok": _contains_ok(case, response_text),
         "source_ok": _source_ok(case, trace),
@@ -277,13 +283,17 @@ def _cost_total(results: Iterable[dict[str, Any]]) -> float:
 
 
 def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
+    generated_date = str(summary["generated_at"]).split("T", 1)[0]
     lines = [
-        "# Pre-demo smoke 2026-07-02",
+        f"# Pre-demo smoke {generated_date}",
         "",
         f"- Target: `{summary['target']}`",
         f"- Cases: `{summary['passed']}/{summary['cases_total']}`",
         f"- Pass rate: `{summary['pass_rate'] * 100:.1f}%`",
+        f"- Trace required: `{summary['require_trace']}`",
+        f"- Trace lookup error: `{summary['trace_error'] or '-'}`",
         f"- Estimated LLM cost: `{summary['llm_estimated_cost_rub']:.6f} RUB`",
+        f"- Failed: `{', '.join(summary['failed']) or '-'}`",
         "",
         "| # | Case | Pass | Model | Escalated | Latency | Cost |",
         "|---:|---|---:|---|---:|---:|---:|",
@@ -328,7 +338,13 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-async def run_smoke(target: str, request_timeout: float) -> dict[str, Any]:
+async def run_smoke(
+    target: str,
+    request_timeout: float,
+    *,
+    require_trace: bool = True,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict[str, Any]:
     env = _read_dotenv()
     trace_dsn = _host_trace_dsn(env)
     pool = None
@@ -340,9 +356,16 @@ async def run_smoke(target: str, request_timeout: float) -> dict[str, Any]:
             trace_error = f"{type(exc).__name__}: {exc}"
 
     headers = _auth_headers(env)
-    async with httpx.AsyncClient(timeout=request_timeout) as client:
+    async with httpx.AsyncClient(timeout=request_timeout, transport=transport) as client:
         results = [
-            await _run_case(client, target=target, headers=headers, case=case, pool=pool)
+            await _run_case(
+                client,
+                target=target,
+                headers=headers,
+                case=case,
+                pool=pool,
+                require_trace=require_trace,
+            )
             for case in CASES
         ]
     if pool:
@@ -352,11 +375,13 @@ async def run_smoke(target: str, request_timeout: float) -> dict[str, Any]:
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "target": target,
+        "require_trace": require_trace,
         "trace_error": trace_error,
         "cases_total": len(results),
         "passed": passed,
         "pass_rate": passed / len(results) if results else 0.0,
         "llm_estimated_cost_rub": round(_cost_total(results), 6),
+        "failed": [item["id"] for item in results if not item["passed"]],
         "results": results,
     }
     return summary
@@ -376,6 +401,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--timeout", type=float, default=240.0)
+    parser.add_argument(
+        "--allow-missing-trace",
+        action="store_true",
+        help="Do not fail cases only because request_traces is unavailable.",
+    )
+    parser.add_argument(
+        "--fail-under",
+        type=float,
+        default=DEFAULT_FAIL_UNDER,
+        help="Exit with code 1 when pass rate is below this value.",
+    )
     return parser.parse_args()
 
 
@@ -386,6 +422,7 @@ def main() -> None:
         run_smoke(
             target=args.target,
             request_timeout=args.timeout,
+            require_trace=not args.allow_missing_trace,
         )
     )
     write_summary(output_dir, summary)
@@ -398,12 +435,14 @@ def main() -> None:
                 "llm_estimated_cost_rub": summary["llm_estimated_cost_rub"],
                 "json": str(output_dir / "pre_demo_smoke.json"),
                 "md": str(output_dir / "pre_demo_smoke.md"),
-                "failed": [item["id"] for item in summary["results"] if not item["passed"]],
+                "failed": summary["failed"],
             },
             ensure_ascii=False,
             indent=2,
         )
     )
+    if summary["pass_rate"] < args.fail_under:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
