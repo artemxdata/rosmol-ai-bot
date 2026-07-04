@@ -292,6 +292,51 @@ async def test_process_message_abuse_safety_escalates_before_graph(
 
 
 @pytest.mark.asyncio
+async def test_process_message_attachment_only_escalates_before_graph(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app()
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="",
+        attachments=[{"id": "file-1", "name": "screenshot.png"}],
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert "не могу надёжно разобрать скриншот" in response
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "attachment_only"
+    assert captured_logs[0]["message_masked"] == "[attachment_only]"
+    assert app.state.sessions.appended == []
+    assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_message_attachment_placeholder_escalates_before_graph(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app()
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="image-12345.png",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert "Передаю обращение специалисту" in response
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "attachment_only"
+    assert captured_logs[0]["message_masked"] == "image-12345.png"
+    assert app.state.sessions.appended == []
+    assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
 async def test_process_message_operator_request_escalates_before_cache_and_graph(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],

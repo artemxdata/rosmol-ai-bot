@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import re
 from contextlib import asynccontextmanager
 from hmac import compare_digest
 from ipaddress import ip_address
@@ -48,6 +49,22 @@ from src.security.pii_masker import PIIMasker
 from src.security.rate_limiter import RateLimiter
 from src.session.manager import SessionManager
 from src.session.memory import UserMemory, hash_user_id
+
+ATTACHMENT_ONLY_RESPONSE = (
+    "Передаю обращение специалисту: сейчас я не могу надёжно разобрать скриншот "
+    "или вложение без текстового описания."
+)
+ATTACHMENT_ONLY_REASON = "attachment_only"
+_ATTACHMENT_FILE_RE = re.compile(
+    r"\b[\w.-]+\.(?:png|jpe?g|gif|webp|heic|pdf|docx?|xlsx?)\b",
+    flags=re.IGNORECASE,
+)
+_ATTACHMENT_WORD_RE = re.compile(
+    r"\b(?:скрин(?:шот)?|фото|картинк[аиу]|изображени[ея]|вложени[ея]|"
+    r"файл|прикрепил[аи]?|прикреплен[оа]?|смотри|посмотри|image|photo|attachment)\b",
+    flags=re.IGNORECASE,
+)
+_MEANINGFUL_WORD_RE = re.compile(r"[а-яa-z0-9]{3,}", flags=re.IGNORECASE)
 
 
 @asynccontextmanager
@@ -660,6 +677,23 @@ async def process_message(
     is_safe, safety_reason = safety.check(message.text)
     masked_text, pii_mapping = fastapi_app.state.pii_masker.mask(message.text)
 
+    if _is_attachment_only_message(message):
+        response = ATTACHMENT_ONLY_RESPONSE
+        await _safe_log(
+            fastapi_app,
+            {
+                "request_id": message.request_id,
+                "channel": message.channel.value,
+                "user_id_hash": user_id_hash,
+                "message_masked": masked_text or "[attachment_only]",
+                "final_response": response,
+                "should_escalate": True,
+                "escalation_reason": ATTACHMENT_ONLY_REASON,
+                "total_latency_ms": int((perf_counter() - started_at) * 1000),
+            },
+        )
+        return response
+
     if not is_safe:
         response = "Передаю обращение специалисту."
         await _safe_log(
@@ -804,6 +838,30 @@ async def process_message(
         await _save_cache(fastapi_app, masked_text, response, result)
     await _safe_log(fastapi_app, result)
     return response
+
+
+def _is_attachment_only_message(message: IncomingMessage) -> bool:
+    text = str(message.text or "").strip()
+    attachments = message.attachments or []
+    if attachments and not text:
+        return True
+    if not text:
+        return False
+
+    normalized = text.casefold().replace("ё", "е")
+    contains_attachment_marker = bool(
+        _ATTACHMENT_FILE_RE.search(normalized) or _ATTACHMENT_WORD_RE.search(normalized)
+    )
+    if not contains_attachment_marker:
+        return False
+
+    cleaned = _ATTACHMENT_FILE_RE.sub(" ", normalized)
+    cleaned = _ATTACHMENT_WORD_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"https?://\S+", " ", cleaned)
+    meaningful_words = _MEANINGFUL_WORD_RE.findall(cleaned)
+    if attachments:
+        return len(meaningful_words) <= 2
+    return len(meaningful_words) == 0
 
 
 async def _check_cache(fastapi_app: FastAPI, query: str, forum: str | None) -> str | None:
