@@ -109,6 +109,75 @@ def test_fallback_analysis_routes_project_selection_error_to_support() -> None:
     assert analysis.complexity.value == "simple"
 
 
+def test_fallback_analysis_routes_project_competition_to_grants_before_forum_scope() -> None:
+    query = (
+        "В проектах участвуют только массовые мероприятия? "
+        "Могу ли я участвовать в конкурсе с индивидуальным проектом?"
+    )
+    analysis = _fallback_analysis(
+        query,
+        query,
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.category == "гранты"
+    assert analysis.needs_clarification is False
+
+
+def test_fallback_analysis_routes_grant_application_ui_error_to_support() -> None:
+    analysis = _fallback_analysis(
+        "Хочу зарегистрироваться на конкурс грантов, но в поле выбора проекта ничего не выпадает",
+        "Хочу зарегистрироваться на конкурс грантов, но в поле выбора проекта ничего не выпадает",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.category == "техподдержка"
+    assert analysis.needs_clarification is False
+
+
+def test_fallback_analysis_escalates_personal_status_request() -> None:
+    analysis = _fallback_analysis(
+        "Статус заявки",
+        "Статус заявки",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.should_escalate is True
+    assert analysis.escalation_reason == "personal_status"
+
+
+def test_fallback_analysis_escalates_specific_technical_review_request() -> None:
+    analysis = _fallback_analysis(
+        "Добрый день! Высылаю скриншоты по вопросу заявки №10069, на почте ничего нет.",
+        "Добрый день! Высылаю скриншоты по вопросу заявки №10069, на почте ничего нет.",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.should_escalate is True
+    assert analysis.escalation_reason in {"technical_issue", "personal_status"}
+
+
+def test_fallback_analysis_escalates_operator_only_brandbook_request() -> None:
+    analysis = _fallback_analysis(
+        "Добрый день, будет ли брендбук Дня молодёжи 2026?",
+        "Добрый день, будет ли брендбук Дня молодёжи 2026?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.should_escalate is True
+    assert analysis.escalation_reason == "operator_requested"
+
+
 def test_fallback_analysis_routes_general_forum_question_to_overview_topic() -> None:
     analysis = _fallback_analysis(
         "Расскажи про Машук",
@@ -312,6 +381,7 @@ def test_fallback_analysis_marks_everyday_requests_as_offtopic() -> None:
         "Закажи мне такси до дома",
         "Где заказать роллы рядом со мной?",
         "Составь исковое заявление в суд",
+        "Где купить билеты на матчи сборной России?",
     ):
         analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
 

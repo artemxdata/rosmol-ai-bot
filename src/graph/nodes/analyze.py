@@ -10,7 +10,7 @@ from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
 from src.models import Complexity, QueryAnalysis
-from src.security.operator_request import is_operator_request
+from src.security.operator_request import is_operator_request, operator_review_reason
 
 
 async def analyze_query(state: BotState) -> dict:
@@ -165,11 +165,13 @@ def _fallback_analysis(
         complexity = Complexity.SIMPLE
     if _should_force_simple_support_query(category, masked_message):
         complexity = Complexity.SIMPLE
-    should_escalate = _is_operator_request(masked_message)
+    review_reason = operator_review_reason(masked_message)
+    should_escalate = review_reason is not None
     if is_offtopic:
         should_escalate = False
+        review_reason = None
     if should_escalate and not category:
-        category = "навигация"
+        category = "техподдержка" if review_reason == "technical_issue" else "навигация"
     payload = {
         "category": category,
         "complexity": complexity.value,
@@ -178,7 +180,7 @@ def _fallback_analysis(
         "clarification_question": clarification_question,
         "is_offtopic": is_offtopic,
         "should_escalate": should_escalate,
-        "escalation_reason": "operator_requested" if should_escalate else None,
+        "escalation_reason": review_reason if should_escalate else None,
     }
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
@@ -255,6 +257,13 @@ def _is_safe_offtopic(message: str) -> bool:
         "в суд",
         "математик",
         "задачу по математике",
+        "билет на матч",
+        "билеты на матч",
+        "матчи сборной",
+        "матч сборной",
+        "сборной россии",
+        "футбольный матч",
+        "хоккейный матч",
     )
     return any(marker in normalized for marker in offtopic_markers)
 
@@ -434,6 +443,67 @@ def _needs_participant_event_context_clarification(normalized: str) -> bool:
     )
 
 
+def _has_grant_project_context(normalized: str) -> bool:
+    if "грант" in normalized:
+        return True
+    if "проект" not in normalized:
+        return False
+    if any(
+        marker in normalized
+        for marker in (
+            "конкурс",
+            "смет",
+            "эксперт",
+            "оцен",
+            "номинац",
+            "массов",
+            "финанс",
+            "средств",
+            "соглашен",
+            "отчет",
+            "отчёт",
+            "реализац",
+            "поддержк",
+        )
+    ):
+        return True
+    if any(marker in normalized for marker in ("подать", "заявк", "отправ")):
+        return not any(
+            marker in normalized for marker in ("форум", "фестивал", "мероприят")
+        )
+    return False
+
+
+def _has_ui_failure_context(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "не могу выбрать",
+            "не могу отправить",
+            "не могу сохранить",
+            "не могу заполнить",
+            "не получается выбрать",
+            "не получается отправить",
+            "не получается сохранить",
+            "не получается заполнить",
+            "не удается выбрать",
+            "не удаётся выбрать",
+            "не удается отправить",
+            "не удаётся отправить",
+            "не удается сохранить",
+            "не удаётся сохранить",
+            "не удается заполнить",
+            "не удаётся заполнить",
+            "не выпада",
+            "не отображ",
+            "ошиб",
+            "баг",
+            "поле",
+            "кнопк",
+        )
+    )
+
+
 def _infer_category_from_message(message: str) -> str | None:
     normalized = message.casefold().replace("ё", "е")
     if _has_staff_feedback_context(normalized):
@@ -448,6 +518,10 @@ def _infer_category_from_message(message: str) -> str | None:
         return "общее"
     if "что такое росмолод" in normalized or "кто такие росмолод" in normalized:
         return "платформа_фгаис"
+    if _has_grant_project_context(normalized):
+        if _has_ui_failure_context(normalized):
+            return "техподдержка"
+        return "гранты"
     if _needs_application_context_clarification(normalized):
         return "форумы"
     if _needs_forum_context_clarification(normalized):

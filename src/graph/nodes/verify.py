@@ -446,6 +446,9 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
         return []
     if analysis and _detected_forums_for_coverage(analysis.extracted_params):
         return []
+    category = str(getattr(analysis, "category", None) or "").strip()
+    if category and category != "форумы":
+        return []
 
     message = _normalize(str(_state_message_for_search(state)))
     if not any(marker in message for marker in FORUM_SPECIFIC_MARKERS):

@@ -1269,3 +1269,42 @@ async def test_verifier_allows_multi_forum_answer_when_sources_cover_each_forum(
     assert result["verification"].has_hallucination is False
     assert "should_escalate" not in result
     assert result["verifier_triggered"] is False
+
+
+@pytest.mark.asyncio
+async def test_verifier_does_not_require_forum_for_grant_application_question() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Хочу зарегистрироваться на конкурс грантов. "
+                "Что указать в поле выбора проекта?"
+            ),
+            "analysis": QueryAnalysis(category="гранты"),
+            "generated_response": (
+                "Для участия в грантовом конкурсе нужно выбрать проект в личном кабинете. "
+                "[src:grant_application]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["grant_application"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="grant_application",
+                    text=(
+                        "Чтобы зарегистрироваться на грантовый конкурс и подать заявку, "
+                        "выбери проект в личном кабинете ФГАИС."
+                    ),
+                    metadata={"forum_normalized": "Амур", "category": "гранты"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="forum_application",
+                    text="Подать заявку на форум можно в личном кабинете.",
+                    metadata={"forum_normalized": "Утро", "category": "форумы"},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert "should_escalate" not in result
