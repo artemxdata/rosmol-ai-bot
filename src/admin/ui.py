@@ -591,6 +591,7 @@ _HTML_TEMPLATE = """
       <button id="validateButton" class="secondary" type="button">Проверка базы</button>
       <button id="qualityButton" class="secondary" type="button">Отчёт качества</button>
       <button id="opsButton" class="secondary" type="button">Работа бота</button>
+      <button id="yonoteButton" class="secondary" type="button">Yonote</button>
       <button id="logoutButton" class="danger" type="button">Выйти</button>
     </div>
   </header>
@@ -706,6 +707,7 @@ _HTML_TEMPLATE = """
         ></textarea>
         <div id="qualityDashboard" class="quality-dashboard hidden"></div>
         <div id="opsDashboard" class="ops-dashboard hidden"></div>
+        <div id="yonoteDashboard" class="quality-dashboard hidden"></div>
         <pre id="reportOutput"></pre>
       </div>
     </section>
@@ -868,9 +870,15 @@ _HTML_TEMPLATE = """
       dashboard.classList.add("hidden");
       dashboard.innerHTML = "";
     }
+    function hideYonoteDashboard() {
+      const dashboard = document.getElementById("yonoteDashboard");
+      dashboard.classList.add("hidden");
+      dashboard.innerHTML = "";
+    }
     function hideReportDashboards() {
       hideOpsDashboard();
       hideQualityDashboard();
+      hideYonoteDashboard();
     }
     function opsRows(items, fields) {
       const rows = (items || []).slice(0, 6);
@@ -1068,6 +1076,84 @@ _HTML_TEMPLATE = """
         </div>
       `;
     }
+    function renderYonoteDashboard(data) {
+      const dashboard = document.getElementById("yonoteDashboard");
+      dashboard.classList.remove("hidden");
+      const shouldShowApply = !data.applied;
+      dashboard.innerHTML = `
+        <div class="ops-kpis">
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(data.documents || 0)}</span>
+            <span class="metric-label">документов Yonote</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(data.fresh_yonote_records || 0)}</span>
+            <span class="metric-label">новых Yonote-чанков</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(data.changed || 0)}</span>
+            <span class="metric-label">изменённых чанков</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">${escapeHtml(data.merged_records || 0)}</span>
+            <span class="metric-label">всего после синка</span>
+          </div>
+        </div>
+        <div class="quality-note">
+          <b>${data.applied ? "Обновление применено" : "Предпросмотр Yonote"}</b>.
+          Добавится: ${escapeHtml(data.added || 0)} ·
+          изменится: ${escapeHtml(data.changed || 0)} ·
+          удалится из Yonote-слоя: ${escapeHtml(data.removed || 0)}.
+          ${data.applied
+            ? [
+                "Seed обновлён. Чтобы бот начал отвечать по новым данным,",
+                "нужна полная переиндексация Qdrant.",
+              ].join(" ")
+            : "Это только проверка: knowledge_base_seed.json ещё не изменён."}
+        </div>
+        <div class="ops-section">
+          <h3>Примеры изменений</h3>
+          <div class="ops-list">
+            <div class="ops-item">
+              <div class="ops-line">
+                <span>Добавятся</span>
+                <span>${escapeHtml(data.added || 0)}</span>
+              </div>
+              <div class="ops-meta">
+                ${escapeHtml((data.added_sample || []).join(", ") || "нет")}
+              </div>
+            </div>
+            <div class="ops-item">
+              <div class="ops-line">
+                <span>Изменятся</span>
+                <span>${escapeHtml(data.changed || 0)}</span>
+              </div>
+              <div class="ops-meta">
+                ${escapeHtml((data.changed_sample || []).join(", ") || "нет")}
+              </div>
+            </div>
+            <div class="ops-item">
+              <div class="ops-line">
+                <span>Удалятся из Yonote-слоя</span>
+                <span>${escapeHtml(data.removed || 0)}</span>
+              </div>
+              <div class="ops-meta">
+                ${escapeHtml((data.removed_sample || []).join(", ") || "нет")}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="editor-actions">
+          ${shouldShowApply
+            ? '<button id="applyYonoteButton" class="primary" type="button">Применить в KB</button>'
+            : '<button class="secondary" type="button" disabled>Применено</button>'}
+        </div>
+      `;
+      const applyButton = document.getElementById("applyYonoteButton");
+      if (applyButton) {
+        applyButton.addEventListener("click", applyYonoteSync);
+      }
+    }
     function renderRows(items) {
       const tbody = document.getElementById("chunksTable");
       tbody.innerHTML = "";
@@ -1259,6 +1345,7 @@ _HTML_TEMPLATE = """
     async function showQualityCheck() {
       try {
         hideOpsDashboard();
+        hideYonoteDashboard();
         const data = await requestJson("/admin/kb/quality-check", {
           method: "POST",
           body: JSON.stringify({include_latest_eval_report: true}),
@@ -1275,6 +1362,7 @@ _HTML_TEMPLATE = """
     async function showOpsReport() {
       try {
         hideQualityDashboard();
+        hideYonoteDashboard();
         const data = await requestJson("/admin/kb/ops-report?days=7", {method: "GET"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         renderOpsDashboard(data);
@@ -1283,6 +1371,55 @@ _HTML_TEMPLATE = """
         const cost = Number(summary.llm_estimated_cost_rub || 0).toFixed(2);
         setMetric("metricOps", requests);
         setStatus("detailStatus", `Работа бота: ${requests} запросов, ${cost} ₽`, "ok");
+      } catch (error) {
+        setStatus("detailStatus", error.message, "error");
+      }
+    }
+    async function previewYonoteSync() {
+      try {
+        hideOpsDashboard();
+        hideQualityDashboard();
+        setStatus("detailStatus", "Читаю Yonote и считаю изменения. База бота пока не меняется...");
+        const data = await requestJson("/admin/kb/yonote/preview", {
+          method: "POST",
+          body: "{}",
+          timeoutMs: 300000,
+        });
+        document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        renderYonoteDashboard(data);
+        setStatus(
+          "detailStatus",
+          `Yonote проверен: +${data.added}, изменится ${data.changed}, удалится ${data.removed}`,
+          "ok"
+        );
+      } catch (error) {
+        setStatus("detailStatus", error.message, "error");
+      }
+    }
+    async function applyYonoteSync() {
+      const confirmed = window.confirm(
+        "Применить данные Yonote в knowledge_base_seed.json? " +
+        "Yonote не будет изменён. После применения нужна полная индексация Qdrant."
+      );
+      if (!confirmed) return;
+      try {
+        setStatus(
+          "detailStatus",
+          "Применяю Yonote в KB seed. Это не пишет ничего в Yonote..."
+        );
+        const data = await requestJson("/admin/kb/yonote/apply", {
+          method: "POST",
+          body: "{}",
+          timeoutMs: 300000,
+        });
+        document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        renderYonoteDashboard(data);
+        setStatus(
+          "detailStatus",
+          "Yonote применён в KB seed. Теперь нужна полная переиндексация Qdrant.",
+          "warn"
+        );
+        await Promise.allSettled([loadChunks(), showValidation()]);
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -1317,6 +1454,7 @@ _HTML_TEMPLATE = """
     document.getElementById("validateButton").addEventListener("click", showValidation);
     document.getElementById("qualityButton").addEventListener("click", showQualityCheck);
     document.getElementById("opsButton").addEventListener("click", showOpsReport);
+    document.getElementById("yonoteButton").addEventListener("click", previewYonoteSync);
     checkSession();
   </script>
 </body>

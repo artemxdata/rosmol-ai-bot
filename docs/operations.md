@@ -90,6 +90,15 @@ Validate before indexing:
 .venv\Scripts\python.exe scripts\index_kb.py --validate-only
 ```
 
+Admin panel flow:
+
+1. Open `/admin/kb`.
+2. Click `Yonote`.
+3. Review `documents`, `fresh_yonote_records`, `added`, `changed`, `removed`.
+4. If the preview looks correct, click `Apply to KB`.
+5. The button only updates this project's `data/knowledge_base_seed.json`; it never writes to Yonote.
+6. After applying, run full Qdrant indexing before relying on the updated answers.
+
 Rebuild the local Docker services and reindex Qdrant:
 
 ```powershell

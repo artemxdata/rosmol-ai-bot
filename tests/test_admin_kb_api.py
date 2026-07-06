@@ -188,7 +188,11 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert 'id="opsButton"' in enabled.text
     assert 'id="opsDashboard"' in enabled.text
     assert 'id="qualityDashboard"' in enabled.text
+    assert 'id="yonoteButton"' in enabled.text
+    assert 'id="yonoteDashboard"' in enabled.text
     assert "/admin/kb/ops-report?days=7" in enabled.text
+    assert "/admin/kb/yonote/preview" in enabled.text
+    assert "/admin/kb/yonote/apply" in enabled.text
     assert "Работа бота" in enabled.text
     assert "Проблемные темы" in enabled.text
     assert "ожидаемые эскалации" in enabled.text
@@ -198,6 +202,73 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert "Сохранение не подтверждено" in enabled.text
     assert "Текст сохранён, но RAG-индекс не обновлён" in enabled.text
     assert "Операция не завершилась за" in enabled.text
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_previews_and_applies_yonote_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+
+    def fake_preview(path: Path, settings: object, *, limit_documents: int | None = None):
+        assert path == seed_path
+        assert settings.admin_auth_token == "admin-secret"
+        assert limit_documents == 3
+        return {
+            "ok": True,
+            "applied": False,
+            "documents": 3,
+            "fresh_yonote_records": 12,
+            "added": 2,
+            "changed": 1,
+            "removed": 0,
+        }
+
+    def fake_apply(path: Path, _settings: object, *, limit_documents: int | None = None):
+        assert path == seed_path
+        assert limit_documents is None
+        return {
+            "ok": True,
+            "applied": True,
+            "index_required": True,
+            "documents": 109,
+            "fresh_yonote_records": 1412,
+            "merged_records": 2162,
+        }
+
+    monkeypatch.setattr("src.main.preview_yonote_sync", fake_preview)
+    monkeypatch.setattr("src.main.apply_yonote_sync", fake_apply)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        unauthorized = await client.post("/admin/kb/yonote/preview", json={})
+        preview = await client.post(
+            "/admin/kb/yonote/preview",
+            json={"limit_documents": 3},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        applied = await client.post(
+            "/admin/kb/yonote/apply",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert preview.status_code == 200
+    assert preview.json()["applied"] is False
+    assert preview.json()["fresh_yonote_records"] == 12
+    assert applied.status_code == 200
+    assert applied.json()["applied"] is True
+    assert applied.json()["index_required"] is True
 
 
 @pytest.mark.asyncio

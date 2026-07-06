@@ -19,7 +19,17 @@ from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
+from scripts.sync_yonote_kb import YonoteApiError
 from src.admin import kb_index, kb_store, ui
+from src.admin.yonote_sync import (
+    YonoteSyncConfigError,
+)
+from src.admin.yonote_sync import (
+    apply_sync as apply_yonote_sync,
+)
+from src.admin.yonote_sync import (
+    preview_sync as preview_yonote_sync,
+)
 from src.channels.hde import HDEAdapter
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
@@ -136,6 +146,10 @@ class AdminLoginPayload(BaseModel):
 
 class AdminQualityCheckPayload(BaseModel):
     include_latest_eval_report: bool = True
+
+
+class AdminYonoteSyncPayload(BaseModel):
+    limit_documents: int | None = Field(default=None, ge=1, le=500)
 
 
 @app.get("/health")
@@ -305,6 +319,48 @@ async def admin_run_kb_quality_check(
             _kb_seed_path(),
             report_path=report_path,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/admin/kb/yonote/preview")
+async def admin_preview_yonote_sync(
+    payload: AdminYonoteSyncPayload,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    try:
+        return await asyncio.to_thread(
+            preview_yonote_sync,
+            _kb_seed_path(),
+            get_settings(),
+            limit_documents=payload.limit_documents,
+        )
+    except YonoteSyncConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YonoteApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/admin/kb/yonote/apply")
+async def admin_apply_yonote_sync(
+    payload: AdminYonoteSyncPayload,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin_secret(request)
+    try:
+        return await asyncio.to_thread(
+            apply_yonote_sync,
+            _kb_seed_path(),
+            get_settings(),
+            limit_documents=payload.limit_documents,
+        )
+    except YonoteSyncConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YonoteApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
