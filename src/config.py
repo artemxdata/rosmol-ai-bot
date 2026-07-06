@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     hde_rate_limit_ban_seconds: int = Field(default=1200, ge=60)
     kb_seed_path: str = "data/knowledge_base_seed.json"
     admin_quality_report_path: str = "reports/presentation_quality/presentation_quality_report.json"
+    yonote_api_token: str = ""
+    yonote_base_url: str = "https://rossmol.yonote.ru"
+    yonote_sync_enabled: bool = False
+    yonote_sync_mode: str = "manual"
+    yonote_collection_names: str = (
+        "Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия"
+    )
+    yonote_request_timeout_seconds: float = Field(default=30.0, ge=1)
 
     cloud_ru_api_key: str = ""
     cloud_ru_chat_completions_url: str = (

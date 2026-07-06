@@ -416,7 +416,7 @@ def _official_source_chunks(chunks: list[Chunk]) -> list[Chunk]:
         chunk
         for chunk in chunks
         if str((chunk.metadata or {}).get("source_type") or "").strip()
-        in {"docx", "xlsx"}
+        in {"docx", "xlsx", "yonote"}
     ]
 
 
@@ -458,7 +458,7 @@ def _official_or_same_chunk_protected_chunks(
 
 def _source_type_rank(chunk: Chunk) -> int:
     source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type in {"docx", "xlsx"}:
+    if source_type in {"docx", "xlsx", "yonote"}:
         return 0
     if source_type == "ticket_answer_bank":
         return 2
@@ -467,7 +467,7 @@ def _source_type_rank(chunk: Chunk) -> int:
 
 def _source_reliability_score(chunk: Chunk) -> float:
     source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type in {"docx", "xlsx"}:
+    if source_type in {"docx", "xlsx", "yonote"}:
         return 3.0
     if source_type == "ticket_answer_bank":
         return -3.0
@@ -577,7 +577,7 @@ def _chunk_matches_exact_question_topic(
     chunk: Chunk,
 ) -> bool:
     metadata = chunk.metadata or {}
-    if str(metadata.get("source_type") or "").strip() not in {"xlsx", "docx"}:
+    if str(metadata.get("source_type") or "").strip() not in {"xlsx", "docx", "yonote"}:
         return False
     if str(metadata.get("topic") or "").strip() != str(question.topic or "").strip():
         return False

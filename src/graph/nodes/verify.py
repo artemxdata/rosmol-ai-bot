@@ -17,7 +17,7 @@ from src.models import Question, ScoredChunk, VerificationResult
 
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
-OFFICIAL_SOURCE_TYPES = {"xlsx", "docx"}
+OFFICIAL_SOURCE_TYPES = {"xlsx", "docx", "yonote"}
 NO_QUESTION_RE = re.compile(
     r"(пока\s+нет\s+вопрос|задайте\s+(?:ваш\s+)?вопрос|готов\s+помочь.*задайте)",
     flags=re.IGNORECASE,

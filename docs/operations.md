@@ -37,6 +37,71 @@ or shared Redis session context:
 The `app-ml` profile uses a longer local timeout than the lightweight app
 because CPU rerank plus Max synthesis can exceed 90 seconds on cold runs.
 
+## Yonote KB Refresh
+
+Yonote is read-only for the bot. We never create, edit, or delete Yonote
+documents from this project. The bot only reads selected collections and
+updates its own normalized RAG seed.
+
+Required local/server `.env` values:
+
+```env
+YONOTE_API_TOKEN=<read-only-token>
+YONOTE_BASE_URL=https://rossmol.yonote.ru
+YONOTE_COLLECTION_NAMES=Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия
+YONOTE_SYNC_ENABLED=false
+YONOTE_SYNC_MODE=manual
+```
+
+Build normalized Yonote chunks from API and merge them into the published KB seed:
+
+```powershell
+.venv\Scripts\python.exe scripts\sync_yonote_kb.py `
+  --replace-existing-yonote `
+  --extraction-date 2026-07-06
+```
+
+Preview without changing `data/knowledge_base_seed.json`:
+
+```powershell
+.venv\Scripts\python.exe scripts\sync_yonote_kb.py `
+  --records-out data\private\yonote\yonote_api_records.preview.json `
+  --replace-existing-yonote `
+  --validate-only
+```
+
+ZIP exports are fallback source material only. Keep ZIP files under
+`data/private/yonote/`; do not commit raw exports.
+
+Fallback ZIP import:
+
+```powershell
+.venv\Scripts\python.exe scripts\build_yonote_kb_seed.py `
+  --source-dir data\private\yonote `
+  --base data\knowledge_base_seed.json `
+  --out data\knowledge_base_seed.json `
+  --replace-existing-yonote `
+  --extraction-date 2026-07-04
+```
+
+Validate before indexing:
+
+```powershell
+.venv\Scripts\python.exe scripts\index_kb.py --validate-only
+```
+
+Rebuild the local Docker services and reindex Qdrant:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml up -d --build app app-ml nginx
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb `
+  python scripts/index_kb.py --path data/knowledge_base_seed.json --embedding-batch-size 32 --prune-stale
+```
+
+After indexing, run smoke checks against `http://127.0.0.1:8001/ask` with
+`X-Bypass-Cache: true`. For server rollout, repeat the same build/index
+commands on the staging host after pulling the latest commit.
+
 ## Server Staging Deploy
 
 Current staging target: Ubuntu 24.04 host with Docker already installed.

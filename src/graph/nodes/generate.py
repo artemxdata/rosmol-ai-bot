@@ -1062,13 +1062,13 @@ def _official_source_chunks(chunks: list[ScoredChunk]) -> list[ScoredChunk]:
         chunk
         for chunk in chunks
         if str((chunk.metadata or {}).get("source_type") or "").strip()
-        in {"docx", "xlsx"}
+        in {"docx", "xlsx", "yonote"}
     ]
 
 
 def _source_type_rank(chunk: ScoredChunk) -> int:
     source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type in {"docx", "xlsx"}:
+    if source_type in {"docx", "xlsx", "yonote"}:
         return 0
     if source_type == "ticket_answer_bank":
         return 2
@@ -1493,7 +1493,7 @@ def _trusted_top_official_source(
         return None
     top_chunk = chunks[0]
     metadata = top_chunk.metadata or {}
-    if metadata.get("source_type") not in {"xlsx", "docx"}:
+    if metadata.get("source_type") not in {"xlsx", "docx", "yonote"}:
         return None
     if analysis and not _chunk_matches_analysis_scope(top_chunk, analysis):
         return None
@@ -1518,7 +1518,7 @@ def _trusted_single_official_source(
         return None
     chunk = chunks[0]
     metadata = chunk.metadata or {}
-    if metadata.get("source_type") not in {"xlsx", "docx"}:
+    if metadata.get("source_type") not in {"xlsx", "docx", "yonote"}:
         return None
     if not _chunk_matches_analysis_scope(chunk, analysis):
         return None
