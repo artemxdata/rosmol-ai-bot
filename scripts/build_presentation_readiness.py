@@ -26,7 +26,10 @@ class ReportPath:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build a compact leadership-demo readiness report from existing quality gates.",
+        description=(
+            "Build a compact leadership-demo readiness report from existing "
+            "quality gates."
+        ),
     )
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--final-acceptance", default=str(DEFAULT_FINAL_ACCEPTANCE))
@@ -128,18 +131,24 @@ def build_readiness_report(
             "demo_pack": "reports/presentation_quality/demo_pack.md",
             "pre_demo_smoke": str(pre_demo_smoke.with_suffix(".md")).replace("\\", "/"),
             "demo_runbook": "docs/presentation_demo_runbook.md",
+            "leadership_pack": "docs/leadership_demo_pack.md",
         },
         "demo_scope": {
             "included": [
-                "RAG-бот на утверждённой статической базе знаний.",
-                "Админ-панель для поиска, правки чанков, validation, quality и ops-отчётов.",
+                "RAG-бот на опубликованной базе знаний и read-only Yonote-источниках.",
+                (
+                    "Админ-панель для поиска, правки чанков, reindex, validation, "
+                    "quality и ops-отчётов."
+                ),
                 "FastAPI /ask API, trace, cited sources, PII masking и safety escalation.",
                 "Тестовый HDE/VK-контур только для коротких smoke-проверок.",
+                "Процесс еженедельной продуктовой калибровки по деперсонализированным тикетам.",
             ],
             "not_in_monday_demo": [
-                "Yonote/live DB synchronization. Это следующий этап после презентации.",
-                "Массовое production-включение HDE. У HDE общий лимит 300 RPM.",
+                "Автономная запись, удаление или редактирование документов внутри Yonote.",
+                "Массовое production-включение HDE. У HDE общий лимит 300 RPM на систему.",
                 "Рассылки и маркетинговые кампании. Это отдельный модуль consent/opt-out/audit.",
+                "Обещание 100% закрытия всех будущих новых вопросов без операторов.",
             ],
         },
         "commands": {
@@ -287,7 +296,7 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"Статус: **{status}**.",
         "",
         (
-            "Этот файл нужен как короткий контрольный лист перед демонстрацией руководству. "
+            "Это короткий контрольный лист перед демонстрацией руководству. "
             "Он не заменяет большой отчёт качества, а собирает главный вердикт "
             "из уже прогнанных gate-ов."
         ),
@@ -304,10 +313,14 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             f"- Pre-demo smoke: `{smoke.get('passed')}/{smoke.get('cases_total')}` "
             f"({smoke.get('pass_rate'):.1%}), trace required: `{smoke.get('require_trace')}`."
         ),
-        f"- Оценочная стоимость LLM в большом presentation quality report: "
-        f"`{quality.get('llm_estimated_cost_rub'):.6f} RUB`.",
-        f"- Оценочная стоимость LLM в быстром smoke: "
-        f"`{smoke.get('llm_estimated_cost_rub'):.6f} RUB`.",
+        (
+            "- Оценочная стоимость LLM в большом presentation quality report: "
+            f"`{quality.get('llm_estimated_cost_rub'):.6f} RUB`."
+        ),
+        (
+            "- Оценочная стоимость LLM в быстром smoke: "
+            f"`{smoke.get('llm_estimated_cost_rub'):.6f} RUB`."
+        ),
         "",
         "## Gates",
         "",
@@ -325,6 +338,7 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "",
             f"- Админ-панель: `{report['demo_links']['admin_panel']}`.",
             f"- Runbook показа: `{report['demo_links']['demo_runbook']}`.",
+            f"- Пакет для руководства: `{report['demo_links']['leadership_pack']}`.",
             f"- Большой отчёт качества: `{report['demo_links']['quality_report']}`.",
             f"- Пакет живых примеров: `{report['demo_links']['demo_pack']}`.",
             f"- Быстрый smoke: `{report['demo_links']['pre_demo_smoke']}`.",

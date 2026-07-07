@@ -69,6 +69,7 @@ def test_build_readiness_report_marks_demo_ready(tmp_path: Path) -> None:
     markdown = (output_dir / "summary.md").read_text(encoding="utf-8")
     assert "Готово к презентации" in markdown
     assert "178/178" in markdown
+    assert "Yonote" in markdown
 
 
 def test_build_readiness_report_marks_demo_not_ready_when_smoke_failed(tmp_path: Path) -> None:
