@@ -128,6 +128,10 @@ def _is_personal_status_request(normalized: str) -> bool:
 
 
 def _is_technical_review_request(normalized: str) -> bool:
+    if "положен" in normalized and any(
+        marker in normalized for marker in ("не отображ", "личном кабинете")
+    ):
+        return False
     if any(marker in normalized for marker in TECHNICAL_REVIEW_MARKERS):
         return True
     if "ошибка" in normalized and any(

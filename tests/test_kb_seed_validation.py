@@ -7,7 +7,9 @@ import pytest
 
 from scripts.index_kb import (
     build_embedding_text,
+    collect_existing_chunk_ids,
     prune_stale_points,
+    select_records_for_indexing,
     validate_only,
     validate_quality_gate,
     validate_seed_items,
@@ -121,6 +123,25 @@ def test_build_embedding_text_includes_intent_examples_without_changing_answer()
     assert record.content == "Билеты до Пятигорска оплачиваются самостоятельно."
 
 
+def test_select_records_for_indexing_keeps_full_allowed_set_for_prune() -> None:
+    records = validate_seed_items(
+        [
+            {"chunk_id": "existing", "text": "Старый чанк"},
+            {"chunk_id": "missing", "text": "Новый чанк"},
+        ]
+    )
+
+    selected, skipped, allowed_chunk_ids = select_records_for_indexing(
+        records,
+        existing_chunk_ids={"existing"},
+        only_missing=True,
+    )
+
+    assert [record.chunk_id for record in selected] == ["missing"]
+    assert skipped == 1
+    assert allowed_chunk_ids == {"existing", "missing"}
+
+
 class FakeQdrantForPrune:
     def __init__(self) -> None:
         self.scroll_calls = []
@@ -143,6 +164,22 @@ class FakeQdrantForPrune:
 
     async def delete(self, **kwargs):
         self.delete_calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_collect_existing_chunk_ids_reads_all_pages() -> None:
+    qdrant = FakeQdrantForPrune()
+
+    chunk_ids = await collect_existing_chunk_ids(
+        qdrant,  # type: ignore[arg-type]
+        "knowledge_base",
+        scroll_limit=2,
+    )
+
+    assert chunk_ids == {"keep", "stale"}
+    assert len(qdrant.scroll_calls) == 2
+    assert qdrant.scroll_calls[0]["with_payload"] == ["chunk_id"]
+    assert qdrant.scroll_calls[0]["with_vectors"] is False
 
 
 @pytest.mark.asyncio

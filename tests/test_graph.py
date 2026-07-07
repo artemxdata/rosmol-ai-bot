@@ -6955,7 +6955,7 @@ async def test_generate_prefers_exact_profile_id_source(
 
 
 @pytest.mark.asyncio
-async def test_generate_does_not_return_source_chunk_for_uncovered_multi_aspect(
+async def test_generate_returns_partial_source_chunk_for_uncovered_multi_aspect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -6988,9 +6988,10 @@ async def test_generate_does_not_return_source_chunk_for_uncovered_multi_aspect(
     )
 
     assert llm.calls == 0
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "insufficient_sources"
-    assert result["generator_model"] == "source_only"
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["travel"]
+    assert result["partial_source_missing_coverage"]
+    assert "в базе нет подтверждённых данных" in result["generated_response"]
 
 
 @pytest.mark.asyncio

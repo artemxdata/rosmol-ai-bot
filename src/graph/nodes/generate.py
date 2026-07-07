@@ -176,6 +176,30 @@ async def generate(state: BotState) -> dict:
                     "generator_model": "source_chunk",
                     "cited_sources": [single_official_source.chunk_id],
                 }
+        partial_chunks, missing_questions = select_partial_source_chunks(
+            analysis,
+            questions,
+            chunks,
+            max_confidence,
+        )
+        partial_response = build_partial_source_response(partial_chunks, missing_questions)
+        if partial_response:
+            if tracer:
+                tracer.add(
+                    "generate",
+                    int((perf_counter() - started_at) * 1000),
+                    mode="complex_partial_source_chunk",
+                    chunks=len(partial_chunks),
+                    missing=len(missing_questions),
+                )
+            return {
+                "generated_response": partial_response,
+                "generator_model": "source_chunk",
+                "cited_sources": [chunk.chunk_id for chunk in partial_chunks],
+                "partial_source_missing_coverage": [
+                    _partial_question_label(question) for question in missing_questions
+                ],
+            }
         if tracer:
             tracer.add(
                 "generate",
@@ -230,6 +254,31 @@ async def generate(state: BotState) -> dict:
             source_chunks=llm_source_chunks,
             started_at=started_at,
         )
+
+    partial_chunks, missing_questions = select_partial_source_chunks(
+        analysis,
+        questions,
+        chunks,
+        max_confidence,
+    )
+    partial_response = build_partial_source_response(partial_chunks, missing_questions)
+    if partial_response:
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                mode="partial_source_chunk",
+                chunks=len(partial_chunks),
+                missing=len(missing_questions),
+            )
+        return {
+            "generated_response": partial_response,
+            "generator_model": "source_chunk",
+            "cited_sources": [chunk.chunk_id for chunk in partial_chunks],
+            "partial_source_missing_coverage": [
+                _partial_question_label(question) for question in missing_questions
+            ],
+        }
 
     if tracer:
         tracer.add(
@@ -763,6 +812,95 @@ def select_deterministic_source_chunks(
         selected.append(source_chunk)
         selected_ids.add(source_chunk.chunk_id)
     return selected
+
+
+def select_partial_source_chunks(
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    chunks: list[ScoredChunk],
+    max_confidence: float,
+) -> tuple[list[ScoredChunk], list[Question]]:
+    if not _has_multiple_distinct_questions(questions):
+        return [], []
+
+    settings = get_settings()
+    if max_confidence < getattr(settings, "reranker_threshold_low", 0.4):
+        return [], []
+
+    candidates = _candidate_source_chunks(analysis, chunks)
+    if not candidates:
+        return [], []
+
+    selected: list[ScoredChunk] = []
+    selected_ids: set[str] = set()
+    missing: list[Question] = []
+
+    for question in questions:
+        if _selected_source_chunks_cover_question(question, selected):
+            continue
+
+        source_chunk = _topic_source_for_question(analysis, question, candidates)
+        if source_chunk is None:
+            question_candidates = _rank_source_candidates_for_question(
+                analysis,
+                question,
+                candidates,
+            )
+            source_chunk = _exact_source_for_original_question(question, question_candidates)
+            if source_chunk is None:
+                source_chunk = next(
+                    (
+                        chunk
+                        for chunk in question_candidates
+                        if _source_chunk_covers_question(question, chunk)
+                    ),
+                    None,
+                )
+
+        if source_chunk is None:
+            missing.append(question)
+            continue
+        if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
+            continue
+
+        selected.append(source_chunk)
+        selected_ids.add(source_chunk.chunk_id)
+
+    if not selected or not missing:
+        return [], []
+    return selected, missing
+
+
+def build_partial_source_response(
+    chunks: list[ScoredChunk],
+    missing_questions: list[Question],
+) -> str | None:
+    source_response = build_deterministic_source_response(chunks)
+    if not source_response:
+        return None
+
+    missing_labels = [_partial_question_label(question) for question in missing_questions]
+    if not missing_labels:
+        return source_response
+
+    missing_text = "; ".join(missing_labels[:5])
+    if len(missing_labels) > 5:
+        missing_text += f"; ещё {len(missing_labels) - 5}"
+    return (
+        f"{source_response}\n\n"
+        f"По этим пунктам в базе нет подтверждённых данных: {missing_text}. "
+        "Чтобы не выдумывать, я не добавляю по ним информацию."
+    )
+
+
+def _partial_question_label(question: Question) -> str:
+    topic = str(question.topic or "").replace("_", " ").strip()
+    text = " ".join(str(question.text or "").split())
+    label = topic or text
+    forum = str(question.forum_normalized or "").strip()
+    if forum and label and forum not in label:
+        return f"{forum}: {label}"
+    return label or "неуточнённый пункт"
 
 
 def _selected_source_chunks_cover_question(

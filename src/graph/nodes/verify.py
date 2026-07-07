@@ -354,13 +354,27 @@ async def verify(state: BotState) -> dict:
             confidence=confidence,
             details="Missing aspect source coverage: " + "; ".join(missing_coverage),
         )
+        partial_response = _partial_response_with_missing_note(state, missing_coverage)
         if tracer:
             tracer.add(
                 "verify",
                 int((perf_counter() - started_at) * 1000),
                 guard=True,
                 missing_coverage=missing_coverage,
+                partial_allowed=bool(partial_response)
+                or _allows_partial_source_response(state, missing_coverage),
             )
+        if partial_response:
+            return {
+                "verification": result,
+                "verifier_triggered": False,
+                "generated_response": partial_response,
+                "partial_source_missing_coverage": missing_coverage,
+                "should_escalate": False,
+                "escalation_reason": None,
+            }
+        if _allows_partial_source_response(state, missing_coverage):
+            return {"verification": result, "verifier_triggered": False}
         return {
             "verification": result,
             "verifier_triggered": False,
@@ -375,13 +389,27 @@ async def verify(state: BotState) -> dict:
             confidence=confidence,
             details="Missing source coverage: " + "; ".join(missing_coverage),
         )
+        partial_response = _partial_response_with_missing_note(state, missing_coverage)
         if tracer:
             tracer.add(
                 "verify",
                 int((perf_counter() - started_at) * 1000),
                 guard=True,
                 missing_coverage=missing_coverage,
+                partial_allowed=bool(partial_response)
+                or _allows_partial_source_response(state, missing_coverage),
             )
+        if partial_response:
+            return {
+                "verification": result,
+                "verifier_triggered": False,
+                "generated_response": partial_response,
+                "partial_source_missing_coverage": missing_coverage,
+                "should_escalate": False,
+                "escalation_reason": None,
+            }
+        if _allows_partial_source_response(state, missing_coverage):
+            return {"verification": result, "verifier_triggered": False}
         return {
             "verification": result,
             "verifier_triggered": False,
@@ -438,6 +466,50 @@ def _signals_insufficient_source_escalation(response: str) -> bool:
     if explicit_escalation in normalized:
         return True
     return bool(INSUFFICIENT_SOURCE_RE.search(normalized))
+
+
+def _allows_partial_source_response(state: BotState, missing_coverage: list[str]) -> bool:
+    if not missing_coverage:
+        return False
+    declared_missing = state.get("partial_source_missing_coverage") or []
+    if not isinstance(declared_missing, list) or not declared_missing:
+        return False
+    response = str(state.get("generated_response") or "").casefold()
+    return "в базе нет подтверждённых данных" in response
+
+
+def _partial_response_with_missing_note(
+    state: BotState, missing_coverage: list[str]
+) -> str | None:
+    if not missing_coverage:
+        return None
+    response = str(state.get("generated_response") or "").strip()
+    if not response or _signals_insufficient_source_escalation(response):
+        return None
+    cited_sources = state.get("cited_sources") or SOURCE_RE.findall(response)
+    if not cited_sources:
+        return None
+    lowered = response.casefold()
+    if "в базе нет подтверждённых данных" in lowered:
+        return response
+    missing_text = "; ".join(
+        _humanize_missing_coverage(item) for item in missing_coverage if item
+    )
+    if not missing_text:
+        return None
+    ending = "" if missing_text.endswith((".", "?", "!")) else "."
+    return (
+        f"{response}\n\n"
+        f"По этим пунктам в базе нет подтверждённых данных: {missing_text}{ending} "
+        "Чтобы не выдумывать, я не добавляю по ним информацию."
+    )
+
+
+def _humanize_missing_coverage(item: str) -> str:
+    value = str(item or "").strip().rstrip(".")
+    if ": " in value:
+        value = value.split(": ", 1)[1].strip()
+    return value
 
 
 def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list[str]:

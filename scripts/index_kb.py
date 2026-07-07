@@ -118,6 +118,7 @@ async def index_kb(
     *,
     embedding_batch_size: int = 16,
     prune_stale: bool = False,
+    only_missing: bool = False,
 ) -> None:
     if prune_stale and limit is not None:
         raise ValueError("--prune-stale cannot be used with --limit")
@@ -133,12 +134,26 @@ async def index_kb(
                 "Run: python scripts/init_qdrant.py"
             )
 
-        embedder = Embedder()
         raw_records = await asyncio.to_thread(path.read_text, encoding="utf-8")
         raw_items = json.loads(raw_records)
         records = validate_seed_items(raw_items)
         if limit is not None:
             records = records[:limit]
+
+        existing_chunk_ids: set[str] = set()
+        if only_missing:
+            existing_chunk_ids = await collect_existing_chunk_ids(client, collection)
+        records, skipped_existing, allowed_chunk_ids = select_records_for_indexing(
+            records,
+            existing_chunk_ids=existing_chunk_ids,
+            only_missing=only_missing,
+        )
+        if only_missing:
+            print(
+                f"only_missing_skip existing={skipped_existing} remaining={len(records)} "
+                f"collection={collection}",
+                flush=True,
+            )
 
         started_at = perf_counter()
         total_records = len(records)
@@ -150,7 +165,10 @@ async def index_kb(
         )
         points: list[models.PointStruct] = []
         indexed = 0
+        embedder = Embedder() if records else None
         for offset in range(0, len(records), embedding_batch_size):
+            if embedder is None:
+                raise RuntimeError("embedder is not initialized")
             batch = records[offset : offset + embedding_batch_size]
             batch_number = offset // embedding_batch_size + 1
             print(
@@ -219,17 +237,61 @@ async def index_kb(
             pruned_stale = await prune_stale_points(
                 client,
                 collection,
-                {record.chunk_id for record in records},
+                allowed_chunk_ids,
             )
 
         elapsed = perf_counter() - started_at
         print(
-            f"indexed={indexed} skipped=0 pruned_stale={pruned_stale} collection={collection} "
+            f"indexed={indexed} skipped={skipped_existing} "
+            f"pruned_stale={pruned_stale} collection={collection} "
             f"limit={limit_label} elapsed_sec={elapsed:.2f}",
             flush=True,
         )
     finally:
         await client.close()
+
+
+def select_records_for_indexing(
+    records: list[KBSeedRecord],
+    *,
+    existing_chunk_ids: set[str],
+    only_missing: bool,
+) -> tuple[list[KBSeedRecord], int, set[str]]:
+    allowed_chunk_ids = {record.chunk_id for record in records}
+    if not only_missing:
+        return records, 0, allowed_chunk_ids
+
+    selected = [record for record in records if record.chunk_id not in existing_chunk_ids]
+    return selected, len(records) - len(selected), allowed_chunk_ids
+
+
+async def collect_existing_chunk_ids(
+    client: AsyncQdrantClient,
+    collection: str,
+    *,
+    scroll_limit: int = 512,
+) -> set[str]:
+    chunk_ids: set[str] = set()
+    next_page_offset: Any = None
+
+    while True:
+        points, next_page_offset = await client.scroll(
+            collection_name=collection,
+            with_payload=["chunk_id"],
+            with_vectors=False,
+            limit=scroll_limit,
+            offset=next_page_offset,
+        )
+        for point in points:
+            payload = getattr(point, "payload", None) or {}
+            chunk_id = payload.get("chunk_id")
+            if isinstance(chunk_id, str) and chunk_id:
+                chunk_ids.add(chunk_id)
+
+        if next_page_offset is None:
+            break
+
+    return chunk_ids
 
 
 async def prune_stale_points(
@@ -331,6 +393,11 @@ def parse_args() -> argparse.Namespace:
             "current seed. Refuses to run with --limit."
         ),
     )
+    parser.add_argument(
+        "--only-missing",
+        action="store_true",
+        help="Index only seed records whose chunk_id is not already present in Qdrant.",
+    )
     return parser.parse_args()
 
 
@@ -354,6 +421,7 @@ def main() -> None:
                     args.limit,
                     embedding_batch_size=args.embedding_batch_size,
                     prune_stale=args.prune_stale,
+                    only_missing=args.only_missing,
                 )
             )
         except MLDependencyError as exc:

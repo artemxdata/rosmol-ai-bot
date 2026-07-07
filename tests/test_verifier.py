@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.graph.nodes.verify import verify
+from src.graph.nodes.verify import _allows_partial_source_response, verify
 from src.models import QueryAnalysis, Question, ScoredChunk
 
 
@@ -16,6 +16,32 @@ class JudgeLLM:
         self.calls += 1
         self.requests.append(kwargs)
         return self.payload
+
+
+def test_allows_partial_source_response_only_with_explicit_missing_note() -> None:
+    assert _allows_partial_source_response(
+        {
+            "generated_response": (
+                "Ответ по найденным источникам.\n\n"
+                "По этим пунктам в базе нет подтверждённых данных: документы."
+            ),
+            "partial_source_missing_coverage": ["документы"],
+        },
+        ["документы"],
+    )
+    assert not _allows_partial_source_response(
+        {
+            "generated_response": "Ответ по найденным источникам.",
+            "partial_source_missing_coverage": ["документы"],
+        },
+        ["документы"],
+    )
+    assert not _allows_partial_source_response(
+        {
+            "generated_response": "По этим пунктам в базе нет подтверждённых данных: документы.",
+        },
+        ["документы"],
+    )
 
 
 @pytest.mark.asyncio
@@ -844,6 +870,45 @@ async def test_verifier_escalates_multi_aspect_partial_source_coverage() -> None
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "partial_source_coverage"
     assert "Что нужно взять с собой?" in result["verification"].details
+
+
+@pytest.mark.asyncio
+async def test_verifier_adds_missing_note_for_cited_partial_source_answer() -> None:
+    result = await verify(
+        {
+            "message_masked": (
+                "Нужен ли ноутбук, как доехать до площадки и можно ли отказаться от участия?"
+            ),
+            "analysis": QueryAnalysis(category="форумы"),
+            "generated_response": (
+                "До площадки можно добраться трансфером. "
+                "Если нужно отказаться от участия, отзови заявку в личном кабинете."
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["travel", "cancel"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="travel",
+                    text="До площадки можно добраться на трансфере от вокзала.",
+                    metadata={"intent_name": "Трансфер и проезд"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="cancel",
+                    text="Если нужно отказаться от участия, отзови заявку в личном кабинете.",
+                    metadata={"intent_name": "Отказ от участия"},
+                    reranker_score=0.8,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "в базе нет подтверждённых данных" in result["generated_response"]
+    assert result["partial_source_missing_coverage"]
 
 
 @pytest.mark.asyncio

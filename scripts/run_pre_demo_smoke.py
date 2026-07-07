@@ -20,12 +20,13 @@ DEFAULT_TARGET = "http://127.0.0.1:8001/ask"
 DEFAULT_OUTPUT_DIR = Path("reports/presentation_quality/pre_demo_smoke_latest")
 DEFAULT_FAIL_UNDER = 1.0
 
+# Keep the executable smoke cases explicitly UTF-8.
 BAD_ANSWER_MARKERS = (
     "По части вопроса в базе знаний нет достаточных подтверждённых данных",
     "Передаю обращение специалисту, чтобы не дать неточный ответ",
 )
 
-CASES: tuple[dict[str, Any], ...] = (
+CASES = (
     {
         "id": "day_youth_multi_aspect",
         "behavior": "answer",
@@ -68,13 +69,13 @@ CASES: tuple[dict[str, Any], ...] = (
     {
         "id": "student_special_forces_travel",
         "behavior": "answer",
-        "query": "Студенческий спецназ возмещение денежных средств на проезд до мероприятия",
-        "must_contain": ("Проезд", "организатор"),
+        "query": "Студенческий спецназ: возмещение денежных средств на проезд до мероприятия",
+        "must_contain": ("проезд", "организатор"),
     },
     {
         "id": "fgais_registration",
         "behavior": "answer",
-        "query": "Как зарегистрироваться в ФГАИС Молодёжь России?",
+        "query": "Как зарегистрироваться в ФГАИС «Молодёжь России»?",
         "must_contain": ("myrosmol.ru/auth/register",),
     },
     {

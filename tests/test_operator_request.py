@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.security.operator_request import is_operator_request
+from src.security.operator_request import is_operator_request, operator_review_reason
 
 
 @pytest.mark.parametrize(
@@ -34,3 +34,15 @@ def test_operator_request_detects_explicit_requests(text: str) -> None:
 )
 def test_operator_request_allows_regular_questions(text: str) -> None:
     assert is_operator_request(text) is False
+
+
+def test_operator_review_does_not_escalate_for_missing_forum_rules_document() -> None:
+    text = "Территория смыслов Вышлите пожалуйста положение, в личном кабинете не отображается"
+
+    assert operator_review_reason(text) is None
+
+
+def test_operator_review_still_escalates_real_platform_issue() -> None:
+    text = "Не могу зарегистрироваться, в личном кабинете ошибка и кнопка не работает"
+
+    assert operator_review_reason(text) == "technical_issue"
