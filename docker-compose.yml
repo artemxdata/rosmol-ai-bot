@@ -98,6 +98,12 @@ services:
       WEBHOOK_AUTH_TOKEN: ${WEBHOOK_AUTH_TOKEN:-}
       ADMIN_AUTH_TOKEN: ${ADMIN_AUTH_TOKEN:-}
       ADMIN_QUALITY_REPORT_PATH: ${ADMIN_QUALITY_REPORT_PATH:-reports/presentation_quality/presentation_quality_report.json}
+      YONOTE_API_TOKEN: ${YONOTE_API_TOKEN:-}
+      YONOTE_BASE_URL: ${YONOTE_BASE_URL:-https://rossmol.yonote.ru}
+      YONOTE_SYNC_ENABLED: ${YONOTE_SYNC_ENABLED:-false}
+      YONOTE_SYNC_MODE: ${YONOTE_SYNC_MODE:-manual}
+      YONOTE_COLLECTION_NAMES: "${YONOTE_COLLECTION_NAMES:-Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия}"
+      YONOTE_REQUEST_TIMEOUT_SECONDS: ${YONOTE_REQUEST_TIMEOUT_SECONDS:-30}
       HDE_TRIGGER_PREFIX: ${HDE_TRIGGER_PREFIX:-}
       HDE_BASE_URL: ${HDE_BASE_URL:-}
       HDE_API_EMAIL: ${HDE_API_EMAIL:-}
