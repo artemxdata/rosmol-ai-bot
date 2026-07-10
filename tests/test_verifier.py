@@ -204,8 +204,9 @@ async def test_verifier_escalates_single_cited_forum_when_forum_context_is_ambig
     )
 
     assert result["verification"].has_hallucination is False
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "Уточни" in result["generated_response"]
 
 
 @pytest.mark.asyncio
@@ -232,8 +233,9 @@ async def test_verifier_escalates_single_forum_source_for_unanchored_forum_quest
         }
     )
 
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "Уточни" in result["generated_response"]
 
 
 @pytest.mark.asyncio
@@ -394,8 +396,9 @@ async def test_verifier_escalates_unanchored_forum_call_letter_source() -> None:
     )
 
     assert result["verification"].has_hallucination is False
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "Уточни" in result["generated_response"]
     assert result["verifier_triggered"] is False
 
 
@@ -1174,8 +1177,9 @@ async def test_verifier_escalates_ambiguous_forum_specific_sources() -> None:
         }
     )
 
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "Уточни" in result["generated_response"]
     assert "Утро" in result["verification"].details
 
 
@@ -1220,8 +1224,9 @@ async def test_verifier_escalates_single_cited_forum_when_candidates_are_ambiguo
         }
     )
 
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "Уточни" in result["generated_response"]
 
 
 @pytest.mark.asyncio
@@ -1261,8 +1266,9 @@ async def test_verifier_escalates_forum_details_without_forum_name() -> None:
         }
     )
 
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "ambiguous_forum_context"
+    assert result["should_escalate"] is False
+    assert result["escalation_reason"] is None
+    assert "Уточни" in result["generated_response"]
     assert gosstart in result["verification"].details
     assert morning in result["verification"].details
 

@@ -18,6 +18,7 @@ class CloudRuLLMClient:
         chat_completions_url: str | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         settings = get_settings()
         self.api_key = self._normalize_secret(api_key or settings.cloud_ru_api_key)
@@ -36,6 +37,7 @@ class CloudRuLLMClient:
         )
         if self.max_retries < 1:
             self.max_retries = 1
+        self._http_client = http_client
 
     async def generate(
         self,
@@ -98,16 +100,16 @@ class CloudRuLLMClient:
             payload["response_format"] = {"type": "json_object"}
 
         started_at = perf_counter()
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                self.chat_completions_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
+        client = self._get_http_client()
+        response = await client.post(
+            self.chat_completions_url,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
 
         latency_ms = int((perf_counter() - started_at) * 1000)
         data = response.json()
@@ -118,6 +120,17 @@ class CloudRuLLMClient:
             return str(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("Cloud.ru LLM response has unexpected format") from exc
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
+
+    async def aclose(self) -> None:
+        if self._http_client is None:
+            return
+        await self._http_client.aclose()
+        self._http_client = None
 
     @staticmethod
     def _normalize_secret(secret: str | None) -> str:

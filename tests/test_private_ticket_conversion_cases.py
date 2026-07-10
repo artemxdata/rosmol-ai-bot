@@ -100,3 +100,30 @@ def test_private_conversion_detects_forwarded_operator_answer_candidate() -> Non
     text = "Пересылаемое сообщение: Федеральное агентство по делам молодёжи"
 
     assert _is_non_user_answer_candidate(normalize_text(text)) is True
+
+
+def test_private_conversion_detects_staff_screenshot_answer_candidate() -> None:
+    text = (
+        "По представленному вами скриншоту видно, что билет уже получен. "
+        "Дополнительные действия не требуются."
+    )
+
+    assert _is_non_user_answer_candidate(normalize_text(text)) is True
+
+
+def test_private_conversion_detects_old_bot_handoff_candidate() -> None:
+    text = "Благодарим за уточнение! Мы передали ваше обращение специалистам."
+
+    assert _is_non_user_answer_candidate(normalize_text(text)) is True
+
+
+def test_private_conversion_detects_promo_and_sales_candidates() -> None:
+    candidates = (
+        "Что объединяет молодёжь России? Регистрируйтесь на сайте и приходите!",
+        "Не теряйте продажи: предлагаем решение с комиссией 20%.",
+        "Congratulations on Russia Day and Proposal for Strategic Cooperation",
+    )
+
+    assert all(
+        _is_non_user_answer_candidate(normalize_text(text)) for text in candidates
+    )

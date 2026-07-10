@@ -46,3 +46,72 @@ def test_operator_review_still_escalates_real_platform_issue() -> None:
     text = "Не могу зарегистрироваться, в личном кабинете ошибка и кнопка не работает"
 
     assert operator_review_reason(text) == "technical_issue"
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (
+            "Статус заявки уже несколько дней на подписании, можно проверить?",
+            "personal_status",
+        ),
+        (
+            "Как получить билет на мужа, если у него нет приложения МАКС?",
+            "personal_status",
+        ),
+        (
+            "Как получить аккредитацию для съёмки видео на Дне молодёжи в Тамбове?",
+            "operator_requested",
+        ),
+        (
+            "Почему задерживается выдача удостоверений по программе?",
+            "operator_requested",
+        ),
+        (
+            "Можно ли исправить в заявке ответы в поле анкеты?",
+            "personal_status",
+        ),
+        (
+            "Нажимаю перейти, но меню не меняется и непонятно, видны ли файлы.",
+            "technical_issue",
+        ),
+        (
+            "При регистрации в МАКС я случайно ввела неправильную почту и не получила билет.",
+            "personal_status",
+        ),
+        (
+            "Прошу направить копию иска и контакты юридического отдела.",
+            "operator_requested",
+        ),
+        (
+            "У меня горит статус 'Участие офлайн'. "
+            "Это значит я ещё в рассмотрении или могу покупать билеты?",
+            "personal_status",
+        ),
+        (
+            "Почему я не прошла на форум, хотя видеовизитка рассматривалась?",
+            "personal_status",
+        ),
+        (
+            "Почему я не могу отменить заявку на сайте, "
+            "если сайт указывает обратиться в службу поддержки?",
+            "personal_status",
+        ),
+    ],
+)
+def test_operator_review_routes_blind_june_personal_and_staff_cases(
+    text: str, reason: str
+) -> None:
+    assert operator_review_reason(text) == reason
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Я получила билет на День молодёжи. Мужу и ребёнку нужны отдельные билеты?",
+        "По одному билету можно пройти с мужем?",
+        "Нужен ли ребёнку отдельный билет на фестиваль?",
+    ],
+)
+def test_operator_review_keeps_general_family_ticket_policy_in_rag(text: str) -> None:
+    assert operator_review_reason(text) is None

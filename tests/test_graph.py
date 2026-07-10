@@ -1277,6 +1277,27 @@ async def test_analyze_uses_deterministic_path_for_clear_forum_query() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_preserves_colloquial_housing_aspect() -> None:
+    message = "Амур: как подать заявку, оплачивается ли проезд и где жить?"
+    result = await analyze_query(
+        {
+            "message": message,
+            "message_masked": message,
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    questions = build_effective_questions(result["analysis"], message)
+
+    assert [question.topic for question in questions] == [
+        "podacha_zayavki_na_proekt",
+        "oplata_proezda",
+        "usloviya_prozhivaniya",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_analyze_uses_deterministic_grant_routing_without_llm() -> None:
     result = await analyze_query(
         {
@@ -1556,7 +1577,7 @@ async def test_analyze_routes_generic_registration_to_platform_without_llm() -> 
 
 
 @pytest.mark.asyncio
-async def test_analyze_still_escalates_unclear_query_on_llm_outage() -> None:
+async def test_analyze_clarifies_unclear_query_on_llm_outage() -> None:
     result = await analyze_query(
         {
             "message": "непонятная формулировка без домена",
@@ -1566,9 +1587,11 @@ async def test_analyze_still_escalates_unclear_query_on_llm_outage() -> None:
         }
     )
 
-    assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "analyzer_failed"
-    assert "HTTP 503" in result["error"]
+    assert result.get("should_escalate") is not True
+    assert result["analyzer_fallback"] is True
+    assert result["analysis"].needs_clarification is True
+    assert result["analysis"].category == "общее"
+    assert "Уточни" in result["analysis"].clarification_question
 
 
 @pytest.mark.asyncio

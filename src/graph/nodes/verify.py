@@ -343,8 +343,13 @@ async def verify(state: BotState) -> dict:
         return {
             "verification": result,
             "verifier_triggered": False,
-            "should_escalate": True,
-            "escalation_reason": "ambiguous_forum_context",
+            "generated_response": (
+                "Уточни, пожалуйста, название форума или мероприятия. "
+                "По твоему вопросу найдены похожие источники по разным событиям, "
+                "и я не хочу смешать условия."
+            ),
+            "should_escalate": False,
+            "escalation_reason": None,
         }
 
     missing_coverage = _missing_aspect_coverage(state, chunks)

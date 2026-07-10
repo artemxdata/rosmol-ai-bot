@@ -55,22 +55,11 @@ async def test_cloud_ru_client_posts_openai_compatible_payload(
     )
 
     transport = httpx.MockTransport(handler)
-    original_async_client = httpx.AsyncClient
-
-    class FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
-            self._client = original_async_client(transport=transport)
-
-        async def __aenter__(self):
-            return self._client
-
-        async def __aexit__(self, exc_type, exc, tb):
-            await self._client.aclose()
+    http_client = httpx.AsyncClient(transport=transport)
 
     monkeypatch.setattr("src.llm.client.get_settings", lambda: _settings())
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
-    client = CloudRuLLMClient(api_key="cloud-key")
+    client = CloudRuLLMClient(api_key="cloud-key", http_client=http_client)
     usage_events, token = start_llm_usage_collection()
     try:
         answer = await client.generate(
@@ -82,6 +71,7 @@ async def test_cloud_ru_client_posts_openai_compatible_payload(
         )
     finally:
         reset_llm_usage_collection(token)
+        await client.aclose()
 
     assert answer == "OK"
     assert usage_events[0]["model"] == "ai-sage/GigaChat3-10B-A1.8B"
@@ -130,16 +120,13 @@ async def test_cloud_ru_client_respects_retry_limit(
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
         async def post(self, *args, **kwargs) -> httpx.Response:
             nonlocal calls
             calls += 1
             return httpx.Response(503, request=request, text="temporary failure")
+
+        async def aclose(self) -> None:
+            return None
 
     async def fake_sleep(delay: float) -> None:
         return None
@@ -160,3 +147,37 @@ async def test_cloud_ru_client_respects_retry_limit(
         await client.generate(model="model", system="system", user="user")
 
     assert calls == 2
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cloud_ru_client_reuses_http_connection_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            nonlocal created
+            created += 1
+
+        async def post(self, *args, **kwargs) -> httpx.Response:
+            request = httpx.Request("POST", str(args[0]))
+            return httpx.Response(
+                200,
+                request=request,
+                json={"choices": [{"message": {"content": "OK"}}]},
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("src.llm.client.get_settings", lambda: _settings())
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    client = CloudRuLLMClient(api_key="cloud-key")
+    await client.generate(model="model", system="system", user="first")
+    await client.generate(model="model", system="system", user="second")
+    await client.aclose()
+
+    assert created == 1

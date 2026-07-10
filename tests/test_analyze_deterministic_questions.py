@@ -67,6 +67,22 @@ def test_fallback_analysis_clarifies_generic_participant_next_step_without_forum
     assert analysis.questions == []
 
 
+def test_fallback_analysis_clarifies_cancel_participation_without_forum() -> None:
+    analysis = _fallback_analysis(
+        "Можно отменить участие в форуме?",
+        "Можно отменить участие в форуме?",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.category == "форумы"
+    assert analysis.clarification_question is not None
+    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.questions == []
+
+
 def test_fallback_analysis_routes_general_grants_to_terms_topic() -> None:
     analysis = _fallback_analysis(
         "Гранты для физлиц",
@@ -416,3 +432,30 @@ def test_fallback_analysis_does_not_treat_birthdate_as_event_date() -> None:
 
     assert analysis is not None
     assert [question.topic for question in analysis.questions] == ["gde_nayti_id_profilya"]
+
+
+def test_fallback_analysis_does_not_route_partner_programs_to_forum_program() -> None:
+    analysis = _fallback_analysis(
+        "Можно ли исправить в заявке информацию по программе партнёров?",
+        "Можно ли исправить в заявке информацию по программе партнёров?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert {question.topic for question in analysis.questions} == set()
+
+
+def test_fallback_analysis_does_not_treat_ticket_word_as_age_or_travel() -> None:
+    analysis = _fallback_analysis(
+        "При регистрации в МАКС не смог сформировать билет, что делать?",
+        "При регистрации в МАКС не смог сформировать билет, что делать?",
+        {"complexity": "complex"},
+        None,
+    )
+
+    assert analysis is not None
+    topics = {question.topic for question in analysis.questions}
+    assert "vozrastnye_ogranicheniya" not in topics
+    assert "oplata_proezda" not in topics

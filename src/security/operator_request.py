@@ -39,12 +39,34 @@ ACTION_MARKERS = (
 PERSONAL_STATUS_MARKERS = (
     "смена статуса",
     "статус не измен",
+    "завис статус",
+    "зависла заявка",
+    "зависла на статусе",
+    "на подписании",
     "статус все тот же",
     "статус всё тот же",
+    "действительно ли я зарегистр",
+    "зарегистрирован на",
+    "зарегистрирована на",
+    "проверить статус участия",
+    "уточнить статус участия",
+    "участие офлайн",
+    "могу уже покупать билеты",
+    "убрать подтверждение",
+    "снять подтверждение",
+    "отменить подтверждение",
+    "не могу отменить заявку",
+    "не могу отменить заяв",
+    "отменить заявку на сайте",
     "мне ничего не приходило",
     "на почте ничего нет",
+    "не было рассмотрено",
+    "письмо с подписью",
+    "подписью и печатью",
     "не могу подтвердить",
     "не получается подтвердить",
+    "не получила билет",
+    "не получил билет",
     "не пришел сертификат",
     "не пришёл сертификат",
     "сертификат не получил",
@@ -61,6 +83,12 @@ TECHNICAL_REVIEW_MARKERS = (
     "не могла выгрузить",
     "не отображ",
     "не отобраз",
+    "меню не меняется",
+    "файлы не видны",
+    "видны ли файлы",
+    "неправильную почту",
+    "приложение не позволяет",
+    "заявка подана",
 )
 OPERATOR_ONLY_MARKERS = (
     "требуется ли в вашу команду",
@@ -77,6 +105,13 @@ OPERATOR_ONLY_MARKERS = (
     "жареным мороженым",
     "где можно найти записи",
     "организатор не подключился",
+    "выдача удостоверений",
+    "удостоверения задерж",
+    "удостоверений задерж",
+    "юридический отдел",
+    "копию иска",
+    "подали в суд",
+    "судебный иск",
 )
 
 
@@ -105,6 +140,10 @@ def operator_review_reason(text: str) -> str | None:
         return "personal_status"
     if _is_technical_review_request(normalized):
         return "technical_issue"
+    if _is_press_accreditation_request(normalized):
+        return "operator_requested"
+    if _is_personal_ticket_request(normalized):
+        return "personal_status"
     if any(marker in normalized for marker in OPERATOR_ONLY_MARKERS):
         return "operator_requested"
     return None
@@ -119,6 +158,24 @@ def _is_personal_status_request(normalized: str) -> bool:
     }:
         return True
     if any(marker in normalized for marker in PERSONAL_STATUS_MARKERS):
+        return True
+    if "статус" in normalized and any(
+        marker in normalized for marker in ("участие офлайн", "в рассмотр", "покупать билет")
+    ):
+        return True
+    if "заяв" in normalized and "службу поддержки" in normalized and any(
+        marker in normalized for marker in ("отмен", "отозв")
+    ):
+        return True
+    if "заяв" in normalized and any(
+        marker in normalized for marker in ("исправ", "измен", "помен", "редакт")
+    ) and any(
+        marker in normalized for marker in ("поле", "анкет", "ответ", "указа", "выбра")
+    ):
+        return True
+    if any(marker in normalized for marker in ("не прошла", "не прошел", "не прошёл")) and any(
+        marker in normalized for marker in ("форум", "отбор", "видеовизит")
+    ) and any(marker in normalized for marker in ("почему", "рассматрив")):
         return True
     if re.search(r"\bзаявк[аи]\s*[№#]\s*\d+", normalized):
         return True
@@ -142,3 +199,71 @@ def _is_technical_review_request(normalized: str) -> bool:
     if "не могу зарегистрироваться" in normalized:
         return True
     return False
+
+
+def _is_press_accreditation_request(normalized: str) -> bool:
+    if "аккредитац" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in ("съем", "съём", "сми", "пресс", "видео", "фото")
+    )
+
+
+def _is_personal_ticket_request(normalized: str) -> bool:
+    if "билет" not in normalized:
+        return False
+
+    if any(
+        marker in normalized
+        for marker in (
+            "переоформ",
+            "перенести билет",
+            "перенесите билет",
+            "привязать билет",
+            "отвязать билет",
+            "восстановить билет",
+            "заменить билет",
+            "изменить билет",
+            "удалить билет",
+            "не получила билет",
+            "не получил билет",
+        )
+    ):
+        return True
+
+    related_person = any(
+        marker in normalized
+        for marker in (
+            "муж",
+            "жена",
+            "супруг",
+            "супруга",
+            "ребен",
+            "ребён",
+            "дет",
+            "другой человек",
+        )
+    )
+    personal_action = any(
+        marker in normalized
+        for marker in (
+            "получить билет на",
+            "оформить билет на",
+            "сдать билет",
+            "на мою почту",
+            "на мою электронную почту",
+            "вместо него",
+            "вместо нее",
+            "вместо неё",
+        )
+    )
+    if related_person and personal_action:
+        return True
+
+    missing_app = any(
+        marker in normalized for marker in ("нет приложения max", "нет приложения макс")
+    )
+    return missing_app and any(
+        marker in normalized for marker in ("получ", "оформ", "отправ", "перенес")
+    )

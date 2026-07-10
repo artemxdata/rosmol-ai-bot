@@ -90,6 +90,7 @@ async def analyze_query(state: BotState) -> dict:
             masked_message,
             routing_hint,
             state.get("session"),
+            allow_unknown_clarification=True,
         )
         if fallback is not None:
             if tracer:
@@ -132,6 +133,8 @@ def _fallback_analysis(
     masked_message: str,
     routing_hint: object,
     session: object | None = None,
+    *,
+    allow_unknown_clarification: bool = False,
 ) -> QueryAnalysis | None:
     category = _infer_category_from_message(masked_message)
     is_offtopic = _is_safe_offtopic(masked_message)
@@ -172,6 +175,20 @@ def _fallback_analysis(
         review_reason = None
     if should_escalate and not category:
         category = "техподдержка" if review_reason == "technical_issue" else "навигация"
+    if (
+        allow_unknown_clarification
+        and not category
+        and not detect_forums_from_text(original_message)
+        and not should_escalate
+    ):
+        category = "общее"
+        complexity = Complexity.SIMPLE
+        needs_clarification = True
+        clarification_question = _build_clarification_question(
+            is_generic_help=True,
+            needs_application_context=False,
+            needs_forum_context=False,
+        )
     payload = {
         "category": category,
         "complexity": complexity.value,
@@ -368,6 +385,10 @@ def _needs_application_context_clarification(message: str) -> bool:
             "оформить",
             "создать",
             "заполнить",
+            "исправить",
+            "изменить",
+            "поменять",
+            "редактировать",
         )
     )
     has_cancel_request = "заяв" in normalized and any(
@@ -412,6 +433,18 @@ def _needs_forum_context_clarification(message: str) -> bool:
         "положение",
         "программа форума",
         "чат участников",
+        "отменить участие",
+        "отказаться от участия",
+        "отозвать заявку",
+        "аккредитац",
+        "съем",
+        "съём",
+        "сми",
+        "пресс",
+        "видео",
+        "билет",
+        "max",
+        "макс",
     )
     return any(marker in normalized for marker in markers)
 
@@ -879,7 +912,7 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "Как оформить отчётность по гранту?",
             ("отчет", "отчетност", "отчёт", "отчётност"),
         ),
-        ("oplata_proezda", "Оплачивается ли проезд?", ("проезд", "дорог", "билет")),
+        ("oplata_proezda", "Оплачивается ли проезд?", ("проезд", "дорог")),
         (
             "usloviya_prozhivaniya",
             "Какие условия проживания?",
@@ -902,7 +935,11 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "Можно ли внести изменения в заявку?",
             ("изменить заявку", "изменить заявк", "внести изменения в заявк", "поменять заявк"),
         ),
-        ("vozrastnye_ogranicheniya", "Какие возрастные ограничения?", ("возраст", "лет")),
+        (
+            "vozrastnye_ogranicheniya",
+            "Какие возрастные ограничения?",
+            ("возраст", "сколько лет", "до 35", "от 14", "от 18"),
+        ),
         (
             "transfer_do_mesta_provedeniya_meropriyatiya",
             "Будет ли трансфер?",
@@ -1004,8 +1041,37 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     ]
     questions: list[dict] = []
     seen_topics: set[str] = set()
+    forum_only_topics = {
+        "o_meropriyatii",
+        "oplata_proezda",
+        "usloviya_prozhivaniya",
+        "otkaz_ot_uchastiya",
+        "vnesti_izmeneniya_v_zayavku",
+        "vozrastnye_ogranicheniya",
+        "transfer_do_mesta_provedeniya_meropriyatiya",
+        "pismo_vyzov",
+        "kogda_budet_sertifikat",
+        "spisok_veschey_i_dokumentov",
+        "dokumenty_meropriyatiya",
+        "rezultaty_rm",
+        "informaciya_o_ploschadke_pitanie_pite",
+        "informaciya_o_ploschadke_medicina",
+        "uchastniki_s_ovz",
+        "inostrannye_grazhdane",
+        "rosmolodezh_granty",
+        "trebovaniya_po_dress_kodu",
+        "poseschenie_festivalya_s_detmi",
+        "programma_i_artisty",
+        "programma_foruma",
+        "daty_nachala_meropriyatiya",
+        "dobavlenie_v_chat_meropriyatiya",
+        "podtverzhdenie_uchastiya_i_org_momenty",
+        "cifrovaya_nedelya",
+    }
     for topic, text, markers in candidates:
         if topic in seen_topics:
+            continue
+        if topic in forum_only_topics and category != "форумы":
             continue
         if topic == "rosmolodezh_granty" and category == "гранты":
             continue

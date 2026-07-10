@@ -104,6 +104,7 @@ async def lifespan(app: FastAPI):
     if settings.ml_prewarm_on_startup:
         await _prewarm_ml_runtime(app, settings)
     yield
+    await app.state.llm_client.aclose()
     await app.state.redis.aclose()
     await app.state.pg_pool.close()
     await app.state.qdrant.close()
