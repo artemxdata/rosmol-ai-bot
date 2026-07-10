@@ -83,6 +83,23 @@ async def generate(state: BotState) -> dict:
             "cited_sources": [],
         }
 
+    catalog_source = _general_catalog_source(analysis.questions or questions, chunks)
+    if catalog_source is not None:
+        source_response = build_deterministic_source_response([catalog_source])
+        if source_response:
+            if tracer:
+                tracer.add(
+                    "generate",
+                    int((perf_counter() - started_at) * 1000),
+                    mode="general_catalog_source_chunk",
+                    chunks=1,
+                )
+            return {
+                "generated_response": source_response,
+                "generator_model": "source_chunk",
+                "cited_sources": [catalog_source.chunk_id],
+            }
+
     if analysis.complexity == Complexity.COMPLEX:
         llm_source_chunks = _select_llm_source_chunks(
             analysis,
@@ -561,6 +578,30 @@ def _should_synthesize_with_llm(
     if analysis.complexity == Complexity.COMPLEX:
         return True
     return len(source_chunks) > 1 and _has_multiple_distinct_questions(questions)
+
+
+def _general_catalog_source(
+    questions: list[Question],
+    chunks: list[ScoredChunk],
+) -> ScoredChunk | None:
+    if len(questions) != 1 or questions[0].topic != "rekomendacii_obschie":
+        return None
+    candidates = [
+        chunk
+        for chunk in chunks
+        if str((chunk.metadata or {}).get("topic") or "").strip()
+        == "rekomendacii_obschie"
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda chunk: (
+            _source_type_rank(chunk),
+            -float(chunk.reranker_score or chunk.score or 0),
+            chunk.chunk_id,
+        ),
+    )
 
 
 def _can_answer_from_single_official_source(

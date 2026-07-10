@@ -756,7 +756,9 @@ def _observed_behavior(response_text: str, trace: dict[str, Any]) -> str:
     normalized = response_text.casefold().replace("ё", "е")
     if _looks_like_scope_note(normalized):
         return "scope_note"
-    if _looks_like_clarification(normalized) and not trace.get("cited_sources"):
+    # The final verifier may replace a generated answer with a clarification while
+    # retrieval citations remain in the trace. User-visible behavior wins here.
+    if _looks_like_clarification(normalized):
         return "clarify"
     return "answer"
 
@@ -766,7 +768,13 @@ def _looks_like_scope_note(normalized_response: str) -> bool:
 
 
 def _looks_like_clarification(normalized_response: str) -> bool:
-    return any(marker in normalized_response for marker in CLARIFICATION_MARKERS)
+    if re.search(r"\bуточни(?:те)?\b", normalized_response):
+        return True
+    return any(
+        marker in normalized_response
+        for marker in CLARIFICATION_MARKERS
+        if marker not in {"уточни", "уточните"}
+    )
 
 
 def _failure_reason_counts(results: list[dict[str, Any]]) -> dict[str, int]:

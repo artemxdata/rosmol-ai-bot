@@ -14,7 +14,15 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
         output_dir=tmp_path,
     )
 
-    assert set(paths) == {"forums", "safety", "off_topic", "pii", "followup", "all_ask"}
+    assert set(paths) == {
+        "forums",
+        "safety",
+        "off_topic",
+        "pii",
+        "adversarial",
+        "followup",
+        "all_ask",
+    }
     for path in paths.values():
         assert path.exists()
 
@@ -22,6 +30,7 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
     safety = json.loads(paths["safety"].read_text(encoding="utf-8"))
     off_topic = json.loads(paths["off_topic"].read_text(encoding="utf-8"))
     pii = json.loads(paths["pii"].read_text(encoding="utf-8"))
+    adversarial = json.loads(paths["adversarial"].read_text(encoding="utf-8"))
     followup = json.loads(paths["followup"].read_text(encoding="utf-8"))
     all_ask = json.loads(paths["all_ask"].read_text(encoding="utf-8"))
 
@@ -29,11 +38,20 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
     assert len(safety) >= 8
     assert len(off_topic) >= 8
     assert len(pii) >= 4
+    assert len(adversarial) == 50
     assert len(followup) >= 3
-    assert len(all_ask) == len(forums) + len(safety) + len(off_topic) + len(pii)
+    assert len(all_ask) == len(forums) + len(safety) + len(off_topic) + len(pii) + len(
+        adversarial
+    )
     assert all(case["expected_behavior"] == "escalate" for case in safety)
     assert all(case["expected_behavior"] == "scope_note" for case in off_topic)
     assert any(case["forbidden_message_masked_contains"] for case in pii)
+    assert {case["expected_behavior"] for case in adversarial} == {
+        "answer",
+        "clarify",
+        "scope_note",
+        "escalate",
+    }
     assert all("turns" in case for case in followup)
 
     bctp_case = next(case for case in forums if case["id"] == "forum_bctp_family_transfer_food")

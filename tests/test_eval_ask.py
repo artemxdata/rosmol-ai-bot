@@ -254,6 +254,31 @@ def test_score_case_accepts_clarify_behavior() -> None:
     result = score_case(case, http_result, {"was_escalated": False})
 
     assert result["observed_behavior"] == "clarify"
+
+
+def test_score_case_treats_final_clarification_as_clarify_with_stale_citations() -> None:
+    case = {
+        "id": "clarify_after_verify",
+        "query": "а это не форум, а программа",
+        "expected_behavior": "clarify",
+        "expected_escalated": False,
+    }
+    http_result = {
+        "http_status": 200,
+        "request_id": "request-clarify-after-verify",
+        "response": "Уточни, пожалуйста, точное название программы.",
+        "latency_ms": 10,
+        "error": None,
+    }
+    trace = {
+        "was_escalated": False,
+        "cited_sources": ["stale_retrieval_source"],
+    }
+
+    result = score_case(case, http_result, trace)
+
+    assert result["observed_behavior"] == "clarify"
+    assert result["passed"] is True
     assert result["passed"] is True
 
 

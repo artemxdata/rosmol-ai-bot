@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 import asyncpg
 import httpx
@@ -35,7 +36,7 @@ from eval.run_ask import (
 )
 
 DEFAULT_OUTPUT_DIR = Path("reports/pre_pilot_quality_suite")
-DEFAULT_SECTIONS = ("forums", "safety", "off_topic", "pii", "followup")
+DEFAULT_SECTIONS = ("forums", "safety", "off_topic", "pii", "adversarial", "followup")
 
 
 async def run_pre_pilot_quality_suite(
@@ -151,9 +152,10 @@ async def run_followup_eval(
 
     results: list[dict[str, Any]] = []
     budget_stopped = False
+    run_namespace = uuid4().hex[:12]
     async with httpx.AsyncClient(timeout=request_timeout) as client:
         for conversation_index, conversation in enumerate(conversations, start=1):
-            user_id = f"pre-pilot-followup-{conversation_index}"
+            user_id = f"pre-pilot-followup-{run_namespace}-{conversation_index}"
             turns = conversation.get("turns") or []
             for raw_turn in turns:
                 case = _normalize_case({**raw_turn, "user_id": user_id})

@@ -11,9 +11,11 @@ ASK_SECTION_FILES = {
     "safety": "pre_pilot_safety.json",
     "off_topic": "pre_pilot_off_topic.json",
     "pii": "pre_pilot_pii.json",
+    "adversarial": "pre_pilot_adversarial.json",
 }
 FOLLOWUP_FILE = "pre_pilot_followup.json"
 ALL_ASK_FILE = "pre_pilot_all_ask.json"
+ADVERSARIAL_SOURCE = Path(__file__).resolve().parent / "cases" / ASK_SECTION_FILES["adversarial"]
 
 
 def build_pre_pilot_case_sets(
@@ -30,6 +32,7 @@ def build_pre_pilot_case_sets(
         "safety": _safety_cases(),
         "off_topic": _off_topic_cases(),
         "pii": _pii_cases(index),
+        "adversarial": _adversarial_cases(),
     }
     _attach_equivalent_chunk_ids(sections, index)
     paths: dict[str, Path] = {}
@@ -60,6 +63,14 @@ def _load_seed_records(path: Path) -> list[dict[str, Any]]:
     if len(records) != len(payload):
         raise ValueError(f"KB seed contains non-object records: {path}")
     return records
+
+
+def _adversarial_cases() -> list[dict[str, Any]]:
+    source = ADVERSARIAL_SOURCE
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise ValueError(f"Adversarial cases must contain a JSON object array: {source}")
+    return payload
 
 
 class _ChunkIndex:

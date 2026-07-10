@@ -65,6 +65,10 @@ PERSONAL_STATUS_MARKERS = (
     "подписью и печатью",
     "не могу подтвердить",
     "не получается подтвердить",
+    "не понимаю прошел ли",
+    "не понимаю прошёл ли",
+    "прошел ли я",
+    "прошёл ли я",
     "не получила билет",
     "не получил билет",
     "не пришел сертификат",
@@ -113,6 +117,15 @@ OPERATOR_ONLY_MARKERS = (
     "подали в суд",
     "судебный иск",
 )
+REPEATED_SUPPORT_FAILURE_MARKERS = (
+    "третий раз никто не помог",
+    "никто не помог",
+    "все перепробовал",
+    "всё перепробовал",
+    "все бесполезно, ничего не работает",
+    "всё бесполезно, ничего не работает",
+    "гоняют по кругу",
+)
 
 
 def is_operator_request(text: str) -> bool:
@@ -121,6 +134,15 @@ def is_operator_request(text: str) -> bool:
         return False
     if LIVE_PERSON_RE.search(normalized):
         return True
+    if any(
+        marker in normalized
+        for marker in (
+            "молодому специалисту",
+            "молодого специалиста",
+            "молодой специалист",
+        )
+    ) and not any(marker in normalized for marker in ("оператор", "поддержк", "сотрудник")):
+        return False
     if not any(marker in normalized for marker in TARGET_MARKERS):
         return False
     if any(marker in normalized for marker in EMPLOYMENT_MARKERS):
@@ -144,6 +166,8 @@ def operator_review_reason(text: str) -> str | None:
         return "operator_requested"
     if _is_personal_ticket_request(normalized):
         return "personal_status"
+    if any(marker in normalized for marker in REPEATED_SUPPORT_FAILURE_MARKERS):
+        return "repeated_support_failure"
     if any(marker in normalized for marker in OPERATOR_ONLY_MARKERS):
         return "operator_requested"
     return None
@@ -158,6 +182,10 @@ def _is_personal_status_request(normalized: str) -> bool:
     }:
         return True
     if any(marker in normalized for marker in PERSONAL_STATUS_MARKERS):
+        return True
+    if "я подал заяв" in normalized and any(
+        marker in normalized for marker in ("прошел ли", "прошёл ли")
+    ):
         return True
     if "статус" in normalized and any(
         marker in normalized for marker in ("участие офлайн", "в рассмотр", "покупать билет")

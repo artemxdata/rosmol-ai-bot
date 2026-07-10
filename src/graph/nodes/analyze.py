@@ -10,7 +10,45 @@ from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
 from src.models import Complexity, QueryAnalysis
-from src.security.operator_request import is_operator_request, operator_review_reason
+from src.security.operator_request import (
+    is_operator_request,
+    operator_review_reason,
+)
+
+BOT_CAPABILITIES_RESPONSE = (
+    "Я ИИ-помощник Росмолодёжи. Отвечаю по подтверждённой базе знаний о форумах, "
+    "мероприятиях, ФГАИС «Молодёжь России» и грантах. Если вопрос вне этих тем, "
+    "я прямо скажу об этом, а опасную ситуацию или явный запрос оператора передам "
+    "специалисту."
+)
+GREETING_RESPONSE = (
+    "Привет! Я помогу разобраться с форумами и мероприятиями Росмолодёжи, "
+    "ФГАИС «Молодёжь России» и грантами. Напиши, что именно тебя интересует."
+)
+FEEDBACK_RESPONSE = (
+    "Расскажи, пожалуйста, что именно хочешь оценить: ответ бота, работу сервиса, "
+    "мероприятие или сотрудника. Опиши ситуацию без персональных данных — я передам "
+    "обратную связь по назначению."
+)
+APPLICATION_SUCCESS_RESPONSE = (
+    "Отлично, заявка подана! Если понадобится, я помогу разобраться с дальнейшими "
+    "шагами по конкретному форуму, мероприятию или грантовому конкурсу."
+)
+ACCOUNT_CHECK_RESPONSE = (
+    "Проверь вход на https://myrosmol.ru/auth/login. Если пароль не помнишь, нажми "
+    "«Восстановить пароль» и укажи электронную почту, которую мог использовать при "
+    "регистрации. Письмо для восстановления покажет, что к этой почте привязан аккаунт. "
+    "Если письма нет, проверь папку «Спам» и правильность адреса."
+)
+SOURCE_BOUNDARY_RESPONSE = (
+    "Я отвечаю только по подтверждённым данным из базы Росмолодёжи. Если уточнишь, "
+    "какие именно условия или какой шаг тебя интересует, я проверю это точнее."
+)
+GRANT_CONTEXT_RESPONSE = (
+    "Понял, речь о грантовом конкурсе Росмолодёжи. Я могу подсказать условия участия, "
+    "подачу заявки, требования к проекту, команде, смете и отчётности. Напиши, какой "
+    "именно этап тебя интересует."
+)
 
 
 async def analyze_query(state: BotState) -> dict:
@@ -136,41 +174,67 @@ def _fallback_analysis(
     *,
     allow_unknown_clarification: bool = False,
 ) -> QueryAnalysis | None:
-    category = _infer_category_from_message(masked_message)
-    is_offtopic = _is_safe_offtopic(masked_message)
+    category = _infer_category_from_message(original_message)
+    if (
+        not category
+        and _is_project_team_question(_normalize_for_session(original_message))
+        and _session_mentions(session, ("идея проекта", "команда проекта", "грант"))
+    ):
+        category = "гранты"
+    # Names can be masked before analysis (for example, politicians). Scope routing is
+    # local and deterministic, so use the original text here without exposing it to LLMs.
+    is_offtopic = is_safe_offtopic_message(original_message)
     if is_offtopic:
         category = "offtopic"
-    is_generic_help = _is_generic_help_request(masked_message)
+    interaction_response = None if is_offtopic else _bot_interaction_response(original_message)
+    ambiguous_response = (
+        None
+        if is_offtopic or interaction_response
+        else _ambiguous_short_request_response(original_message, session)
+    )
+    if interaction_response and not category:
+        category = "общее"
+    if ambiguous_response and not category:
+        category = "общее"
+    is_generic_help = _is_generic_help_request(original_message)
     if is_generic_help and not category:
         category = "общее"
-    needs_forum_context = _needs_forum_context_clarification(masked_message)
+    needs_forum_context = _needs_forum_context_clarification(original_message)
     if needs_forum_context and not category:
         category = "форумы"
     complexity = _complexity_from_routing_hint(routing_hint)
-    if _has_feedback_context(masked_message):
+    if _has_feedback_context(original_message):
         complexity = Complexity.SIMPLE
-    if _is_exact_fallback_intent_message(masked_message):
+    if _is_exact_fallback_intent_message(original_message):
         complexity = Complexity.SIMPLE
-    needs_application_context = _needs_application_context_clarification(masked_message)
-    needs_clarification = (
-        is_offtopic or is_generic_help or needs_application_context or needs_forum_context
+    needs_application_context = _needs_application_context_clarification(original_message)
+    needs_clarification = bool(
+        is_offtopic
+        or interaction_response
+        or ambiguous_response
+        or is_generic_help
+        or needs_application_context
+        or needs_forum_context
     )
-    clarification_question = (
-        _build_clarification_question(
-            is_generic_help=is_generic_help,
-            needs_application_context=needs_application_context,
-            needs_forum_context=needs_forum_context,
+    clarification_question = None
+    if needs_clarification and not is_offtopic:
+        clarification_question = interaction_response or ambiguous_response or (
+            _build_clarification_question(
+                is_generic_help=is_generic_help,
+                needs_application_context=needs_application_context,
+                needs_forum_context=needs_forum_context,
+            )
         )
-        if needs_clarification and not is_offtopic
-        else None
-    )
     if needs_clarification:
         complexity = Complexity.SIMPLE
-    if _should_force_simple_support_query(category, masked_message):
+    if _should_force_simple_support_query(category, original_message):
         complexity = Complexity.SIMPLE
-    review_reason = operator_review_reason(masked_message)
+    review_reason = operator_review_reason(original_message) or _session_followup_review_reason(
+        original_message,
+        session,
+    )
     should_escalate = review_reason is not None
-    if is_offtopic:
+    if is_offtopic or (needs_clarification and review_reason != "operator_requested"):
         should_escalate = False
         review_reason = None
     if should_escalate and not category:
@@ -202,7 +266,7 @@ def _fallback_analysis(
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
     _apply_forum_category_guardrail(payload, original_message)
-    _ensure_deterministic_questions(payload, masked_message)
+    _ensure_deterministic_questions(payload, original_message)
     analysis = QueryAnalysis.model_validate(payload)
     analysis = apply_session_context(analysis, masked_message, session)
     if not analysis.category and not analysis.forum_normalized:
@@ -214,7 +278,7 @@ def _is_operator_request(message: str) -> bool:
     return is_operator_request(message)
 
 
-def _is_safe_offtopic(message: str) -> bool:
+def is_safe_offtopic_message(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е")
     if ("контрольн" in normalized and "точк" in normalized) or any(
         marker in normalized for marker in ("окно отчета", "окно отчёта")
@@ -234,7 +298,56 @@ def _is_safe_offtopic(message: str) -> bool:
         "кабинет",
         "профил",
     )
-    if any(marker in normalized for marker in in_scope_markers):
+    has_known_forum = bool(detect_forums_from_text(message))
+    has_in_scope_context = has_known_forum or any(
+        marker in normalized for marker in in_scope_markers
+    )
+    if has_in_scope_context and _has_actionable_support_request(normalized):
+        return False
+
+    conversational_offtopic_markers = (
+        "путин",
+        "трамп",
+        "трам ",
+        "нетаньяху",
+        "израиль или иран",
+        "иран или израиль",
+        "чей крым",
+        "за путина",
+        "против путина",
+        "политическ",
+        "выборы президента",
+        "какой президент",
+        "ахмат сила",
+        "деньги пилите",
+        "шарага",
+        "ты туп",
+        "ты дурак",
+        "такой дурак",
+        "такой тупой",
+        "дурацкий бот",
+        "тупой бот",
+        "глупый бот",
+        "ты глуп",
+        "ничего не умеешь",
+        "чат gpt лучше",
+        "чат gpt и то",
+        "лучше поспрашиваю алису",
+        "зачем нужен такой",
+        "сосал",
+        "дом труба шатал",
+        "поговори со мной",
+        "я тебя люблю",
+        "кто виноват",
+        "доколе",
+        "мистер поттер",
+        "златоцвет",
+        "настойку полыни",
+    )
+    if any(marker in normalized for marker in conversational_offtopic_markers):
+        return True
+
+    if has_in_scope_context:
         return False
 
     offtopic_markers = (
@@ -281,8 +394,326 @@ def _is_safe_offtopic(message: str) -> bool:
         "сборной россии",
         "футбольный матч",
         "хоккейный матч",
+        "проблемы с работодателем",
+        "жилье молодому специалисту",
+        "жильё молодому специалисту",
+        "меня отчисляют",
+        "материальная помощь",
+        "льгот",
+        "выплат",
     )
     return any(marker in normalized for marker in offtopic_markers)
+
+
+def _has_actionable_support_request(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "как ",
+            "как?",
+            "где ",
+            "когда ",
+            "куда ",
+            "можно ли",
+            "нужно ли",
+            "что нужно",
+            "что делать",
+            "подскаж",
+            "расскаж",
+            "помог",
+            "хочу попасть",
+            "хочу участвовать",
+            "хочу поучаствовать",
+            "хочу подать",
+            "зарегистр",
+            "регистрац",
+            "подать заяв",
+            "не работает",
+            "не получается",
+            "не могу",
+            "ошиб",
+        )
+    )
+
+
+def _bot_interaction_response(message: str) -> str | None:
+    normalized = message.casefold().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return None
+
+    greeting_phrases = {
+        "привет",
+        "здравствуйте",
+        "добрый день",
+        "добрый вечер",
+        "как дела",
+        "привет можете помочь",
+        "привет можешь помочь",
+    }
+    if normalized in greeting_phrases:
+        return GREETING_RESPONSE
+
+    bot_markers = (
+        "почему не можешь помочь",
+        "что ты умеешь",
+        "что ты вообще умеешь",
+        "что умеешь",
+        "что вы можете подсказать",
+        "что вы вообще можете подсказать",
+        "ты нейросеть",
+        "ты ии",
+        "ты искусственный интеллект",
+        "ты исскуственный интеллект",
+        "ты исскусственный интеллект",
+        "ты чат gpt",
+        "ты чат джипити",
+        "ты учишься",
+        "ты умеешь обучаться",
+        "какие вопросы ты понимаешь",
+        "как задавать тебе вопросы",
+        "ты полезный",
+        "какой в тебе смысл",
+        "ты хоть что-то можешь",
+        "вы вообще отвечаете людям",
+        "зачем вы тогда нужны",
+        "ты ответишь",
+    )
+    if any(marker in normalized for marker in bot_markers):
+        return BOT_CAPABILITIES_RESPONSE
+    if any(
+        marker in normalized
+        for marker in (
+            "а ты сам не знаешь",
+            "ты сам не знаешь",
+            "сам не знаешь",
+        )
+    ):
+        return SOURCE_BOUNDARY_RESPONSE
+    if any(
+        marker in normalized
+        for marker in (
+            "оставить обратную связь",
+            "хочу дать фидбек",
+            "дать фидбек",
+        )
+    ):
+        return FEEDBACK_RESPONSE
+    return None
+
+
+def _ambiguous_short_request_response(message: str, session: object | None) -> str | None:
+    normalized = message.casefold().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if _is_application_success(normalized):
+        return APPLICATION_SUCCESS_RESPONSE
+    if "это не форум а грант" in normalized:
+        return GRANT_CONTEXT_RESPONSE
+    if "есть ли у меня аккаунт" in normalized:
+        return ACCOUNT_CHECK_RESPONSE
+    if any(
+        marker in normalized
+        for marker in (
+            "это не форум а программа",
+            "это не на грант заявка",
+            "это не грант",
+        )
+    ):
+        return (
+            "Понял, предыдущая тема не подходит. Уточни точное название программы или "
+            "мероприятия и что произошло с заявкой — я проверю нужный раздел базы."
+        )
+    if "точно такой грант есть" in normalized:
+        return (
+            "Не нахожу подтверждения гранта с таким точным названием. Уточни официальное "
+            "название конкурса или проверь написание — я не буду подменять его похожим."
+        )
+    if "где там про условия" in normalized:
+        return (
+            "Уточни, пожалуйста, какие условия тебя интересуют: возраст и отбор, проезд, "
+            "проживание, питание или документы?"
+        )
+    if normalized in {"нет это от вас письмо", "это от вас письмо"}:
+        return (
+            "Понял. Уточни, пожалуйста, тему письма и что в нём просят сделать, без "
+            "персональных данных и номера заявки. Тогда я проверю нужную инструкцию."
+        )
+    if any(
+        marker in normalized
+        for marker in ("лк на вашем сайте", "личный кабинет на вашем сайте")
+    ):
+        return (
+            "Уточни, пожалуйста, какой сайт открыт: ФГАИС «Молодёжь России» "
+            "(myrosmol.ru), Добро.рф или другой сервис, и на каком шаге возникает проблема."
+        )
+    if any(marker in normalized for marker in ("просто тупит", "тупит и неудоб", "просто неудоб")):
+        if _session_mentions(session, ("кабинет", "личный кабинет", "лк", "сайт")):
+            return (
+                "Уточни, пожалуйста, что именно не работает в личном кабинете: вход, "
+                "профиль, заявка или карточка мероприятия, и что происходит после нажатия."
+            )
+    if _looks_like_unknown_name_after_clarification(normalized, session):
+        return (
+            "Не нахожу точного подтверждённого названия. Проверь написание или уточни, "
+            "это форум, программа, мероприятие или грантовый конкурс."
+        )
+    if _has_session_context(session):
+        return None
+    if "пришло" in normalized and "письм" in normalized and any(
+        marker in normalized for marker in ("не понимаю", "неясно", "что делать")
+    ):
+        return (
+            "Уточни, пожалуйста, от кого пришло письмо и что именно в нём непонятно. "
+            "Не отправляй сюда персональные данные, номер заявки или скриншот с ними."
+        )
+    if "вложен" in normalized and "контекст" in normalized:
+        return (
+            "Уточни, пожалуйста, текстом: что изображено во вложении "
+            "и с чем нужна помощь."
+        )
+    if "анкет" in normalized and any(
+        marker in normalized for marker in ("фигн", "проблем", "непонят")
+    ):
+        return (
+            "Уточни, пожалуйста, о какой анкете речь и на каком шаге возникла проблема: "
+            "вход, заполнение, сохранение или отправка?"
+        )
+    if "кабинет" in normalized and any(
+        marker in normalized for marker in ("задолб", "тупит", "неудоб", "фигн")
+    ):
+        return (
+            "Уточни, пожалуйста, что именно происходит в личном кабинете и на каком "
+            "шаге: вход, заполнение профиля, заявка или карточка мероприятия?"
+        )
+    if "участвовал раньше" in normalized and "заново регистр" in normalized:
+        return (
+            "Уточни, пожалуйста, речь о повторной регистрации аккаунта ФГАИС или о "
+            "подаче новой заявки на конкретное мероприятие?"
+        )
+    if re.search(r"\b\d{2}\b", normalized) and any(
+        marker in normalized for marker in ("не поздно", "ваших программ", "участвовать")
+    ):
+        return (
+            "Для разных программ действуют разные возрастные ограничения. Уточни, "
+            "пожалуйста, название форума или мероприятия — я проверю точные условия."
+        )
+    technical_phrases = {
+        "ошибка",
+        "не работает",
+        "не пускает",
+        "не проходит",
+        "не прикрепляется",
+        "не отображается",
+        "там ошибка",
+        "у вас баг",
+        "там ошибка но я не понял какая",
+        "я что-то нажал и теперь непонятно что дальше",
+    }
+    if normalized in technical_phrases:
+        return (
+            "Уточни, пожалуйста, где именно возникла проблема и что видишь на экране: "
+            "вход в ФГАИС, профиль, заявка или карточка мероприятия?"
+        )
+    if normalized in {"что делать", "а дальше что", "что дальше"}:
+        return (
+            "Уточни, пожалуйста, что произошло и о каком форуме, мероприятии, "
+            "гранте или разделе ФГАИС идёт речь."
+        )
+    return None
+
+
+def _is_application_success(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "получилось подать заявку",
+            "получилось отправить заявку",
+            "ура я подал заявку",
+            "ура я подала заявку",
+            "заявку успешно подал",
+            "заявку успешно подала",
+        )
+    )
+
+
+def _looks_like_unknown_name_after_clarification(
+    normalized: str,
+    session: object | None,
+) -> bool:
+    if not normalized or detect_forums_from_text(normalized):
+        return False
+    words = re.findall(r"[\w-]+", normalized, flags=re.UNICODE)
+    if not 1 <= len(words) <= 4:
+        return False
+    if all(word.isdigit() for word in words):
+        return False
+    last_bot = _last_session_message(session, "bot")
+    return any(
+        marker in last_bot
+        for marker in (
+            "уточни",
+            "точное название",
+            "название форума",
+            "название программы",
+            "о какой заявке",
+        )
+    )
+
+
+def _session_followup_review_reason(message: str, session: object | None) -> str | None:
+    normalized = _normalize_for_session(message)
+    if not (
+        "заяв" in normalized
+        and any(marker in normalized for marker in ("что по", "что с", "а по"))
+    ):
+        return None
+    if _session_mentions(
+        session,
+        (
+            "не понимаю прошел ли",
+            "не понимаю прошёл ли",
+            "прошел ли я",
+            "прошёл ли я",
+            "проверить статус",
+            "статус заявки",
+        ),
+    ):
+        return "personal_status"
+    return None
+
+
+def _session_mentions(session: object | None, markers: tuple[str, ...]) -> bool:
+    for field in ("user", "bot"):
+        if any(marker in _last_session_message(session, field) for marker in markers):
+            return True
+    return False
+
+
+def _last_session_message(session: object | None, field: str) -> str:
+    messages = getattr(session, "last_messages", None) or []
+    for item in reversed(messages[-5:]):
+        value = _normalize_for_session(str(item.get(field) or ""))
+        if value:
+            return value
+    return ""
+
+
+def _normalize_for_session(value: str) -> str:
+    normalized = str(value or "").casefold().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _has_session_context(session: object | None) -> bool:
+    if session is None:
+        return False
+    return bool(
+        getattr(session, "forum_context", None)
+        or getattr(session, "last_messages", None)
+        or getattr(session, "pending_clarification", None)
+    )
 
 
 def _should_force_simple_support_query(category: str | None, message: str) -> bool:
@@ -315,6 +746,11 @@ def _is_generic_help_request(message: str) -> bool:
         "подскажите",
         "добрый день помогите",
         "здравствуйте помогите",
+        "у меня вопрос но не знаю к вам ли это",
+        "я запутался куда обратиться",
+        "я запутался куда мне обратиться",
+        "не понимаю с чего начать",
+        "мне нужна помощь по молодежной теме",
     }
     if normalized in exact_phrases:
         return True
@@ -375,6 +811,17 @@ def _needs_application_context_clarification(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е")
     if detect_forums_from_text(message):
         return False
+    has_vague_application_problem = "заяв" in normalized and any(
+        marker in normalized
+        for marker in (
+            "проблем",
+            "какая-то",
+            "какая то",
+            "что-то не так",
+            "что то не так",
+            "непонят",
+        )
+    )
     has_application_request = "заяв" in normalized and any(
         marker in normalized
         for marker in (
@@ -382,6 +829,7 @@ def _needs_application_context_clarification(message: str) -> bool:
             "подать",
             "подач",
             "отправить",
+            "не отправ",
             "оформить",
             "создать",
             "заполнить",
@@ -395,7 +843,21 @@ def _needs_application_context_clarification(message: str) -> bool:
         marker in normalized
         for marker in ("отмен", "отозв", "удал")
     )
-    if not (has_application_request or has_cancel_request):
+    has_unspecified_selection_problem = any(
+        marker in normalized
+        for marker in (
+            "мне отказали",
+            "не прошел отбор",
+            "не прошёл отбор",
+            "не прошла отбор",
+        )
+    )
+    if not (
+        has_application_request
+        or has_cancel_request
+        or has_vague_application_problem
+        or has_unspecified_selection_problem
+    ):
         return False
     if any(
         marker in normalized
@@ -417,6 +879,23 @@ def _needs_forum_context_clarification(message: str) -> bool:
     if any(marker in normalized for marker in ("грант", "фгаис", "росмолод")):
         return False
     if _needs_participant_event_context_clarification(normalized):
+        return True
+    if any(
+        marker in normalized
+        for marker in (
+            "хочу попасть на форум",
+            "хочу попасть на мероприятие",
+            "как попасть на форум",
+            "как туда попасть",
+            "хочу на форум",
+            "хочу на мероприятие",
+            "вписаться в движ",
+            "залететь на форум",
+            "залететь на программу",
+            "стать участником форума",
+            "стать участницей форума",
+        )
+    ):
         return True
     markers = (
         "фельдшер",
@@ -450,7 +929,7 @@ def _needs_forum_context_clarification(message: str) -> bool:
 
 
 def _needs_participant_event_context_clarification(normalized: str) -> bool:
-    if "участ" not in normalized:
+    if not any(marker in normalized for marker in ("участ", "подал", "подалась", "подался")):
         return False
     participant_markers = (
         "я участник",
@@ -462,10 +941,16 @@ def _needs_participant_event_context_clarification(normalized: str) -> bool:
         "прошла отбор",
         "подтвердил участие",
         "подтвердила участие",
+        "я подался",
+        "я подалась",
+        "я подал заявку",
+        "я подала заявку",
     )
     next_step_markers = (
         "что дальше",
         "дальше что",
+        "дальше че",
+        "дальше чо",
         "что теперь",
         "следующ",
         "какие дальнейшие",
@@ -497,6 +982,10 @@ def _has_grant_project_context(normalized: str) -> bool:
             "отчёт",
             "реализац",
             "поддержк",
+            "команд",
+            "идея проект",
+            "идея для проект",
+            "нет опыта",
         )
     ):
         return True
@@ -539,11 +1028,15 @@ def _has_ui_failure_context(normalized: str) -> bool:
 
 def _infer_category_from_message(message: str) -> str | None:
     normalized = message.casefold().replace("ё", "е")
+    if _is_sport_recommendation_request(normalized):
+        return "платформа_фгаис"
     if _has_staff_feedback_context(normalized):
         return "навигация"
     if normalized.startswith("технические вопросы.") or "технические вопросы" in normalized:
         return "техподдержка"
     if normalized.startswith("рекомендации.") or "рекомендации" in normalized:
+        return "общее"
+    if _is_forum_discovery_request(normalized):
         return "общее"
     if any(marker in normalized for marker in ("сотруднич", "партнерств", "партнёрств")):
         return "общее"
@@ -663,6 +1156,73 @@ def _infer_category_from_message(message: str) -> str | None:
     if any(word in normalized for word in ("форум", "мероприят", "фестивал")):
         return "форумы"
     return None
+
+
+def _is_forum_discovery_request(message: str) -> bool:
+    normalized = message.casefold().replace("ё", "е")
+    if any(
+        marker in normalized
+        for marker in (
+            "какие у меня вообще есть возможности",
+            "куда вообще можно податься",
+            "хочу развиваться",
+            "не понимаю куда двигаться",
+            "есть ли у вас что-то полезное",
+            "куда-то подаваться",
+            "начать участвовать",
+            "молодежной жизни",
+            "молодёжной жизни",
+            "нет опыта и портфолио",
+            "нет сильного опыта и портфолио",
+            "не знаю что мне интересно",
+            "не знаю, что мне интересно",
+            "для моего региона",
+            "куда мне пойти участвовать",
+            "куда пойти участвовать",
+            "нет возможности надолго уезжать",
+            "нет возможности уезжать",
+        )
+    ):
+        return True
+    if any(
+        marker in normalized
+        for marker in (
+            "есть что-то",
+            "есть что то",
+            "что-то проводится",
+            "что то проводится",
+        )
+    ) and any(marker in normalized for marker in ("для ", "в адыге", "в анадыр")):
+        return True
+    has_forum_context = "форум" in normalized or "мероприят" in normalized
+    return has_forum_context and any(
+        marker in normalized
+        for marker in (
+            "какие есть",
+            "что есть",
+            "что сейчас есть",
+            "че по форум",
+            "чё по форум",
+            "список форум",
+            "все форум",
+            "выбрать форум",
+        )
+    )
+
+
+def _is_sport_recommendation_request(normalized: str) -> bool:
+    if not any(marker in normalized for marker in ("спортсмен", "спортсменка", "спорт")):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "где я могу поучаствовать",
+            "где можно поучаствовать",
+            "куда податься",
+            "что подойдет",
+            "что подойдёт",
+        )
+    )
 
 
 def _has_staff_feedback_context(message: str) -> bool:
@@ -870,6 +1430,42 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     category = payload.get("category")
     forum = payload.get("forum_normalized") or payload.get("forum")
     normalized = message.casefold().replace("ё", "е")
+    if _is_sport_recommendation_request(normalized):
+        return [
+            {
+                "text": "Какие мероприятия подойдут любителям спорта?",
+                "topic": "rekomendacii_sport",
+                "category": "платформа_фгаис",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_project_team_question(normalized):
+        return [
+            {
+                "text": "Обязательна ли команда проекта и можно ли участвовать одному?",
+                "topic": "komanda_proekta",
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        ]
+    if category == "гранты" and "ссылк" in normalized and "грант" in normalized:
+        return [
+            {
+                "text": "Как подать заявку на участие в грантовом конкурсе?",
+                "topic": "podat_zayavku_na_uchastie",
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_forum_discovery_request(normalized):
+        return [
+            {
+                "text": "Какие форумы и мероприятия сейчас доступны?",
+                "topic": "rekomendacii_obschie",
+                "category": "общее",
+                "forum_normalized": None,
+            }
+        ]
     if not forum and category not in {"гранты", "платформа_фгаис", "техподдержка"}:
         return []
     if category == "гранты" and _is_general_grant_info_query(normalized):
@@ -905,7 +1501,28 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
         (
             "podacha_zayavki_na_proekt",
             "Как подать заявку?",
-            ("подать заяв", "подача заяв", "подать проект"),
+            (
+                "подать заяв",
+                "подача заяв",
+                "подать проект",
+                "хочу попасть на",
+                "как попасть на форум",
+                "как туда попасть",
+                "что нужно сделать чтобы попасть",
+                "что нужно сделать, чтобы попасть",
+                "как стать участником",
+                "как стать участницей",
+                "хочу стать участником",
+                "хочу стать участницей",
+                "хочу поучаствовать",
+                "хочу участвовать",
+                "хочу на форум",
+                "хочу на мероприятие",
+                "вписаться в движ",
+                "залететь на форум",
+                "залететь на программу",
+                "присоединиться к форуму",
+            ),
         ),
         (
             "grant_reporting",
@@ -1112,6 +1729,23 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "forum_normalized": forum,
         }
     ]
+
+
+def _is_project_team_question(normalized: str) -> bool:
+    if any(
+        marker in normalized
+        for marker in (
+            "нет команды",
+            "без команды",
+            "команда проекта",
+            "одному можно участвовать",
+            "можно участвовать одному",
+            "одному можно подать",
+            "самому можно участвовать",
+        )
+    ):
+        return True
+    return "идея проект" in normalized and "команд" in normalized
 
 
 def _is_general_forum_info_query(message: str, forum: str) -> bool:

@@ -22,6 +22,10 @@ def test_detect_forum_from_text_handles_volga_accusative_case() -> None:
     assert detect_forum_from_text("Расскажи про Волгу") == "Волга"
 
 
+def test_detect_forum_from_text_handles_tavrida_art_accusative_case() -> None:
+    assert detect_forum_from_text("Как попасть на Тавриду.Арт?") == "Таврида"
+
+
 def test_detect_forums_from_text_returns_all_registry_matches_once() -> None:
     forums = detect_forums_from_text(
         "Чем отличаются Машук и Территория смыслов по проживанию?"

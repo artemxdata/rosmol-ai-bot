@@ -600,6 +600,111 @@ async def test_process_message_safe_offtopic_returns_scope_note_without_escalati
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Как ты относишься к Путину?",
+        "Чей Крым?",
+        "Ты тупой?",
+        "Ваш Росмол — та ещё шарага, да?",
+    ],
+)
+async def test_process_message_provocations_return_scope_note_without_operator(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+    text: str,
+) -> None:
+    app = _app(graph=build_graph())
+    message = IncomingMessage(user_id="u1", channel=Channel.HDE, text=text)
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == OFFTOPIC_SCOPE_NOTE
+    assert captured_logs[0]["should_escalate"] is False
+    assert captured_logs[0]["escalation_reason"] is None
+    assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_message_uses_original_politics_text_after_pii_masking(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(
+        graph=build_graph(),
+        masked_text="Как ты относишься к [ИМЯ]?",
+        cached_response="Устаревший ответ из кэша",
+    )
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="Как ты относишься к Путину?",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == OFFTOPIC_SCOPE_NOTE
+    assert captured_logs[0]["should_escalate"] is False
+    assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_message_standalone_profanity_does_not_escalate_or_call_graph(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app()
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="Да вы заебали, бот гавно",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert "не вступаю в споры" in response
+    assert "форумам" in response
+    assert captured_logs[0]["should_escalate"] is False
+    assert captured_logs[0]["escalation_reason"] is None
+    assert captured_logs[0]["interaction_reason"] == "profanity"
+    assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_message_keeps_actionable_question_despite_profanity(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Инструкция по подаче заявки")
+    app = _app(graph=graph)
+    text = "Как, блять, подать заявку на форум Ростов?"
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
+
+    response = await process_message(message, app, bypass_cache=True)  # type: ignore[arg-type]
+
+    assert response == "Инструкция по подаче заявки"
+    assert graph.seen_state is not None
+    assert captured_logs[0].get("interaction_reason") is None
+
+
+@pytest.mark.asyncio
+async def test_process_message_keeps_ambiguous_cabinet_issue_despite_profanity(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Уточни, пожалуйста, что не работает в кабинете")
+    app = _app(graph=graph)
+    text = "Задолбался с этим кабинетом"
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
+
+    response = await process_message(message, app, bypass_cache=True)  # type: ignore[arg-type]
+
+    assert response == "Уточни, пожалуйста, что не работает в кабинете"
+    assert graph.seen_state is not None
+    assert captured_logs[0].get("interaction_reason") is None
+
+
+@pytest.mark.asyncio
 async def test_process_message_high_confidence_returns_source_chunk(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],

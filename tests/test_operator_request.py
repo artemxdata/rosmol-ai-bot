@@ -30,6 +30,7 @@ def test_operator_request_detects_explicit_requests(text: str) -> None:
         "Можно побыть у вас оператором?",
         "Есть вакансии оператора?",
         "Хочу работать специалистом поддержки",
+        "Хочу понять, как получить жильё молодому специалисту",
     ],
 )
 def test_operator_request_allows_regular_questions(text: str) -> None:
@@ -53,6 +54,10 @@ def test_operator_review_still_escalates_real_platform_issue() -> None:
     [
         (
             "Статус заявки уже несколько дней на подписании, можно проверить?",
+            "personal_status",
+        ),
+        (
+            "Я подал заявку, но не понимаю, прошел ли, и не могу войти в кабинет",
             "personal_status",
         ),
         (
@@ -115,3 +120,15 @@ def test_operator_review_routes_blind_june_personal_and_staff_cases(
 )
 def test_operator_review_keeps_general_family_ticket_policy_in_rag(text: str) -> None:
     assert operator_review_reason(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Мне третий раз никто не помог",
+        "Я уже всё перепробовал",
+        "Мне надоело, что меня гоняют по кругу",
+    ],
+)
+def test_operator_review_escalates_repeated_support_failures(text: str) -> None:
+    assert operator_review_reason(text) == "repeated_support_failure"

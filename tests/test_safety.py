@@ -26,6 +26,10 @@ from src.security import safety
         ("На форуме участник избил другого", "safety_abuse"),
         ("Мне пишут оскорбления и буллят в группе", "safety_bullying"),
         ("Меня Соня обижает", "safety_bullying"),
+        ("Мне небезопасно дома, куда обратиться?", "safety_abuse"),
+        ("Я боюсь возвращаться домой", "safety_abuse"),
+        ("Мне нужна психологическая помощь", "safety_psychological_crisis"),
+        ("Я схожу с ума и не знаю, что делать", "safety_psychological_crisis"),
     ],
 )
 def test_safety_detects_operator_only_topics(text: str, reason: str | None) -> None:

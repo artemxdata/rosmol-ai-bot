@@ -36,6 +36,7 @@ from src.channels.vk import VKAdapter
 from src.config import get_settings
 from src.graph.context import is_context_dependent_followup
 from src.graph.graph import build_graph
+from src.graph.nodes.analyze import is_safe_offtopic_message
 from src.kb.forum_registry import detect_forum_from_text
 from src.llm.client import CloudRuLLMClient
 from src.llm.routing import estimate_routing_hint
@@ -768,10 +769,11 @@ async def process_message(
         )
         return response
 
-    if profanity.check(message.text):
+    if profanity.check(message.text) and not _has_actionable_support_context(message.text):
         response = (
-            "Пожалуйста, воздержись от нецензурных выражений. "
-            "Я помогу, если сформулировать вопрос спокойно."
+            "Я не поддерживаю оскорбления и не вступаю в споры. "
+            "Я отвечаю на вопросы по мероприятиям, форумам, ФГАИС «Молодёжь России» "
+            "и грантам Росмолодёжи. Задай, пожалуйста, вопрос по этим темам."
         )
         await _safe_log(
             fastapi_app,
@@ -782,7 +784,8 @@ async def process_message(
                 "message_masked": masked_text,
                 "final_response": response,
                 "should_escalate": False,
-                "escalation_reason": "profanity",
+                "escalation_reason": None,
+                "interaction_reason": "profanity",
                 "total_latency_ms": int((perf_counter() - started_at) * 1000),
             },
         )
@@ -817,7 +820,10 @@ async def process_message(
 
     routing_hint = estimate_routing_hint(masked_text)
     detected_forum = detect_forum_from_text(message.text)
-    cache_allowed = not is_context_dependent_followup(masked_text, session)
+    cache_allowed = not is_context_dependent_followup(
+        masked_text,
+        session,
+    ) and not is_safe_offtopic_message(message.text)
 
     tracer = Tracer()
     state = {
@@ -919,6 +925,57 @@ def _is_attachment_only_message(message: IncomingMessage) -> bool:
     if attachments:
         return len(meaningful_words) <= 2
     return len(meaningful_words) == 0
+
+
+def _has_actionable_support_context(text: str) -> bool:
+    normalized = str(text or "").casefold().replace("ё", "е")
+    has_scope = bool(detect_forum_from_text(text)) or any(
+        marker in normalized
+        for marker in (
+            "форум",
+            "мероприят",
+            "фестивал",
+            "грант",
+            "фгаис",
+            "молодежь россии",
+            "росмолод",
+            "заявк",
+            "кабинет",
+            "профил",
+        )
+    )
+    if not has_scope:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "как ",
+            "где ",
+            "когда ",
+            "куда ",
+            "можно ли",
+            "нужно ли",
+            "что нужно",
+            "что делать",
+            "подскаж",
+            "расскаж",
+            "помог",
+            "хочу попасть",
+            "хочу участвовать",
+            "хочу поучаствовать",
+            "хочу подать",
+            "зарегистр",
+            "регистрац",
+            "подать заяв",
+            "не работает",
+            "не получается",
+            "не могу",
+            "ошиб",
+            "задолб",
+            "тупит",
+            "фигн",
+        )
+    )
 
 
 async def _check_cache(fastapi_app: FastAPI, query: str, forum: str | None) -> str | None:

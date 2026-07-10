@@ -919,11 +919,27 @@ def test_fallback_questions_map_cannot_go_followup_to_decline_not_travel() -> No
     assert questions[0].forum_normalized == "Амур"
 
 
+def test_fallback_questions_map_colloquial_rejection_to_rejection_reason() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="ТИМ Бирюса"),
+        "Меня как будто завернули, но не понял до конца",
+    )
+
+    assert [question.text for question in questions] == ["Почему отклонили заявку?"]
+
+
 def test_query_aliases_expand_cannot_go_to_decline_terms() -> None:
     expanded = expand_query_aliases("Подтвердил участие, но не могу поехать")
 
     assert "отказ от участия" in expanded
     assert "отозвать заявку" in expanded
+
+
+def test_query_aliases_expand_colloquial_rejection_to_rejection_reason() -> None:
+    expanded = expand_query_aliases("Меня как будто завернули")
+
+    assert "почему отклонили заявку" in expanded
+    assert "причина отклонения" in expanded
 
 
 def test_session_context_restores_forum_for_followup_from_last_five_turns() -> None:
@@ -1431,7 +1447,7 @@ async def test_analyze_uses_deterministic_common_fallback_intents_without_llm() 
         ("Предложение о сотрудничестве", "общее", False),
         ("Возможности бота / abilities", "общее", False),
         ("Что такое Росмолодёжь?", "платформа_фгаис", False),
-        ("Оставить обратную связь о сотрудн", "навигация", False),
+        ("Оставить обратную связь о сотрудн", "навигация", True),
         ("Подать заявку на участие", "форумы", True),
     ]
 
@@ -6729,6 +6745,48 @@ async def test_generate_prefers_sport_recommendation_over_generic_recommendation
     )
 
     assert result["cited_sources"] == ["recommendation_sport"]
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_official_catalog_without_contextual_llm_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    catalog = ScoredChunk(
+        chunk_id="recommendation_catalog",
+        text="Посмотри все доступные форумы на https://events.myrosmol.ru/forumy/.",
+        metadata={"category": "общее", "topic": "rekomendacii_obschie"},
+        score=0.5,
+        reranker_score=0.3,
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Куда мне пойти участвовать?",
+            "contextual_message": "Предыдущий вопрос. Куда мне пойти участвовать?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="общее",
+                questions=[
+                    Question(
+                        text="Какие форумы и мероприятия сейчас доступны?",
+                        topic="rekomendacii_obschie",
+                        category="общее",
+                    )
+                ],
+            ),
+            "reranked_chunks": [catalog],
+            "max_confidence": 0.3,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["recommendation_catalog"]
+    assert "events.myrosmol.ru/forumy" in result["generated_response"]
 
 
 @pytest.mark.asyncio

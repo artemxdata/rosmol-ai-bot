@@ -32,6 +32,11 @@ def expand_query_aliases(text: str) -> str:
             "отказ от участия отказаться от участия отозвать заявку отменить участие "
             "отмена заявки не смогу приехать не смогу посетить мероприятие"
         )
+    if any(
+        marker in normalized
+        for marker in ("завернул", "не прошел отбор", "не прошёл отбор")
+    ):
+        aliases.append("почему отклонили заявку причина отклонения результаты отбора")
     if aliases:
         expanded = f"{expanded} {' '.join(aliases)}"
     return expanded
