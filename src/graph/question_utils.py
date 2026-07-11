@@ -133,6 +133,8 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         (
             "место проведения",
+            "где и когда проходит",
+            "где и когда будет проходить",
             "где проходит",
             "где пройдет",
             "где пройдёт",
@@ -338,6 +340,15 @@ def _base_questions(
     extra_fallback_markers: tuple[tuple[tuple[str, ...], str], ...] = (),
 ) -> list[Question]:
     message = str(message or "").strip()
+    if _has_combined_event_place_date_request(message):
+        return [
+            Question(
+                text="Где и когда проходит мероприятие?",
+                topic="opisanie",
+                category=analysis.category,
+                forum_normalized=analysis.forum_normalized,
+            )
+        ]
     if _has_feedback_context(message):
         return [
             Question(
@@ -408,6 +419,19 @@ def _base_questions(
             forum_normalized=analysis.forum_normalized,
         )
     ]
+
+
+def _has_combined_event_place_date_request(message: str) -> bool:
+    normalized = str(message or "").casefold().replace("ё", "е")
+    return any(
+        marker in normalized
+        for marker in (
+            "где и когда проходит",
+            "где и когда будет проходить",
+            "когда и где проходит",
+            "когда и где будет проходить",
+        )
+    )
 
 
 def _has_feedback_context(message: str) -> bool:

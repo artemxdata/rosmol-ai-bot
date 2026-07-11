@@ -3,7 +3,13 @@ from __future__ import annotations
 import re
 from time import perf_counter
 
+from src.config import get_settings
 from src.graph.state import BotState
+from src.kb.event_facts import (
+    concise_event_place_date_response,
+    foreign_registration_response,
+)
+from src.kb.temporal import expired_registration_response
 
 SOURCE_RE = re.compile(r"[ \t]*\[src:[^\]]+\][ \t]*")
 TRAILING_LINE_SPACE_RE = re.compile(r"[ \t]+\n")
@@ -110,9 +116,35 @@ async def respond(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     response = state.get("generated_response") or state.get("final_response") or ""
+    settings = get_settings()
+    foreign_response = foreign_registration_response(
+        message=state.get("message_masked") or state.get("message") or "",
+        analysis=state.get("analysis"),
+        chunks=state.get("reranked_chunks") or [],
+        seed_path=settings.kb_seed_path,
+    )
+    event_fact_response = concise_event_place_date_response(
+        message=state.get("message_masked") or state.get("message") or "",
+        analysis=state.get("analysis"),
+        chunks=state.get("reranked_chunks") or [],
+    )
+    temporal_response = expired_registration_response(
+        message=state.get("message_masked") or state.get("message") or "",
+        analysis=state.get("analysis"),
+        chunks=state.get("reranked_chunks") or [],
+        seed_path=settings.kb_seed_path,
+    )
+    if foreign_response or event_fact_response or temporal_response:
+        response = foreign_response or event_fact_response or temporal_response or response
     final = normalize_final_response(response)
     if tracer:
-        tracer.add("respond", int((perf_counter() - started_at) * 1000))
+        tracer.add(
+            "respond",
+            int((perf_counter() - started_at) * 1000),
+            temporal_guard="registration_closed" if temporal_response else None,
+            event_fact_guard="place_and_date" if event_fact_response else None,
+            foreign_registration_guard=bool(foreign_response),
+        )
     return {"final_response": final}
 
 

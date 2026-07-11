@@ -370,6 +370,32 @@ async def test_process_message_returns_semantic_cache_hit(
 
 
 @pytest.mark.asyncio
+async def test_process_message_skips_cache_for_registration_deadline_query(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Свежий ответ с проверкой срока регистрации")
+    app = _app(
+        cached_response="Устаревший ответ: регистрируйся прямо сейчас",
+        graph=graph,
+    )
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.API,
+        text="Хочу попасть на форум Ростов, что нужно сделать?",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Свежий ответ с проверкой срока регистрации"
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+    assert graph.seen_state is not None
+    assert graph.seen_state["cache_allowed"] is False
+    assert captured_logs[0]["cache_hit"] is False
+
+
+@pytest.mark.asyncio
 async def test_process_message_skips_cache_for_contextual_followup(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],

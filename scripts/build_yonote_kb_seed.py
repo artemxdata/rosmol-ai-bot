@@ -23,6 +23,7 @@ from src.kb.source_extractors import (
     extract_phones,
     slugify,
 )
+from src.kb.temporal import registration_deadline_iso
 
 DEFAULT_SOURCE_DIR = Path("data/private/yonote")
 DEFAULT_BASE_KB = Path("data/knowledge_base_seed.json")
@@ -258,7 +259,7 @@ def build_record(
     forum_slug = slugify(document.forum, max_length=48)
     chunk_id = f"yonote_{forum_slug}_s{section.index:04d}_{topic}"
 
-    return {
+    record = {
         "chunk_id": chunk_id,
         "text_raw": text_clean,
         "text_clean": text_clean,
@@ -293,6 +294,10 @@ def build_record(
         "source_row": section.index,
         "source_columns": ["markdown_heading", "markdown_body"],
     }
+    registration_deadline = registration_deadline_iso(text_clean)
+    if registration_deadline:
+        record["registration_deadline"] = registration_deadline
+    return record
 
 
 def build_intent_examples(forum: str, title: str) -> list[str]:

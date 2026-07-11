@@ -878,6 +878,18 @@ def test_fallback_questions_map_selection_deadline_to_results_not_event_dates() 
     ]
 
 
+def test_fallback_questions_split_event_place_and_dates() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        "Где и когда проходит форум Ростов?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Где и когда проходит мероприятие?",
+    ]
+    assert questions[0].topic == "opisanie"
+
+
 def test_fallback_questions_map_rejected_application() -> None:
     questions = build_effective_questions(
         QueryAnalysis(category="гранты"),

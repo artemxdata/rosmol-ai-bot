@@ -38,6 +38,7 @@ from src.graph.context import is_context_dependent_followup
 from src.graph.graph import build_graph
 from src.graph.nodes.analyze import is_safe_offtopic_message
 from src.kb.forum_registry import detect_forum_from_text
+from src.kb.temporal import is_registration_query
 from src.llm.client import CloudRuLLMClient
 from src.llm.routing import estimate_routing_hint
 from src.llm.usage import (
@@ -824,6 +825,7 @@ async def process_message(
         masked_text,
         session,
     ) and not is_safe_offtopic_message(message.text)
+    cache_allowed = cache_allowed and not is_registration_query(masked_text)
 
     tracer = Tracer()
     state = {

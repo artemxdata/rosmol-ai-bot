@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
 
+from src.kb.temporal import registration_deadline_iso
+
 SPREADSHEET_NS = {
     "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
 }
@@ -411,6 +413,9 @@ def base_record(
         "parent_chunk_id": None,
     }
     record.update(extra)
+    registration_deadline = registration_deadline_iso(text_clean)
+    if registration_deadline:
+        record["registration_deadline"] = registration_deadline
     return record
 
 

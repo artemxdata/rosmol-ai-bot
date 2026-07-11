@@ -30,6 +30,7 @@ from src.kb.source_extractors import (
     has_conditional_logic,
     slugify,
 )
+from src.kb.temporal import registration_deadline_iso
 
 DEFAULT_BASE_KB = Path("data/knowledge_base_seed.json")
 DEFAULT_OUTPUT = Path("data/knowledge_base_seed.json")
@@ -390,7 +391,7 @@ def build_record(
     source_url = f"{base_url.rstrip('/')}{document.url}" if document.url else None
     forum = event_name if category in {"форумы", "гранты"} else None
 
-    return {
+    record = {
         "chunk_id": chunk_id,
         "text_raw": text_clean,
         "text_clean": text_clean,
@@ -430,6 +431,10 @@ def build_record(
         "source_heading_path": list(document.path_titles) + [title],
         "source_document_updated_at": document.updated_at,
     }
+    registration_deadline = registration_deadline_iso(text_clean)
+    if registration_deadline:
+        record["registration_deadline"] = registration_deadline
+    return record
 
 
 def build_intent_examples(
