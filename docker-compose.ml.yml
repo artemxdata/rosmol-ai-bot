@@ -86,9 +86,10 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null"]
+      start_period: 240s
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 6
 
   ml-check:
     profiles: ["ml"]
