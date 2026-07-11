@@ -37,16 +37,23 @@ def test_operator_request_allows_regular_questions(text: str) -> None:
     assert is_operator_request(text) is False
 
 
+def test_operator_request_does_not_confuse_grant_support_with_human_support() -> None:
+    text = "Можно ли получить сертификат участника команды, получившей грантовую поддержку?"
+
+    assert is_operator_request(text) is False
+    assert operator_review_reason(text) is None
+
+
 def test_operator_review_does_not_escalate_for_missing_forum_rules_document() -> None:
     text = "Территория смыслов Вышлите пожалуйста положение, в личном кабинете не отображается"
 
     assert operator_review_reason(text) is None
 
 
-def test_operator_review_still_escalates_real_platform_issue() -> None:
+def test_operator_review_keeps_first_platform_issue_in_rag() -> None:
     text = "Не могу зарегистрироваться, в личном кабинете ошибка и кнопка не работает"
 
-    assert operator_review_reason(text) == "technical_issue"
+    assert operator_review_reason(text) is None
 
 
 @pytest.mark.parametrize(
@@ -73,18 +80,6 @@ def test_operator_review_still_escalates_real_platform_issue() -> None:
             "operator_requested",
         ),
         (
-            "Можно ли исправить в заявке ответы в поле анкеты?",
-            "personal_status",
-        ),
-        (
-            "Нажимаю перейти, но меню не меняется и непонятно, видны ли файлы.",
-            "technical_issue",
-        ),
-        (
-            "При регистрации в МАКС я случайно ввела неправильную почту и не получила билет.",
-            "personal_status",
-        ),
-        (
             "Прошу направить копию иска и контакты юридического отдела.",
             "operator_requested",
         ),
@@ -100,6 +95,11 @@ def test_operator_review_still_escalates_real_platform_issue() -> None:
         (
             "Почему я не могу отменить заявку на сайте, "
             "если сайт указывает обратиться в службу поддержки?",
+            "personal_status",
+        ),
+        (
+            "Мне нужно повторно отправить подписанное письмо с печатью, "
+            "проверьте мою заявку",
             "personal_status",
         ),
     ],
@@ -119,6 +119,21 @@ def test_operator_review_routes_blind_june_personal_and_staff_cases(
     ],
 )
 def test_operator_review_keeps_general_family_ticket_policy_in_rag(text: str) -> None:
+    assert operator_review_reason(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Как получить билет на несовершеннолетнего ребёнка?",
+        "Как зарегистрировать ребёнка на День молодёжи?",
+        "Можно ли исправить в заявке ответы в поле анкеты?",
+        "Нажимаю перейти, но меню не меняется и непонятно, видны ли файлы.",
+        "При регистрации в МАКС я случайно ввела неправильную почту и не получила билет.",
+        "Когда будут объявлены даты следующей премии ШУМ?",
+    ],
+)
+def test_operator_review_keeps_first_line_policy_questions_in_rag(text: str) -> None:
     assert operator_review_reason(text) is None
 
 

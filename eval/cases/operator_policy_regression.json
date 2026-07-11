@@ -1,0 +1,90 @@
+[
+  {
+    "id": "operator_policy_grant_support_certificate",
+    "query": "Как получить сертификат участника команды грантовой поддержки?",
+    "expected_behavior": "escalate",
+    "expected_escalated": true,
+    "expected_escalation_reason": "partial_source_coverage",
+    "tags": ["operator_qa", "grants", "source_gap"]
+  },
+  {
+    "id": "operator_policy_day_youth_child_ticket",
+    "query": "На День молодёжи ребёнку нужен отдельный билет?",
+    "expected_behavior": "answer",
+    "expected_answer_contains": ["реб"],
+    "expected_escalated": false,
+    "tags": ["operator_qa", "day_youth", "ticket"]
+  },
+  {
+    "id": "operator_policy_territory_meanings_technical",
+    "query": "На Территории смыслов в личном кабинете не отображается согласие, что делать?",
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "technical", "forum_alias"]
+  },
+  {
+    "id": "operator_policy_day_youth_genitive",
+    "query": "Когда пройдёт событие Дня молодёжи и где посмотреть программу?",
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "day_youth", "forum_alias"]
+  },
+  {
+    "id": "operator_policy_biryusa_finzozh",
+    "query": "Как попасть на смену ФинЗОЖ форума ТИМ Бирюса?",
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "biryusa", "shift_alias"]
+  },
+  {
+    "id": "operator_policy_istoki_childhood",
+    "query": "Что известно о смене Детство школы Истоки?",
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "istoki", "shift_alias"]
+  },
+  {
+    "id": "operator_policy_edit_application",
+    "query": "Можно ли изменить данные в уже поданной заявке на форум?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "application", "clarify"]
+  },
+  {
+    "id": "operator_policy_first_technical_issue",
+    "query": "В ФГАИС не открывается карточка мероприятия, что можно попробовать?",
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "technical", "first_line"]
+  },
+  {
+    "id": "operator_policy_explicit_operator",
+    "query": "Позови оператора",
+    "expected_behavior": "escalate",
+    "expected_escalated": true,
+    "expected_escalation_reason": "operator_requested",
+    "tags": ["operator_qa", "operator"]
+  },
+  {
+    "id": "operator_policy_signed_letter_resend",
+    "query": "Мне нужно повторно отправить подписанное письмо с печатью, проверьте мою заявку",
+    "expected_behavior": "escalate",
+    "expected_escalated": true,
+    "expected_escalation_reason": "personal_status",
+    "tags": ["operator_qa", "manual_review"]
+  },
+  {
+    "id": "operator_policy_missing_forum_clarification",
+    "query": "Кто оплачивает проезд и где будут жить участники?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "clarify"]
+  },
+  {
+    "id": "operator_policy_off_topic",
+    "query": "Какая погода завтра в Москве?",
+    "expected_behavior": "scope_note",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "off_topic"]
+  }
+]

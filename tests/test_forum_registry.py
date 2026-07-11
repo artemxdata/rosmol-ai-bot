@@ -26,6 +26,26 @@ def test_detect_forum_from_text_handles_tavrida_art_accusative_case() -> None:
     assert detect_forum_from_text("Как попасть на Тавриду.Арт?") == "Таврида"
 
 
+def test_detect_forum_from_text_handles_youth_day_genitive_case() -> None:
+    assert detect_forum_from_text("Где программа Дня молодёжи?") == "День молодёжи"
+
+
+def test_detect_forum_from_text_handles_mixed_alphabet_ostrova() -> None:
+    assert detect_forum_from_text("Я прошла первый этап форума ОстроVа") == "Островa"
+
+
+def test_detect_forum_from_text_handles_territory_of_meanings_genitive_case() -> None:
+    assert (
+        detect_forum_from_text("Как организован трансфер Территории смыслов?")
+        == "Территория смыслов"
+    )
+
+
+def test_detect_forum_from_text_maps_named_shifts_to_parent_events() -> None:
+    assert detect_forum_from_text("Когда проходит смена ФинЗОЖ?") == "ТИМ Бирюса"
+    assert detect_forum_from_text("Я участник смены Детство") == "Истоки Школа"
+
+
 def test_detect_forums_from_text_returns_all_registry_matches_once() -> None:
     forums = detect_forums_from_text(
         "Чем отличаются Машук и Территория смыслов по проживанию?"

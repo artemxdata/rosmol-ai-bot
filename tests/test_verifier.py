@@ -1379,3 +1379,60 @@ async def test_verifier_does_not_require_forum_for_grant_application_question() 
     )
 
     assert "should_escalate" not in result
+
+
+@pytest.mark.asyncio
+async def test_verifier_blocks_request_to_send_credentials_in_chat() -> None:
+    result = await verify(
+        {
+            "message_masked": "Не могу войти в личный кабинет",
+            "analysis": QueryAnalysis(category="техподдержка"),
+            "generated_response": (
+                "Пришли в чат логин и пароль, чтобы проверить аккаунт. [src:tech]"
+            ),
+            "generator_model": "source_chunk",
+            "cited_sources": ["tech"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="tech",
+                    text="Попробуй очистить кеш и открыть сайт в режиме инкогнито.",
+                    metadata={"source_type": "yonote", "category": "техподдержка"},
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "unsafe_sensitive_data_request"
+    assert result["verification"].has_hallucination is True
+
+
+@pytest.mark.asyncio
+async def test_verifier_allows_passport_as_event_document() -> None:
+    result = await verify(
+        {
+            "message_masked": "Какие документы взять на форум?",
+            "analysis": QueryAnalysis(category="форумы", forum_normalized="Амур"),
+            "generated_response": "Возьми с собой паспорт и медицинскую справку. [src:docs]",
+            "generator_model": "source_chunk",
+            "cited_sources": ["docs"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="docs",
+                    text="Возьми с собой паспорт и медицинскую справку.",
+                    metadata={
+                        "source_type": "xlsx",
+                        "category": "форумы",
+                        "forum_normalized": "Амур",
+                    },
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert "should_escalate" not in result
+    assert result["verification"].has_hallucination is False

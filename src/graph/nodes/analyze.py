@@ -234,7 +234,7 @@ def _fallback_analysis(
         session,
     )
     should_escalate = review_reason is not None
-    if is_offtopic or (needs_clarification and review_reason != "operator_requested"):
+    if is_offtopic:
         should_escalate = False
         review_reason = None
     if should_escalate and not category:

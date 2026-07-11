@@ -7,7 +7,7 @@ LIVE_PERSON_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 
-TARGET_MARKERS = ("оператор", "специалист", "сотрудник", "поддержк")
+TARGET_MARKERS = ("оператор", "специалист", "сотрудник")
 EMPLOYMENT_MARKERS = (
     "ваканс",
     "работ",
@@ -62,6 +62,8 @@ PERSONAL_STATUS_MARKERS = (
     "на почте ничего нет",
     "не было рассмотрено",
     "письмо с подписью",
+    "подписанное письмо",
+    "письмо с печатью",
     "подписью и печатью",
     "не могу подтвердить",
     "не получается подтвердить",
@@ -69,12 +71,14 @@ PERSONAL_STATUS_MARKERS = (
     "не понимаю прошёл ли",
     "прошел ли я",
     "прошёл ли я",
-    "не получила билет",
-    "не получил билет",
     "не пришел сертификат",
     "не пришёл сертификат",
     "сертификат не получил",
     "сертификат не получила",
+    "удостоверение не получил",
+    "удостоверение не получила",
+    "удостоверение так и не",
+    "так и не прислали",
 )
 TECHNICAL_REVIEW_MARKERS = (
     "скриншот",
@@ -103,8 +107,6 @@ OPERATOR_ONLY_MARKERS = (
     "удостоверение по программе",
     "паспорт молодости",
     "паспорт молодоости",
-    "премия шум",
-    "премии шум",
     "маркет молодых",
     "жареным мороженым",
     "где можно найти записи",
@@ -143,7 +145,12 @@ def is_operator_request(text: str) -> bool:
         )
     ) and not any(marker in normalized for marker in ("оператор", "поддержк", "сотрудник")):
         return False
-    if not any(marker in normalized for marker in TARGET_MARKERS):
+    has_direct_target = any(marker in normalized for marker in TARGET_MARKERS)
+    has_support_target = "поддержк" in normalized and any(
+        marker in normalized
+        for marker in ("служба поддерж", "техподдерж", "сотрудник поддерж", "оператор поддерж")
+    )
+    if not has_direct_target and not has_support_target:
         return False
     if any(marker in normalized for marker in EMPLOYMENT_MARKERS):
         return False
@@ -160,8 +167,8 @@ def operator_review_reason(text: str) -> str | None:
         return "operator_requested"
     if _is_personal_status_request(normalized):
         return "personal_status"
-    if _is_technical_review_request(normalized):
-        return "technical_issue"
+    # Yonote first-line policy requires troubleshooting guidance before escalation.
+    # Repeated failures are handled below; a first technical report stays in RAG.
     if _is_press_accreditation_request(normalized):
         return "operator_requested"
     if _is_personal_ticket_request(normalized):
@@ -193,12 +200,6 @@ def _is_personal_status_request(normalized: str) -> bool:
         return True
     if "заяв" in normalized and "службу поддержки" in normalized and any(
         marker in normalized for marker in ("отмен", "отозв")
-    ):
-        return True
-    if "заяв" in normalized and any(
-        marker in normalized for marker in ("исправ", "измен", "помен", "редакт")
-    ) and any(
-        marker in normalized for marker in ("поле", "анкет", "ответ", "указа", "выбра")
     ):
         return True
     if any(marker in normalized for marker in ("не прошла", "не прошел", "не прошёл")) and any(
@@ -254,8 +255,6 @@ def _is_personal_ticket_request(normalized: str) -> bool:
             "заменить билет",
             "изменить билет",
             "удалить билет",
-            "не получила билет",
-            "не получил билет",
         )
     ):
         return True
@@ -273,6 +272,22 @@ def _is_personal_ticket_request(normalized: str) -> bool:
             "другой человек",
         )
     )
+    child_policy_question = any(
+        marker in normalized for marker in ("ребен", "ребён", "дет")
+    ) and any(
+        marker in normalized
+        for marker in (
+            "как получить билет",
+            "как зарегистрировать",
+            "нужен ли билет",
+            "нужен ли отдельный билет",
+        )
+    )
+    if child_policy_question and not any(
+        marker in normalized
+        for marker in ("не получил", "не получила", "не пришел", "не пришёл", "переоформ")
+    ):
+        return False
     personal_action = any(
         marker in normalized
         for marker in (

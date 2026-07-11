@@ -241,6 +241,20 @@ UNSUPPORTED_DIRECTIVE_MARKERS: tuple[str, ...] = (
     "уточнить вашу регистрацию",
     "подтвердить участие",
 )
+SENSITIVE_DATA_REQUEST_RE = re.compile(
+    r"(?:"
+    r"(?:пришли|пришлите|отправь|отправьте|сообщи|сообщите|напиши|напишите|"
+    r"укажи|укажите|предоставь|предоставьте|скинь|скиньте)"
+    r"[^.!?\n]{0,80}"
+    r"(?:логин|парол|снилс|паспортн\w*\s+данн|сери\w*\s+паспорт|номер\w*\s+паспорт)"
+    r"|"
+    r"(?:логин|парол|снилс|паспортн\w*\s+данн|сери\w*\s+паспорт|номер\w*\s+паспорт)"
+    r"[^.!?\n]{0,80}"
+    r"(?:пришли|пришлите|отправь|отправьте|сообщи|сообщите|напиши|напишите|"
+    r"укажи|укажите|предоставь|предоставьте|скинь|скиньте)"
+    r")",
+    flags=re.IGNORECASE,
+)
 
 
 async def verify(state: BotState) -> dict:
@@ -303,6 +317,27 @@ async def verify(state: BotState) -> dict:
             "verifier_triggered": False,
             "should_escalate": True,
             "escalation_reason": "insufficient_sources",
+        }
+
+    sensitive_data_request = _sensitive_data_request(response)
+    if sensitive_data_request:
+        result = VerificationResult(
+            has_hallucination=True,
+            confidence=0.0,
+            details="Response asks the user to transmit sensitive credentials or documents.",
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                guard=True,
+                sensitive_data_request=True,
+            )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "unsafe_sensitive_data_request",
         }
 
     unsupported_directives = _unsupported_directive_markers(response, state, chunks)
@@ -471,6 +506,13 @@ def _signals_insufficient_source_escalation(response: str) -> bool:
     if explicit_escalation in normalized:
         return True
     return bool(INSUFFICIENT_SOURCE_RE.search(normalized))
+
+
+def _sensitive_data_request(response: str) -> bool:
+    if not response:
+        return False
+    normalized = SOURCE_RE.sub(" ", response)
+    return bool(SENSITIVE_DATA_REQUEST_RE.search(normalized))
 
 
 def _allows_partial_source_response(state: BotState, missing_coverage: list[str]) -> bool:

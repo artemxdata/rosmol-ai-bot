@@ -452,6 +452,18 @@ def test_fallback_analysis_escalates_personal_status_request() -> None:
     assert analysis.escalation_reason == "personal_status"
 
 
+def test_fallback_analysis_does_not_clarify_signed_letter_manual_check() -> None:
+    text = (
+        "Мне нужно повторно отправить подписанное письмо с печатью, "
+        "проверьте мою заявку"
+    )
+    analysis = _fallback_analysis(text, text, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.should_escalate is True
+    assert analysis.escalation_reason == "personal_status"
+
+
 def test_fallback_analysis_escalates_specific_technical_review_request() -> None:
     analysis = _fallback_analysis(
         "Добрый день! Высылаю скриншоты по вопросу заявки №10069, на почте ничего нет.",
