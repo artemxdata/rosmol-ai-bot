@@ -46,6 +46,15 @@ class FakeReranker:
         return []
 
 
+class FakePIIMasker:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def mask(self, text: str) -> tuple[str, dict[str, list[str]]]:
+        self.texts.append(text)
+        return text, {}
+
+
 def _request(*, redis_fail: bool = False, ml_prewarm: dict | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         app=SimpleNamespace(
@@ -93,9 +102,17 @@ async def test_ready_reports_failed_ml_prewarm() -> None:
 async def test_run_ml_prewarm_loads_embedder_and_reranker() -> None:
     embedder = FakeEmbedder()
     reranker = FakeReranker()
-    app = SimpleNamespace(state=SimpleNamespace(embedder=embedder, reranker=reranker))
+    pii_masker = FakePIIMasker()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            embedder=embedder,
+            reranker=reranker,
+            pii_masker=pii_masker,
+        )
+    )
 
     await _run_ml_prewarm(app)  # type: ignore[arg-type]
 
+    assert pii_masker.texts == ["Иван Иванов спрашивает о регистрации на форум."]
     assert embedder.queries == ["регистрация на форум"]
     assert reranker.calls == [("регистрация на форум", 1, 1)]

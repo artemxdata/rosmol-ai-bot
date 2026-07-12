@@ -527,6 +527,10 @@ async def _prewarm_ml_runtime(fastapi_app: FastAPI, settings: Any) -> None:
 
 async def _run_ml_prewarm(fastapi_app: FastAPI) -> None:
     query = "регистрация на форум"
+    await asyncio.to_thread(
+        fastapi_app.state.pii_masker.mask,
+        "Иван Иванов спрашивает о регистрации на форум.",
+    )
     await asyncio.to_thread(fastapi_app.state.embedder.encode, query)
     warm_chunk = Chunk(
         chunk_id="ml_prewarm",
