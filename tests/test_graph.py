@@ -2536,6 +2536,67 @@ async def test_rerank_uses_exact_topic_fast_path_for_trusted_non_forum_analysis(
 
 
 @pytest.mark.asyncio
+async def test_rerank_uses_exact_yonote_grant_topic_without_cross_encoder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="grant_report_review",
+            text="Статус «Отчёт на проверке» может занимать до 30 рабочих дней.",
+            metadata={
+                "category": "гранты",
+                "forum_normalized": "Гранты для физических лиц",
+                "topic": "proverka_otcheta",
+                "source_type": "yonote",
+            },
+            score=0.64,
+        ),
+        Chunk(
+            chunk_id="grant_report_submission",
+            text="Отчёт необходимо отправить в течение 60 рабочих дней.",
+            metadata={
+                "category": "гранты",
+                "topic": "vopros_po_otchetnosti",
+                "source_type": "xlsx",
+            },
+            score=0.75,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Какой срок проверки грантового отчёта?",
+            "analyzer_mode": "deterministic",
+            "analysis": QueryAnalysis(
+                category="гранты",
+                questions=[
+                    Question(
+                        text="Сколько времени проверяют грантовый отчёт?",
+                        category="гранты",
+                        topic="proverka_otcheta",
+                    )
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == [
+        "grant_report_review"
+    ]
+    assert result["max_confidence"] == 0.7
+
+
+@pytest.mark.asyncio
 async def test_rerank_pins_original_exact_match_for_multi_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

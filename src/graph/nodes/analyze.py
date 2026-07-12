@@ -1430,6 +1430,15 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     category = payload.get("category")
     forum = payload.get("forum_normalized") or payload.get("forum")
     normalized = message.casefold().replace("ё", "е")
+    if category == "гранты" and _is_grant_report_review_timing_query(normalized):
+        return [
+            {
+                "text": "Сколько времени проверяют грантовый отчёт?",
+                "topic": "proverka_otcheta",
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        ]
     if _is_sport_recommendation_request(normalized):
         return [
             {
@@ -1729,6 +1738,16 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "forum_normalized": forum,
         }
     ]
+
+
+def _is_grant_report_review_timing_query(normalized: str) -> bool:
+    has_report = "отчет" in normalized or "отчетност" in normalized
+    has_review = "провер" in normalized or "рассматрива" in normalized
+    has_timing = any(
+        marker in normalized
+        for marker in ("срок", "сколько", "долго", "время", "дней", "когда")
+    )
+    return has_report and has_review and has_timing
 
 
 def _is_project_team_question(normalized: str) -> bool:

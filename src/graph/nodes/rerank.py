@@ -595,7 +595,14 @@ def _chunk_matches_exact_question_topic(
         return chunk_forum == forum
     if category == "форумы":
         return False
+    if category == "гранты" and _is_general_grant_scope(chunk_forum):
+        return True
     return not chunk_forum
+
+
+def _is_general_grant_scope(value: str) -> bool:
+    normalized = _normalize(value)
+    return "грант" in normalized and "физичес" in normalized
 
 
 def _best_exact_topic_candidate(question: str, matches: list[Chunk]) -> Chunk:

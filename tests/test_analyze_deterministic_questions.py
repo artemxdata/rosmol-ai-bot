@@ -396,6 +396,15 @@ def test_fallback_analysis_keeps_control_point_report_in_grants_scope() -> None:
     assert [question.topic for question in analysis.questions] == ["grant_reporting"]
 
 
+def test_fallback_analysis_routes_grant_report_review_timing_to_exact_topic() -> None:
+    text = "Какой срок проверки грантового отчёта?"
+    analysis = _fallback_analysis(text, text, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "гранты"
+    assert [question.topic for question in analysis.questions] == ["proverka_otcheta"]
+
+
 def test_fallback_analysis_routes_project_selection_error_to_support() -> None:
     analysis = _fallback_analysis(
         "Не могу выбрать проект при заполнении заявки",
