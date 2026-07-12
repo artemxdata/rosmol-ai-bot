@@ -1971,6 +1971,62 @@ async def test_retrieve_uses_metadata_lookup_for_exact_topic_attempts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieve_stops_after_exact_non_forum_metadata_match() -> None:
+    class ExactGrantTopicRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = []
+            self.metadata_calls = []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            self.semantic_calls.append((query, filters, top_k))
+            raise AssertionError("semantic retrieval must not run after an exact topic match")
+
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            self.metadata_calls.append((filters, top_k))
+            return [
+                Chunk(
+                    chunk_id="grant_report_review",
+                    text="Report review can take up to 30 working days.",
+                    metadata={
+                        "chunk_id": "grant_report_review",
+                        "category": "grants",
+                        "topic": "proverka_otcheta",
+                    },
+                    score=1.0,
+                )
+            ]
+
+    retriever = ExactGrantTopicRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                category="grants",
+                questions=[
+                    Question(
+                        text="How long does grant report review take?",
+                        category="grants",
+                        topic="proverka_otcheta",
+                    )
+                ],
+            ),
+            "message_masked": "How long does grant report review take?",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "grant_report_review"
+    ]
+    assert retriever.semantic_calls == []
+    assert retriever.metadata_calls == [
+        ({"category": "grants", "topic": "proverka_otcheta"}, 10)
+    ]
+    assert result["retrieval_filter_attempts"] == [
+        {"category": "grants", "topic": "proverka_otcheta"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> None:
     class AliasMetadataRetriever:
         def __init__(self) -> None:

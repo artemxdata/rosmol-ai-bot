@@ -184,6 +184,8 @@ async def retrieve(state: BotState) -> dict:
                     strict_found = True
                 found.extend(attempt_chunks)
                 found.extend(keyword_chunks)
+                if used_metadata_lookup and attempt_chunks:
+                    break
                 if attempt_chunks and not _should_continue_filter_attempts(
                     attempt_index,
                     candidate_filters,
