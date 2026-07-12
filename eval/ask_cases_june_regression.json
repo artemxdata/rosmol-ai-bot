@@ -1,0 +1,92 @@
+[
+  {
+    "id": "june-youth-day-latin-e-ticket",
+    "query": "Не пришло письмо с кодом на концерт на день молодëжи",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0618_bilet_ne_prishel_povtornoe_poluchenie"
+    ]
+  },
+  {
+    "id": "june-youth-day-family-missing-tickets",
+    "query": "На День молодёжи не пришли билеты на почту для меня и дочки 12 лет. Что делать?",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0618_bilet_ne_prishel_povtornoe_poluchenie",
+      "xlsx_category_r0617_registraciya_drugogo_cheloveka"
+    ]
+  },
+  {
+    "id": "june-grant-agreement-save",
+    "query": "Не получается сохранить правки при заключении грантового соглашения",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0053_poryadok_zaklyucheniya_soglasheniya"
+    ]
+  },
+  {
+    "id": "june-grant-payment",
+    "query": "Какими способами можно оплатить товар по гранту?",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0059_oplata_tovarov_i_uslug"
+    ]
+  },
+  {
+    "id": "june-grant-winners",
+    "query": "Где найти список победителей грантового конкурса?",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0050_publikaciya_prikaza"
+    ]
+  },
+  {
+    "id": "june-grant-multi-aspect",
+    "query": "В грантовой заявке не отображается проект. Как оплачивать товары по гранту и где потом посмотреть победителей конкурса?",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0010_2_zapolnenie_vkladok_proekta",
+      "yonote_api_g4yfzssrsd_s0059_oplata_tovarov_i_uslug",
+      "yonote_api_g4yfzssrsd_s0050_publikaciya_prikaza"
+    ]
+  },
+  {
+    "id": "june-collaboration-photographer",
+    "query": "Я фотограф и хочу предложить свои услуги для Дня молодёжи",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "xlsx_fallback_r0003_predlozhenie_sotrudnichestva"
+    ]
+  },
+  {
+    "id": "june-youth-day-dj-smash",
+    "query": "Где посмотреть программу выступления DJ Smash?",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0613_programma_i_artisty"
+    ]
+  },
+  {
+    "id": "june-youth-day-molfest74",
+    "query": "Где посмотреть фото и программу Молфеста74?",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0613_programma_i_artisty"
+    ]
+  },
+  {
+    "id": "june-regulator-offtopic",
+    "query": "Прошу заблокировать телеграм-канал за нарушение правил Роскомнадзора",
+    "expected_behavior": "scope_note",
+    "expected_escalated": false
+  },
+  {
+    "id": "june-explicit-forum-context-ticket",
+    "query": "Где мой билет?",
+    "forum_context": "День молодёжи",
+    "expected_behavior": "answer",
+    "expected_cited_chunk_ids": [
+      "xlsx_category_r0616_poluchenie_i_naznachenie_bileta"
+    ]
+  }
+]

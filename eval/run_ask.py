@@ -102,6 +102,7 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         "query": str(query),
         "user_id": str(raw.get("user_id") or "ask-eval"),
         "channel": str(raw.get("channel") or "api"),
+        "forum_context": str(raw.get("forum_context") or "").strip() or None,
         "expected_chunk_ids": expected_chunk_ids,
         "expected_cited_chunk_ids": expected_cited_chunk_ids,
         "equivalent_chunk_ids": equivalent_chunk_ids,
@@ -858,14 +859,17 @@ async def _run_case(
         started_at = perf_counter()
         request_id: str | None = None
         try:
+            request_payload: dict[str, Any] = {
+                "user_id": case["user_id"],
+                "channel": case["channel"],
+                "text": case["query"],
+            }
+            if case.get("forum_context"):
+                request_payload["forum_context"] = case["forum_context"]
             response = await client.post(
                 target,
                 headers=headers,
-                json={
-                    "user_id": case["user_id"],
-                    "channel": case["channel"],
-                    "text": case["query"],
-                },
+                json=request_payload,
             )
             latency_ms = int((perf_counter() - started_at) * 1000)
             payload = _safe_response_json(response)

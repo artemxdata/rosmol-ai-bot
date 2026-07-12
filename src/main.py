@@ -127,6 +127,7 @@ class AskPayload(BaseModel):
     channel: Channel = Channel.API
     text: str = Field(min_length=1, max_length=4000)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    forum_context: str | None = Field(default=None, max_length=200)
 
     @field_validator("user_id", "text")
     @classmethod
@@ -203,6 +204,7 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
         channel=payload.channel,
         text=payload.text,
         attachments=payload.attachments,
+        forum_context=payload.forum_context,
     )
     if _should_bypass_cache(request):
         response = await process_message(message, request.app, bypass_cache=True)
@@ -823,13 +825,24 @@ async def process_message(
         )
         return response
 
-    routing_hint = estimate_routing_hint(masked_text)
-    detected_forum = detect_forum_from_text(message.text)
-    cache_allowed = not is_context_dependent_followup(
+    explicit_forum_context = detect_forum_from_text(message.forum_context or "")
+    if explicit_forum_context and session.forum_context != explicit_forum_context:
+        session = await fastapi_app.state.sessions.update(
+            session,
+            forum_context=explicit_forum_context,
+        )
+    graph_message, graph_masked_text = _with_explicit_forum_context(
+        message.text,
         masked_text,
+        explicit_forum_context,
+    )
+    routing_hint = estimate_routing_hint(graph_masked_text)
+    detected_forum = detect_forum_from_text(graph_message)
+    cache_allowed = not is_context_dependent_followup(
+        graph_masked_text,
         session,
-    ) and not is_safe_offtopic_message(message.text)
-    cache_allowed = cache_allowed and not is_registration_query(masked_text)
+    ) and not is_safe_offtopic_message(graph_message)
+    cache_allowed = cache_allowed and not is_registration_query(graph_masked_text)
 
     tracer = Tracer()
     state = {
@@ -837,8 +850,8 @@ async def process_message(
         "channel": message.channel.value,
         "user_id": message.user_id,
         "user_id_hash": user_id_hash,
-        "message": message.text,
-        "message_masked": masked_text,
+        "message": graph_message,
+        "message_masked": graph_masked_text,
         "routing_hint": routing_hint.model_dump(),
         "session": session,
         "trace": tracer,
@@ -854,7 +867,7 @@ async def process_message(
     if not bypass_cache and cache_allowed:
         cached_response = await _check_cache(
             fastapi_app,
-            masked_text,
+            graph_masked_text,
             detected_forum or session.forum_context,
         )
     if cached_response:
@@ -907,6 +920,16 @@ async def process_message(
         await _save_cache(fastapi_app, masked_text, response, result)
     await _safe_log(fastapi_app, result)
     return response
+
+
+def _with_explicit_forum_context(
+    message: str,
+    masked_text: str,
+    forum_context: str | None,
+) -> tuple[str, str]:
+    if not forum_context or detect_forum_from_text(message):
+        return message, masked_text
+    return f"{forum_context}: {message}", f"{forum_context}: {masked_text}"
 
 
 def _is_attachment_only_message(message: IncomingMessage) -> bool:

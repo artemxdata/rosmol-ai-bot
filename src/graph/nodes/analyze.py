@@ -175,6 +175,16 @@ def _fallback_analysis(
     allow_unknown_clarification: bool = False,
 ) -> QueryAnalysis | None:
     category = _infer_category_from_message(original_message)
+    exact_grant_questions = _build_exact_grant_questions(
+        _normalize_for_session(original_message)
+    )
+    is_collaboration = _is_collaboration_request(
+        _normalize_for_session(original_message)
+    )
+    if exact_grant_questions:
+        category = "гранты"
+    elif is_collaboration:
+        category = "общее"
     if (
         not category
         and _is_project_team_question(_normalize_for_session(original_message))
@@ -233,6 +243,8 @@ def _fallback_analysis(
         original_message,
         session,
     )
+    if exact_grant_questions and review_reason == "technical_issue":
+        review_reason = None
     should_escalate = review_reason is not None
     if is_offtopic:
         should_escalate = False
@@ -401,6 +413,10 @@ def is_safe_offtopic_message(message: str) -> bool:
         "материальная помощь",
         "льгот",
         "выплат",
+        "роскомнадзор",
+        "заблокировать телеграм",
+        "жалоба на телеграм канал",
+        "пожаловаться на телеграм канал",
     )
     return any(marker in normalized for marker in offtopic_markers)
 
@@ -1296,6 +1312,8 @@ def _coerce_analysis_payload(payload: dict) -> dict:
 
 
 def _apply_deterministic_forum(payload: dict, message: str) -> None:
+    if _is_collaboration_request(message.casefold().replace("ё", "е")):
+        return
     detected_forums = detect_forums_from_text(message)
     grant_pseudo_detected = any(_is_grant_pseudo_forum(forum) for forum in detected_forums)
     detected_forums = [
@@ -1338,6 +1356,8 @@ def _apply_deterministic_forum(payload: dict, message: str) -> None:
 def _apply_forum_category_guardrail(payload: dict, message: str) -> None:
     forum = str(payload.get("forum_normalized") or payload.get("forum") or "").strip()
     if not forum or _is_grant_pseudo_forum(forum):
+        return
+    if _is_collaboration_request(message.casefold().replace("ё", "е")):
         return
     if _has_forum_technical_marker(message):
         return
@@ -1430,6 +1450,9 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     category = payload.get("category")
     forum = payload.get("forum_normalized") or payload.get("forum")
     normalized = message.casefold().replace("ё", "е")
+    grant_questions = _build_exact_grant_questions(normalized)
+    if grant_questions:
+        return grant_questions
     if category == "гранты" and _is_grant_report_review_timing_query(normalized):
         return [
             {
@@ -1475,8 +1498,20 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
                 "forum_normalized": None,
             }
         ]
+    if _is_collaboration_request(normalized):
+        return [
+            {
+                "text": "Куда направить предложение о сотрудничестве?",
+                "topic": "predlozhenie_sotrudnichestva",
+                "category": "общее",
+                "forum_normalized": None,
+            }
+        ]
     if not forum and category not in {"гранты", "платформа_фгаис", "техподдержка"}:
         return []
+    ticket_questions = _build_exact_ticket_questions(normalized, str(forum or ""))
+    if ticket_questions:
+        return ticket_questions
     if category == "гранты" and _is_general_grant_info_query(normalized):
         return [
             {
@@ -1633,7 +1668,7 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
         (
             "programma_i_artisty",
             "Где посмотреть программу и артистов?",
-            ("программ", "артист"),
+            ("программ", "артист", "выступ"),
         ),
         ("programma_foruma", "Где посмотреть программу?", ("программ", "расписан")),
         (
@@ -1738,6 +1773,165 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "forum_normalized": forum,
         }
     ]
+
+
+def _build_exact_grant_questions(normalized: str) -> list[dict]:
+    questions: list[dict] = []
+    if "соглашен" in normalized:
+        topic = (
+            "proverka_proekta_grantovogo_soglasheniya"
+            if "провер" in normalized
+            else "poryadok_zaklyucheniya_soglasheniya"
+        )
+        questions.append(
+            {
+                "text": "Как заключить и проверить грантовое соглашение?",
+                "topic": topic,
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        )
+    if (
+        any(marker in normalized for marker in ("оплат", "оплач", "закуп"))
+        and any(marker in normalized for marker in ("товар", "услуг", "расход"))
+        and ("грант" in normalized or "проект" in normalized)
+    ):
+        questions.append(
+            {
+                "text": "Как оплачивать товары и услуги за счёт гранта?",
+                "topic": "oplata_tovarov_i_uslug",
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        )
+    if (
+        any(marker in normalized for marker in ("победител", "приказ"))
+        and any(marker in normalized for marker in ("грант", "конкурс", "результат"))
+    ):
+        questions.append(
+            {
+                "text": "Где публикуют приказ и список победителей грантового конкурса?",
+                "topic": "publikaciya_prikaza",
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        )
+    project_selector_markers = (
+        "выберите проект",
+        "выбрать проект",
+        "проект не отображ",
+        "проект не высвеч",
+        "проекты не отображ",
+        "проекты не высвеч",
+        "не отображается проект",
+        "не отображаются проекты",
+        "не высвечивается проект",
+        "не высвечиваются проекты",
+    )
+    if "грант" in normalized and any(
+        marker in normalized for marker in project_selector_markers
+    ):
+        questions.append(
+            {
+                "text": "Почему проект не отображается при подаче грантовой заявки?",
+                "topic": "2_zapolnenie_vkladok_proekta",
+                "category": "гранты",
+                "forum_normalized": None,
+            }
+        )
+    return questions
+
+
+def _is_collaboration_request(normalized: str) -> bool:
+    collaboration_markers = (
+        "предложить сотрудничество",
+        "предлагаю сотрудничество",
+        "предлагаем сотрудничество",
+        "предложение о сотрудничестве",
+        "предложение сотрудничества",
+        "коммерческое предложение",
+        "стать партнером",
+        "стать партнёром",
+        "в качестве партнера",
+        "в качестве партнёра",
+        "в качестве спикера",
+        "выступить спикером",
+        "предложить свои услуги",
+        "по вопросам рекламы",
+        "сотрудничество с росмолод",
+    )
+    return any(marker in normalized for marker in collaboration_markers)
+
+
+def _build_exact_ticket_questions(normalized: str, forum: str) -> list[dict]:
+    if forum.casefold().replace("ё", "е") != "день молодежи":
+        return []
+    if not any(marker in normalized for marker in ("билет", "пропуск", "код")):
+        return []
+
+    questions: list[dict] = []
+    if any(marker in normalized for marker in ("исправ", "измен", "сменить", "неверн")):
+        questions.append(
+            _ticket_question("ispravlenie_dannyh_v_bilete", "Как исправить данные в билете?")
+        )
+    if any(
+        marker in normalized
+        for marker in ("не приш", "не могу найти", "не получается найти", "повторно", "почт")
+    ):
+        questions.append(
+            _ticket_question(
+                "bilet_ne_prishel_povtornoe_poluchenie",
+                "Что делать, если билет не пришёл или потерялся?",
+            )
+        )
+    if any(
+        marker in normalized
+        for marker in (
+            "другого",
+            "другому",
+            "муж",
+            "жен",
+            "друг",
+            "доч",
+            "сын",
+            "ребен",
+            "ребён",
+            "дет",
+            "несколько билет",
+            "два билет",
+            "2 билет",
+        )
+    ):
+        questions.append(
+            _ticket_question(
+                "registraciya_drugogo_cheloveka",
+                "Можно ли зарегистрировать другого человека и получить несколько билетов?",
+            )
+        )
+    if any(marker in normalized for marker in ("отмен", "отказаться", "не смогу прийти")):
+        questions.append(
+            _ticket_question(
+                "kolichestvo_person_otmena_registracii",
+                "Можно ли отменить билет или регистрацию?",
+            )
+        )
+    if questions:
+        return questions
+    return [
+        _ticket_question(
+            "poluchenie_i_naznachenie_bileta",
+            "Как получить билет и для чего он нужен?",
+        )
+    ]
+
+
+def _ticket_question(topic: str, text: str) -> dict:
+    return {
+        "text": text,
+        "topic": topic,
+        "category": "форумы",
+        "forum_normalized": "День молодёжи",
+    }
 
 
 def _is_grant_report_review_timing_query(normalized: str) -> bool:

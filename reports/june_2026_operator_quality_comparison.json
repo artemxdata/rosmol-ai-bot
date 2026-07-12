@@ -1,0 +1,229 @@
+{
+  "generated_at": "2026-07-12T17:38:49.119869+00:00",
+  "baseline_path": "data\\private\\operator_qa\\analysis\\operator_full_june_baseline_audit.json",
+  "post_fix_path": "data\\private\\operator_qa\\analysis\\operator_full_june_postfix_audit.json",
+  "coverage": {
+    "source_rows_total": 3348,
+    "runnable_rows": 3295,
+    "empty_queries_excluded": 53,
+    "evaluated_rows": 3295,
+    "missing_results": 0,
+    "duplicate_eval_results": 0,
+    "evaluation_coverage": 1.0
+  },
+  "overall": {
+    "cases": 3295,
+    "baseline": {
+      "cases": 3295,
+      "direct_answers": 1764,
+      "direct_conversion": 0.535357,
+      "contained_without_operator": 2802,
+      "containment_rate": 0.850379,
+      "escalated": 493,
+      "escalation_rate": 0.149621,
+      "source_grounded_direct_answers": 1740,
+      "source_grounded_direct_answer_rate": 0.528073,
+      "strict_grounded_answers": 403,
+      "strict_grounded_answer_rate": 0.122307
+    },
+    "post_fix": {
+      "cases": 3295,
+      "direct_answers": 1795,
+      "direct_conversion": 0.544765,
+      "contained_without_operator": 2817,
+      "containment_rate": 0.854932,
+      "escalated": 478,
+      "escalation_rate": 0.145068,
+      "source_grounded_direct_answers": 1772,
+      "source_grounded_direct_answer_rate": 0.537785,
+      "strict_grounded_answers": 409,
+      "strict_grounded_answer_rate": 0.124127
+    },
+    "delta": {
+      "direct_conversion": 0.009408,
+      "containment_rate": 0.004553,
+      "escalation_rate": -0.004553,
+      "source_grounded_direct_answer_rate": 0.009712,
+      "strict_grounded_answer_rate": 0.00182
+    }
+  },
+  "golden_eligible": {
+    "cases": 577,
+    "baseline": {
+      "cases": 577,
+      "direct_answers": 403,
+      "direct_conversion": 0.69844,
+      "contained_without_operator": 556,
+      "containment_rate": 0.963605,
+      "escalated": 21,
+      "escalation_rate": 0.036395,
+      "source_grounded_direct_answers": 403,
+      "source_grounded_direct_answer_rate": 0.69844,
+      "strict_grounded_answers": 403,
+      "strict_grounded_answer_rate": 0.69844
+    },
+    "post_fix": {
+      "cases": 577,
+      "direct_answers": 409,
+      "direct_conversion": 0.708839,
+      "contained_without_operator": 558,
+      "containment_rate": 0.967071,
+      "escalated": 19,
+      "escalation_rate": 0.032929,
+      "source_grounded_direct_answers": 409,
+      "source_grounded_direct_answer_rate": 0.708839,
+      "strict_grounded_answers": 409,
+      "strict_grounded_answer_rate": 0.708839
+    },
+    "delta": {
+      "direct_conversion": 0.010399,
+      "containment_rate": 0.003466,
+      "escalation_rate": -0.003466,
+      "source_grounded_direct_answer_rate": 0.010399,
+      "strict_grounded_answer_rate": 0.010399
+    }
+  },
+  "context_limited": {
+    "cases": 1674,
+    "baseline": {
+      "cases": 1674,
+      "direct_answers": 647,
+      "direct_conversion": 0.386499,
+      "contained_without_operator": 1320,
+      "containment_rate": 0.78853,
+      "escalated": 354,
+      "escalation_rate": 0.21147,
+      "source_grounded_direct_answers": 625,
+      "source_grounded_direct_answer_rate": 0.373357,
+      "strict_grounded_answers": 0,
+      "strict_grounded_answer_rate": 0.0
+    },
+    "post_fix": {
+      "cases": 1674,
+      "direct_answers": 671,
+      "direct_conversion": 0.400836,
+      "contained_without_operator": 1332,
+      "containment_rate": 0.795699,
+      "escalated": 342,
+      "escalation_rate": 0.204301,
+      "source_grounded_direct_answers": 649,
+      "source_grounded_direct_answer_rate": 0.387694,
+      "strict_grounded_answers": 0,
+      "strict_grounded_answer_rate": 0.0
+    },
+    "delta": {
+      "direct_conversion": 0.014337,
+      "containment_rate": 0.007169,
+      "escalation_rate": -0.007169,
+      "source_grounded_direct_answer_rate": 0.014337,
+      "strict_grounded_answer_rate": 0.0
+    }
+  },
+  "category_comparison": [
+    {
+      "category": "другое",
+      "cases": 1456,
+      "direct_conversion_baseline": 0.389423,
+      "direct_conversion_post_fix": 0.406593,
+      "direct_conversion_delta": 0.01717,
+      "containment_rate_baseline": 0.776099,
+      "containment_rate_post_fix": 0.785714,
+      "containment_rate_delta": 0.009615
+    },
+    {
+      "category": "форумы",
+      "cases": 1006,
+      "direct_conversion_baseline": 0.756461,
+      "direct_conversion_post_fix": 0.761431,
+      "direct_conversion_delta": 0.00497,
+      "containment_rate_baseline": 0.942346,
+      "containment_rate_post_fix": 0.944334,
+      "containment_rate_delta": 0.001988
+    },
+    {
+      "category": "платформа_фгаис",
+      "cases": 277,
+      "direct_conversion_baseline": 0.527076,
+      "direct_conversion_post_fix": 0.523466,
+      "direct_conversion_delta": -0.00361,
+      "containment_rate_baseline": 0.920578,
+      "containment_rate_post_fix": 0.920578,
+      "containment_rate_delta": 0.0
+    },
+    {
+      "category": "навигация",
+      "cases": 248,
+      "direct_conversion_baseline": 0.266129,
+      "direct_conversion_post_fix": 0.274194,
+      "direct_conversion_delta": 0.008065,
+      "containment_rate_baseline": 0.798387,
+      "containment_rate_post_fix": 0.798387,
+      "containment_rate_delta": 0.0
+    },
+    {
+      "category": "гранты",
+      "cases": 237,
+      "direct_conversion_baseline": 0.818565,
+      "direct_conversion_post_fix": 0.801688,
+      "direct_conversion_delta": -0.016877,
+      "containment_rate_baseline": 0.886076,
+      "containment_rate_post_fix": 0.869198,
+      "containment_rate_delta": -0.016878
+    },
+    {
+      "category": "техподдержка",
+      "cases": 71,
+      "direct_conversion_baseline": 0.422535,
+      "direct_conversion_post_fix": 0.478873,
+      "direct_conversion_delta": 0.056338,
+      "containment_rate_baseline": 0.859155,
+      "containment_rate_post_fix": 0.901408,
+      "containment_rate_delta": 0.042253
+    }
+  ],
+  "latency_ms": {
+    "baseline": {
+      "min": 3,
+      "p50": 1437,
+      "p95": 84057,
+      "max": 149874
+    },
+    "post_fix": {
+      "min": 6,
+      "p50": 972,
+      "p95": 81230,
+      "max": 150041
+    },
+    "p50_delta": -465,
+    "p95_delta": -2827
+  },
+  "cost_rub": {
+    "baseline": 218.327685,
+    "post_fix": 222.956386
+  },
+  "methodology_notes": [
+    "Конверсия — прямой содержательный первый ответ без оператора.",
+    "Уточнение считается удержанием без оператора, но не считается закрытым тикетом.",
+    "Golden-eligible — автоматически очищенное подмножество, а не ручная экспертная разметка всех строк.",
+    "Ответ оператора не считается автоматически истинным: часть операторских данных получена из ФГАИС, соцсетей, второй линии и внутреннего чата.",
+    "Пустые вопросы и attachment-only строки не запускаются как текстовый RAG-тест."
+  ],
+  "explicit_channel_context_scenario": {
+    "label": "MAX / День молодёжи с явным контекстом кампании из HDE",
+    "status": "сценарный потенциал, не текущая общая конверсия",
+    "cases": 546,
+    "direct_answers": 541,
+    "direct_conversion": 0.990842,
+    "escalated": 5,
+    "escalation_rate": 0.009158,
+    "http_success_rate": 1.0,
+    "trace_coverage_rate": 1.0,
+    "latency_ms": {
+      "avg": 840.53,
+      "p50": 132,
+      "p95": 3600,
+      "max": 19375
+    },
+    "llm_estimated_cost_rub": 0.887601
+  }
+}

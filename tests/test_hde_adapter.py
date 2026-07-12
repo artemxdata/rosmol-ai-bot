@@ -46,6 +46,18 @@ def test_hde_adapter_parses_nested_new_reply_payload_without_prefix() -> None:
     assert message.text == "Не пришло письмо по форуму, что делать?"
 
 
+def test_hde_adapter_parses_explicit_forum_context() -> None:
+    payload = {
+        "chat_id": "ticket-123",
+        "forum_context": "День молодёжи",
+        "message": {"kind": "visitor", "text": "Где мой билет?"},
+    }
+
+    message = HDEAdapter().parse(payload)
+
+    assert message.forum_context == "День молодёжи"
+
+
 def test_hde_adapter_keeps_legacy_flat_payload_support() -> None:
     payload = {
         "ticket_id": "legacy-ticket",

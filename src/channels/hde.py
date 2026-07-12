@@ -66,6 +66,9 @@ class HDEAdapter(ChannelAdapter):
 
     def parse(self, payload: dict[str, Any]) -> IncomingMessage:
         visitor = payload.get("visitor") if isinstance(payload.get("visitor"), dict) else {}
+        visitor_fields = (
+            visitor.get("fields") if isinstance(visitor.get("fields"), dict) else {}
+        )
         message = payload.get("message")
         message_payload = message if isinstance(message, dict) else {}
 
@@ -90,6 +93,13 @@ class HDEAdapter(ChannelAdapter):
             attachments=_normalize_attachments(
                 payload.get("attachments") or message_payload.get("attachments") or []
             ),
+            forum_context=_first_non_empty(
+                payload.get("forum_context"),
+                payload.get("source_forum"),
+                message_payload.get("forum_context"),
+                visitor_fields.get("forum_context"),
+            )
+            or None,
         )
 
     async def send(self, user_id: str, text: str) -> None:

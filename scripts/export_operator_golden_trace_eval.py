@@ -16,6 +16,7 @@ import asyncpg
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.config import get_settings
+from src.session.memory import hash_user_id
 
 DEFAULT_CASES = Path("data/private/operator_qa/analysis/operator_golden_calibration.json")
 DEFAULT_OUTPUT = Path("data/private/operator_qa/analysis/calibration_bot_eval.json")
@@ -37,6 +38,7 @@ async def export_trace_eval(
     *,
     since_minutes: int = 60,
     postgres_dsn: str | None = None,
+    user_prefix: str | None = None,
 ) -> dict[str, Any]:
     cases = _read_json_array(cases_path)
     query_to_cases: dict[str, list[dict[str, Any]]] = {}
@@ -47,7 +49,7 @@ async def export_trace_eval(
     try:
         traces = await pool.fetch(
             """
-            select timestamp, message_masked, response_text, was_escalated,
+            select timestamp, user_id_hash, message_masked, response_text, was_escalated,
                    escalation_reason, generator_model, cited_sources,
                    total_latency_ms, llm_total_tokens, llm_estimated_cost_rub
             from request_traces
@@ -61,15 +63,31 @@ async def export_trace_eval(
         await pool.close()
 
     latest_by_query: dict[str, dict[str, Any]] = {}
+    latest_by_user_hash: dict[str, dict[str, Any]] = {}
     for trace in traces:
+        user_hash = str(trace["user_id_hash"] or "")
+        if user_hash and user_hash not in latest_by_user_hash:
+            latest_by_user_hash[user_hash] = dict(trace)
         key = _normalize(str(trace["message_masked"] or ""))
         if key in query_to_cases and key not in latest_by_query:
             latest_by_query[key] = dict(trace)
 
     results: list[dict[str, Any]] = []
-    for case in cases:
+    recovered_by_user_hash = 0
+    recovered_by_query = 0
+    for index, case in enumerate(cases, start=1):
         query = str(case.get("query") or "")
-        trace = latest_by_query.get(_normalize(query))
+        trace = None
+        if user_prefix:
+            trace = latest_by_user_hash.get(
+                expected_trace_user_hash(user_prefix, index)
+            )
+            if trace:
+                recovered_by_user_hash += 1
+        if not trace and not user_prefix:
+            trace = latest_by_query.get(_normalize(query))
+            if trace:
+                recovered_by_query += 1
         if not trace:
             continue
         response = str(trace.get("response_text") or "")
@@ -101,10 +119,13 @@ async def export_trace_eval(
         "generated_at": datetime.now(UTC).isoformat(),
         "cases_path": str(cases_path),
         "source": "request_traces_recovery",
+        "user_prefix": user_prefix,
         "since_minutes": since_minutes,
         "cases_total": len(cases),
         "cases_recovered": len(results),
         "cases_missing": len(cases) - len(results),
+        "recovered_by_user_hash": recovered_by_user_hash,
+        "recovered_by_query": recovered_by_query,
         "observed_behavior_counts": dict(
             Counter(result["observed_behavior"] for result in results)
         ),
@@ -131,6 +152,10 @@ async def export_trace_eval(
         )
     )
     return payload
+
+
+def expected_trace_user_hash(user_prefix: str, index: int) -> str:
+    return hash_user_id("api", f"{user_prefix}-{index}")
 
 
 def observed_behavior(response: str, *, was_escalated: bool) -> str:
@@ -179,6 +204,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--since-minutes", type=int, default=60)
     parser.add_argument("--postgres-dsn", default="")
+    parser.add_argument("--user-prefix", default="")
     return parser.parse_args()
 
 
@@ -190,6 +216,7 @@ def main() -> None:
             args.output,
             since_minutes=args.since_minutes,
             postgres_dsn=args.postgres_dsn or None,
+            user_prefix=args.user_prefix or None,
         )
     )
 

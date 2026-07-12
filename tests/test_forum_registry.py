@@ -30,6 +30,17 @@ def test_detect_forum_from_text_handles_youth_day_genitive_case() -> None:
     assert detect_forum_from_text("Где программа Дня молодёжи?") == "День молодёжи"
 
 
+def test_detect_forum_from_text_handles_latin_e_diaeresis_in_youth_day() -> None:
+    assert detect_forum_from_text("Не пришёл билет на день молодëжи") == "День молодёжи"
+
+
+def test_detect_forum_from_text_maps_youth_day_campaign_names() -> None:
+    assert detect_forum_from_text("Где выступает DJ Smash?") == "День молодёжи"
+    assert detect_forum_from_text("Когда на сцене The Hatters?") == "День молодёжи"
+    assert detect_forum_from_text("Программа Молфеста") == "День молодёжи"
+    assert detect_forum_from_text("Где фотоотчёт с молфеста74?") == "День молодёжи"
+
+
 def test_detect_forum_from_text_handles_mixed_alphabet_ostrova() -> None:
     assert detect_forum_from_text("Я прошла первый этап форума ОстроVа") == "Островa"
 

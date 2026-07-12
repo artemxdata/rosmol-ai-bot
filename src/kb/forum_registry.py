@@ -82,6 +82,6 @@ def _span_is_contained(span: tuple[int, int], containers: list[tuple[int, int]])
 
 
 def _normalize_for_match(text: str) -> str:
-    normalized = str(text or "").casefold().replace("ё", "е")
+    normalized = str(text or "").casefold().replace("ё", "е").replace("ë", "е")
     normalized = NON_WORD_PATTERN.sub(" ", normalized)
     return " ".join(normalized.split())

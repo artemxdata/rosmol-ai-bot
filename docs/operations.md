@@ -243,6 +243,21 @@ The HDE adapter uses `chat_id` as the bot conversation id because replies must
 be bound to the ticket. The trigger prefix is stripped before the message reaches
 PII masking, RAG, or LLM.
 
+If an HDE rule is dedicated to one known event, it may pass an explicit optional
+context at the root of either payload:
+
+```json
+{
+  "forum_context": "День молодёжи"
+}
+```
+
+Only names and aliases present in `data/forums_registry.json` are accepted. The
+field is useful when the user's first message is context-free, for example
+`Где мой билет?`. Do not infer this field from a general MAX/VK channel: configure
+it only on a dispatcher rule that is unambiguously bound to one event. Existing
+payloads without `forum_context` remain compatible.
+
 HDE replies are sent through HelpDeskEddy API v2 as public ticket posts:
 
 ```http

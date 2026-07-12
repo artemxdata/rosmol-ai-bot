@@ -405,6 +405,98 @@ def test_fallback_analysis_routes_grant_report_review_timing_to_exact_topic() ->
     assert [question.topic for question in analysis.questions] == ["proverka_otcheta"]
 
 
+@pytest.mark.parametrize(
+    ("text", "topic"),
+    [
+        (
+            "Не получается сохранить правки при заключении грантового соглашения",
+            "poryadok_zaklyucheniya_soglasheniya",
+        ),
+        (
+            "Какими способами можно оплатить товар по гранту?",
+            "oplata_tovarov_i_uslug",
+        ),
+        (
+            "Где найти список победителей грантового конкурса?",
+            "publikaciya_prikaza",
+        ),
+        (
+            "При подаче грантовой заявки не могу выбрать проект",
+            "2_zapolnenie_vkladok_proekta",
+        ),
+    ],
+)
+def test_fallback_analysis_routes_exact_grant_topics(text: str, topic: str) -> None:
+    analysis = _fallback_analysis(text, text, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "гранты"
+    assert analysis.should_escalate is False
+    assert [question.topic for question in analysis.questions] == [topic]
+
+
+def test_fallback_analysis_routes_youth_day_missing_ticket_to_exact_topic() -> None:
+    text = "Не пришло письмо с кодом на концерт на день молодëжи"
+    analysis = _fallback_analysis(text, text, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "форумы"
+    assert analysis.forum_normalized == "День молодёжи"
+    assert [question.topic for question in analysis.questions] == [
+        "bilet_ne_prishel_povtornoe_poluchenie"
+    ]
+
+
+def test_fallback_analysis_keeps_all_youth_day_ticket_aspects() -> None:
+    text = (
+        "На День молодёжи не пришли билеты на почту для меня и дочки 12 лет. "
+        "Что делать?"
+    )
+    analysis = _fallback_analysis(text, text, {"complexity": "complex"}, None)
+
+    assert analysis is not None
+    assert [question.topic for question in analysis.questions] == [
+        "bilet_ne_prishel_povtornoe_poluchenie",
+        "registraciya_drugogo_cheloveka",
+    ]
+
+
+def test_fallback_analysis_keeps_all_exact_grant_aspects() -> None:
+    text = (
+        "В грантовой заявке не отображается проект. Как оплачивать товары по гранту "
+        "и где потом посмотреть победителей конкурса?"
+    )
+    analysis = _fallback_analysis(text, text, {"complexity": "complex"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "гранты"
+    assert [question.topic for question in analysis.questions] == [
+        "oplata_tovarov_i_uslug",
+        "publikaciya_prikaza",
+        "2_zapolnenie_vkladok_proekta",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Хотели бы предложить сотрудничество на ваших мероприятиях как спикеры",
+        "Я фотограф и хочу предложить свои услуги для Дня молодёжи",
+        "Куда отправить коммерческое предложение по рекламе?",
+    ],
+)
+def test_fallback_analysis_routes_collaboration_to_exact_source(text: str) -> None:
+    analysis = _fallback_analysis(text, text, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "общее"
+    assert analysis.forum_normalized is None
+    assert analysis.should_escalate is False
+    assert [question.topic for question in analysis.questions] == [
+        "predlozhenie_sotrudnichestva"
+    ]
+
+
 def test_fallback_analysis_routes_project_selection_error_to_support() -> None:
     analysis = _fallback_analysis(
         "Не могу выбрать проект при заполнении заявки",
@@ -703,6 +795,7 @@ def test_fallback_analysis_marks_everyday_requests_as_offtopic() -> None:
         "Где заказать роллы рядом со мной?",
         "Составь исковое заявление в суд",
         "Где купить билеты на матчи сборной России?",
+        "Прошу заблокировать телеграм-канал за нарушение правил Роскомнадзора",
     ):
         analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
 

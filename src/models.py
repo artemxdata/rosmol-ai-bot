@@ -27,6 +27,7 @@ class IncomingMessage(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     request_id: UUID = Field(default_factory=uuid4)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    forum_context: str | None = None
 
 
 class OutgoingMessage(BaseModel):

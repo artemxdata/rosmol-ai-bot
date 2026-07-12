@@ -36,6 +36,7 @@ def test_normalize_case_accepts_common_fields() -> None:
         "query": "Кто оплачивает проезд на Машук?",
         "user_id": "ask-eval",
         "channel": "api",
+        "forum_context": None,
         "expected_chunk_ids": ["chunk_1"],
         "expected_cited_chunk_ids": [],
         "equivalent_chunk_ids": {},
@@ -48,6 +49,18 @@ def test_normalize_case_accepts_common_fields() -> None:
         "expected_generator_model": "source_chunk",
         "tags": ["travel"],
     }
+
+
+def test_normalize_case_keeps_explicit_forum_context() -> None:
+    case = _normalize_case(
+        {
+            "id": "ticket-context",
+            "query": "Где мой билет?",
+            "forum_context": "День молодёжи",
+        }
+    )
+
+    assert case["forum_context"] == "День молодёжи"
 
 
 def test_build_seed_ask_cases_uses_intent_examples() -> None:

@@ -9,8 +9,8 @@ import pytest
 
 from src.graph.graph import build_graph
 from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE
+from src.main import _with_explicit_forum_context, process_message
 from src.main import app as fastapi_app
-from src.main import process_message
 from src.models import Channel, Chunk, IncomingMessage, ScoredChunk, Session
 from src.session.memory import hash_user_id
 
@@ -773,3 +773,25 @@ async def test_process_message_escalates_on_request_timeout(
     assert app.state.sessions.appended
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "request_timeout"
+
+
+def test_with_explicit_forum_context_adds_known_forum_to_ambiguous_message() -> None:
+    message, masked = _with_explicit_forum_context(
+        "Где мой билет?",
+        "Где мой билет?",
+        "День молодёжи",
+    )
+
+    assert message == "День молодёжи: Где мой билет?"
+    assert masked == message
+
+
+def test_with_explicit_forum_context_does_not_override_message_forum() -> None:
+    message, masked = _with_explicit_forum_context(
+        "Как подать заявку на Амур?",
+        "Как подать заявку на Амур?",
+        "День молодёжи",
+    )
+
+    assert message == "Как подать заявку на Амур?"
+    assert masked == message
