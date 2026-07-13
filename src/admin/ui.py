@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import base64
@@ -23,703 +25,709 @@ _HTML_TEMPLATE = """
   <style>
     :root {
       color-scheme: light;
-      --ink: #061d39;
-      --ink-2: #0b315f;
-      --bg: #eef3f8;
+      --shell: #080b10;
+      --sidebar: #0d1118;
+      --sidebar-hover: #171d26;
+      --canvas: #f4f6f8;
       --surface: #ffffff;
-      --surface-2: #f7fafc;
-      --line: #d7e1ec;
-      --muted: #64748b;
-      --text: #102033;
-      --accent: #fbdb24;
-      --accent-2: #0b7f96;
-      --accent-soft: #e6f7fa;
-      --danger: #b42318;
-      --ok: #027a48;
-      --shadow: 0 18px 45px rgba(6, 29, 57, 0.12);
+      --surface-soft: #f8fafb;
+      --surface-hover: #f1f5f7;
+      --line: #dde3e8;
+      --line-strong: #c9d2da;
+      --text: #17202b;
+      --text-strong: #071425;
+      --muted: #6b7787;
+      --muted-dark: #98a5b5;
+      --accent: #f5d90a;
+      --accent-strong: #e9c900;
+      --cyan: #00a4bd;
+      --cyan-soft: #e3f7fa;
+      --danger: #c9362b;
+      --danger-soft: #fff0ef;
+      --ok: #0b8a5f;
+      --ok-soft: #e7f7f0;
+      --warn: #9a6c00;
+      --warn-soft: #fff8d8;
+      --shadow: 0 14px 38px rgba(8, 15, 24, 0.10);
+      --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
     }
     * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
     body {
       margin: 0;
-      background:
-        linear-gradient(180deg, rgba(6, 29, 57, 0.08), transparent 260px),
-        var(--bg);
+      background: var(--canvas);
       color: var(--text);
-      font-family: Inter, Arial, sans-serif;
+      font-family: var(--font);
       font-size: 14px;
       letter-spacing: 0;
     }
-    button, input, select, textarea {
-      font: inherit;
-      letter-spacing: 0;
-    }
+    button, input, select, textarea { font: inherit; letter-spacing: 0; }
     button {
-      min-height: 40px;
+      min-height: 36px;
       border: 1px solid transparent;
-      border-radius: 7px;
-      padding: 9px 13px;
-      background: var(--ink);
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #111927;
       color: #fff;
-      font-weight: 800;
+      font-weight: 700;
       cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
     }
-    button:hover { filter: brightness(1.04); }
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    button.primary {
-      background: var(--accent);
-      color: var(--ink);
-    }
-    button.secondary {
-      background: #fff;
-      border-color: var(--line);
-      color: var(--ink);
-    }
-    button.danger {
-      background: #fff;
-      border-color: #f2b8b5;
-      color: var(--danger);
+    button:hover:not(:disabled) { transform: translateY(-1px); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:disabled { opacity: 0.46; cursor: not-allowed; }
+    button.primary { background: var(--accent); color: #161400; }
+    button.primary:hover:not(:disabled) { background: var(--accent-strong); }
+    button.secondary { background: #fff; border-color: var(--line); color: var(--text-strong); }
+    button.secondary:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--line-strong); }
+    button.danger { background: transparent; border-color: #61302f; color: #ffaaa3; }
+    button.danger:hover:not(:disabled) { background: #2b1718; }
+    button .icon { margin-right: 7px; }
+    .icon {
+      width: 16px;
+      height: 16px;
+      display: inline-block;
+      vertical-align: -3px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
     }
     input, select, textarea {
       border: 1px solid var(--line);
-      border-radius: 7px;
+      border-radius: 6px;
       background: #fff;
       color: var(--text);
-      padding: 10px 12px;
-      min-height: 40px;
+      padding: 9px 11px;
+      min-height: 38px;
     }
+    input::placeholder, textarea::placeholder { color: #95a0ad; }
     input:focus, select:focus, textarea:focus {
-      outline: 3px solid rgba(11, 127, 150, 0.16);
-      border-color: var(--accent-2);
+      outline: 2px solid rgba(0, 164, 189, 0.15);
+      border-color: var(--cyan);
     }
     .topbar {
-      min-height: 78px;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 18px;
-      padding: 16px 22px;
-      background: var(--ink);
-      color: #fff;
-      position: sticky;
-      top: 0;
-      z-index: 5;
-      box-shadow: 0 12px 30px rgba(6, 29, 57, 0.2);
-    }
-    .brand {
+      min-height: 58px;
       display: flex;
       align-items: center;
-      gap: 16px;
-      min-width: 0;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 9px 14px;
+      background: var(--shell);
+      color: #fff;
+      border-bottom: 1px solid #202631;
+      position: sticky;
+      top: 0;
+      z-index: 20;
     }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .logo-mark {
       display: grid;
       place-items: center;
-      width: 218px;
-      height: 58px;
+      width: 142px;
+      height: 38px;
       flex: 0 0 auto;
-      border-radius: 8px;
+      border-radius: 5px;
       background: #fff;
-      padding: 8px 14px;
+      padding: 5px 10px;
+      overflow: hidden;
     }
-    .logo-mark img {
-      width: 100%;
-      max-width: 184px;
-      max-height: 40px;
-      height: 100%;
-      display: block;
-      object-fit: contain;
-    }
-    .brand-copy {
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      min-width: 0;
-    }
-    h1 {
-      margin: 0;
-      font-size: 19px;
-      line-height: 1.1;
-      font-weight: 900;
-    }
-    .subtitle {
-      color: #bfd1e6;
-      font-size: 12px;
-      line-height: 1.3;
-      max-width: 460px;
-    }
-    .top-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      max-width: 720px;
-    }
-    .top-actions button.secondary {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.18);
-      color: #fff;
-    }
-    .top-actions button.primary {
-      box-shadow: 0 0 0 1px rgba(251, 219, 36, 0.25);
-    }
+    .logo-mark img { width: 100%; height: 100%; display: block; object-fit: contain; }
+    .brand-copy { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    h1 { margin: 0; font-size: 15px; line-height: 1.2; font-weight: 750; white-space: nowrap; }
+    .subtitle { color: var(--muted-dark); font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .top-actions { display: flex; align-items: center; gap: 9px; }
     .status-pill {
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      min-height: 34px;
+      min-height: 30px;
       border-radius: 999px;
-      padding: 6px 11px;
-      background: rgba(255, 255, 255, 0.1);
-      color: #e8f1fb;
-      font-size: 12px;
-      font-weight: 800;
+      padding: 5px 10px;
+      background: #141a23;
+      border: 1px solid #242d39;
+      color: #cbd4df;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
     }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(245, 217, 10, 0.08); }
+    .product-chip { color: #758194; font-family: var(--mono); font-size: 11px; }
     .auth {
-      max-width: 560px;
-      margin: 58px auto;
+      max-width: 440px;
+      margin: 72px auto;
       background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 8px;
       box-shadow: var(--shadow);
       overflow: hidden;
+      color: var(--text);
     }
-    .auth-head {
-      padding: 24px;
-      background: linear-gradient(135deg, var(--ink), var(--ink-2));
-      color: #fff;
-    }
-    .auth-head h2 {
-      margin: 0 0 8px;
-      font-size: 24px;
-    }
-    .auth-head p {
-      margin: 0;
-      color: #c9d8e8;
-      line-height: 1.45;
-    }
-    .auth-body {
-      padding: 22px;
-      display: grid;
-      gap: 12px;
-    }
+    .auth-head { padding: 22px; background: #10151d; color: #fff; border-bottom: 1px solid #222a35; }
+    .auth-head h2 { margin: 0 0 7px; font-size: 20px; }
+    .auth-head p { margin: 0; color: #aab5c3; line-height: 1.5; font-size: 13px; }
+    .auth-body { padding: 20px; display: grid; gap: 10px; }
     .auth-body input { width: 100%; }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(420px, 0.88fr) minmax(560px, 1.18fr);
-      gap: 18px;
-      padding: 18px;
+    .workspace { min-height: calc(100vh - 58px); display: grid; grid-template-columns: 214px minmax(0, 1fr); }
+    .nav-rail {
+      position: sticky;
+      top: 58px;
+      height: calc(100vh - 58px);
+      display: flex;
+      flex-direction: column;
+      padding: 12px 9px;
+      background: var(--sidebar);
+      border-right: 1px solid #202631;
+      color: #d8e0e9;
+      overflow: auto;
     }
+    .nav-label { padding: 8px 10px 7px; color: #647184; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    .nav-group { display: grid; gap: 3px; }
+    .nav-item {
+      width: 100%;
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 9px;
+      padding: 8px 10px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: #aeb9c7;
+      font-size: 13px;
+      font-weight: 650;
+      text-align: left;
+    }
+    .nav-item .icon { margin: 0; }
+    .nav-item:hover:not(:disabled) { background: var(--sidebar-hover); color: #fff; transform: none; }
+    .nav-item.active { background: #1b222d; border-color: #2b3543; color: #fff; }
+    .nav-item.active::after { content: ""; width: 3px; height: 18px; margin-left: auto; border-radius: 2px; background: var(--accent); }
+    .nav-spacer { flex: 1; min-height: 20px; }
+    .nav-foot { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid #202631; }
+    .nav-hint { padding: 0 10px; color: #647184; font-size: 11px; line-height: 1.45; }
+    .content { min-width: 0; padding: 12px; overflow: hidden; }
+    .layout { display: grid; grid-template-columns: minmax(390px, 0.82fr) minmax(560px, 1.35fr); gap: 10px; min-height: calc(100vh - 82px); }
     .panel {
       min-width: 0;
       background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      box-shadow: var(--shadow);
+      border-radius: 7px;
+      box-shadow: 0 1px 2px rgba(8, 15, 24, 0.04);
       overflow: hidden;
     }
     .panel-head {
+      min-height: 51px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 14px;
-      padding: 14px 16px;
+      gap: 12px;
+      padding: 9px 12px;
       border-bottom: 1px solid var(--line);
-      background: var(--surface);
+      background: #fff;
     }
-    .panel-title {
-      margin: 0;
-      color: var(--ink);
-      font-size: 15px;
-      font-weight: 900;
-    }
+    .panel-title { margin: 0; color: var(--text-strong); font-size: 14px; font-weight: 750; }
+    .panel-eyebrow { display: block; margin-bottom: 2px; color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
     .search-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-      gap: 10px;
-      padding: 14px 16px;
+      grid-template-columns: minmax(190px, 1.45fr) minmax(130px, 0.85fr) minmax(105px, 0.7fr);
+      gap: 7px;
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
-      background: var(--surface-2);
+      background: var(--surface-soft);
     }
-    .search-grid input,
-    .search-grid select,
-    .search-grid button {
-      width: 100%;
-      min-width: 0;
-    }
+    .search-grid input, .search-grid select, .search-grid button { width: 100%; min-width: 0; }
+    .search-grid .category-field { grid-column: 1 / 2; }
+    .search-grid .search-button { grid-column: 2 / 4; }
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      padding: 14px 16px;
       border-bottom: 1px solid var(--line);
       background: #fff;
     }
-    .metric {
-      min-height: 78px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px;
-      background:
-        linear-gradient(135deg, rgba(251, 219, 36, 0.16), transparent 70%),
-        var(--surface-2);
-    }
-    .metric-value {
-      display: block;
-      color: var(--ink);
-      font-size: 23px;
-      font-weight: 900;
-      line-height: 1;
-      margin-bottom: 8px;
-    }
-    .metric-label {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .status {
-      min-height: 22px;
-      color: var(--muted);
-      font-size: 13px;
-    }
+    .metric { min-height: 66px; padding: 11px 12px; border-right: 1px solid var(--line); background: #fff; }
+    .metric:last-child { border-right: 0; }
+    .metric-value { display: block; color: var(--text-strong); font-size: 19px; font-weight: 780; line-height: 1.1; margin-bottom: 5px; }
+    .metric-label { color: var(--muted); font-size: 10px; font-weight: 700; line-height: 1.25; }
+    .status { min-height: 18px; color: var(--muted); font-size: 12px; line-height: 1.45; }
     .status.error { color: var(--danger); }
-    .status.warn { color: #8a6500; }
+    .status.warn { color: var(--warn); }
     .status.ok { color: var(--ok); }
-    .table-wrap {
-      max-height: calc(100vh - 324px);
-      min-height: 360px;
-      overflow: auto;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
-    }
-    th, td {
-      border-bottom: 1px solid var(--line);
-      padding: 11px 12px;
-      vertical-align: top;
-      text-align: left;
-      word-break: break-word;
-    }
-    th {
-      position: sticky;
-      top: 0;
-      z-index: 2;
-      background: #f2f6fa;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 900;
-    }
-    tbody tr { cursor: pointer; }
-    tbody tr:hover td { background: #f5fbfc; }
-    tr.selected td {
-      background: var(--accent-soft);
-      border-bottom-color: #bce5ec;
-    }
-    .mono {
-      font-family: Consolas, "Courier New", monospace;
-      font-size: 12px;
-    }
+    .list-status { display: inline-flex; align-items: center; min-height: 28px; padding: 4px 8px; border-radius: 5px; background: var(--surface-soft); }
+    .table-wrap { height: calc(100vh - 276px); min-height: 400px; overflow: auto; background: #fff; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border-bottom: 1px solid #e8edf1; padding: 9px 10px; vertical-align: top; text-align: left; word-break: break-word; }
+    th { position: sticky; top: 0; z-index: 2; background: #f7f9fb; color: #758194; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    tbody tr { cursor: pointer; position: relative; }
+    tbody tr:hover td { background: #f5f8fa; }
+    tr.selected td { background: #e9f6f8; border-bottom-color: #cde8ec; }
+    tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--cyan); }
+    .mono { font-family: var(--mono); font-size: 11px; }
     .muted { color: var(--muted); }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border-radius: 999px;
-      padding: 5px 10px;
-      background: var(--accent-soft);
-      color: var(--accent-2);
-      font-size: 12px;
-      font-weight: 900;
-      max-width: 100%;
-      white-space: nowrap;
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 7px; background: var(--ok-soft); color: var(--ok); font-size: 10px; font-weight: 800; white-space: nowrap; }
+    .badge.status-draft { background: var(--warn-soft); color: var(--warn); }
+    .badge.status-archived { background: #eef1f4; color: #657181; }
+    .empty-row { padding: 36px 16px; text-align: center; color: var(--muted); }
+    .skeleton { height: 11px; border-radius: 3px; background: linear-gradient(90deg, #eef1f4 25%, #f8fafb 50%, #eef1f4 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+    .editor-panel { display: flex; flex-direction: column; min-height: 0; }
+    .editor-panel.is-busy { cursor: progress; }
+    .editor-panel.report-mode .document-head,
+    .editor-panel.report-mode .editor-surface,
+    .editor-panel.report-mode .editor-statusbar .toggle,
+    .editor-panel.report-mode .panel-head .editor-actions {
+      display: none;
     }
-    .badge.status-draft {
-      background: #fff8db;
-      color: #8a6500;
-    }
-    .badge.status-archived {
-      background: #f1f5f9;
-      color: #64748b;
-    }
-    .editor-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .editor-body {
-      padding: 16px;
-    }
-    .field-grid {
-      display: grid;
-      grid-template-columns: 110px 1fr;
-      gap: 10px 12px;
-      align-items: center;
-      margin-bottom: 14px;
-    }
-    .detail-title {
-      margin: 0 0 14px;
-      color: var(--ink);
-      font-size: 18px;
-      font-weight: 900;
-    }
-    #textClean {
-      width: 100%;
-      min-height: 360px;
-      resize: vertical;
-      line-height: 1.55;
-      font-size: 15px;
-    }
-    pre {
-      max-height: 300px;
-      overflow: auto;
-      margin: 14px 0 0;
-      background: #07152a;
-      color: #e7eef8;
-      padding: 14px;
-      border-radius: 8px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 12px;
-    }
-    .ops-dashboard {
-      display: grid;
-      gap: 12px;
-      margin: 14px 0;
-    }
-    .quality-dashboard {
-      display: grid;
-      gap: 12px;
-      margin: 14px 0;
-    }
-    .ops-kpis {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .ops-section {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      overflow: hidden;
-    }
-    .ops-section h3 {
-      margin: 0;
-      padding: 11px 12px;
-      border-bottom: 1px solid var(--line);
-      background: #f7fafc;
-      color: var(--ink);
-      font-size: 13px;
-      font-weight: 900;
-    }
-    .ops-list {
-      display: grid;
-      gap: 0;
-    }
-    .ops-item {
-      display: grid;
-      gap: 4px;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--line);
-    }
+    .editor-panel.report-mode .editor-statusbar { justify-content: flex-end; }
+    .editor-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .editor-actions button { white-space: nowrap; }
+    .editor-body { min-height: 0; padding: 0; display: flex; flex-direction: column; }
+    .editor-statusbar { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+    .toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 650; user-select: none; }
+    .toggle input { width: 15px; height: 15px; min-height: 15px; accent-color: var(--cyan); }
+    .document-head { padding: 13px 14px 10px; border-bottom: 1px solid var(--line); }
+    .document-path { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; color: var(--muted); font-family: var(--mono); font-size: 10px; }
+    .detail-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .detail-title { margin: 0; color: var(--text-strong); font-family: var(--mono); font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dirty-indicator { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); font-size: 11px; font-weight: 750; white-space: nowrap; }
+    .dirty-indicator::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-strong); }
+    .field-grid { display: grid; grid-template-columns: minmax(190px, 1fr) repeat(3, minmax(110px, 0.6fr)); gap: 8px; align-items: stretch; margin-top: 11px; }
+    .meta-field { min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
+    .meta-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+    .meta-value { display: block; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+    .meta-field select { width: 100%; min-height: 27px; padding: 0; border: 0; background: transparent; outline: 0; }
+    .editor-surface { position: relative; min-height: 360px; flex: 1; padding: 12px; background: #fff; }
+    .editor-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+    #textClean { width: 100%; height: calc(100vh - 334px); min-height: 320px; resize: vertical; border-color: transparent; border-radius: 4px; background: #fbfcfd; font-family: var(--font); font-size: 14px; line-height: 1.65; }
+    #textClean:hover { border-color: var(--line); }
+    #textClean:focus { background: #fff; border-color: var(--cyan); }
+    .raw-report { margin: 0 12px 12px; border: 1px solid var(--line); border-radius: 5px; background: #fff; }
+    .raw-report summary { padding: 9px 11px; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 700; }
+    pre { max-height: 300px; overflow: auto; margin: 0; border-top: 1px solid #232b37; background: #0c1119; color: #d5deea; padding: 13px; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 11px; }
+    .ops-dashboard, .quality-dashboard { display: grid; gap: 9px; padding: 12px; border-top: 1px solid var(--line); background: var(--surface-soft); }
+    .ops-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .ops-kpis .metric { border-bottom: 0; }
+    .ops-section { border: 1px solid var(--line); border-radius: 6px; background: #fff; overflow: hidden; }
+    .ops-section h3 { margin: 0; padding: 10px 11px; border-bottom: 1px solid var(--line); background: #f7f9fb; color: var(--text-strong); font-size: 12px; font-weight: 750; }
+    .ops-list { display: grid; }
+    .ops-item { display: grid; gap: 4px; padding: 9px 11px; border-bottom: 1px solid var(--line); }
     .ops-item:last-child { border-bottom: 0; }
-    .ops-line {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      color: var(--ink);
-      font-weight: 800;
-    }
-    .ops-meta {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .ops-preview {
-      color: var(--text);
-      font-size: 13px;
-      line-height: 1.4;
-    }
-    .quality-note {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      padding: 12px;
-      color: var(--text);
-      line-height: 1.45;
-    }
-    .quality-ok {
-      color: var(--ok);
-      font-weight: 900;
-    }
-    .quality-bad {
-      color: var(--danger);
-      font-weight: 900;
-    }
-    .toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--muted);
-      font-weight: 700;
-      user-select: none;
-    }
-    .toggle input {
-      width: 16px;
-      height: 16px;
-      min-height: 16px;
-    }
+    .ops-line { display: flex; justify-content: space-between; gap: 10px; color: var(--text-strong); font-weight: 700; }
+    .ops-meta { color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .ops-preview { color: var(--text); font-size: 12px; line-height: 1.45; }
+    .quality-note { border-left: 3px solid var(--cyan); background: #edf8fa; padding: 10px 12px; color: var(--text); line-height: 1.45; }
+    .quality-ok { color: var(--ok); font-weight: 800; }
+    .quality-bad { color: var(--danger); font-weight: 800; }
+    .toast-region { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+    .toast { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid #2c3542; border-radius: 6px; background: #111720; color: #e7edf5; box-shadow: 0 14px 32px rgba(0,0,0,.28); font-size: 12px; line-height: 1.45; animation: toast-in 180ms ease-out; }
+    .toast.ok { border-left: 3px solid #38c793; }
+    .toast.error { border-left: 3px solid #ef6b62; }
+    .toast.warn { border-left: 3px solid var(--accent); }
+    @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
     .hidden { display: none !important; }
-    @media (max-width: 1180px) {
-      .topbar {
-        grid-template-columns: 1fr;
-        align-items: start;
-      }
-      .top-actions {
-        justify-content: start;
-        max-width: none;
-      }
-      .layout { grid-template-columns: 1fr; }
-      .table-wrap { max-height: none; }
-      .search-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    @media (max-width: 1240px) {
+      .workspace { grid-template-columns: 72px minmax(0, 1fr); }
+      .nav-label, .nav-item span, .nav-hint { display: none; }
+      .nav-item { justify-content: center; padding: 9px; }
+      .nav-item.active::after { position: absolute; right: 5px; }
+      .layout { grid-template-columns: minmax(350px, 0.78fr) minmax(500px, 1.22fr); }
+      .editor-actions button { font-size: 12px; }
     }
-    @media (max-width: 760px) {
-      .topbar { padding: 14px; }
-      .top-actions {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        width: 100%;
-      }
-      .top-actions .status-pill {
-        grid-column: 1 / -1;
-        justify-content: center;
-      }
-      .top-actions button { width: 100%; }
-      .brand {
-        align-items: center;
-        gap: 12px;
-      }
-      .logo-mark {
-        width: 190px;
-        height: 54px;
-      }
-      .logo-mark img {
-        max-width: 160px;
-        max-height: 36px;
-      }
-      .layout { padding: 10px; }
-      .search-grid, .metrics, .field-grid, .ops-kpis { grid-template-columns: 1fr; }
+    @media (max-width: 980px) {
+      .topbar { position: relative; }
+      .workspace { min-height: auto; grid-template-columns: 1fr; }
+      .nav-rail { position: sticky; top: 0; z-index: 15; height: auto; display: flex; flex-direction: row; align-items: center; padding: 7px 9px; border-right: 0; border-bottom: 1px solid #202631; overflow-x: auto; }
+      .nav-group { display: flex; gap: 4px; }
+      .nav-spacer, .nav-label, .nav-hint { display: none; }
+      .nav-foot { margin-left: auto; padding: 0 0 0 8px; border: 0; }
+      .nav-item { width: auto; min-width: 38px; }
+      .nav-item span { display: inline; }
+      .nav-item.active::after { display: none; }
+      .content { padding: 9px; }
+      .layout { grid-template-columns: 1fr; min-height: 0; }
+      .table-wrap { height: 430px; min-height: 320px; }
+      #textClean { height: 430px; }
     }
-    @media (max-width: 640px) {
-      .table-wrap {
-        overflow: visible;
-        min-height: 0;
-      }
-      table, thead, tbody, tr, th, td {
-        display: block;
-        width: 100%;
-      }
+    @media (max-width: 700px) {
+      .topbar { min-height: 54px; padding: 8px 10px; }
+      .logo-mark { width: 112px; height: 34px; }
+      .brand-copy { display: none; }
+      .product-chip { display: none; }
+      .workspace { min-height: calc(100vh - 54px); }
+      .nav-rail { top: 0; }
+      .nav-item span { display: none; }
+      .panel-head { align-items: flex-start; flex-direction: column; }
+      .panel-head .editor-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
+      .panel-head .editor-actions button { width: 100%; }
+      .panel-head .editor-actions button:first-child { grid-column: 1 / -1; }
+      .search-grid { grid-template-columns: 1fr 1fr; }
+      .search-grid > * { grid-column: auto !important; }
+      .search-grid > :first-child { grid-column: 1 / -1 !important; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .table-wrap { height: 420px; overflow: auto; }
+      table { min-width: 660px; }
+      .editor-statusbar { align-items: flex-start; flex-direction: column; }
+      .field-grid { grid-template-columns: 1fr 1fr; }
+      .field-grid .meta-field:first-child { grid-column: 1 / -1; }
+      .ops-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #textClean { min-height: 360px; height: 55vh; }
+    }
+    @media (max-width: 520px) {
+      .table-wrap { height: 520px; overflow-y: auto; overflow-x: hidden; }
+      table, tbody, tr, td { display: block; width: 100%; min-width: 0; }
       thead { display: none; }
-      tbody {
-        display: grid;
-        gap: 10px;
-        padding: 12px;
-      }
+      tbody { display: grid; }
       tbody tr {
-        border: 1px solid var(--line);
-        border-radius: 9px;
+        padding: 9px 11px;
+        border-bottom: 1px solid var(--line);
         background: #fff;
-        overflow: hidden;
       }
+      tbody tr.selected {
+        background: #e9f6f8;
+        box-shadow: inset 3px 0 0 var(--cyan);
+      }
+      tbody tr.selected td { background: transparent; }
+      tr.selected td:first-child { box-shadow: none; }
       td {
-        border-bottom: 0;
-        padding: 8px 12px;
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr);
+        gap: 7px;
+        padding: 3px 0;
+        border: 0;
       }
       td::before {
         content: attr(data-label);
-        display: block;
-        margin-bottom: 3px;
         color: var(--muted);
-        font-size: 11px;
-        font-weight: 900;
+        font-size: 9px;
+        font-weight: 800;
         text-transform: uppercase;
       }
+      td[data-label="текст"] {
+        max-height: 4.5em;
+        overflow: hidden;
+      }
+      td.empty-row { display: block; padding: 30px 12px; }
+      td.empty-row::before { display: none; }
     }
-    @media (max-width: 520px) {
-      .brand {
-        align-items: flex-start;
-        flex-direction: column;
-      }
-      .brand-copy h1 { font-size: 22px; }
-      .logo-mark {
-        width: 220px;
-        max-width: 100%;
-      }
-      .top-actions {
-        grid-template-columns: 1fr;
-      }
+    @media (max-width: 430px) {
+      .status-pill { padding-inline: 8px; }
+      .search-grid { grid-template-columns: 1fr; }
+      .search-grid > * { grid-column: 1 !important; }
+      .field-grid, .ops-kpis { grid-template-columns: 1fr; }
+      .field-grid .meta-field:first-child { grid-column: 1; }
+      .ops-kpis .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .ops-kpis .metric:last-child { border-bottom: 0; }
     }
   </style>
 </head>
 <body>
+  <svg class="hidden" aria-hidden="true">
+    <symbol id="icon-database" viewBox="0 0 24 24">
+      <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+      <path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"></path>
+      <path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"></path>
+    </symbol>
+    <symbol id="icon-shield" viewBox="0 0 24 24">
+      <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"></path>
+      <path d="m9 12 2 2 4-4"></path>
+    </symbol>
+    <symbol id="icon-chart" viewBox="0 0 24 24">
+      <path d="M3 3v18h18"></path>
+      <path d="M7 16v-3"></path>
+      <path d="M12 16V8"></path>
+      <path d="M17 16V5"></path>
+    </symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24">
+      <path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"></path>
+      <path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"></path>
+    </symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24">
+      <path d="M10 17l5-5-5-5"></path>
+      <path d="M15 12H3"></path>
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+    </symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="8"></circle>
+      <path d="m21 21-4.3-4.3"></path>
+    </symbol>
+    <symbol id="icon-save" viewBox="0 0 24 24">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+      <path d="M17 21v-8H7v8"></path>
+      <path d="M7 3v5h8"></path>
+    </symbol>
+    <symbol id="icon-flask" viewBox="0 0 24 24">
+      <path d="M9 3h6"></path>
+      <path d="M10 9V3h4v6l5 9a2 2 0 0 1-1.7 3H6.7A2 2 0 0 1 5 18z"></path>
+      <path d="M7 15h10"></path>
+    </symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+      <path d="M14 2v6h6"></path>
+    </symbol>
+  </svg>
   <header class="topbar">
     <div class="brand">
       <div class="logo-mark">
         <img src="__LOGO_DATA_URI__" alt="Импульс кода">
       </div>
       <div class="brand-copy">
-        <h1>Админка знаний</h1>
-        <span class="subtitle">RAG-корпус Росмолодёжи · правка чанков · обновление индекса</span>
+        <h1>Knowledge Studio</h1>
+        <span class="subtitle">База знаний Росмолодёжи · редактор RAG</span>
       </div>
     </div>
     <div class="top-actions">
+      <span class="product-chip">production workspace</span>
       <span class="status-pill">
         <span class="status-dot"></span>
         <span id="authState">проверка доступа</span>
       </span>
-      <button id="validateButton" class="secondary" type="button">Проверка базы</button>
-      <button id="qualityButton" class="secondary" type="button">Отчёт качества</button>
-      <button id="opsButton" class="secondary" type="button">Работа бота</button>
-      <button id="yonoteButton" class="secondary" type="button">Yonote</button>
-      <button id="logoutButton" class="danger" type="button">Выйти</button>
     </div>
   </header>
 
   <section id="authPanel" class="auth hidden">
     <div class="auth-head">
-      <h2>Вход в админку</h2>
+      <h2>Вход в Knowledge Studio</h2>
       <p>
-        Токен вводится один раз. Сервер сохранит безопасную HttpOnly-cookie,
-        сам токен не попадёт в HTML и не будет храниться в JavaScript.
+        Введи токен администратора. Сервер сохранит сессию в защищённой
+        HttpOnly-cookie, сам токен не хранится в браузерном JavaScript.
       </p>
     </div>
     <div class="auth-body">
       <input id="tokenInput" type="password" autocomplete="off" placeholder="ADMIN_AUTH_TOKEN">
-      <button id="loginButton" class="primary" type="button">Войти</button>
+      <button id="loginButton" class="primary" type="button">Открыть рабочее пространство</button>
       <div id="authStatus" class="status"></div>
     </div>
   </section>
 
-  <main id="appShell" class="layout hidden">
-    <section class="panel">
-      <div class="panel-head">
-        <h2 class="panel-title">База знаний</h2>
-        <div id="listStatus" class="status"></div>
+  <main id="appShell" class="workspace hidden">
+    <aside class="nav-rail" aria-label="Разделы админки">
+      <div class="nav-label">Рабочее пространство</div>
+      <div class="nav-group">
+        <button id="knowledgeButton" class="nav-item active" type="button" title="База знаний">
+          <svg class="icon"><use href="#icon-database"></use></svg>
+          <span>База знаний</span>
+        </button>
+        <button id="validateButton" class="nav-item" type="button" title="Проверка базы">
+          <svg class="icon"><use href="#icon-shield"></use></svg>
+          <span>Проверка базы</span>
+        </button>
+        <button id="qualityButton" class="nav-item" type="button" title="Отчёт качества">
+          <svg class="icon"><use href="#icon-flask"></use></svg>
+          <span>Отчёт качества</span>
+        </button>
+        <button id="opsButton" class="nav-item" type="button" title="Работа бота">
+          <svg class="icon"><use href="#icon-chart"></use></svg>
+          <span>Работа бота</span>
+        </button>
+        <button id="yonoteButton" class="nav-item" type="button" title="Синхронизация Yonote">
+          <svg class="icon"><use href="#icon-refresh"></use></svg>
+          <span>Синхронизация Yonote</span>
+        </button>
       </div>
-      <div class="search-grid">
-        <input id="searchInput" type="search" placeholder="Поиск: Амур, проезд, сертификат">
-        <select id="statusFilter">
-          <option value="">Все статусы</option>
-          <option value="published">Опубликованные</option>
-          <option value="draft">Черновики</option>
-          <option value="archived">Архивные</option>
-        </select>
-        <input id="forumFilter" type="text" placeholder="Форум">
-        <input id="categoryFilter" type="text" placeholder="Категория">
-        <button id="loadButton" type="button">Найти</button>
+      <div class="nav-spacer"></div>
+      <div class="nav-foot">
+        <div class="nav-hint">Ctrl + S — сохранить<br>/ — поиск по базе</div>
+        <button id="logoutButton" class="nav-item danger" type="button" title="Выйти">
+          <svg class="icon"><use href="#icon-logout"></use></svg>
+          <span>Выйти</span>
+        </button>
       </div>
-      <div class="metrics">
-        <div class="metric">
-          <span id="metricFound" class="metric-value">-</span>
-          <span class="metric-label">найдено по фильтру</span>
-        </div>
-        <div class="metric">
-          <span id="metricValid" class="metric-value">-</span>
-          <span class="metric-label">валидных чанков</span>
-        </div>
-        <div class="metric">
-          <span id="metricEval" class="metric-value">-</span>
-          <span class="metric-label">отчёт качества</span>
-        </div>
-        <div class="metric">
-          <span id="metricOps" class="metric-value">-</span>
-          <span class="metric-label">запросов за 7 дней</span>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 26%;">ID чанка</th>
-              <th style="width: 16%;">статус</th>
-              <th style="width: 18%;">форум</th>
-              <th>текст</th>
-            </tr>
-          </thead>
-          <tbody id="chunksTable"></tbody>
-        </table>
-      </div>
-    </section>
+    </aside>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2 class="panel-title">Редактор чанка</h2>
-        <div class="editor-actions">
-          <button id="saveChunkButton" class="primary" type="button" disabled>
-            Сохранить и обновить RAG
-          </button>
-          <button id="reindexButton" class="secondary" type="button" disabled>
-            Только обновить индекс
-          </button>
-          <button id="relatedCasesButton" class="secondary" type="button" disabled>
-            Тест-кейсы
-          </button>
-        </div>
+    <div class="content">
+      <div class="layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <span class="panel-eyebrow">Knowledge base</span>
+              <h2 class="panel-title">Документы и чанки</h2>
+            </div>
+            <div id="listStatus" class="status list-status"></div>
+          </div>
+          <div class="search-grid">
+            <input id="searchInput" type="search" placeholder="Поиск по тексту или ID">
+            <select id="statusFilter">
+              <option value="">Все статусы</option>
+              <option value="published">Опубликованные</option>
+              <option value="draft">Черновики</option>
+              <option value="archived">Архивные</option>
+            </select>
+            <input id="forumFilter" type="text" placeholder="Форум">
+            <input id="categoryFilter" class="category-field" type="text" placeholder="Категория">
+            <button id="loadButton" class="search-button" type="button">
+              <svg class="icon"><use href="#icon-search"></use></svg>Найти
+            </button>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span id="metricFound" class="metric-value">-</span>
+              <span class="metric-label">по текущему фильтру</span>
+            </div>
+            <div class="metric">
+              <span id="metricValid" class="metric-value">-</span>
+              <span class="metric-label">валидных чанков</span>
+            </div>
+            <div class="metric">
+              <span id="metricEval" class="metric-value">-</span>
+              <span class="metric-label">quality report</span>
+            </div>
+            <div class="metric">
+              <span id="metricOps" class="metric-value">-</span>
+              <span class="metric-label">запросов за 7 дней</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 27%;">ID чанка</th>
+                  <th style="width: 15%;">Статус</th>
+                  <th style="width: 18%;">Форум</th>
+                  <th>Текст</th>
+                </tr>
+              </thead>
+              <tbody id="chunksTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="editorPanel" class="panel editor-panel">
+          <div class="panel-head">
+            <div>
+              <span class="panel-eyebrow">RAG document</span>
+              <h2 id="editorPanelTitle" class="panel-title">Редактор источника</h2>
+            </div>
+            <div class="editor-actions">
+              <button id="saveChunkButton" class="primary" type="button" disabled>
+                <svg class="icon"><use href="#icon-save"></use></svg>Сохранить и обновить RAG
+              </button>
+              <button id="reindexButton" class="secondary" type="button" disabled>
+                <svg class="icon"><use href="#icon-refresh"></use></svg>Обновить индекс
+              </button>
+              <button id="relatedCasesButton" class="secondary" type="button" disabled>
+                <svg class="icon"><use href="#icon-flask"></use></svg>Тест-кейсы
+              </button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <div class="editor-statusbar">
+              <label class="toggle">
+                <input id="reindexToggle" type="checkbox" checked>
+                Обновить Qdrant и сбросить semantic cache после сохранения
+              </label>
+              <span id="detailStatus" class="status"></span>
+            </div>
+            <div class="document-head">
+              <div class="document-path">
+                <svg class="icon"><use href="#icon-file"></use></svg>
+                knowledge_base / chunks / selected
+              </div>
+              <div class="detail-title-row">
+                <h2 id="detailTitle" class="detail-title muted">Выбери чанк в списке</h2>
+                <span id="dirtyIndicator" class="dirty-indicator hidden">не сохранено</span>
+              </div>
+              <div class="field-grid">
+                <div class="meta-field">
+                  <label class="meta-label" for="chunkStatus">Статус</label>
+                  <select id="chunkStatus" disabled>
+                    <option value="published">Опубликован</option>
+                    <option value="draft">Черновик</option>
+                    <option value="archived">Архив</option>
+                  </select>
+                </div>
+                <div class="meta-field">
+                  <span class="meta-label">Форум</span>
+                  <span id="chunkForum" class="meta-value mono">—</span>
+                </div>
+                <div class="meta-field">
+                  <span class="meta-label">Тема</span>
+                  <span id="chunkTopic" class="meta-value mono">—</span>
+                </div>
+                <div class="meta-field">
+                  <span class="meta-label">Источник</span>
+                  <span id="chunkSource" class="meta-value mono">—</span>
+                </div>
+              </div>
+            </div>
+            <div class="editor-surface">
+              <div class="editor-label">
+                <span>Текст ответа</span>
+                <span id="charCount">0 символов</span>
+              </div>
+              <textarea
+                id="textClean"
+                disabled
+                spellcheck="true"
+                placeholder="Выбери чанк слева, чтобы открыть текст ответа."
+              ></textarea>
+            </div>
+            <div id="qualityDashboard" class="quality-dashboard hidden"></div>
+            <div id="opsDashboard" class="ops-dashboard hidden"></div>
+            <div id="yonoteDashboard" class="quality-dashboard hidden"></div>
+            <details id="rawReportDetails" class="raw-report">
+              <summary>Технические данные ответа API</summary>
+              <pre id="reportOutput"></pre>
+            </details>
+          </div>
+        </section>
       </div>
-      <div class="editor-body">
-        <div class="editor-actions" style="margin-bottom: 12px;">
-          <label class="toggle">
-            <input id="reindexToggle" type="checkbox" checked>
-            сразу обновлять Qdrant и сбрасывать семантический кэш
-          </label>
-          <span id="detailStatus" class="status"></span>
-        </div>
-        <h2 id="detailTitle" class="detail-title muted">Чанк не выбран</h2>
-        <div class="field-grid">
-          <label for="chunkStatus">Статус</label>
-          <select id="chunkStatus" disabled>
-            <option value="published">Опубликован</option>
-            <option value="draft">Черновик</option>
-            <option value="archived">Архив</option>
-          </select>
-          <div class="muted">Форум</div>
-          <div id="chunkForum" class="mono"></div>
-          <div class="muted">Тема</div>
-          <div id="chunkTopic" class="mono"></div>
-          <div class="muted">Источник</div>
-          <div id="chunkSource" class="mono"></div>
-        </div>
-        <textarea
-          id="textClean"
-          disabled
-          placeholder="Выбери чанк слева, чтобы редактировать текст ответа."
-        ></textarea>
-        <div id="qualityDashboard" class="quality-dashboard hidden"></div>
-        <div id="opsDashboard" class="ops-dashboard hidden"></div>
-        <div id="yonoteDashboard" class="quality-dashboard hidden"></div>
-        <pre id="reportOutput"></pre>
-      </div>
-    </section>
+    </div>
   </main>
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
 
   <script>
     let selectedChunkId = "";
+    let editorOriginalText = "";
+    let editorOriginalStatus = "";
+    let editorDirty = false;
 
     function setStatus(id, message, cls = "") {
       const el = document.getElementById(id);
       el.className = "status " + cls;
       el.textContent = message;
+    }
+    function showToast(message, cls = "ok") {
+      const region = document.getElementById("toastRegion");
+      const toast = document.createElement("div");
+      toast.className = "toast " + cls;
+      toast.textContent = message;
+      region.appendChild(toast);
+      window.setTimeout(() => toast.remove(), 4200);
+    }
+    function setActiveNav(buttonId) {
+      document.querySelectorAll(".nav-item").forEach((button) => {
+        button.classList.toggle("active", button.id === buttonId);
+      });
+    }
+    function setWorkspaceMode(mode, title) {
+      const editorPanel = document.getElementById("editorPanel");
+      editorPanel.classList.toggle("report-mode", mode !== "knowledge");
+      document.getElementById("editorPanelTitle").textContent = title;
+    }
+    function updateEditorDirty() {
+      const text = document.getElementById("textClean").value;
+      const status = document.getElementById("chunkStatus").value;
+      editorDirty = Boolean(
+        selectedChunkId &&
+        (text !== editorOriginalText || status !== editorOriginalStatus)
+      );
+      document.getElementById("dirtyIndicator").classList.toggle("hidden", !editorDirty);
+      document.getElementById("charCount").textContent = text.length + " символов";
+    }
+    function showKnowledgeWorkspace() {
+      setActiveNav("knowledgeButton");
+      setWorkspaceMode("knowledge", "Редактор источника");
+      hideReportDashboards();
+      setStatus(
+        "detailStatus",
+        selectedChunkId ? (editorDirty ? "Есть несохранённые изменения" : "Готово") : "Выбери чанк в списке",
+        editorDirty ? "warn" : ""
+      );
     }
     function setMetric(id, value) {
       document.getElementById(id).textContent = String(value);
@@ -783,6 +791,7 @@ _HTML_TEMPLATE = """
     }
     function setEditorBusy(isBusy) {
       if (!selectedChunkId) return;
+      document.getElementById("editorPanel").classList.toggle("is-busy", isBusy);
       document.getElementById("saveChunkButton").disabled = isBusy;
       document.getElementById("reindexButton").disabled = isBusy;
       document.getElementById("relatedCasesButton").disabled = isBusy;
@@ -1007,6 +1016,37 @@ _HTML_TEMPLATE = """
       }
       return items;
     }
+    function renderValidationDashboard(data) {
+      const dashboard = document.getElementById("qualityDashboard");
+      const statuses = Object.entries(data.status_counts || {});
+      const categories = Object.entries(data.category_counts || {})
+        .sort((left, right) => Number(right[1]) - Number(left[1]))
+        .slice(0, 10);
+      const categoryRows = categories.map(([name, count]) => [
+        '<div class="ops-item">',
+        '<div class="ops-line"><span>' + escapeHtml(name) + '</span>',
+        '<span>' + escapeHtml(count) + '</span></div>',
+        "</div>",
+      ].join("")).join("");
+      dashboard.classList.remove("hidden");
+      dashboard.innerHTML = [
+        '<div class="ops-kpis">',
+        '<div class="metric"><span class="metric-value">' + escapeHtml(data.valid_records || 0) + '</span>',
+        '<span class="metric-label">валидных записей</span></div>',
+        '<div class="metric"><span class="metric-value">' + escapeHtml(statuses.length) + '</span>',
+        '<span class="metric-label">статусов</span></div>',
+        '<div class="metric"><span class="metric-value">' + escapeHtml(Object.keys(data.category_counts || {}).length) + '</span>',
+        '<span class="metric-label">категорий</span></div>',
+        '<div class="metric"><span class="metric-value quality-ok">OK</span>',
+        '<span class="metric-label">структура seed</span></div>',
+        "</div>",
+        '<div class="quality-note"><b>База прошла структурную проверку.</b> ',
+        "Все записи имеют обязательные поля и могут быть использованы для индексации.</div>",
+        '<div class="ops-section"><h3>Крупнейшие категории</h3><div class="ops-list">',
+        categoryRows || '<div class="ops-item"><span class="ops-meta">Нет данных</span></div>',
+        "</div></div>",
+      ].join("");
+    }
     function renderQualityDashboard(data) {
       const validation = data.validation || {};
       const report = data.latest_eval_report || {};
@@ -1154,9 +1194,28 @@ _HTML_TEMPLATE = """
         applyButton.addEventListener("click", applyYonoteSync);
       }
     }
+    function renderListLoading() {
+      const row = [
+        "<tr>",
+        '<td><div class="skeleton" style="width:82%"></div></td>',
+        '<td><div class="skeleton" style="width:70%"></div></td>',
+        '<td><div class="skeleton" style="width:74%"></div></td>',
+        '<td><div class="skeleton" style="width:94%"></div></td>',
+        "</tr>",
+      ].join("");
+      document.getElementById("chunksTable").innerHTML = row.repeat(7);
+    }
     function renderRows(items) {
       const tbody = document.getElementById("chunksTable");
       tbody.innerHTML = "";
+      if (!items.length) {
+        tbody.innerHTML = [
+          '<tr><td colspan="4" class="empty-row">',
+          "Ничего не найдено. Измени фильтры или поисковый запрос.",
+          "</td></tr>",
+        ].join("");
+        return;
+      }
       for (const item of items) {
         const tr = document.createElement("tr");
         tr.dataset.chunkId = item.chunk_id;
@@ -1202,6 +1261,7 @@ _HTML_TEMPLATE = """
     async function loadChunks() {
       try {
         setStatus("listStatus", "Загрузка...");
+        renderListLoading();
         const params = queryString({
           q: document.getElementById("searchInput").value.trim(),
           status: document.getElementById("statusFilter").value,
@@ -1215,10 +1275,21 @@ _HTML_TEMPLATE = """
         setStatus("listStatus", `Найдено: ${data.total}`, "ok");
       } catch (error) {
         setStatus("listStatus", error.message, "error");
+        showToast(error.message, "error");
       }
     }
     async function loadChunk(chunkId, row) {
+      if (
+        editorDirty &&
+        selectedChunkId &&
+        selectedChunkId !== chunkId &&
+        !window.confirm("В текущем чанке есть несохранённые изменения. Перейти без сохранения?")
+      ) {
+        return;
+      }
       try {
+        setActiveNav("knowledgeButton");
+        setWorkspaceMode("knowledge", "Редактор источника");
         hideReportDashboards();
         selectedChunkId = chunkId;
         document.querySelectorAll("tr.selected").forEach((el) => el.classList.remove("selected"));
@@ -1235,6 +1306,9 @@ _HTML_TEMPLATE = """
         document.getElementById("chunkTopic").textContent = data.topic || data.intent_name || "";
         document.getElementById("chunkSource").textContent = data.source_type || "";
         document.getElementById("textClean").value = data.text_clean || data.text || "";
+        editorOriginalText = document.getElementById("textClean").value;
+        editorOriginalStatus = document.getElementById("chunkStatus").value;
+        updateEditorDirty();
         document.getElementById("textClean").disabled = false;
         document.getElementById("saveChunkButton").disabled = false;
         document.getElementById("reindexButton").disabled = false;
@@ -1243,6 +1317,7 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", "Готово", "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
+        showToast(error.message, "error");
       }
     }
     async function saveChunk() {
@@ -1279,12 +1354,17 @@ _HTML_TEMPLATE = """
               ". Нажми «Только обновить индекс», когда app-ml будет готов.",
             "warn"
           );
+          showToast("Текст сохранён, но индекс нужно обновить отдельно.", "warn");
         } else {
           const reindex = data.reindex && data.reindex.ok
             ? " Qdrant обновлён, кэш сброшен."
             : "";
           setStatus("detailStatus", "Сохранено." + reindex, "ok");
+          showToast("Чанк сохранён, знания бота обновлены.", "ok");
         }
+        editorOriginalText = document.getElementById("textClean").value;
+        editorOriginalStatus = document.getElementById("chunkStatus").value;
+        updateEditorDirty();
         await loadChunks();
       } catch (error) {
         setStatus(
@@ -1294,6 +1374,7 @@ _HTML_TEMPLATE = """
             " Открой этот чанк заново и проверь текст перед повторной правкой.",
           "error"
         );
+        showToast("Сохранение не подтверждено. Проверь состояние чанка.", "error");
       } finally {
         setEditorBusy(false);
       }
@@ -1310,8 +1391,10 @@ _HTML_TEMPLATE = """
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         setStatus("detailStatus", "Qdrant обновлён, семантический кэш сброшен", "ok");
+        showToast("Индекс чанка обновлён, кэш сброшен.", "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
+        showToast(error.message, "error");
       } finally {
         setEditorBusy(false);
       }
@@ -1326,6 +1409,7 @@ _HTML_TEMPLATE = """
           {method: "GET"}
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        document.getElementById("rawReportDetails").open = true;
         setStatus("detailStatus", `Тест-кейсов: ${data.total}`, "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
@@ -1333,9 +1417,12 @@ _HTML_TEMPLATE = """
     }
     async function showValidation() {
       try {
+        setActiveNav("validateButton");
+        setWorkspaceMode("validation", "Проверка базы");
         hideReportDashboards();
         const data = await requestJson("/admin/kb/validate", {method: "POST", body: "{}"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        renderValidationDashboard(data);
         setMetric("metricValid", data.valid_records);
         setStatus("detailStatus", `База валидна: ${data.valid_records}`, "ok");
       } catch (error) {
@@ -1344,6 +1431,8 @@ _HTML_TEMPLATE = """
     }
     async function showQualityCheck() {
       try {
+        setActiveNav("qualityButton");
+        setWorkspaceMode("quality", "Отчёт качества");
         hideOpsDashboard();
         hideYonoteDashboard();
         const data = await requestJson("/admin/kb/quality-check", {
@@ -1361,6 +1450,8 @@ _HTML_TEMPLATE = """
     }
     async function showOpsReport() {
       try {
+        setActiveNav("opsButton");
+        setWorkspaceMode("ops", "Работа бота");
         hideQualityDashboard();
         hideYonoteDashboard();
         const data = await requestJson("/admin/kb/ops-report?days=7", {method: "GET"});
@@ -1377,6 +1468,8 @@ _HTML_TEMPLATE = """
     }
     async function previewYonoteSync() {
       try {
+        setActiveNav("yonoteButton");
+        setWorkspaceMode("yonote", "Синхронизация Yonote");
         hideOpsDashboard();
         hideQualityDashboard();
         setStatus("detailStatus", "Читаю Yonote и считаю изменения. База бота пока не меняется...");
@@ -1424,14 +1517,41 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", error.message, "error");
       }
     }
+    async function loadOverviewMetrics() {
+      const results = await Promise.allSettled([
+        requestJson("/admin/kb/validate", {method: "POST", body: "{}"}),
+        requestJson("/admin/kb/quality-check", {
+          method: "POST",
+          body: JSON.stringify({include_latest_eval_report: true}),
+        }),
+        requestJson("/admin/kb/ops-report?days=7", {method: "GET"}),
+      ]);
+      const validation = results[0];
+      const quality = results[1];
+      const ops = results[2];
+      if (validation.status === "fulfilled") {
+        setMetric("metricValid", validation.value.valid_records || 0);
+      }
+      if (quality.status === "fulfilled") {
+        setMetric(
+          "metricEval",
+          quality.value.latest_eval_report_exists ? "есть" : "нет"
+        );
+      }
+      if (ops.status === "fulfilled") {
+        setMetric("metricOps", (ops.value.summary || {}).request_count || 0);
+      }
+    }
     async function boot() {
       setAuthenticated(true);
+      setActiveNav("knowledgeButton");
+      setWorkspaceMode("knowledge", "Редактор источника");
+      hideReportDashboards();
       await Promise.allSettled([
         loadChunks(),
-        showValidation(),
-        showQualityCheck(),
+        loadOverviewMetrics(),
       ]);
-      await showOpsReport();
+      setStatus("detailStatus", "Выбери чанк в списке");
     }
     async function checkSession() {
       try {
@@ -1446,8 +1566,14 @@ _HTML_TEMPLATE = """
     document.getElementById("tokenInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") login();
     });
+    document.getElementById("knowledgeButton").addEventListener("click", showKnowledgeWorkspace);
     document.getElementById("logoutButton").addEventListener("click", logout);
     document.getElementById("loadButton").addEventListener("click", loadChunks);
+    document.getElementById("searchInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadChunks();
+    });
+    document.getElementById("textClean").addEventListener("input", updateEditorDirty);
+    document.getElementById("chunkStatus").addEventListener("change", updateEditorDirty);
     document.getElementById("saveChunkButton").addEventListener("click", saveChunk);
     document.getElementById("reindexButton").addEventListener("click", reindexChunk);
     document.getElementById("relatedCasesButton").addEventListener("click", showRelatedCases);
@@ -1455,6 +1581,24 @@ _HTML_TEMPLATE = """
     document.getElementById("qualityButton").addEventListener("click", showQualityCheck);
     document.getElementById("opsButton").addEventListener("click", showOpsReport);
     document.getElementById("yonoteButton").addEventListener("click", previewYonoteSync);
+    document.addEventListener("keydown", (event) => {
+      const target = event.target;
+      const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (selectedChunkId && !document.getElementById("saveChunkButton").disabled) {
+          saveChunk();
+        }
+      } else if (event.key === "/" && !isTyping) {
+        event.preventDefault();
+        document.getElementById("searchInput").focus();
+      }
+    });
+    window.addEventListener("beforeunload", (event) => {
+      if (!editorDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
     checkSession();
   </script>
 </body>
