@@ -1,0 +1,134 @@
+[
+  {
+    "id": "dialog_ticket_event_clarification",
+    "tags": ["dialog", "ticket", "clarification", "real_pattern"],
+    "turns": [
+      {
+        "id": "dialog_ticket_event_clarification_t1",
+        "query": "Где мой билет?",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_ticket_event_clarification_t2",
+        "query": "День молодёжи",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      }
+    ]
+  },
+  {
+    "id": "dialog_five_followups_keep_event",
+    "tags": ["dialog", "memory", "five_followups", "day_youth"],
+    "turns": [
+      {
+        "id": "dialog_five_followups_keep_event_t1",
+        "query": "День молодёжи: где получить билет?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_followups_keep_event_t2",
+        "query": "А если билет не пришёл на почту?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_followups_keep_event_t3",
+        "query": "А мужу нужен отдельный билет?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_followups_keep_event_t4",
+        "query": "А ребёнку 12 лет?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_followups_keep_event_t5",
+        "query": "А где посмотреть программу?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_followups_keep_event_t6",
+        "query": "А когда проходит?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_followups_keep_event_t7",
+        "query": "Какой срок проверки грантового отчёта?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      }
+    ]
+  },
+  {
+    "id": "dialog_five_clarifications_then_resolution",
+    "tags": ["dialog", "memory", "five_clarifications", "no_guessing"],
+    "turns": [
+      {
+        "id": "dialog_five_clarifications_then_resolution_t1",
+        "query": "Кто оплачивает проезд?",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_clarifications_then_resolution_t2",
+        "query": "Не помню название",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_clarifications_then_resolution_t3",
+        "query": "Это мероприятие для молодёжи",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_clarifications_then_resolution_t4",
+        "query": "Оно будет в моём городе",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_clarifications_then_resolution_t5",
+        "query": "В июне",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_five_clarifications_then_resolution_t6",
+        "query": "День молодёжи",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      }
+    ]
+  },
+  {
+    "id": "dialog_nested_grant_followups",
+    "tags": ["dialog", "memory", "nested_followups", "grants"],
+    "turns": [
+      {
+        "id": "dialog_nested_grant_followups_t1",
+        "query": "Как отправить грантовый отчёт?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_nested_grant_followups_t2",
+        "query": "А куда именно отправлять?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_nested_grant_followups_t3",
+        "query": "А сколько его проверяют?",
+        "expected_behavior": "answer",
+        "expected_escalated": false
+      }
+    ]
+  }
+]

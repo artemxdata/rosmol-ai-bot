@@ -43,6 +43,7 @@ def test_compare_audits_builds_aggregate_report(tmp_path: Path) -> None:
     post_fix = tmp_path / "post.json"
     output = tmp_path / "comparison.json"
     scenario = tmp_path / "context.json"
+    dialog_scenario = tmp_path / "dialog.json"
     baseline.write_text(json.dumps(_audit(0.5)), encoding="utf-8")
     post_fix.write_text(json.dumps(_audit(0.7)), encoding="utf-8")
     scenario.write_text(
@@ -58,12 +59,28 @@ def test_compare_audits_builds_aggregate_report(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    dialog_scenario.write_text(
+        json.dumps(
+            {
+                "conversations_total": 3,
+                "conversations_executed": 3,
+                "conversation_pass_rate": 1.0,
+                "turns_total": 15,
+                "turn_pass_rate": 1.0,
+                "http_success_rate": 1.0,
+                "trace_coverage_rate": 1.0,
+                "llm_estimated_cost_rub": 1.25,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     report = compare_audits(
         baseline,
         post_fix,
         output,
         context_scenario_path=scenario,
+        dialog_scenario_paths=[dialog_scenario],
     )
 
     assert report["overall"]["delta"]["direct_conversion"] == pytest.approx(0.2)
@@ -73,7 +90,11 @@ def test_compare_audits_builds_aggregate_report(tmp_path: Path) -> None:
     assert output.exists()
     assert output.with_suffix(".md").exists()
     assert report["explicit_channel_context_scenario"]["direct_conversion"] == 0.95
+    assert report["multi_turn_scenarios"][0]["turns_total"] == 15
     assert "Сценарий с контекстом канала HDE" in output.with_suffix(".md").read_text(
+        encoding="utf-8"
+    )
+    assert "Многошаговые диалоги" in output.with_suffix(".md").read_text(
         encoding="utf-8"
     )
 

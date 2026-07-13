@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp-*/
 .ruff_cache/
 .mypy_cache/
 .pip-cache/
@@ -28,6 +29,8 @@ RAG_Dataset*
 
 # runtime artifacts
 logs/
+.docker-tmp/
+outputs/
 eval/metrics*.json
 reports/
 qdrant_storage/

@@ -46,6 +46,7 @@ async def run_pre_pilot_quality_suite(
     kb_seed_path: Path = Path("data/knowledge_base_seed.json"),
     target: str = "http://localhost:8001/ask",
     sections: tuple[str, ...] = DEFAULT_SECTIONS,
+    followup_cases_path: Path | None = None,
     rebuild_cases: bool = False,
     concurrency: int = 1,
     request_timeout: float = 180.0,
@@ -74,7 +75,7 @@ async def run_pre_pilot_quality_suite(
                 stopped_by_budget = True
                 break
             report = await run_followup_eval(
-                cases_path=cases_dir / FOLLOWUP_FILE,
+                cases_path=followup_cases_path or (cases_dir / FOLLOWUP_FILE),
                 output_path=output_dir / "followup_eval.json",
                 markdown_path=output_dir / "followup_eval.md",
                 target=target,
@@ -153,7 +154,7 @@ async def run_followup_eval(
     results: list[dict[str, Any]] = []
     budget_stopped = False
     run_namespace = uuid4().hex[:12]
-    async with httpx.AsyncClient(timeout=request_timeout) as client:
+    async with httpx.AsyncClient(timeout=request_timeout, trust_env=False) as client:
         for conversation_index, conversation in enumerate(conversations, start=1):
             user_id = f"pre-pilot-followup-{run_namespace}-{conversation_index}"
             turns = conversation.get("turns") or []
@@ -497,6 +498,7 @@ def main() -> None:
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--target", default="http://localhost:8001/ask")
     parser.add_argument("--sections", default=",".join(DEFAULT_SECTIONS))
+    parser.add_argument("--followup-cases", default="")
     parser.add_argument("--rebuild-cases", action="store_true")
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--request-timeout", type=float, default=180.0)
@@ -516,6 +518,7 @@ def main() -> None:
             sections=tuple(
                 section.strip() for section in args.sections.split(",") if section.strip()
             ),
+            followup_cases_path=(Path(args.followup_cases) if args.followup_cases else None),
             rebuild_cases=args.rebuild_cases,
             concurrency=args.concurrency,
             request_timeout=args.request_timeout,

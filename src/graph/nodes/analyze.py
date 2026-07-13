@@ -470,6 +470,8 @@ def _bot_interaction_response(message: str) -> str | None:
     }
     if normalized in greeting_phrases:
         return GREETING_RESPONSE
+    if normalized in {"пока", "до свидания", "до встречи"}:
+        return "До встречи! Если появится вопрос по Росмолодёжи, я помогу."
 
     bot_markers = (
         "почему не можешь помочь",
@@ -523,6 +525,18 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
     normalized = message.casefold().replace("ё", "е")
     normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not _has_session_context(session) and normalized in {
+        "старт",
+        "start",
+        "назад",
+        "регистрация",
+        "регистрациях",
+        "расписание",
+    }:
+        return (
+            "Уточни, пожалуйста, что именно тебя интересует и о каком форуме, "
+            "мероприятии, разделе ФГАИС или грантовом конкурсе речь."
+        )
     if _is_application_success(normalized):
         return APPLICATION_SUCCESS_RESPONSE
     if "это не форум а грант" in normalized:
@@ -589,8 +603,12 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
             "Уточни, пожалуйста, текстом: что изображено во вложении "
             "и с чем нужна помощь."
         )
-    if "анкет" in normalized and any(
+    if (
+        len(normalized.split()) <= 16
+        and "анкет" in normalized
+        and any(
         marker in normalized for marker in ("фигн", "проблем", "непонят")
+        )
     ):
         return (
             "Уточни, пожалуйста, о какой анкете речь и на каком шаге возникла проблема: "
@@ -608,8 +626,12 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
             "Уточни, пожалуйста, речь о повторной регистрации аккаунта ФГАИС или о "
             "подаче новой заявки на конкретное мероприятие?"
         )
-    if re.search(r"\b\d{2}\b", normalized) and any(
+    if (
+        not detect_forums_from_text(message)
+        and re.search(r"\b\d{2}\b", normalized)
+        and any(
         marker in normalized for marker in ("не поздно", "ваших программ", "участвовать")
+        )
     ):
         return (
             "Для разных программ действуют разные возрастные ограничения. Уточни, "
@@ -836,6 +858,9 @@ def _needs_application_context_clarification(message: str) -> bool:
             "что-то не так",
             "что то не так",
             "непонят",
+            "вопрос по поводу",
+            "вопрос по заяв",
+            "по поводу заяв",
         )
     )
     has_application_request = "заяв" in normalized and any(
@@ -894,6 +919,69 @@ def _needs_forum_context_clarification(message: str) -> bool:
         return False
     if any(marker in normalized for marker in ("грант", "фгаис", "росмолод")):
         return False
+    has_generic_event = any(
+        marker in normalized for marker in ("форум", "мероприят", "фестивал")
+    )
+    asks_event_details = any(
+        marker in normalized
+        for marker in (
+            "когда",
+            "где",
+            "дат",
+            "срок",
+            "программ",
+            "афиш",
+            "артист",
+            "исполнител",
+            "кто выступ",
+            "выступлен",
+        )
+    )
+    if has_generic_event and asks_event_details:
+        return True
+    has_unanchored_age_or_family_question = any(
+        marker in normalized
+        for marker in (
+            "до какого возраста",
+            "возрастные огранич",
+            "во сколько лет",
+            "можно с ребен",
+            "можно с ребён",
+            "взять ребен",
+            "взять ребён",
+            "прийти с ребен",
+            "прийти с ребён",
+            "регистрировать ребен",
+            "регистрировать ребён",
+            "регистрировать дет",
+            "регистрация для детей",
+            "билет для детей",
+            "билет ребенку",
+            "билет ребёнку",
+        )
+    )
+    if has_unanchored_age_or_family_question:
+        return True
+    has_unanchored_application_state = "заяв" in normalized and any(
+        marker in normalized
+        for marker in (
+            "одобр",
+            "подтверд",
+            "рассмотр",
+            "резерв",
+            "статус",
+            "прошел",
+            "прошёл",
+            "прошла",
+        )
+    )
+    if has_unanchored_application_state:
+        return True
+    if "обучен" in normalized and any(
+        marker in normalized
+        for marker in ("как зайти", "как попасть", "зарегистр", "не могу", "не получается")
+    ):
+        return True
     if _needs_participant_event_context_clarification(normalized):
         return True
     if any(
@@ -920,6 +1008,7 @@ def _needs_forum_context_clarification(message: str) -> bool:
         "питани",
         "прожив",
         "трансфер",
+        "проезд",
         "письмо-вызов",
         "письмо вызов",
         "сертификат",
@@ -927,6 +1016,11 @@ def _needs_forum_context_clarification(message: str) -> bool:
         "памятк",
         "положение",
         "программа форума",
+        "афиш",
+        "артист",
+        "исполнител",
+        "кто выступ",
+        "выступлен",
         "чат участников",
         "отменить участие",
         "отказаться от участия",

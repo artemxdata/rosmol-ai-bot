@@ -13,6 +13,9 @@ async def test_run_pre_pilot_quality_suite_writes_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    custom_followup_cases = tmp_path / "dialog_memory_regression.json"
+    captured_followup_path: Path | None = None
+
     async def fake_run_ask_eval(**kwargs):
         kwargs["output_path"].write_text("{}", encoding="utf-8")
         kwargs["markdown_path"].write_text("# ask\n", encoding="utf-8")
@@ -30,6 +33,8 @@ async def test_run_pre_pilot_quality_suite_writes_summary(
         }
 
     async def fake_followup_eval(**kwargs):
+        nonlocal captured_followup_path
+        captured_followup_path = kwargs["cases_path"]
         kwargs["output_path"].write_text("{}", encoding="utf-8")
         kwargs["markdown_path"].write_text("# followup\n", encoding="utf-8")
         return {
@@ -53,12 +58,14 @@ async def test_run_pre_pilot_quality_suite_writes_summary(
         cases_dir=tmp_path / "cases",
         kb_seed_path=Path("data/knowledge_base_seed.json"),
         sections=("forums", "pii", "followup"),
+        followup_cases_path=custom_followup_cases,
         max_llm_cost_rub=10.0,
     )
 
     assert summary["passed"] is True
     assert summary["completed_sections"] == ["forums", "pii", "followup"]
     assert summary["llm_estimated_cost_rub"] == 1.25
+    assert captured_followup_path == custom_followup_cases
     assert (tmp_path / "out" / "summary.md").exists()
     stored = json.loads((tmp_path / "out" / "summary.json").read_text(encoding="utf-8"))
     assert stored["sections"]["followup"]["turn_pass_rate"] == 1.0

@@ -9,9 +9,22 @@ import pytest
 
 from src.graph.graph import build_graph
 from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE
-from src.main import _with_explicit_forum_context, process_message
+from src.main import (
+    CLARIFICATION_EXHAUSTED_RESPONSE,
+    _update_dialog_session,
+    _with_explicit_forum_context,
+    _with_pending_clarification_context,
+    process_message,
+)
 from src.main import app as fastapi_app
-from src.models import Channel, Chunk, IncomingMessage, ScoredChunk, Session
+from src.models import (
+    Channel,
+    Chunk,
+    IncomingMessage,
+    QueryAnalysis,
+    ScoredChunk,
+    Session,
+)
 from src.session.memory import hash_user_id
 
 
@@ -61,7 +74,15 @@ class FakeSessions:
 
     async def append_turn(self, session: Session, user_text: str, bot_text: str) -> Session:
         self.appended.append((user_text, bot_text))
-        return session
+        messages = [*session.last_messages, {"user": user_text, "bot": bot_text}][-5:]
+        self.session = session.model_copy(
+            update={"last_messages": messages, "turn_count": session.turn_count + 1}
+        )
+        return self.session
+
+    async def update(self, session: Session, **kwargs: Any) -> Session:
+        self.session = session.model_copy(update=kwargs)
+        return self.session
 
 
 class FakeSemanticCache:
@@ -129,6 +150,28 @@ class FakeRetriever:
                     "source_type": "xlsx",
                 },
                 score=0.9,
+            )
+        ]
+
+
+class TicketRetriever:
+    async def retrieve(self, query: str, filters: dict[str, Any], top_k: int) -> list[Chunk]:
+        return [
+            Chunk(
+                chunk_id="ticket_missing",
+                text=(
+                    "Если билет на День молодёжи не пришёл, проверь папки «Спам» "
+                    "и «Рассылки». Билет также доступен в разделе «Мои билеты» "
+                    "чат-бота MAX."
+                ),
+                metadata={
+                    "chunk_id": "ticket_missing",
+                    "category": "форумы",
+                    "forum_normalized": "День молодёжи",
+                    "topic": "bilet_ne_prishel_povtornoe_poluchenie",
+                    "source_type": "xlsx",
+                },
+                score=0.95,
             )
         ]
 
@@ -341,7 +384,15 @@ async def test_process_message_operator_request_escalates_before_cache_and_graph
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],
 ) -> None:
-    app = _app(cached_response="Ответ из кэша")
+    session = Session(
+        user_id="u1",
+        channel=Channel.HDE,
+        user_id_hash="hash",
+        forum_context="Амур",
+        pending_clarification="Где мой билет?",
+        clarification_attempts=2,
+    )
+    app = _app(cached_response="Ответ из кэша", session=session)
     message = IncomingMessage(user_id="u1", channel=Channel.HDE, text="Позови оператора")
 
     response = await process_message(message, app)  # type: ignore[arg-type]
@@ -350,6 +401,8 @@ async def test_process_message_operator_request_escalates_before_cache_and_graph
     assert app.state.semantic_cache.check_calls == []
     assert app.state.semantic_cache.save_calls == []
     assert app.state.sessions.appended == [("Позови оператора", response)]
+    assert app.state.sessions.session.pending_clarification is None
+    assert app.state.sessions.session.clarification_attempts == 0
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "operator_requested"
 
@@ -795,3 +848,201 @@ def test_with_explicit_forum_context_does_not_override_message_forum() -> None:
 
     assert message == "Как подать заявку на Амур?"
     assert masked == message
+
+
+def test_pending_clarification_combines_original_question_with_forum_reply() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        pending_clarification="Где мой билет?",
+        clarification_attempts=1,
+    )
+
+    message, masked, applied = _with_pending_clarification_context(
+        "День молодёжи",
+        "День молодёжи",
+        session,
+    )
+
+    assert applied is True
+    assert message == "Где мой билет?\nУточнение пользователя: День молодёжи"
+    assert masked == message
+
+
+def test_pending_clarification_does_not_capture_long_unrelated_question() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        pending_clarification="Где мой билет?",
+        clarification_attempts=1,
+    )
+    new_question = (
+        "Расскажи подробно, как оформить грантовое соглашение и кто должен его подписать"
+    )
+
+    message, masked, applied = _with_pending_clarification_context(
+        new_question,
+        new_question,
+        session,
+    )
+
+    assert applied is False
+    assert message == new_question
+    assert masked == new_question
+
+
+def test_pending_clarification_does_not_capture_short_grant_topic_switch() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        pending_clarification="Где мой билет?",
+        clarification_attempts=1,
+    )
+    new_question = "Какой срок проверки грантового отчёта?"
+
+    message, masked, applied = _with_pending_clarification_context(
+        new_question,
+        new_question,
+        session,
+    )
+
+    assert applied is False
+    assert message == new_question
+    assert masked == new_question
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["Как дела?", "Спасибо", "Пока", "Привет"],
+)
+def test_pending_clarification_does_not_capture_interaction_reply(reply: str) -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        pending_clarification="Где мой билет?",
+        clarification_attempts=1,
+    )
+
+    message, masked, applied = _with_pending_clarification_context(
+        reply,
+        reply,
+        session,
+    )
+
+    assert applied is False
+    assert message == reply
+    assert masked == reply
+
+
+@pytest.mark.asyncio
+async def test_process_message_resolves_ticket_after_forum_clarification(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(
+        graph=build_graph(),
+        llm_client=FakeAnalyzerLLM(),
+        retriever=TicketRetriever(),
+        reranker=HighConfidenceReranker(),
+    )
+
+    first = await process_message(
+        IncomingMessage(user_id="dialog-user", channel=Channel.API, text="Где мой билет?"),
+        app,  # type: ignore[arg-type]
+    )
+    assert "о каком форуме или мероприятии" in first
+    assert app.state.sessions.session.pending_clarification == "Где мой билет?"
+    assert app.state.sessions.session.clarification_attempts == 1
+
+    second = await process_message(
+        IncomingMessage(
+            user_id="dialog-user",
+            channel=Channel.API,
+            text="День молодёжи",
+        ),
+        app,  # type: ignore[arg-type]
+    )
+
+    assert "папки «Спам»" in second
+    assert app.state.sessions.session.pending_clarification is None
+    assert app.state.sessions.session.clarification_attempts == 0
+    assert app.state.sessions.session.forum_context == "День молодёжи"
+    assert captured_logs[-1]["cited_sources"] == ["ticket_missing"]
+
+
+@pytest.mark.asyncio
+async def test_dialog_escalates_only_after_five_unresolved_clarifications() -> None:
+    app = _app()
+    session = Session(
+        user_id="dialog-user",
+        channel=Channel.API,
+        user_id_hash="hash",
+    )
+    analysis = QueryAnalysis(
+        category="форумы",
+        needs_clarification=True,
+        clarification_question="Уточни, пожалуйста, название мероприятия.",
+    )
+
+    for attempt in range(1, 6):
+        result: dict[str, Any] = {"analysis": analysis, "final_response": "Уточни."}
+        session, response = await _update_dialog_session(
+            app,  # type: ignore[arg-type]
+            session,
+            result,
+            pending_text=f"неполный контекст {attempt}",
+            response="Уточни.",
+        )
+        assert response == "Уточни."
+        assert result.get("should_escalate") is not True
+        assert session.clarification_attempts == attempt
+
+    exhausted_result: dict[str, Any] = {
+        "analysis": analysis,
+        "final_response": "Уточни.",
+    }
+    session, response = await _update_dialog_session(
+        app,  # type: ignore[arg-type]
+        session,
+        exhausted_result,
+        pending_text="контекст всё ещё не определён",
+        response="Уточни.",
+    )
+
+    assert response == CLARIFICATION_EXHAUSTED_RESPONSE
+    assert exhausted_result["should_escalate"] is True
+    assert exhausted_result["escalation_reason"] == "clarification_exhausted"
+    assert session.pending_clarification is None
+    assert session.clarification_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_dialog_topic_switch_clears_stale_forum_context() -> None:
+    app = _app()
+    session = Session(
+        user_id="dialog-user",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+    )
+    result: dict[str, Any] = {
+        "analysis": QueryAnalysis(category="гранты", topics=["proverka_otcheta"]),
+        "final_response": "Проверка отчёта занимает до 30 рабочих дней.",
+    }
+
+    session, response = await _update_dialog_session(
+        app,  # type: ignore[arg-type]
+        session,
+        result,
+        pending_text="Какой срок проверки грантового отчёта?",
+        response=result["final_response"],
+    )
+
+    assert response == result["final_response"]
+    assert session.forum_context is None
+    assert session.extracted_entities["last_category"] == "гранты"
+    assert session.extracted_entities["last_topics"] == ["proverka_otcheta"]

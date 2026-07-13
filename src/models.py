@@ -48,6 +48,7 @@ class Session(BaseModel):
     turn_count: int = 0
     extracted_entities: dict[str, Any] = Field(default_factory=dict)
     pending_clarification: str | None = None
+    clarification_attempts: int = Field(default=0, ge=0)
 
 
 class MemoryRecord(BaseModel):

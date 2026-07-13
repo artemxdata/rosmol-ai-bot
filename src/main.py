@@ -34,7 +34,7 @@ from src.channels.hde import HDEAdapter
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
 from src.config import get_settings
-from src.graph.context import is_context_dependent_followup
+from src.graph.context import NON_FORUM_CONTEXT_CATEGORIES, is_context_dependent_followup
 from src.graph.graph import build_graph
 from src.graph.nodes.analyze import is_safe_offtopic_message
 from src.kb.forum_registry import detect_forum_from_text
@@ -48,7 +48,7 @@ from src.llm.usage import (
 )
 from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
-from src.models import Channel, Chunk, IncomingMessage
+from src.models import Channel, Chunk, IncomingMessage, QueryAnalysis, Session
 from src.ops.reports import build_trace_report
 from src.rag.cache import SemanticCache
 from src.rag.embedder import Embedder
@@ -77,6 +77,11 @@ _ATTACHMENT_WORD_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _MEANINGFUL_WORD_RE = re.compile(r"[а-яa-z0-9]{3,}", flags=re.IGNORECASE)
+MAX_CLARIFICATION_ATTEMPTS = 5
+CLARIFICATION_EXHAUSTED_RESPONSE = (
+    "Мне не удалось уточнить достаточно данных за несколько шагов. "
+    "Передаю обращение специалисту, чтобы не задерживать решение."
+)
 
 
 @asynccontextmanager
@@ -809,6 +814,7 @@ async def process_message(
 
     if is_operator_request(masked_text):
         response = "Передаю обращение специалисту."
+        session = await _clear_pending_clarification(fastapi_app, session)
         await fastapi_app.state.sessions.append_turn(session, masked_text, response)
         await _safe_log(
             fastapi_app,
@@ -831,9 +837,16 @@ async def process_message(
             session,
             forum_context=explicit_forum_context,
         )
+    graph_message, graph_masked_text, pending_context_applied = (
+        _with_pending_clarification_context(
+            message.text,
+            masked_text,
+            session,
+        )
+    )
     graph_message, graph_masked_text = _with_explicit_forum_context(
-        message.text,
-        masked_text,
+        graph_message,
+        graph_masked_text,
         explicit_forum_context,
     )
     routing_hint = estimate_routing_hint(graph_masked_text)
@@ -843,6 +856,7 @@ async def process_message(
         session,
     ) and not is_safe_offtopic_message(graph_message)
     cache_allowed = cache_allowed and not is_registration_query(graph_masked_text)
+    cache_allowed = cache_allowed and not pending_context_applied
 
     tracer = Tracer()
     state = {
@@ -877,6 +891,11 @@ async def process_message(
                 "final_response": cached_response,
                 "total_latency_ms": int((perf_counter() - started_at) * 1000),
             }
+        )
+        session = await _clear_pending_clarification(
+            fastapi_app,
+            session,
+            detected_forum=detected_forum,
         )
         await fastapi_app.state.sessions.append_turn(session, masked_text, cached_response)
         await _safe_log(fastapi_app, state)
@@ -913,6 +932,14 @@ async def process_message(
         reset_llm_usage_collection(llm_usage_token)
     result.update(summarize_llm_usage(llm_usage_events))
     response = result.get("final_response") or "Передаю обращение специалисту."
+    session, response = await _update_dialog_session(
+        fastapi_app,
+        session,
+        result,
+        pending_text=graph_masked_text,
+        response=response,
+    )
+    result["final_response"] = response
     await fastapi_app.state.sessions.append_turn(session, masked_text, response)
     result["total_latency_ms"] = int((perf_counter() - started_at) * 1000)
     await _update_memory(fastapi_app, user_id_hash, message.channel.value, result)
@@ -930,6 +957,172 @@ def _with_explicit_forum_context(
     if not forum_context or detect_forum_from_text(message):
         return message, masked_text
     return f"{forum_context}: {message}", f"{forum_context}: {masked_text}"
+
+
+def _with_pending_clarification_context(
+    message: str,
+    masked_text: str,
+    session: Session,
+) -> tuple[str, str, bool]:
+    pending = str(session.pending_clarification or "").strip()
+    if not pending or not _looks_like_clarification_reply(message):
+        return message, masked_text, False
+    return (
+        f"{pending}\nУточнение пользователя: {message}",
+        f"{pending}\nУточнение пользователя: {masked_text}",
+        True,
+    )
+
+
+def _looks_like_clarification_reply(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+    if detect_forum_from_text(text):
+        return True
+    words = re.findall(r"[а-яёa-z0-9-]+", text.casefold(), flags=re.IGNORECASE)
+    normalized = " ".join(words)
+    if normalized in {
+        "привет",
+        "здравствуйте",
+        "добрый день",
+        "добрый вечер",
+        "как дела",
+        "спасибо",
+        "благодарю",
+        "пока",
+        "до свидания",
+        "до встречи",
+    }:
+        return False
+    if normalized.startswith(
+        (
+            "это ",
+            "речь о ",
+            "речь про ",
+            "про форум ",
+            "про мероприятие ",
+            "про грант ",
+            "в фгаис ",
+        )
+    ):
+        return True
+    if _looks_like_explicit_domain_switch(normalized):
+        return False
+    return len(words) <= 6
+
+
+def _looks_like_explicit_domain_switch(normalized: str) -> bool:
+    if not any(
+        marker in normalized
+        for marker in (
+            "грант",
+            "грантов",
+            "грантового отч",
+            "грантового соглаш",
+            "фгаис",
+            "госуслуг",
+            "личный кабинет",
+            "профил",
+        )
+    ):
+        return False
+    return any(
+        marker in normalized
+        for marker in ("как ", "какой ", "какие ", "где ", "почему ", "что делать")
+    )
+
+
+async def _update_dialog_session(
+    fastapi_app: FastAPI,
+    session: Session,
+    result: dict[str, Any],
+    *,
+    pending_text: str,
+    response: str,
+) -> tuple[Session, str]:
+    analysis = result.get("analysis")
+    if not isinstance(analysis, QueryAnalysis):
+        if result.get("should_escalate"):
+            return await _clear_pending_clarification(fastapi_app, session), response
+        return session, response
+
+    forum = analysis.forum_normalized
+    if forum is None and analysis.category not in NON_FORUM_CONTEXT_CATEGORIES:
+        forum = session.forum_context
+    topics = [str(topic) for topic in analysis.topics if topic]
+    entities = dict(session.extracted_entities)
+    if analysis.category:
+        entities["last_category"] = analysis.category
+    if topics:
+        entities["last_topics"] = topics
+
+    if _is_actionable_clarification(analysis) and not result.get("should_escalate"):
+        attempts = session.clarification_attempts + 1
+        if attempts > MAX_CLARIFICATION_ATTEMPTS:
+            result["should_escalate"] = True
+            result["escalation_reason"] = "clarification_exhausted"
+            return (
+                await fastapi_app.state.sessions.update(
+                    session,
+                    forum_context=forum,
+                    extracted_entities=entities,
+                    pending_clarification=None,
+                    clarification_attempts=0,
+                ),
+                CLARIFICATION_EXHAUSTED_RESPONSE,
+            )
+        updated = await fastapi_app.state.sessions.update(
+            session,
+            forum_context=forum,
+            extracted_entities=entities,
+            pending_clarification=_limit_pending_context(pending_text),
+            clarification_attempts=attempts,
+        )
+        return updated, response
+
+    updated = await fastapi_app.state.sessions.update(
+        session,
+        forum_context=forum,
+        extracted_entities=entities,
+        pending_clarification=None,
+        clarification_attempts=0,
+    )
+    return updated, response
+
+
+def _is_actionable_clarification(analysis: QueryAnalysis) -> bool:
+    if analysis.is_offtopic or not analysis.needs_clarification:
+        return False
+    prompt = str(analysis.clarification_question or "").casefold()
+    return "уточни" in prompt or "что именно хочешь оценить" in prompt
+
+
+def _limit_pending_context(text: str, limit: int = 4000) -> str:
+    normalized = str(text or "").strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[-limit:]
+
+
+async def _clear_pending_clarification(
+    fastapi_app: FastAPI,
+    session: Session,
+    *,
+    detected_forum: str | None = None,
+) -> Session:
+    if (
+        not session.pending_clarification
+        and session.clarification_attempts == 0
+        and (not detected_forum or session.forum_context == detected_forum)
+    ):
+        return session
+    return await fastapi_app.state.sessions.update(
+        session,
+        forum_context=detected_forum or session.forum_context,
+        pending_clarification=None,
+        clarification_attempts=0,
+    )
 
 
 def _is_attachment_only_message(message: IncomingMessage) -> bool:

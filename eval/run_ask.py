@@ -194,7 +194,11 @@ async def run_eval(
         headers["X-Bypass-Cache"] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
     budget_stopped = False
-    async with httpx.AsyncClient(transport=transport, timeout=request_timeout) as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        timeout=request_timeout,
+        trust_env=False,
+    ) as client:
         if max_llm_cost_rub is None:
             tasks = [
                 _run_case(

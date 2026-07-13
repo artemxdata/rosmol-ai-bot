@@ -14,6 +14,7 @@ def compare_audits(
     post_fix_path: Path,
     output_path: Path = DEFAULT_OUTPUT,
     context_scenario_path: Path | None = None,
+    dialog_scenario_paths: list[Path] | None = None,
 ) -> dict[str, Any]:
     baseline = _read_json_object(baseline_path)
     post_fix = _read_json_object(post_fix_path)
@@ -63,6 +64,10 @@ def compare_audits(
         report["explicit_channel_context_scenario"] = _scenario_summary(
             context_scenario_path
         )
+    if dialog_scenario_paths:
+        report["multi_turn_scenarios"] = [
+            _dialog_scenario_summary(path) for path in dialog_scenario_paths
+        ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
@@ -93,6 +98,24 @@ def _scenario_summary(path: Path) -> dict[str, Any]:
         "http_success_rate": float(source.get("http_success_rate") or 0.0),
         "trace_coverage_rate": float(source.get("trace_coverage_rate") or 0.0),
         "latency_ms": dict(source.get("latency_ms") or {}),
+        "llm_estimated_cost_rub": float(
+            source.get("llm_estimated_cost_rub") or 0.0
+        ),
+    }
+
+
+def _dialog_scenario_summary(path: Path) -> dict[str, Any]:
+    source = _read_json_object(path)
+    return {
+        "label": path.stem,
+        "path": str(path),
+        "conversations_total": int(source.get("conversations_total") or 0),
+        "conversations_executed": int(source.get("conversations_executed") or 0),
+        "conversation_pass_rate": float(source.get("conversation_pass_rate") or 0.0),
+        "turns_total": int(source.get("turns_total") or 0),
+        "turn_pass_rate": float(source.get("turn_pass_rate") or 0.0),
+        "http_success_rate": float(source.get("http_success_rate") or 0.0),
+        "trace_coverage_rate": float(source.get("trace_coverage_rate") or 0.0),
         "llm_estimated_cost_rub": float(
             source.get("llm_estimated_cost_rub") or 0.0
         ),
@@ -169,6 +192,7 @@ def build_markdown(report: dict[str, Any]) -> str:
     coverage = report["coverage"]
     overall = report["overall"]
     golden = report["golden_eligible"]
+    context_limited = report["context_limited"]
     lines = [
         "# Качество бота на реальных обращениях за июнь 2026",
         "",
@@ -204,6 +228,13 @@ def build_markdown(report: dict[str, Any]) -> str:
             "Прямой ответ с источником",
         ),
         "",
+        "## Обращения с недостаточным исходным контекстом",
+        "",
+        f"- Кейсов: **{context_limited['cases']}**.",
+        "- Это короткие или зависимые от предыдущей переписки реплики. Их нельзя "
+        "надёжно закрыть первым ответом без названия события или иной сущности.",
+        "- Для них отдельно измеряется многошаговое разрешение после уточнения.",
+        "",
         "## Категории",
         "",
         "| Категория | Кейсов | Baseline | После | Дельта |",
@@ -218,6 +249,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         )
     latency = report["latency_ms"]
     scenario = report.get("explicit_channel_context_scenario")
+    dialog_scenarios = report.get("multi_turn_scenarios") or []
     lines.extend(
         [
             "",
@@ -247,6 +279,29 @@ def build_markdown(report: dict[str, Any]) -> str:
                 f"p95: **{scenario['latency_ms'].get('p95')} мс**.",
                 "- Это сценарный потенциал после настройки выделенного HDE-правила, "
                 "а не текущая общая конверсия всех каналов.",
+            ]
+        )
+    if dialog_scenarios:
+        lines.extend(
+            [
+                "",
+                "## Многошаговые диалоги",
+                "",
+                "| Набор | Диалогов | Успешные диалоги | Реплик | Успешные реплики |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for item in dialog_scenarios:
+            lines.append(
+                f"| {item['label']} | {item['conversations_total']} | "
+                f"{item['conversation_pass_rate']:.1%} | {item['turns_total']} | "
+                f"{item['turn_pass_rate']:.1%} |"
+            )
+        lines.extend(
+            [
+                "",
+                "- Эти показатели оценивают решение после уточнений и не заменяют "
+                "метрику прямого закрытия первым ответом.",
             ]
         )
     return "\n".join(lines) + "\n"
@@ -280,6 +335,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--post-fix", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--context-scenario", type=Path)
+    parser.add_argument("--dialog-scenario", type=Path, action="append")
     return parser.parse_args()
 
 
@@ -290,6 +346,7 @@ def main() -> None:
         args.post_fix,
         args.output,
         context_scenario_path=args.context_scenario,
+        dialog_scenario_paths=args.dialog_scenario,
     )
 
 

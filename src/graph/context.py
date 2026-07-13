@@ -4,10 +4,43 @@ from src.kb.forum_registry import detect_forums_from_text
 from src.models import QueryAnalysis, Question, Session
 
 MAX_CONTEXT_TURNS = 5
+NON_FORUM_CONTEXT_CATEGORIES = frozenset(
+    {
+        "гранты",
+        "платформа_фгаис",
+        "техподдержка",
+    }
+)
 
 FOLLOWUP_FORUM_MARKERS: tuple[str, ...] = (
     "а что",
     "а если",
+    "а где",
+    "а когда",
+    "а какие",
+    "а программа",
+    "а билет",
+    "а проезд",
+    "а питание",
+    "а проживание",
+    "а документы",
+    "а регистрац",
+    "билет",
+    "проезд",
+    "питани",
+    "прожив",
+    "трансфер",
+    "программ",
+    "расписан",
+    "документ",
+    "справк",
+    "сертификат",
+    "муж",
+    "жен",
+    "ребен",
+    "ребён",
+    "дет",
+    "сопровожд",
     "если я",
     "что делать",
     "теперь",
@@ -24,6 +57,8 @@ FOLLOWUP_FORUM_MARKERS: tuple[str, ...] = (
     "не могу",
     "не смогу",
     "не получается",
+    "на этом мероприятии",
+    "на этом форуме",
 )
 FOLLOWUP_TOPIC_MARKERS: tuple[str, ...] = (
     "а куда",
@@ -34,6 +69,9 @@ FOLLOWUP_TOPIC_MARKERS: tuple[str, ...] = (
     "какая почта",
     "где именно",
     "как именно",
+    "а сколько",
+    "сколько времени",
+    "а срок",
 )
 GRANT_RETURN_QUESTION = Question(
     text="Как вернуть грантовые средства?",
@@ -50,7 +88,30 @@ def apply_session_context(
     if analysis.is_offtopic:
         return analysis
 
-    if _is_forum_followup(message):
+    if _is_grant_return_followup(message, session):
+        questions = list(analysis.questions or [])
+        if not any(question.topic == GRANT_RETURN_QUESTION.topic for question in questions):
+            questions.insert(0, GRANT_RETURN_QUESTION)
+        return analysis.model_copy(
+            update={
+                "category": "гранты",
+                "questions": questions,
+                "topics": _merge_topics(analysis.topics, [GRANT_RETURN_QUESTION.topic or ""]),
+            }
+        )
+
+    if _has_explicit_non_forum_context(analysis):
+        return analysis
+
+    if _is_topic_followup(message):
+        previous_category = last_category_from_session(session)
+        if (
+            previous_category in NON_FORUM_CONTEXT_CATEGORIES
+            and analysis.category in {None, "общее", "навигация"}
+        ):
+            return analysis.model_copy(update={"category": previous_category})
+
+    if _is_forum_followup(message) or _is_topic_followup(message):
         if analysis.forum_normalized:
             if analysis.category:
                 return analysis
@@ -82,18 +143,6 @@ def apply_session_context(
                 }
             )
 
-    if _is_grant_return_followup(message, session):
-        questions = list(analysis.questions or [])
-        if not any(question.topic == GRANT_RETURN_QUESTION.topic for question in questions):
-            questions.insert(0, GRANT_RETURN_QUESTION)
-        return analysis.model_copy(
-            update={
-                "category": "гранты",
-                "questions": questions,
-                "topics": _merge_topics(analysis.topics, [GRANT_RETURN_QUESTION.topic or ""]),
-            }
-        )
-
     return analysis
 
 
@@ -106,15 +155,37 @@ def build_contextual_message(
     if not text:
         return text
 
-    forum = getattr(analysis, "forum_normalized", None) or last_forum_from_session(session)
-    if not forum or _mentions_forum(text, forum) or not _is_forum_followup(text):
+    if _has_explicit_non_forum_context(analysis):
         if _is_grant_return_followup(text, session):
             return f"{GRANT_RETURN_QUESTION.text} {text}"
+        if _is_topic_followup(text):
+            previous_user = context_anchor_from_session(session)
+            if previous_user:
+                return f"{previous_user}. Уточнение пользователя: {text}"
         return text
-    previous_user = last_user_message_from_session(session)
-    if previous_user and _needs_previous_topic_context(text):
+
+    forum = getattr(analysis, "forum_normalized", None) or last_forum_from_session(session)
+    is_contextual_followup = _is_forum_followup(text) or _is_topic_followup(text)
+    if not forum or _mentions_forum(text, forum) or not is_contextual_followup:
+        if _is_grant_return_followup(text, session):
+            return f"{GRANT_RETURN_QUESTION.text} {text}"
+        if _is_topic_followup(text):
+            previous_user = context_anchor_from_session(session)
+            if previous_user:
+                return f"{previous_user}. Уточнение пользователя: {text}"
+        return text
+    previous_user = context_anchor_from_session(session)
+    if previous_user and (
+        _is_topic_followup(text) or _needs_previous_topic_context(text)
+    ):
         return f"{forum}: {previous_user}. {text}"
     return f"{forum}: {text}"
+
+
+def _has_explicit_non_forum_context(analysis: QueryAnalysis | None) -> bool:
+    if analysis is None or analysis.forum_normalized:
+        return False
+    return analysis.category in NON_FORUM_CONTEXT_CATEGORIES
 
 
 def is_context_dependent_followup(message: str, session: Session | None) -> bool:
@@ -125,6 +196,8 @@ def is_context_dependent_followup(message: str, session: Session | None) -> bool
         return False
     if _is_forum_followup(text) and last_forum_from_session(session):
         return True
+    if _is_topic_followup(text) and last_user_message_from_session(session):
+        return True
     return _is_grant_return_followup(text, session)
 
 
@@ -132,14 +205,17 @@ def last_forum_from_session(session: Session | None) -> str | None:
     if session is None:
         return None
 
+    forum = str(session.forum_context or "").strip()
+    if forum:
+        return forum
+
     for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
         for field in ("user", "bot"):
             detected = detect_forums_from_text(str(message.get(field) or ""))
             if detected:
                 return detected[-1]
 
-    forum = str(session.forum_context or "").strip()
-    return forum or None
+    return None
 
 
 def last_user_message_from_session(session: Session | None) -> str | None:
@@ -150,6 +226,28 @@ def last_user_message_from_session(session: Session | None) -> str | None:
         if text:
             return text
     return None
+
+
+def last_category_from_session(session: Session | None) -> str | None:
+    if session is None:
+        return None
+    category = session.extracted_entities.get("last_category")
+    normalized = str(category or "").strip()
+    return normalized or None
+
+
+def context_anchor_from_session(session: Session | None) -> str | None:
+    if session is None:
+        return None
+    fallback: str | None = None
+    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+        text = str(message.get("user") or "").strip()
+        if not text:
+            continue
+        fallback = fallback or text
+        if not _is_topic_followup(text):
+            return text
+    return fallback
 
 
 def _is_forum_followup(message: str) -> bool:

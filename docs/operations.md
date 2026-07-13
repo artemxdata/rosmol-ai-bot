@@ -37,6 +37,22 @@ or shared Redis session context:
 The `app-ml` profile uses a longer local timeout than the lightweight app
 because CPU rerank plus Max synthesis can exceed 90 seconds on cold runs.
 
+Run the permanent clarification and five-turn memory regression against the
+live ML container:
+
+```powershell
+.venv\Scripts\python.exe -m eval.run_pre_pilot_quality_suite `
+  --target http://127.0.0.1:8001/ask `
+  --sections followup `
+  --followup-cases eval\cases\dialog_memory_regression.json `
+  --output-dir reports\dialog_memory_regression `
+  --max-llm-cost-rub 20
+```
+
+Interpret first-turn conversion and multi-turn resolution separately. A
+clarification keeps the user in the bot flow but does not count as a closed
+ticket until a later turn produces a grounded answer.
+
 ## Yonote KB Refresh
 
 Yonote is read-only for the bot. We never create, edit, or delete Yonote

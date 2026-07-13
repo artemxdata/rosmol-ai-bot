@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-07-12T17:38:49.119869+00:00",
+  "generated_at": "2026-07-13T16:38:20.622715+00:00",
   "baseline_path": "data\\private\\operator_qa\\analysis\\operator_full_june_baseline_audit.json",
-  "post_fix_path": "data\\private\\operator_qa\\analysis\\operator_full_june_postfix_audit.json",
+  "post_fix_path": "data\\private\\operator_qa\\analysis\\operator_full_june_final_audit.json",
   "coverage": {
     "source_rows_total": 3348,
     "runnable_rows": 3295,
@@ -28,23 +28,23 @@
     },
     "post_fix": {
       "cases": 3295,
-      "direct_answers": 1795,
-      "direct_conversion": 0.544765,
-      "contained_without_operator": 2817,
-      "containment_rate": 0.854932,
-      "escalated": 478,
-      "escalation_rate": 0.145068,
-      "source_grounded_direct_answers": 1772,
-      "source_grounded_direct_answer_rate": 0.537785,
-      "strict_grounded_answers": 409,
-      "strict_grounded_answer_rate": 0.124127
+      "direct_answers": 1485,
+      "direct_conversion": 0.450683,
+      "contained_without_operator": 2875,
+      "containment_rate": 0.872534,
+      "escalated": 420,
+      "escalation_rate": 0.127466,
+      "source_grounded_direct_answers": 1460,
+      "source_grounded_direct_answer_rate": 0.443096,
+      "strict_grounded_answers": 394,
+      "strict_grounded_answer_rate": 0.119575
     },
     "delta": {
-      "direct_conversion": 0.009408,
-      "containment_rate": 0.004553,
-      "escalation_rate": -0.004553,
-      "source_grounded_direct_answer_rate": 0.009712,
-      "strict_grounded_answer_rate": 0.00182
+      "direct_conversion": -0.084674,
+      "containment_rate": 0.022155,
+      "escalation_rate": -0.022155,
+      "source_grounded_direct_answer_rate": -0.084977,
+      "strict_grounded_answer_rate": -0.002732
     }
   },
   "golden_eligible": {
@@ -64,23 +64,23 @@
     },
     "post_fix": {
       "cases": 577,
-      "direct_answers": 409,
-      "direct_conversion": 0.708839,
-      "contained_without_operator": 558,
-      "containment_rate": 0.967071,
-      "escalated": 19,
-      "escalation_rate": 0.032929,
-      "source_grounded_direct_answers": 409,
-      "source_grounded_direct_answer_rate": 0.708839,
-      "strict_grounded_answers": 409,
-      "strict_grounded_answer_rate": 0.708839
+      "direct_answers": 394,
+      "direct_conversion": 0.682842,
+      "contained_without_operator": 560,
+      "containment_rate": 0.970537,
+      "escalated": 17,
+      "escalation_rate": 0.029463,
+      "source_grounded_direct_answers": 394,
+      "source_grounded_direct_answer_rate": 0.682842,
+      "strict_grounded_answers": 394,
+      "strict_grounded_answer_rate": 0.682842
     },
     "delta": {
-      "direct_conversion": 0.010399,
-      "containment_rate": 0.003466,
-      "escalation_rate": -0.003466,
-      "source_grounded_direct_answer_rate": 0.010399,
-      "strict_grounded_answer_rate": 0.010399
+      "direct_conversion": -0.015598,
+      "containment_rate": 0.006932,
+      "escalation_rate": -0.006932,
+      "source_grounded_direct_answer_rate": -0.015598,
+      "strict_grounded_answer_rate": -0.015598
     }
   },
   "context_limited": {
@@ -100,22 +100,22 @@
     },
     "post_fix": {
       "cases": 1674,
-      "direct_answers": 671,
-      "direct_conversion": 0.400836,
-      "contained_without_operator": 1332,
-      "containment_rate": 0.795699,
-      "escalated": 342,
-      "escalation_rate": 0.204301,
-      "source_grounded_direct_answers": 649,
-      "source_grounded_direct_answer_rate": 0.387694,
+      "direct_answers": 439,
+      "direct_conversion": 0.262246,
+      "contained_without_operator": 1379,
+      "containment_rate": 0.823775,
+      "escalated": 295,
+      "escalation_rate": 0.176225,
+      "source_grounded_direct_answers": 416,
+      "source_grounded_direct_answer_rate": 0.248507,
       "strict_grounded_answers": 0,
       "strict_grounded_answer_rate": 0.0
     },
     "delta": {
-      "direct_conversion": 0.014337,
-      "containment_rate": 0.007169,
-      "escalation_rate": -0.007169,
-      "source_grounded_direct_answer_rate": 0.014337,
+      "direct_conversion": -0.124253,
+      "containment_rate": 0.035245,
+      "escalation_rate": -0.035245,
+      "source_grounded_direct_answer_rate": -0.12485,
       "strict_grounded_answer_rate": 0.0
     }
   },
@@ -124,38 +124,38 @@
       "category": "другое",
       "cases": 1456,
       "direct_conversion_baseline": 0.389423,
-      "direct_conversion_post_fix": 0.406593,
-      "direct_conversion_delta": 0.01717,
+      "direct_conversion_post_fix": 0.254808,
+      "direct_conversion_delta": -0.134615,
       "containment_rate_baseline": 0.776099,
-      "containment_rate_post_fix": 0.785714,
-      "containment_rate_delta": 0.009615
+      "containment_rate_post_fix": 0.816621,
+      "containment_rate_delta": 0.040522
     },
     {
       "category": "форумы",
       "cases": 1006,
       "direct_conversion_baseline": 0.756461,
-      "direct_conversion_post_fix": 0.761431,
-      "direct_conversion_delta": 0.00497,
+      "direct_conversion_post_fix": 0.746521,
+      "direct_conversion_delta": -0.00994,
       "containment_rate_baseline": 0.942346,
-      "containment_rate_post_fix": 0.944334,
-      "containment_rate_delta": 0.001988
+      "containment_rate_post_fix": 0.952286,
+      "containment_rate_delta": 0.00994
     },
     {
       "category": "платформа_фгаис",
       "cases": 277,
       "direct_conversion_baseline": 0.527076,
-      "direct_conversion_post_fix": 0.523466,
-      "direct_conversion_delta": -0.00361,
+      "direct_conversion_post_fix": 0.357401,
+      "direct_conversion_delta": -0.169675,
       "containment_rate_baseline": 0.920578,
-      "containment_rate_post_fix": 0.920578,
-      "containment_rate_delta": 0.0
+      "containment_rate_post_fix": 0.938628,
+      "containment_rate_delta": 0.01805
     },
     {
       "category": "навигация",
       "cases": 248,
       "direct_conversion_baseline": 0.266129,
-      "direct_conversion_post_fix": 0.274194,
-      "direct_conversion_delta": 0.008065,
+      "direct_conversion_post_fix": 0.221774,
+      "direct_conversion_delta": -0.044355,
       "containment_rate_baseline": 0.798387,
       "containment_rate_post_fix": 0.798387,
       "containment_rate_delta": 0.0
@@ -164,8 +164,8 @@
       "category": "гранты",
       "cases": 237,
       "direct_conversion_baseline": 0.818565,
-      "direct_conversion_post_fix": 0.801688,
-      "direct_conversion_delta": -0.016877,
+      "direct_conversion_post_fix": 0.751055,
+      "direct_conversion_delta": -0.06751,
       "containment_rate_baseline": 0.886076,
       "containment_rate_post_fix": 0.869198,
       "containment_rate_delta": -0.016878
@@ -174,8 +174,8 @@
       "category": "техподдержка",
       "cases": 71,
       "direct_conversion_baseline": 0.422535,
-      "direct_conversion_post_fix": 0.478873,
-      "direct_conversion_delta": 0.056338,
+      "direct_conversion_post_fix": 0.43662,
+      "direct_conversion_delta": 0.014085,
       "containment_rate_baseline": 0.859155,
       "containment_rate_post_fix": 0.901408,
       "containment_rate_delta": 0.042253
@@ -189,17 +189,17 @@
       "max": 149874
     },
     "post_fix": {
-      "min": 6,
-      "p50": 972,
-      "p95": 81230,
-      "max": 150041
+      "min": 1,
+      "p50": 304,
+      "p95": 23892,
+      "max": 88656
     },
-    "p50_delta": -465,
-    "p95_delta": -2827
+    "p50_delta": -1133,
+    "p95_delta": -60165
   },
   "cost_rub": {
     "baseline": 218.327685,
-    "post_fix": 222.956386
+    "post_fix": 221.295646
   },
   "methodology_notes": [
     "Конверсия — прямой содержательный первый ответ без оператора.",
@@ -225,5 +225,31 @@
       "max": 19375
     },
     "llm_estimated_cost_rub": 0.887601
-  }
+  },
+  "multi_turn_scenarios": [
+    {
+      "label": "operator_real_followup_second_cycle_results_postfix",
+      "path": "data\\private\\operator_qa\\analysis\\operator_real_followup_second_cycle_results_postfix.json",
+      "conversations_total": 297,
+      "conversations_executed": 297,
+      "conversation_pass_rate": 1.0,
+      "turns_total": 594,
+      "turn_pass_rate": 1.0,
+      "http_success_rate": 1.0,
+      "trace_coverage_rate": 1.0,
+      "llm_estimated_cost_rub": 3.486069
+    },
+    {
+      "label": "followup_eval",
+      "path": "reports\\dialog_memory_regression\\followup_eval.json",
+      "conversations_total": 4,
+      "conversations_executed": 4,
+      "conversation_pass_rate": 1.0,
+      "turns_total": 18,
+      "turn_pass_rate": 1.0,
+      "http_success_rate": 1.0,
+      "trace_coverage_rate": 1.0,
+      "llm_estimated_cost_rub": 3.436537
+    }
+  ]
 }

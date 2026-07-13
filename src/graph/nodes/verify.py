@@ -203,6 +203,23 @@ FORUM_SPECIFIC_MARKERS = FORUM_SPECIFIC_MARKERS + (
     "\u043e\u0442\u0435\u043b",
     "\u043f\u0438\u0442\u0430\u043d",
     "\u0435\u0434\u0430",
+    "заявк",
+    "обучен",
+    "смен",
+    "концерт",
+    "праздник",
+    "ребен",
+    "ребён",
+    "дет",
+    "расписан",
+    "программ",
+    "афиш",
+    "артист",
+    "выступ",
+    "резерв",
+    "отбор",
+    "одобр",
+    "статус",
 )
 INSUFFICIENT_SOURCE_RE = re.compile(
     r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
@@ -566,7 +583,7 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
     if analysis and _detected_forums_for_coverage(analysis.extracted_params):
         return []
     category = str(getattr(analysis, "category", None) or "").strip()
-    if category and category != "форумы":
+    if category == "гранты":
         return []
 
     message = _normalize(str(_state_message_for_search(state)))
@@ -594,24 +611,7 @@ def _ambiguous_forum_context(state: BotState, chunks: list[ScoredChunk]) -> list
 
 
 def _is_unanchored_forum_specific_question(message: str) -> bool:
-    if "форум" in message or "мероприят" in message:
-        return True
-    return any(
-        marker in message
-        for marker in (
-            "подат",
-            "участ",
-            "регист",
-            "проезд",
-            "прожив",
-            "питан",
-            "трансфер",
-            "документ",
-            "памятк",
-            "заезд",
-            "выезд",
-        )
-    )
+    return any(marker in message for marker in FORUM_SPECIFIC_MARKERS)
 
 
 def _unsupported_directive_markers(

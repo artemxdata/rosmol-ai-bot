@@ -467,6 +467,71 @@ async def test_verify_allows_source_supported_plain_email_wording() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verify_blocks_unanchored_specific_forum_source_for_fgaas_query() -> None:
+    chunk = ScoredChunk(
+        chunk_id="polus_application",
+        text="Подать заявку на форум Полюс можно в карточке события.",
+        metadata={
+            "chunk_id": "polus_application",
+            "source_type": "xlsx",
+            "forum_normalized": "Полюс",
+        },
+        score=0.8,
+        reranker_score=0.8,
+    )
+
+    result = await verify(
+        {
+            "message_masked": "Одобрили заявку на обучение. Как зайти?",
+            "analysis": QueryAnalysis(category="платформа_фгаис"),
+            "generated_response": "Открой карточку форума. [src:polus_application]",
+            "reranked_chunks": [chunk],
+            "cited_sources": ["polus_application"],
+            "generator_model": "source_chunk",
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["should_escalate"] is False
+    assert "Уточни" in result["generated_response"]
+    assert "не хочу смешать условия" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_verify_allows_specific_forum_source_with_explicit_context() -> None:
+    chunk = ScoredChunk(
+        chunk_id="polus_application",
+        text="Подать заявку на форум Полюс можно в карточке события.",
+        metadata={
+            "chunk_id": "polus_application",
+            "source_type": "xlsx",
+            "forum_normalized": "Полюс",
+        },
+        score=0.8,
+        reranker_score=0.8,
+    )
+
+    result = await verify(
+        {
+            "message_masked": "Полюс: как подать заявку?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum="Полюс",
+                forum_normalized="Полюс",
+            ),
+            "generated_response": "Открой карточку форума. [src:polus_application]",
+            "reranked_chunks": [chunk],
+            "cited_sources": ["polus_application"],
+            "generator_model": "source_chunk",
+            "max_confidence": 0.8,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert "should_escalate" not in result
+
+
+@pytest.mark.asyncio
 async def test_respond_does_not_append_specialist_note_for_valid_lowish_confidence() -> None:
     result = await respond(
         {
@@ -1003,6 +1068,95 @@ def test_session_context_clears_forum_clarification_when_forum_is_known() -> Non
     assert analysis.clarification_question is None
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "А мужу нужен отдельный билет?",
+        "А ребёнку 12 лет?",
+        "Кто оплачивает проезд?",
+        "Где посмотреть программу?",
+    ),
+)
+def test_session_context_keeps_known_forum_for_topic_followups(message: str) -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+    )
+    analysis = QueryAnalysis(
+        category="форумы",
+        needs_clarification=True,
+        clarification_question=(
+            "Уточни, пожалуйста, о каком форуме или мероприятии речь? "
+            "У разных событий условия могут отличаться."
+        ),
+    )
+
+    contextual = apply_session_context(analysis, message, session)
+
+    assert contextual.forum_normalized == "День молодёжи"
+    assert contextual.needs_clarification is False
+    assert contextual.clarification_question is None
+
+
+def test_stored_forum_context_wins_over_forum_mentioned_in_old_bot_answer() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+        last_messages=[
+            {
+                "user": "Кто оплачивает проезд?",
+                "bot": "Информация о форуме «Таврида» будет опубликована позднее.",
+            }
+        ],
+    )
+
+    contextual = apply_session_context(
+        QueryAnalysis(category="форумы"),
+        "А ребёнку 12 лет?",
+        session,
+    )
+
+    assert contextual.forum_normalized == "День молодёжи"
+
+
+def test_explicit_grant_question_does_not_inherit_stale_forum_context() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+    )
+    message = "Какие документы нужны для грантового отчёта?"
+    analysis = QueryAnalysis(category="гранты")
+
+    contextual = apply_session_context(analysis, message, session)
+
+    assert contextual.forum_normalized is None
+    assert contextual.category == "гранты"
+    assert build_contextual_message(message, session, contextual) == message
+
+
+def test_explicit_technical_question_does_not_inherit_stale_forum_context() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="Амур",
+    )
+    message = "В ФГАИС не получается отправить заявку, что делать?"
+    analysis = QueryAnalysis(category="техподдержка")
+
+    contextual = apply_session_context(analysis, message, session)
+
+    assert contextual.forum_normalized is None
+    assert contextual.category == "техподдержка"
+    assert build_contextual_message(message, session, contextual) == message
+
+
 def test_session_context_restores_grant_return_for_followup() -> None:
     session = Session(
         user_id="u1",
@@ -1023,6 +1177,100 @@ def test_session_context_restores_grant_return_for_followup() -> None:
     assert build_contextual_message(message, session, analysis).startswith(
         "Как вернуть грантовые средства?"
     )
+
+
+def test_session_context_restores_forum_and_topic_for_short_where_followup() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+        extracted_entities={"last_category": "форумы", "last_topics": ["bilet"]},
+        last_messages=[
+            {
+                "user": "Где получить билет на День молодёжи?",
+                "bot": "Билет доступен в чат-боте MAX.",
+            }
+        ],
+    )
+    message = "А где именно?"
+
+    analysis = apply_session_context(
+        QueryAnalysis(category="навигация"),
+        message,
+        session,
+    )
+    contextual = build_contextual_message(message, session, analysis)
+
+    assert analysis.category == "форумы"
+    assert analysis.forum_normalized == "День молодёжи"
+    assert contextual.startswith("День молодёжи: Где получить билет")
+
+
+def test_session_context_restores_non_forum_category_for_short_followup() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        extracted_entities={
+            "last_category": "гранты",
+            "last_topics": ["proverka_otcheta"],
+        },
+        last_messages=[
+            {
+                "user": "Как отправить грантовый отчёт?",
+                "bot": "Отчёт отправляется через личный кабинет.",
+            }
+        ],
+    )
+    message = "А куда именно?"
+
+    analysis = apply_session_context(
+        QueryAnalysis(category="навигация"),
+        message,
+        session,
+    )
+    contextual = build_contextual_message(message, session, analysis)
+
+    assert analysis.category == "гранты"
+    assert analysis.forum_normalized is None
+    assert contextual.startswith("Как отправить грантовый отчёт?")
+    assert "Уточнение пользователя: А куда именно?" in contextual
+
+
+def test_nested_followup_uses_last_substantive_question_as_context_anchor() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        extracted_entities={
+            "last_category": "гранты",
+            "last_topics": ["proverka_otcheta"],
+        },
+        last_messages=[
+            {
+                "user": "Как отправить грантовый отчёт?",
+                "bot": "Отчёт отправляется через личный кабинет.",
+            },
+            {
+                "user": "А куда именно отправлять?",
+                "bot": "Во вкладке «Отчёт» в карточке проекта.",
+            },
+        ],
+    )
+    message = "А сколько его проверяют?"
+
+    analysis = apply_session_context(
+        QueryAnalysis(category="навигация"),
+        message,
+        session,
+    )
+    contextual = build_contextual_message(message, session, analysis)
+
+    assert analysis.category == "гранты"
+    assert contextual.startswith("Как отправить грантовый отчёт?")
+    assert "А куда именно отправлять?" not in contextual
+    assert "Уточнение пользователя: А сколько его проверяют?" in contextual
 
 
 def test_contextual_message_keeps_previous_topic_for_elliptical_forum_followup() -> None:

@@ -335,6 +335,47 @@ def test_fallback_analysis_clarifies_forum_specific_question_without_forum() -> 
     assert analysis.questions == []
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "До какого возраста можно принимать участие?",
+        "Можно ли прийти с ребёнком?",
+        "Надо регистрировать детей?",
+        "Одобрили заявку, как подтвердить участие?",
+        "Как зайти на дистанционное обучение?",
+    ],
+)
+def test_fallback_analysis_clarifies_unanchored_event_conditions(query: str) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.category == "форумы"
+    assert analysis.clarification_question is not None
+    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.questions == []
+
+
+@pytest.mark.parametrize("query", ["Старт", "Назад", "Регистрация", "Расписание"])
+def test_fallback_analysis_clarifies_unanchored_navigation_word(query: str) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.clarification_question is not None
+    assert "Уточни" in analysis.clarification_question
+
+
+def test_fallback_analysis_clarifies_vague_application_question() -> None:
+    query = "У меня вопрос по поводу заявки на сайте"
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.clarification_question is not None
+    assert "заявке" in analysis.clarification_question
+
+
 def test_fallback_analysis_clarifies_generic_participant_next_step_without_forum() -> None:
     analysis = _fallback_analysis(
         "Я участник, что дальше?",
@@ -910,6 +951,36 @@ def test_fallback_analysis_clarifies_account_or_age_without_specific_event(
     assert analysis.clarification_question is not None
 
 
+def test_known_forum_with_child_age_does_not_trigger_generic_age_clarification() -> None:
+    query = (
+        "Я зарегистрировалась на День молодёжи, но билет не пришёл. "
+        "Нужен ли отдельный билет дочке 12 лет?"
+    )
+
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.forum_normalized == "День молодёжи"
+    assert analysis.needs_clarification is False
+    assert {question.topic for question in analysis.questions} >= {
+        "bilet_ne_prishel_povtornoe_poluchenie",
+        "registraciya_drugogo_cheloveka",
+    }
+
+
+def test_detailed_application_failure_does_not_repeat_already_answered_question() -> None:
+    query = (
+        "При регистрации на программу ГосСтарт.Стажировки после нажатия "
+        "«Подать заявку» анкета не отображается, а появляется надпись "
+        "«Вы подали заявку»."
+    )
+
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.needs_clarification is False
+
+
 def test_fallback_analysis_routes_short_grant_link_request_to_application_source() -> None:
     query = "Ссылка на грант"
     analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
@@ -1135,3 +1206,33 @@ def test_no_travel_opportunity_request_routes_to_catalog() -> None:
     assert [question.topic for question in analysis.questions] == [
         "rekomendacii_obschie"
     ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Афиша на Великий Новгород",
+        "Какие исполнители будут выступать в Армавире?",
+        "Выступление блогеров 27 июня на площади Ленина будет?",
+        "Когда будет мероприятие?",
+    ],
+)
+def test_event_details_without_event_name_require_clarification(query: str) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.should_escalate is False
+    assert analysis.clarification_question is not None
+    assert "о каком форуме или мероприятии" in analysis.clarification_question
+
+
+def test_travel_payment_without_event_name_requires_clarification() -> None:
+    query = "Кто оплачивает проезд?"
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "форумы"
+    assert analysis.needs_clarification is True
+    assert analysis.should_escalate is False
+    assert analysis.clarification_question is not None

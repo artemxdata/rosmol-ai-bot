@@ -86,5 +86,83 @@
     "expected_behavior": "scope_note",
     "expected_escalated": false,
     "tags": ["operator_qa", "off_topic"]
+  },
+  {
+    "id": "operator_policy_ticket_without_event",
+    "query": "Не приходит билет на почту, что делать?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "ticket", "missing_event", "clarify"]
+  },
+  {
+    "id": "operator_policy_generic_event_date",
+    "query": "Когда будет мероприятие?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "event_date", "missing_event", "clarify"]
+  },
+  {
+    "id": "operator_policy_city_lineup_without_event",
+    "query": "Какие исполнители будут выступать в Армавире?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "lineup", "missing_event", "clarify"]
+  },
+  {
+    "id": "operator_policy_gosstart_detailed_application_failure",
+    "query": "При регистрации на программу ГосСтарт.Стажировки после нажатия «Подать заявку» анкета не отображается, а появляется сообщение об ошибке. Что проверить?",
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "gosstart", "application", "technical", "detailed"]
+  },
+  {
+    "id": "operator_policy_unanchored_age",
+    "query": "До какого возраста можно принимать участие?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "missing_event", "clarify"]
+  },
+  {
+    "id": "operator_policy_unanchored_children",
+    "query": "Надо регистрировать детей?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "missing_event", "clarify"]
+  },
+  {
+    "id": "operator_policy_unanchored_training",
+    "query": "Одобрили заявку на обучение. Как зайти на дистанционное обучение?",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "missing_program", "clarify"]
+  },
+  {
+    "id": "operator_policy_unanchored_application",
+    "query": "У меня вопрос по поводу заявки на сайте",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "missing_application", "clarify"]
+  },
+  {
+    "id": "operator_policy_unanchored_schedule",
+    "query": "Расписание",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "navigation", "clarify"]
+  },
+  {
+    "id": "operator_policy_unanchored_start",
+    "query": "Старт",
+    "expected_behavior": "clarify",
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "navigation", "clarify"]
+  },
+  {
+    "id": "operator_policy_farewell",
+    "query": "Пока",
+    "expected_behavior": "answer",
+    "expected_answer_contains": ["До встречи"],
+    "expected_escalated": false,
+    "tags": ["operator_qa", "residual", "interaction"]
   }
 ]
