@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from time import perf_counter
 
-from src.graph.context import apply_session_context, build_contextual_message
+from src.graph.context import (
+    RECENT_CONTEXT_TURNS,
+    apply_session_context,
+    build_contextual_message,
+)
 from src.graph.state import BotState
 from src.kb.forum_registry import detect_forums_from_text
 from src.llm.cascade import select_analyzer_model
@@ -731,7 +735,7 @@ def _session_mentions(session: object | None, markers: tuple[str, ...]) -> bool:
 
 def _last_session_message(session: object | None, field: str) -> str:
     messages = getattr(session, "last_messages", None) or []
-    for item in reversed(messages[-5:]):
+    for item in reversed(messages[-RECENT_CONTEXT_TURNS:]):
         value = _normalize_for_session(str(item.get(field) or ""))
         if value:
             return value

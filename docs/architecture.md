@@ -206,15 +206,17 @@ endpoint-ы.
 │    "forum_context": "Машук",                            │
 │    "user_age": 17,                                      │
 │    "user_region": null,                                  │
-│    "last_messages": [...последние 5 пар user/bot...],     │
+│    "last_messages": [...последние 20 пар user/bot...],    │
 │    "turn_count": 3,                                     │
 │    "extracted_entities": {"city": "Пятигорск"},          │
-│    "pending_clarification": null                        │
+│    "pending_clarification": null,                       │
+│    "clarification_history": [],                         │
+│    "conversation_summary": null                         │
 │  }                                                      │
 │                                                         │
 │  При первом сообщении — проверяется долгосрочная        │
-│  память в PostgreSQL (раздел 5). Если есть —             │
-│  подгружается last_forum и last_topics в сессию.         │
+│  память в PostgreSQL (раздел 5). Восстанавливаются       │
+│  структурированный контекст и последние 20 сообщений.   │
 └─────────────────────────┬───────────────────────────────┘
                           │
                           ▼
@@ -772,7 +774,9 @@ else:
 
 ### Принцип
 
-Не полный профиль, а контекст общения. Никаких ПДн в таблице — только hash и тематическая информация.
+Хранится не пользовательский профиль, а контекст общения: полный маскированный
+журнал ходов, структурированные сущности и компактное резюме старой части
+диалога. Исходный `user_id` и немаскированный текст в PostgreSQL не записываются.
 
 ### Модель данных (PostgreSQL)
 
@@ -784,6 +788,7 @@ CREATE TABLE user_memory (
     last_forum VARCHAR(100),
     last_topics TEXT[],                  -- ["оплата_проезда", "трансфер"]
     turn_summary TEXT,                  -- краткое резюме последнего диалога
+    structured_context JSONB NOT NULL,  -- событие, сущности, вопросы уточнения
     interaction_count INT DEFAULT 1,
     last_interaction TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -791,8 +796,16 @@ CREATE TABLE user_memory (
     UNIQUE(user_id_hash, channel)
 );
 
--- TTL: удалять записи старше 30 дней
--- Cron: DELETE FROM user_memory WHERE last_interaction < NOW() - INTERVAL '30 days';
+CREATE TABLE conversation_turns (
+    id BIGSERIAL PRIMARY KEY,
+    user_id_hash VARCHAR(64) NOT NULL,
+    channel VARCHAR(20) NOT NULL,
+    turn_index INT NOT NULL,
+    user_text_masked TEXT NOT NULL,
+    bot_text TEXT NOT NULL,
+    structured_context JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ```
 
 ### Использование
@@ -800,7 +813,7 @@ CREATE TABLE user_memory (
 ```python
 # При первом сообщении в сессии:
 memory = db.query(
-    "SELECT last_forum, last_topics, turn_summary FROM user_memory "
+    "SELECT last_forum, last_topics, turn_summary, structured_context "
     "WHERE user_id_hash = %s AND channel = %s",
     (hash(user_id), channel)
 )
@@ -808,17 +821,22 @@ memory = db.query(
 if memory:
     session.forum_context = memory.last_forum
     session.context_hint = memory.turn_summary
-    # Query Analyzer получит: "Пользователь ранее спрашивал про Машук,
-    # темы: оплата проезда, трансфер"
+    session.last_messages = load_last_masked_turns(limit=20)
 ```
 
 ### Что это даёт
 
-Пользователь неделю назад спрашивал про Машук. Сегодня пишет: «А что с моей заявкой?» Бот понимает, что речь про Машук, и не задаёт уточняющий вопрос.
+Длинный диалог не обрывается на фиксированном числе уточнений. После истечения
+Redis TTL бот восстанавливает событие, тему, сущности, заданные уточнения,
+последние 20 пар сообщений и резюме более старой части разговора.
 
 ### Юридическая чистота
 
-`user_id_hash` — это SHA-256 от `"vk:123456789"`. Без маппинга hash → user_id (который нигде не хранится) это не ПДн. В таблице нет ФИО, телефонов, email — только тематический контекст. Пользователь может написать «забудь мои данные» → бот удаляет запись по hash.
+`user_id_hash` — SHA-256 от `"channel:user_id"`, а пользовательский текст до
+записи проходит PII masking. Это снижает риск утечки, но не отменяет требования
+к доступу, резервному копированию и сроку хранения. Перед production необходимо
+утвердить retention для `conversation_turns`; удаление выполняется по
+`created_at` отдельной регламентной задачей.
 
 ---
 

@@ -66,41 +66,47 @@
     ]
   },
   {
-    "id": "dialog_five_clarifications_then_resolution",
-    "tags": ["dialog", "memory", "five_clarifications", "no_guessing"],
+    "id": "dialog_long_clarifications_then_resolution",
+    "tags": ["dialog", "memory", "long_clarifications", "no_guessing"],
     "turns": [
       {
-        "id": "dialog_five_clarifications_then_resolution_t1",
+        "id": "dialog_long_clarifications_then_resolution_t1",
         "query": "Кто оплачивает проезд?",
         "expected_behavior": "clarify",
         "expected_escalated": false
       },
       {
-        "id": "dialog_five_clarifications_then_resolution_t2",
+        "id": "dialog_long_clarifications_then_resolution_t2",
         "query": "Не помню название",
         "expected_behavior": "clarify",
         "expected_escalated": false
       },
       {
-        "id": "dialog_five_clarifications_then_resolution_t3",
+        "id": "dialog_long_clarifications_then_resolution_t3",
         "query": "Это мероприятие для молодёжи",
         "expected_behavior": "clarify",
         "expected_escalated": false
       },
       {
-        "id": "dialog_five_clarifications_then_resolution_t4",
+        "id": "dialog_long_clarifications_then_resolution_t4",
         "query": "Оно будет в моём городе",
         "expected_behavior": "clarify",
         "expected_escalated": false
       },
       {
-        "id": "dialog_five_clarifications_then_resolution_t5",
+        "id": "dialog_long_clarifications_then_resolution_t5",
         "query": "В июне",
         "expected_behavior": "clarify",
         "expected_escalated": false
       },
       {
-        "id": "dialog_five_clarifications_then_resolution_t6",
+        "id": "dialog_long_clarifications_then_resolution_t6",
+        "query": "Название организатор ещё не сообщил",
+        "expected_behavior": "clarify",
+        "expected_escalated": false
+      },
+      {
+        "id": "dialog_long_clarifications_then_resolution_t7",
         "query": "День молодёжи",
         "expected_behavior": "answer",
         "expected_escalated": false

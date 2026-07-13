@@ -49,6 +49,8 @@ class Session(BaseModel):
     extracted_entities: dict[str, Any] = Field(default_factory=dict)
     pending_clarification: str | None = None
     clarification_attempts: int = Field(default=0, ge=0)
+    clarification_history: list[str] = Field(default_factory=list)
+    conversation_summary: str | None = None
 
 
 class MemoryRecord(BaseModel):
@@ -57,6 +59,7 @@ class MemoryRecord(BaseModel):
     last_forum: str | None = None
     last_topics: list[str] = Field(default_factory=list)
     turn_summary: str | None = None
+    structured_context: dict[str, Any] = Field(default_factory=dict)
     interaction_count: int = 0
     last_interaction: datetime | None = None
 

@@ -37,8 +37,8 @@ or shared Redis session context:
 The `app-ml` profile uses a longer local timeout than the lightweight app
 because CPU rerank plus Max synthesis can exceed 90 seconds on cold runs.
 
-Run the permanent clarification and five-turn memory regression against the
-live ML container:
+Run the permanent clarification and long-dialog memory regression against the
+live ML container. Clarification count must never be the sole escalation reason:
 
 ```powershell
 .venv\Scripts\python.exe -m eval.run_pre_pilot_quality_suite `
@@ -52,6 +52,24 @@ live ML container:
 Interpret first-turn conversion and multi-turn resolution separately. A
 clarification keeps the user in the bot flow but does not count as a closed
 ticket until a later turn produces a grounded answer.
+
+## Conversation Memory
+
+Migration `006_conversation_memory` adds `user_memory.structured_context` and
+the append-only `conversation_turns` table. Only PII-masked user text is stored.
+Redis keeps the latest 20 `user/bot` pairs; PostgreSQL restores that recent
+window and the rolling summary after Redis TTL expiration.
+
+Verify the migration:
+
+```powershell
+docker compose exec -T app alembic current
+docker compose exec -T postgres psql -U rosmol -d rosmol_ai_bot -P pager=off -c "select count(*) from conversation_turns;"
+```
+
+The production retention period for `conversation_turns` must be approved
+before enabling scheduled cleanup. Do not delete production history manually
+during deployment.
 
 ## Yonote KB Refresh
 

@@ -77,13 +77,6 @@ _ATTACHMENT_WORD_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _MEANINGFUL_WORD_RE = re.compile(r"[а-яa-z0-9]{3,}", flags=re.IGNORECASE)
-MAX_CLARIFICATION_ATTEMPTS = 5
-CLARIFICATION_EXHAUSTED_RESPONSE = (
-    "Мне не удалось уточнить достаточно данных за несколько шагов. "
-    "Передаю обращение специалисту, чтобы не задерживать решение."
-)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -746,9 +739,18 @@ async def process_message(
 
     is_safe, safety_reason = safety.check(message.text)
     masked_text, pii_mapping = fastapi_app.state.pii_masker.mask(message.text)
+    session = await fastapi_app.state.sessions.get_or_create(
+        message.channel.value,
+        message.user_id,
+    )
 
     if _is_attachment_only_message(message):
         response = ATTACHMENT_ONLY_RESPONSE
+        await fastapi_app.state.sessions.append_turn(
+            session,
+            masked_text or "[attachment_only]",
+            response,
+        )
         await _safe_log(
             fastapi_app,
             {
@@ -766,6 +768,7 @@ async def process_message(
 
     if not is_safe:
         response = "Передаю обращение специалисту."
+        await fastapi_app.state.sessions.append_turn(session, masked_text, response)
         await _safe_log(
             fastapi_app,
             {
@@ -787,6 +790,7 @@ async def process_message(
             "Я отвечаю на вопросы по мероприятиям, форумам, ФГАИС «Молодёжь России» "
             "и грантам Росмолодёжи. Задай, пожалуйста, вопрос по этим темам."
         )
+        await fastapi_app.state.sessions.append_turn(session, masked_text, response)
         await _safe_log(
             fastapi_app,
             {
@@ -809,8 +813,6 @@ async def process_message(
             str(pii_mapping),
             ex=settings.session_ttl_seconds,
         )
-
-    session = await fastapi_app.state.sessions.get_or_create(message.channel.value, message.user_id)
 
     if is_operator_request(masked_text):
         response = "Передаю обращение специалисту."
@@ -911,6 +913,7 @@ async def process_message(
                 "total_latency_ms": int((perf_counter() - started_at) * 1000),
             }
         )
+        await fastapi_app.state.sessions.append_turn(session, masked_text, response)
         await _safe_log(fastapi_app, state)
         return response
 
@@ -940,9 +943,15 @@ async def process_message(
         response=response,
     )
     result["final_response"] = response
-    await fastapi_app.state.sessions.append_turn(session, masked_text, response)
+    session = await fastapi_app.state.sessions.append_turn(session, masked_text, response)
     result["total_latency_ms"] = int((perf_counter() - started_at) * 1000)
-    await _update_memory(fastapi_app, user_id_hash, message.channel.value, result)
+    await _update_memory(
+        fastapi_app,
+        user_id_hash,
+        message.channel.value,
+        result,
+        session=session,
+    )
     if not bypass_cache and cache_allowed:
         await _save_cache(fastapi_app, masked_text, response, result)
     await _safe_log(fastapi_app, result)
@@ -1050,34 +1059,42 @@ async def _update_dialog_session(
     forum = analysis.forum_normalized
     if forum is None and analysis.category not in NON_FORUM_CONTEXT_CATEGORIES:
         forum = session.forum_context
-    topics = [str(topic) for topic in analysis.topics if topic]
+    topics: list[str] = []
+    for topic in [
+        *analysis.topics,
+        *(question.topic for question in analysis.questions),
+    ]:
+        normalized_topic = str(topic or "").strip()
+        if normalized_topic and normalized_topic not in topics:
+            topics.append(normalized_topic)
     entities = dict(session.extracted_entities)
     if analysis.category:
         entities["last_category"] = analysis.category
     if topics:
         entities["last_topics"] = topics
+    for key, value in analysis.extracted_params.items():
+        if value not in (None, "", [], {}):
+            entities[str(key)] = value
+    if forum:
+        entities["forum_context"] = forum
+    elif analysis.category in NON_FORUM_CONTEXT_CATEGORIES:
+        entities.pop("forum_context", None)
 
     if _is_actionable_clarification(analysis) and not result.get("should_escalate"):
         attempts = session.clarification_attempts + 1
-        if attempts > MAX_CLARIFICATION_ATTEMPTS:
-            result["should_escalate"] = True
-            result["escalation_reason"] = "clarification_exhausted"
-            return (
-                await fastapi_app.state.sessions.update(
-                    session,
-                    forum_context=forum,
-                    extracted_entities=entities,
-                    pending_clarification=None,
-                    clarification_attempts=0,
-                ),
-                CLARIFICATION_EXHAUSTED_RESPONSE,
-            )
+        clarification_history = list(session.clarification_history)
+        clarification = str(analysis.clarification_question or response).strip()
+        if clarification and (
+            not clarification_history or clarification_history[-1] != clarification
+        ):
+            clarification_history.append(clarification)
         updated = await fastapi_app.state.sessions.update(
             session,
             forum_context=forum,
             extracted_entities=entities,
             pending_clarification=_limit_pending_context(pending_text),
             clarification_attempts=attempts,
+            clarification_history=clarification_history[-50:],
         )
         return updated, response
 
@@ -1229,6 +1246,8 @@ async def _update_memory(
     user_id_hash: str,
     channel: str,
     state: dict[str, Any],
+    *,
+    session: Session,
 ) -> None:
     analysis = state.get("analysis")
     if not analysis:
@@ -1237,12 +1256,25 @@ async def _update_memory(
         await fastapi_app.state.memory.upsert(
             user_id_hash=user_id_hash,
             channel=channel,
-            forum=analysis.forum_normalized,
-            topics=analysis.topics,
-            summary=state.get("final_response"),
+            forum=session.forum_context,
+            topics=_memory_topics(session, analysis),
+            structured_context={
+                "forum_context": session.forum_context,
+                "entities": session.extracted_entities,
+                "clarification_history": session.clarification_history[-50:],
+                "pending_clarification": session.pending_clarification,
+                "clarification_attempts": session.clarification_attempts,
+            },
         )
     except Exception as exc:
         logger.warning("user_memory_update_failed", error=str(exc))
+
+
+def _memory_topics(session: Session, analysis: QueryAnalysis) -> list[str]:
+    topics = session.extracted_entities.get("last_topics")
+    if isinstance(topics, list):
+        return [str(topic) for topic in topics if topic]
+    return [str(topic) for topic in analysis.topics if topic]
 
 
 async def _safe_log(fastapi_app: FastAPI, state: dict[str, Any]) -> None:

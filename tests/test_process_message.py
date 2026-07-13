@@ -10,7 +10,6 @@ import pytest
 from src.graph.graph import build_graph
 from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE
 from src.main import (
-    CLARIFICATION_EXHAUSTED_RESPONSE,
     _update_dialog_session,
     _with_explicit_forum_context,
     _with_pending_clarification_context,
@@ -22,6 +21,7 @@ from src.models import (
     Chunk,
     IncomingMessage,
     QueryAnalysis,
+    Question,
     ScoredChunk,
     Session,
 )
@@ -74,7 +74,7 @@ class FakeSessions:
 
     async def append_turn(self, session: Session, user_text: str, bot_text: str) -> Session:
         self.appended.append((user_text, bot_text))
-        messages = [*session.last_messages, {"user": user_text, "bot": bot_text}][-5:]
+        messages = [*session.last_messages, {"user": user_text, "bot": bot_text}][-20:]
         self.session = session.model_copy(
             update={"last_messages": messages, "turn_count": session.turn_count + 1}
         )
@@ -304,7 +304,7 @@ async def test_process_message_safety_escalates_before_graph(
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "safety_bullying"
     assert captured_logs[0]["message_masked"] == "Меня травят в чате форума"
-    assert app.state.sessions.appended == []
+    assert app.state.sessions.appended == [(message.text, response)]
     assert app.state.semantic_cache.check_calls == []
 
 
@@ -330,7 +330,7 @@ async def test_process_message_abuse_safety_escalates_before_graph(
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "safety_abuse"
     assert captured_logs[0]["message_masked"] == text
-    assert app.state.sessions.appended == []
+    assert app.state.sessions.appended == [(text, response)]
     assert app.state.semantic_cache.check_calls == []
 
 
@@ -353,7 +353,7 @@ async def test_process_message_attachment_only_escalates_before_graph(
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "attachment_only"
     assert captured_logs[0]["message_masked"] == "[attachment_only]"
-    assert app.state.sessions.appended == []
+    assert app.state.sessions.appended == [("[attachment_only]", response)]
     assert app.state.semantic_cache.check_calls == []
 
 
@@ -375,7 +375,7 @@ async def test_process_message_attachment_placeholder_escalates_before_graph(
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "attachment_only"
     assert captured_logs[0]["message_masked"] == "image-12345.png"
-    assert app.state.sessions.appended == []
+    assert app.state.sessions.appended == [(message.text, response)]
     assert app.state.semantic_cache.check_calls == []
 
 
@@ -975,7 +975,7 @@ async def test_process_message_resolves_ticket_after_forum_clarification(
 
 
 @pytest.mark.asyncio
-async def test_dialog_escalates_only_after_five_unresolved_clarifications() -> None:
+async def test_dialog_does_not_escalate_only_because_clarifications_are_long() -> None:
     app = _app()
     session = Session(
         user_id="dialog-user",
@@ -988,7 +988,7 @@ async def test_dialog_escalates_only_after_five_unresolved_clarifications() -> N
         clarification_question="Уточни, пожалуйста, название мероприятия.",
     )
 
-    for attempt in range(1, 6):
+    for attempt in range(1, 13):
         result: dict[str, Any] = {"analysis": analysis, "final_response": "Уточни."}
         session, response = await _update_dialog_session(
             app,  # type: ignore[arg-type]
@@ -1000,24 +1000,9 @@ async def test_dialog_escalates_only_after_five_unresolved_clarifications() -> N
         assert response == "Уточни."
         assert result.get("should_escalate") is not True
         assert session.clarification_attempts == attempt
+        assert session.pending_clarification == f"неполный контекст {attempt}"
 
-    exhausted_result: dict[str, Any] = {
-        "analysis": analysis,
-        "final_response": "Уточни.",
-    }
-    session, response = await _update_dialog_session(
-        app,  # type: ignore[arg-type]
-        session,
-        exhausted_result,
-        pending_text="контекст всё ещё не определён",
-        response="Уточни.",
-    )
-
-    assert response == CLARIFICATION_EXHAUSTED_RESPONSE
-    assert exhausted_result["should_escalate"] is True
-    assert exhausted_result["escalation_reason"] == "clarification_exhausted"
-    assert session.pending_clarification is None
-    assert session.clarification_attempts == 0
+    assert session.clarification_history == [analysis.clarification_question]
 
 
 @pytest.mark.asyncio
@@ -1046,3 +1031,38 @@ async def test_dialog_topic_switch_clears_stale_forum_context() -> None:
     assert session.forum_context is None
     assert session.extracted_entities["last_category"] == "гранты"
     assert session.extracted_entities["last_topics"] == ["proverka_otcheta"]
+
+
+@pytest.mark.asyncio
+async def test_dialog_persists_analyzer_entities_in_structured_context() -> None:
+    app = _app()
+    session = Session(
+        user_id="dialog-user",
+        channel=Channel.API,
+        user_id_hash="hash",
+    )
+    result: dict[str, Any] = {
+        "analysis": QueryAnalysis(
+            category="форумы",
+            forum_normalized="Амур",
+            questions=[Question(text="Кто оплачивает проезд?", topic="oplata_proezda")],
+            extracted_params={"age": 19, "city": "Томск"},
+        ),
+        "final_response": "Ответ по форуму.",
+    }
+
+    session, _ = await _update_dialog_session(
+        app,  # type: ignore[arg-type]
+        session,
+        result,
+        pending_text="Мне 19 лет, я из Томска.",
+        response=result["final_response"],
+    )
+
+    assert session.extracted_entities == {
+        "last_category": "форумы",
+        "last_topics": ["oplata_proezda"],
+        "age": 19,
+        "city": "Томск",
+        "forum_context": "Амур",
+    }

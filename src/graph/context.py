@@ -3,7 +3,7 @@ from __future__ import annotations
 from src.kb.forum_registry import detect_forums_from_text
 from src.models import QueryAnalysis, Question, Session
 
-MAX_CONTEXT_TURNS = 5
+RECENT_CONTEXT_TURNS = 20
 NON_FORUM_CONTEXT_CATEGORIES = frozenset(
     {
         "гранты",
@@ -209,11 +209,15 @@ def last_forum_from_session(session: Session | None) -> str | None:
     if forum:
         return forum
 
-    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+    for message in reversed((session.last_messages or [])[-RECENT_CONTEXT_TURNS:]):
         for field in ("user", "bot"):
             detected = detect_forums_from_text(str(message.get(field) or ""))
             if detected:
                 return detected[-1]
+
+    detected = detect_forums_from_text(str(session.conversation_summary or ""))
+    if detected:
+        return detected[-1]
 
     return None
 
@@ -221,11 +225,11 @@ def last_forum_from_session(session: Session | None) -> str | None:
 def last_user_message_from_session(session: Session | None) -> str | None:
     if session is None:
         return None
-    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+    for message in reversed((session.last_messages or [])[-RECENT_CONTEXT_TURNS:]):
         text = str(message.get("user") or "").strip()
         if text:
             return text
-    return None
+    return _last_user_from_summary(session.conversation_summary)
 
 
 def last_category_from_session(session: Session | None) -> str | None:
@@ -240,14 +244,14 @@ def context_anchor_from_session(session: Session | None) -> str | None:
     if session is None:
         return None
     fallback: str | None = None
-    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+    for message in reversed((session.last_messages or [])[-RECENT_CONTEXT_TURNS:]):
         text = str(message.get("user") or "").strip()
         if not text:
             continue
         fallback = fallback or text
         if not _is_topic_followup(text):
             return text
-    return fallback
+    return fallback or _last_user_from_summary(session.conversation_summary)
 
 
 def _is_forum_followup(message: str) -> bool:
@@ -305,15 +309,28 @@ def _last_grant_return_from_session(session: Session | None) -> bool:
     if session is None:
         return False
 
-    for message in reversed((session.last_messages or [])[-MAX_CONTEXT_TURNS:]):
+    for message in reversed((session.last_messages or [])[-RECENT_CONTEXT_TURNS:]):
         text = _normalize(f"{message.get('user') or ''} {message.get('bot') or ''}")
         if _has_grant_return_context(text):
             return True
+
+    if _has_grant_return_context(_normalize(session.conversation_summary or "")):
+        return True
 
     last_topics = session.extracted_entities.get("last_topics")
     if isinstance(last_topics, list):
         return "vernut_denezhnye_sredstva" in {str(topic) for topic in last_topics}
     return False
+
+
+def _last_user_from_summary(summary: str | None) -> str | None:
+    for line in reversed(str(summary or "").splitlines()):
+        if not line.startswith("Пользователь:"):
+            continue
+        text = line.removeprefix("Пользователь:").strip()
+        if text:
+            return text
+    return None
 
 
 def _has_grant_return_context(text: str) -> bool:
