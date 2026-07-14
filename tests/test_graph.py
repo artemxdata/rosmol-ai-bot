@@ -1706,7 +1706,7 @@ async def test_analyze_uses_deterministic_common_fallback_intents_without_llm() 
     cases = [
         ("Предложение о сотрудничестве", "общее", False),
         ("Возможности бота / abilities", "общее", False),
-        ("Что такое Росмолодёжь?", "платформа_фгаис", False),
+        ("Что такое Росмолодёжь?", "общее", False),
         ("Оставить обратную связь о сотрудн", "навигация", True),
         ("Подать заявку на участие", "форумы", True),
     ]
@@ -2287,8 +2287,10 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
 
         async def retrieve_by_metadata(self, filters: dict, top_k: int):
             self.metadata_calls.append((filters, top_k))
-            topic = filters.get("topic")
-            if topic == "registraciya_na_meropriyatie":
+            topics = filters.get("topic")
+            topics = topics if isinstance(topics, list) else [topics]
+            if "registraciya_na_meropriyatie" in topics:
+                topic = "registraciya_na_meropriyatie"
                 return [
                     Chunk(
                         chunk_id="registration_alias",
@@ -2297,7 +2299,8 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         score=1.0,
                     )
                 ]
-            if topic == "programma_i_artisty":
+            if "programma_i_artisty" in topics:
+                topic = "programma_i_artisty"
                 return [
                     Chunk(
                         chunk_id="program_alias",
@@ -2306,7 +2309,8 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         score=1.0,
                     )
                 ]
-            if topic == "vremya_nachala_i_raspisanie":
+            if "vremya_nachala_i_raspisanie" in topics:
+                topic = "vremya_nachala_i_raspisanie"
                 return [
                     Chunk(
                         chunk_id="date_alias",
@@ -2315,7 +2319,8 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
                         score=1.0,
                     )
                 ]
-            if topic == "mesto_i_ploschadka_provedeniya":
+            if "mesto_i_ploschadka_provedeniya" in topics:
+                topic = "mesto_i_ploschadka_provedeniya"
                 return [
                     Chunk(
                         chunk_id="place_alias",
@@ -2353,14 +2358,23 @@ async def test_retrieve_uses_topic_alias_metadata_before_broad_fallback() -> Non
         "date_alias",
     ]
     assert retriever.semantic_calls == []
-    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    metadata_topics = {
+        topic
+        for call in retriever.metadata_calls
+        for topic in (
+            call[0].get("topic")
+            if isinstance(call[0].get("topic"), list)
+            else [call[0].get("topic")]
+        )
+    }
     assert "kak_zaregistrirovatsya_na_fgais" in metadata_topics
     assert "registraciya_na_meropriyatie" in metadata_topics
     assert "programma_foruma" in metadata_topics
     assert "programma_i_artisty" in metadata_topics
     assert "daty_nachala_meropriyatiya" in metadata_topics
     assert "vremya_nachala_i_raspisanie" in metadata_topics
-    assert "mesto_i_ploschadka_provedeniya" not in metadata_topics
+    assert "mesto_i_ploschadka_provedeniya" in metadata_topics
+    assert len(retriever.metadata_calls) == 3
 
 
 @pytest.mark.asyncio
@@ -2376,8 +2390,10 @@ async def test_retrieve_uses_document_topic_alias_for_program_questions() -> Non
 
         async def retrieve_by_metadata(self, filters: dict, top_k: int):
             self.metadata_calls.append((filters, top_k))
-            topic = filters.get("topic")
-            if topic == "dokumenty_meropriyatiya":
+            topics = filters.get("topic")
+            topics = topics if isinstance(topics, list) else [topics]
+            if "dokumenty_meropriyatiya" in topics:
+                topic = "dokumenty_meropriyatiya"
                 return [
                     Chunk(
                         chunk_id="program_from_documents",
@@ -2410,8 +2426,8 @@ async def test_retrieve_uses_document_topic_alias_for_program_questions() -> Non
         "program_from_documents"
     ]
     assert retriever.semantic_calls == []
-    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
-    assert metadata_topics == [
+    assert len(retriever.metadata_calls) == 1
+    assert retriever.metadata_calls[0][0]["topic"] == [
         "programma_foruma",
         "programma_i_artisty",
         "programma_artisty",
@@ -2433,8 +2449,10 @@ async def test_retrieve_uses_food_topic_alias_for_platform_food_questions() -> N
 
         async def retrieve_by_metadata(self, filters: dict, top_k: int):
             self.metadata_calls.append((filters, top_k))
-            topic = filters.get("topic")
-            if topic == "informaciya_o_ploschadke_pitanie":
+            topics = filters.get("topic")
+            topics = topics if isinstance(topics, list) else [topics]
+            if "informaciya_o_ploschadke_pitanie" in topics:
+                topic = "informaciya_o_ploschadke_pitanie"
                 return [
                     Chunk(
                         chunk_id="food_alias_source",
@@ -2470,7 +2488,15 @@ async def test_retrieve_uses_food_topic_alias_for_platform_food_questions() -> N
         "food_alias_source"
     ]
     assert retriever.semantic_calls == []
-    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    metadata_topics = {
+        topic
+        for call in retriever.metadata_calls
+        for topic in (
+            call[0].get("topic")
+            if isinstance(call[0].get("topic"), list)
+            else [call[0].get("topic")]
+        )
+    }
     assert "informaciya_o_ploschadke_pitanie_pite" in metadata_topics
     assert "informaciya_o_ploschadke_pitanie" in metadata_topics
 
@@ -2488,8 +2514,10 @@ async def test_retrieve_uses_travel_topic_alias_for_housing_questions() -> None:
 
         async def retrieve_by_metadata(self, filters: dict, top_k: int):
             self.metadata_calls.append((filters, top_k))
-            topic = filters.get("topic")
-            if topic == "oplata_proezda":
+            topics = filters.get("topic")
+            topics = topics if isinstance(topics, list) else [topics]
+            if "oplata_proezda" in topics:
+                topic = "oplata_proezda"
                 return [
                     Chunk(
                         chunk_id="travel_with_housing",
@@ -2519,7 +2547,15 @@ async def test_retrieve_uses_travel_topic_alias_for_housing_questions() -> None:
         "travel_with_housing"
     ]
     assert retriever.semantic_calls == []
-    metadata_topics = [call[0].get("topic") for call in retriever.metadata_calls]
+    metadata_topics = {
+        topic
+        for call in retriever.metadata_calls
+        for topic in (
+            call[0].get("topic")
+            if isinstance(call[0].get("topic"), list)
+            else [call[0].get("topic")]
+        )
+    }
     assert "usloviya_prozhivaniya" in metadata_topics
     assert "oplata_proezda" in metadata_topics
 
@@ -4170,6 +4206,66 @@ async def test_rerank_pins_topic_candidates_for_forum_multi_aspect(
     chunk_ids = {chunk.chunk_id for chunk in result["reranked_chunks"]}
     assert {"confirmation", "digital_week", "dates"} <= chunk_ids
     assert "neighbor_volunteers" not in [chunk.chunk_id for chunk in result["reranked_chunks"][:3]]
+
+
+@pytest.mark.asyncio
+async def test_rerank_prefers_fresh_yonote_source_for_equivalent_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="legacy_travel",
+            text="Legacy travel answer.",
+            metadata={
+                "forum_normalized": "Ladoga",
+                "category": "forums",
+                "source_type": "xlsx",
+                "topic": "oplata_proezda",
+            },
+            score=0.9,
+        ),
+        Chunk(
+            chunk_id="fresh_compensation",
+            text="Fresh compensation answer.",
+            metadata={
+                "forum_normalized": "Ladoga",
+                "category": "forums",
+                "source_type": "yonote",
+                "topic": "kompensaciya",
+            },
+            score=0.7,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Does Ladoga reimburse travel?",
+            "analysis": QueryAnalysis(
+                category="forums",
+                forum_normalized="Ladoga",
+                questions=[
+                    Question(
+                        text="Does Ladoga reimburse travel?",
+                        topic="oplata_proezda",
+                        category="forums",
+                        forum_normalized="Ladoga",
+                    )
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": InputOrderReranker(),
+        }
+    )
+
+    assert result["reranked_chunks"][0].chunk_id == "fresh_compensation"
 
 
 @pytest.mark.asyncio

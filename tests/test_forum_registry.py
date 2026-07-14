@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from src.kb.forum_registry import detect_forum_from_text, detect_forums_from_text
+from src.kb.forum_registry import (
+    canonicalize_forum_name,
+    detect_forum_from_text,
+    detect_forums_from_text,
+    forum_filter_values,
+)
 
 
 def test_detect_forum_from_text_uses_registry_aliases() -> None:
@@ -20,6 +25,26 @@ def test_detect_forum_from_text_handles_ivolga_genitive_case() -> None:
 
 def test_detect_forum_from_text_handles_volga_accusative_case() -> None:
     assert detect_forum_from_text("Расскажи про Волгу") == "Волга"
+
+
+def test_detect_forum_from_text_handles_new_yonote_entities() -> None:
+    assert detect_forum_from_text("Как зарегистрироваться на Добро.РФ?") == "Добро.РФ"
+    assert (
+        detect_forum_from_text("Кто может участвовать в Национальной премии Патриот?")
+        == "Национальная премия «Патриот»"
+    )
+
+
+def test_detect_forum_from_text_loads_distinct_seed_entities_but_not_navigation() -> None:
+    assert detect_forum_from_text("Расскажи про Наука. КМОЦ") == "Наука. КМОЦ"
+    assert detect_forum_from_text("Какие платформы используются?") is None
+
+
+def test_forum_source_variants_share_canonical_name_and_filter_values() -> None:
+    assert canonicalize_forum_name("ОстроVа") == "Островa"
+    assert canonicalize_forum_name("ШУМ") == "Шум"
+    assert canonicalize_forum_name("иВолга") == "Иволга"
+    assert "ОстроVа" in forum_filter_values("Островa")
 
 
 def test_detect_forum_from_text_handles_tavrida_art_accusative_case() -> None:

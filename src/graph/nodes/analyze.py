@@ -930,8 +930,104 @@ def _needs_application_context_clarification(message: str) -> bool:
     return True
 
 
+def _is_about_rosmolodezh_query(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "что такое росмолод",
+            "кто такие росмолод",
+            "чем занимается росмолод",
+            "какие задачи у росмолод",
+        )
+    )
+
+
+def _is_application_status_explanation_query(normalized: str) -> bool:
+    if "заяв" not in normalized or "статус" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "что означает",
+            "что означают",
+            "что значит",
+            "что значат",
+            "расшифр",
+            "какие бывают",
+            "список статус",
+        )
+    )
+
+
+def _is_participation_confirmation_workflow_query(normalized: str) -> bool:
+    if "участи" not in normalized or "подтверд" not in normalized:
+        return False
+    if any(
+        marker in normalized
+        for marker in (
+            "не могу поехать",
+            "не смогу поехать",
+            "отказаться от участия",
+            "отменить участие",
+        )
+    ):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "как подтверд",
+            "где подтверд",
+            "нужно подтверд",
+            "необходимо подтверд",
+            "подтвердить участие",
+        )
+    )
+
+
+def _is_generic_platform_workflow_query(normalized: str) -> bool:
+    return _is_application_status_explanation_query(
+        normalized
+    ) or _is_participation_confirmation_workflow_query(normalized)
+
+
+def _is_account_deletion_information_query(normalized: str) -> bool:
+    if "аккаунт" not in normalized or "удал" not in normalized:
+        return False
+    if any(
+        marker in normalized
+        for marker in (
+            "не могу",
+            "не получается",
+            "не удаляется",
+            "ошиб",
+            "кнопка не работает",
+        )
+    ):
+        return False
+    return True
+
+
+def _is_account_merge_query(normalized: str) -> bool:
+    has_account_context = "аккаунт" in normalized or "учетн" in normalized
+    has_transfer_context = any(
+        marker in normalized
+        for marker in (
+            "объедин",
+            "обьедин",
+            "перенести данные",
+            "перенос данных",
+            "старой почт",
+            "старому аккаунт",
+            "новый аккаунт",
+        )
+    )
+    return has_account_context and has_transfer_context
+
+
 def _needs_forum_context_clarification(message: str) -> bool:
     normalized = message.casefold().replace("ё", "е")
+    if _is_generic_platform_workflow_query(normalized):
+        return False
     if detect_forums_from_text(message):
         return False
     if any(marker in normalized for marker in ("грант", "фгаис", "росмолод")):
@@ -1155,6 +1251,14 @@ def _has_ui_failure_context(normalized: str) -> bool:
 
 def _infer_category_from_message(message: str) -> str | None:
     normalized = message.casefold().replace("ё", "е")
+    if _is_about_rosmolodezh_query(normalized):
+        return "общее"
+    if _is_generic_platform_workflow_query(normalized):
+        return "платформа_фгаис"
+    if _is_account_deletion_information_query(normalized):
+        return "платформа_фгаис"
+    if _is_account_merge_query(normalized):
+        return "платформа_фгаис"
     if _is_sport_recommendation_request(normalized):
         return "платформа_фгаис"
     if _has_staff_feedback_context(normalized):
@@ -1169,8 +1273,6 @@ def _infer_category_from_message(message: str) -> str | None:
         return "общее"
     if any(marker in normalized for marker in ("возможности бота", "abilities", "что умеешь")):
         return "общее"
-    if "что такое росмолод" in normalized or "кто такие росмолод" in normalized:
-        return "платформа_фгаис"
     if _has_grant_project_context(normalized):
         if _has_ui_failure_context(normalized):
             return "техподдержка"
@@ -1561,6 +1663,51 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     category = payload.get("category")
     forum = payload.get("forum_normalized") or payload.get("forum")
     normalized = message.casefold().replace("ё", "е")
+    if _is_about_rosmolodezh_query(normalized):
+        return [
+            {
+                "text": "Что такое Росмолодёжь и чем она занимается?",
+                "topic": "chto_takoe_rosmolodezh",
+                "category": "общее",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_account_deletion_information_query(normalized):
+        return [
+            {
+                "text": "Кто и как может удалить аккаунт ФГАИС?",
+                "topic": "udalenie_akkaunta",
+                "category": "платформа_фгаис",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_account_merge_query(normalized):
+        return [
+            {
+                "text": "Как объединить старый и новый аккаунты ФГАИС?",
+                "topic": "obedinenie_akkauntov",
+                "category": "платформа_фгаис",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_application_status_explanation_query(normalized):
+        return [
+            {
+                "text": "Что означают статусы заявки в ФГАИС?",
+                "topic": "statusy_zayavok",
+                "category": "платформа_фгаис",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_participation_confirmation_workflow_query(normalized):
+        return [
+            {
+                "text": "Как подтвердить участие после одобрения заявки на форум?",
+                "topic": "podtverzhdenie_uchastiya_v_forume",
+                "category": "платформа_фгаис",
+                "forum_normalized": None,
+            }
+        ]
     grant_questions = _build_exact_grant_questions(normalized)
     if grant_questions:
         return grant_questions

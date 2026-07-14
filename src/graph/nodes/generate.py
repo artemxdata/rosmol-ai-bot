@@ -1231,7 +1231,11 @@ def _order_official_sources_first(chunks: list[ScoredChunk]) -> list[ScoredChunk
         chunk
         for _, chunk in sorted(
             enumerate(chunks),
-            key=lambda item: (_source_type_rank(item[1]), item[0]),
+            key=lambda item: (
+                _source_type_rank(item[1]),
+                _source_freshness_rank(item[1]),
+                item[0],
+            ),
         )
     ]
 
@@ -1254,6 +1258,15 @@ def _source_type_rank(chunk: ScoredChunk) -> int:
     return 1
 
 
+def _source_freshness_rank(chunk: ScoredChunk) -> int:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    if source_type == "yonote":
+        return 0
+    if source_type in {"docx", "xlsx"}:
+        return 1
+    return 2
+
+
 def _rank_source_candidates_for_question(
     analysis: QueryAnalysis,
     question: Question,
@@ -1270,7 +1283,9 @@ HOUSING_COMPATIBLE_TRAVEL_TOPICS = frozenset(
 )
 HOUSING_TEXT_MARKERS = ("прожив", "размещ", "жиль", "жить")
 TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
-    frozenset({"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}),
+    frozenset(
+        {"oplata_proezda", "oplata_proezda_palatok_i_pitaniya", "kompensaciya"}
+    ),
     frozenset(
         {
             "transfer_do_mesta_provedeniya",
@@ -1287,6 +1302,7 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
             "informaciya_o_ploschadke_pitanie",
             "informaciya_o_ploschadke_pitanie_pite",
             "informaciya_o_ploschadke_pitanie_pite_i",
+            "pitanie_i_prozhivanie",
         }
     ),
     frozenset(
@@ -1324,6 +1340,9 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
             "registraciya_bez_max",
             "podacha_zayavki_na_proekt",
             "podat_zayavku_na_uchastie",
+            "registraciya_s_pomoschyu_sozdaniya_kabineta",
+            "registraciya",
+            "volonterskaya_pomosch",
         }
     ),
     frozenset({"otkaz_ot_uchastiya", "kolichestvo_person_otmena_registracii"}),
@@ -1331,7 +1350,13 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
     frozenset({"cifrovaya_nedelya"}),
     frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
-    frozenset({"usloviya_prozhivaniya", "oplata_proezda_prozhivaniya_i_charter"}),
+    frozenset(
+        {
+            "usloviya_prozhivaniya",
+            "oplata_proezda_prozhivaniya_i_charter",
+            "pitanie_i_prozhivanie",
+        }
+    ),
     frozenset({"trebovaniya_po_dress_kodu"}),
     frozenset({"poseschenie_festivalya_s_detmi", "registraciya_detey"}),
     frozenset({"vozrastnye_ogranicheniya"}),
@@ -1356,8 +1381,15 @@ def _source_topic_match_rank(question: Question, chunk: ScoredChunk) -> int:
         return 1
     if chunk_topic == question_topic:
         return 0
+    if (
+        chunk_topic == "forum"
+        and question_topic_group
+        == _equivalent_topic_group("podacha_zayavki_na_proekt")
+        and "регистрац" in chunk.text.casefold()
+    ):
+        return 0
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
-        return 1
+        return 0
     if _is_housing_compatible_travel_source(question_topic_group, chunk_topic, chunk.text):
         return 1
     return 2
@@ -1441,7 +1473,7 @@ def _source_candidate_priority(
     analysis: QueryAnalysis,
     question: Question,
     chunk: ScoredChunk,
-) -> tuple[float, int, int, int, float, int, int, float]:
+) -> tuple[float, int, int, int, int, float, int, int, float]:
     if (
         _is_specific_technical_question(question) or _is_feedback_question(question)
     ) and _metadata_matches_specific_question(analysis, question, chunk):
@@ -1451,12 +1483,14 @@ def _source_candidate_priority(
         unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
         grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
         topic_rank = _source_topic_match_rank(question, chunk)
+        freshness_rank = _source_freshness_rank(chunk)
         confidence = float(chunk.reranker_score or chunk.score or 0)
         return (
             0,
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_rank,
+            freshness_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -1470,6 +1504,7 @@ def _source_candidate_priority(
     unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
     grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
     topic_rank = _source_topic_match_rank(question, chunk)
+    freshness_rank = _source_freshness_rank(chunk)
     confidence = float(chunk.reranker_score or chunk.score or 0)
     if str(question.topic or "").strip() and topic_rank <= 1:
         return (
@@ -1477,6 +1512,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_rank,
+            freshness_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -1488,6 +1524,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_rank,
+            freshness_rank,
             -float(intent_score * 100) - field_score,
             source_rank,
             generic_rank,
@@ -1499,6 +1536,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_rank,
+            freshness_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -1510,6 +1548,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_rank,
+            freshness_rank,
             -field_score,
             source_rank,
             generic_rank,
@@ -1520,6 +1559,7 @@ def _source_candidate_priority(
         unscoped_grant_rank,
         grant_source_category_rank,
         topic_rank,
+        freshness_rank,
         0,
         source_rank,
         generic_rank,

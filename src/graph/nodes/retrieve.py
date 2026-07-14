@@ -32,6 +32,15 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
         "registraciya_bez_max",
         "podacha_zayavki_na_proekt",
         "podat_zayavku_na_uchastie",
+        "registraciya_s_pomoschyu_sozdaniya_kabineta",
+        "registraciya",
+        "volonterskaya_pomosch",
+        "forum",
+    ),
+    (
+        "oplata_proezda",
+        "oplata_proezda_palatok_i_pitaniya",
+        "kompensaciya",
     ),
     (
         "programma_foruma",
@@ -60,6 +69,7 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
         "usloviya_prozhivaniya",
         "oplata_proezda_prozhivaniya_i_charter",
         "oplata_proezda",
+        "pitanie_i_prozhivanie",
     ),
     (
         "usloviya_pitaniya_i_tochki_s_vodoy",
@@ -68,6 +78,7 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
         "informaciya_o_ploschadke_pitanie",
         "informaciya_o_ploschadke_pitanie_pite",
         "informaciya_o_ploschadke_pitanie_pite_i",
+        "pitanie_i_prozhivanie",
     ),
     (
         "otkaz_ot_uchastiya",
@@ -306,17 +317,13 @@ async def _retrieve_attempt(
 ) -> tuple[list, bool]:
     retrieve_by_metadata = getattr(retriever, "retrieve_by_metadata", None)
     if filters.get("topic") and callable(retrieve_by_metadata):
-        chunks = await retrieve_by_metadata(filters, top_k=top_k)
-        if chunks:
-            return chunks, True
-
-        alias_chunks = []
-        for topic in _topic_lookup_aliases(str(filters.get("topic") or "")):
-            alias_filters = {**filters, "topic": topic}
-            alias_chunks.extend(await retrieve_by_metadata(alias_filters, top_k=top_k))
-            if alias_chunks:
-                return alias_chunks, True
-        return [], True
+        topic = str(filters.get("topic") or "").strip()
+        topic_values = list(dict.fromkeys([topic, *_topic_lookup_aliases(topic)]))
+        lookup_filters = {
+            **filters,
+            "topic": topic_values if len(topic_values) > 1 else topic,
+        }
+        return await retrieve_by_metadata(lookup_filters, top_k=top_k), True
     return await retriever.retrieve(query, filters, top_k=top_k), False
 
 

@@ -236,3 +236,34 @@ def test_infer_category_handles_general_platform_and_grants() -> None:
 
     assert infer_category(fgais, infer_event_name(fgais)) == "платформа_фгаис"
     assert infer_category(grants, infer_event_name(grants)) == "гранты"
+
+
+@pytest.mark.parametrize("title", ["О Росмолодёжи", "Структура и направления"])
+def test_infer_category_keeps_general_yonote_sections_out_of_forum_taxonomy(
+    title: str,
+) -> None:
+    document = YonoteDocument(
+        id="doc-general",
+        title=title,
+        text="Справочная информация Росмолодёжи",
+        collection_id="c",
+        collection_name="Росмолодёжь: общее, структура, направления",
+        url=None,
+        url_id=None,
+        parent_document_id=None,
+        path_titles=(title,),
+        updated_at=None,
+        created_at=None,
+        document_type="document",
+    )
+
+    records = build_records_from_api_documents(
+        [document],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 7, 14),
+    )
+
+    assert records
+    assert {record["category"] for record in records} == {"общее"}
+    assert {record["forum_normalized"] for record in records} == {None}
+    assert {record["is_generic"] for record in records} == {True}

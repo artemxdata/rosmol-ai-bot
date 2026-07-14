@@ -56,7 +56,9 @@ HOUSING_COMPATIBLE_TRAVEL_TOPICS = frozenset(
 )
 HOUSING_TEXT_MARKERS = ("прожив", "размещ", "жиль", "жить")
 TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
-    frozenset({"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}),
+    frozenset(
+        {"oplata_proezda", "oplata_proezda_palatok_i_pitaniya", "kompensaciya"}
+    ),
     frozenset(
         {
             "transfer_do_mesta_provedeniya",
@@ -73,6 +75,7 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
             "informaciya_o_ploschadke_pitanie",
             "informaciya_o_ploschadke_pitanie_pite",
             "informaciya_o_ploschadke_pitanie_pite_i",
+            "pitanie_i_prozhivanie",
         }
     ),
     frozenset(
@@ -95,7 +98,18 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"rosmolodezh_granty", "usloviya_i_sroki_uchastiya_granty"}),
     frozenset({"pismo_vyzov"}),
     frozenset({"kogda_budet_sertifikat", "mozhno_li_poluchit_sertifikat_za_uchastie"}),
-    frozenset({"podacha_zayavki_na_proekt", "podat_zayavku_na_uchastie"}),
+    frozenset(
+        {
+            "kak_zaregistrirovatsya_na_fgais",
+            "registraciya_na_meropriyatie",
+            "registraciya_bez_max",
+            "podacha_zayavki_na_proekt",
+            "podat_zayavku_na_uchastie",
+            "registraciya_s_pomoschyu_sozdaniya_kabineta",
+            "registraciya",
+            "volonterskaya_pomosch",
+        }
+    ),
     frozenset({"otkaz_ot_uchastiya"}),
     frozenset({"vnesti_izmeneniya_v_zayavku"}),
     frozenset({"trebovaniya_po_dress_kodu"}),
@@ -103,7 +117,13 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"podtverzhdenie_uchastiya_i_org_momenty"}),
     frozenset({"cifrovaya_nedelya"}),
     frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
-    frozenset({"usloviya_prozhivaniya", "oplata_proezda_prozhivaniya_i_charter"}),
+    frozenset(
+        {
+            "usloviya_prozhivaniya",
+            "oplata_proezda_prozhivaniya_i_charter",
+            "pitanie_i_prozhivanie",
+        }
+    ),
     frozenset({"vozrastnye_ogranicheniya"}),
 )
 
@@ -406,7 +426,11 @@ def _order_official_sources_first(chunks: list[Chunk]) -> list[Chunk]:
         chunk
         for _, chunk in sorted(
             enumerate(chunks),
-            key=lambda item: (_source_type_rank(item[1]), item[0]),
+            key=lambda item: (
+                _source_type_rank(item[1]),
+                _source_freshness_rank(item[1]),
+                item[0],
+            ),
         )
     ]
 
@@ -465,9 +489,20 @@ def _source_type_rank(chunk: Chunk) -> int:
     return 1
 
 
+def _source_freshness_rank(chunk: Chunk) -> int:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    if source_type == "yonote":
+        return 0
+    if source_type in {"docx", "xlsx"}:
+        return 1
+    return 2
+
+
 def _source_reliability_score(chunk: Chunk) -> float:
     source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type in {"docx", "xlsx", "yonote"}:
+    if source_type == "yonote":
+        return 4.0
+    if source_type in {"docx", "xlsx"}:
         return 3.0
     if source_type == "ticket_answer_bank":
         return -3.0
@@ -694,7 +729,7 @@ def _topic_candidate_for_question(
     if not question_topic_group:
         return None
 
-    matches: list[tuple[int, int, float, int, float, int, Chunk]] = []
+    matches: list[tuple[int, int, int, float, int, float, int, Chunk]] = []
     for index, chunk in enumerate(chunks):
         topic_rank = _topic_match_rank(question, chunk)
         if topic_rank > 1 or not _chunk_matches_question_scope(analysis, question, chunk):
@@ -703,6 +738,7 @@ def _topic_candidate_for_question(
         matches.append(
             (
                 topic_rank,
+                _source_freshness_rank(chunk),
                 _source_type_rank(chunk),
                 -field_score,
                 1 if _is_generic_chunk(chunk) else 0,
@@ -724,8 +760,15 @@ def _topic_match_rank(question: Question, chunk: Chunk) -> int:
         return 1
     if question_topic and chunk_topic == question_topic:
         return 0
+    if (
+        chunk_topic == "forum"
+        and question_topic_group
+        == _equivalent_topic_group("podacha_zayavki_na_proekt")
+        and "регистрац" in chunk.text.casefold()
+    ):
+        return 0
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
-        return 1
+        return 0
     if _is_housing_compatible_travel_source(question_topic_group, chunk_topic, chunk.text):
         return 1
     return 2

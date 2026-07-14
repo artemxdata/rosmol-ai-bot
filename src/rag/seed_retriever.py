@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.kb.forum_registry import canonicalize_forum_name, forums_are_equivalent
 from src.models import Chunk
 
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]+", flags=re.IGNORECASE)
@@ -64,7 +65,7 @@ class SeedRetriever:
             Chunk(
                 chunk_id=str(document.record["chunk_id"]),
                 text=str(document.record.get("text_clean") or document.record.get("text") or ""),
-                metadata=document.record,
+                metadata=_canonicalize_record_forum(document.record),
                 score=score,
             )
             for score, document in scored[:top_k]
@@ -138,12 +139,33 @@ def _matches_filters(record: dict[str, Any], filters: dict[str, Any]) -> bool:
         expected = filters.get(key)
         if expected is None:
             continue
+        if key == "forum_normalized":
+            candidates = expected if isinstance(expected, list) else [expected]
+            if not any(
+                forums_are_equivalent(str(record.get(key) or ""), str(candidate))
+                for candidate in candidates
+            ):
+                return False
+            continue
         if isinstance(expected, list):
             if record.get(key) not in expected:
                 return False
         elif record.get(key) != expected:
             return False
     return True
+
+
+def _canonicalize_record_forum(record: dict[str, Any]) -> dict[str, Any]:
+    source_forum = str(record.get("forum_normalized") or "").strip()
+    canonical_forum = canonicalize_forum_name(source_forum)
+    if not canonical_forum or canonical_forum == source_forum:
+        return record
+    normalized = dict(record)
+    normalized["forum_source_value"] = source_forum
+    normalized["forum_normalized"] = canonical_forum
+    if normalized.get("forum"):
+        normalized["forum"] = canonical_forum
+    return normalized
 
 
 def _repeat(value: Any, times: int) -> str:

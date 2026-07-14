@@ -508,6 +508,9 @@ def infer_category(document: YonoteDocument, event_name: str | None) -> str:
     haystack = normalize_key(
         " ".join((*document.path_titles, document.title, document.collection_name))
     )
+    path_keys = {normalize_key(title) for title in document.path_titles}
+    if path_keys & {"о росмолодежи", "структура и направления"}:
+        return "общее"
     if "грант" in haystack:
         return "гранты"
     if any(token in haystack for token in ("фгаис", "профиль", "заявк", "авторизац")):

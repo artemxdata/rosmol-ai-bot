@@ -8,6 +8,11 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient, models
 
+from src.kb.forum_registry import (
+    canonicalize_forum_name,
+    forum_filter_values,
+    forums_are_equivalent,
+)
 from src.models import Chunk
 from src.rag.embedder import Embedder, sparse_to_indices_values
 from src.rag.filter_keys import category_filter_key, stable_text_filter_key
@@ -79,7 +84,7 @@ class Retriever:
 
         chunks: list[Chunk] = []
         for point in result.points:
-            payload = point.payload or {}
+            payload = _canonicalize_payload_forum(point.payload or {})
             chunks.append(
                 Chunk(
                     chunk_id=str(payload.get("chunk_id") or point.id),
@@ -114,7 +119,7 @@ class Retriever:
 
         chunks: list[Chunk] = []
         for point in points:
-            payload = point.payload or {}
+            payload = _canonicalize_payload_forum(point.payload or {})
             chunks.append(
                 Chunk(
                     chunk_id=str(payload.get("chunk_id") or point.id),
@@ -199,7 +204,7 @@ class Retriever:
                 with_payload=True,
             )
             for point in points:
-                payload = dict(point.payload or {})
+                payload = _canonicalize_payload_forum(point.payload or {})
                 payload.setdefault("_point_id", str(point.id))
                 payloads.append(payload)
             if not next_page_offset:
@@ -216,18 +221,20 @@ def build_filter(filters: dict[str, Any], *, use_stable_keys: bool = True) -> mo
 
     forum = filters.get("forum_normalized")
     if forum:
+        forum_values = forum_filter_values(str(forum)) or (str(forum),)
         if use_stable_keys:
+            forum_keys = sorted({stable_text_filter_key(value) for value in forum_values})
             must.append(
                 models.FieldCondition(
                     key="forum_key",
-                    match=models.MatchValue(value=stable_text_filter_key(forum)),
+                    match=_match_values(forum_keys),
                 )
             )
         else:
             must.append(
                 models.FieldCondition(
                     key="forum_normalized",
-                    match=models.MatchValue(value=forum),
+                    match=_match_values(list(forum_values)),
                 )
             )
 
@@ -250,18 +257,24 @@ def build_filter(filters: dict[str, Any], *, use_stable_keys: bool = True) -> mo
 
     topic = filters.get("topic")
     if topic:
+        topic_values = (
+            [str(value) for value in topic]
+            if isinstance(topic, (list, tuple, set))
+            else [str(topic)]
+        )
         if use_stable_keys:
+            topic_keys = [stable_text_filter_key(value) for value in topic_values]
             must.append(
                 models.FieldCondition(
                     key="topic_key",
-                    match=models.MatchValue(value=stable_text_filter_key(topic)),
+                    match=_match_values(topic_keys),
                 )
             )
         else:
             must.append(
                 models.FieldCondition(
                     key="topic",
-                    match=models.MatchValue(value=topic),
+                    match=_match_values(topic_values),
                 )
             )
 
@@ -358,13 +371,8 @@ def _payload_matches_filters(payload: dict[str, Any], filters: dict[str, Any]) -
         if not value:
             continue
         if key == "forum_normalized":
-            if not _payload_value_matches(
-                payload,
-                "forum_normalized",
-                value,
-                key_field="forum_key",
-                key_value=stable_text_filter_key(str(value)),
-            ):
+            payload_forum = str(payload.get("forum_normalized") or "")
+            if not forums_are_equivalent(payload_forum, str(value)):
                 return False
         elif key == "category":
             if not _payload_value_matches(
@@ -387,6 +395,28 @@ def _payload_matches_filters(payload: dict[str, Any], filters: dict[str, Any]) -
         elif str(payload.get(key) or "") != str(value):
             return False
     return True
+
+
+def _match_values(values: list[str]) -> models.Match:
+    unique_values = list(dict.fromkeys(value for value in values if value))
+    if len(unique_values) == 1:
+        return models.MatchValue(value=unique_values[0])
+    return models.MatchAny(any=unique_values)
+
+
+def _canonicalize_payload_forum(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_payload = dict(payload)
+    source_forum = str(normalized_payload.get("forum_normalized") or "").strip()
+    canonical_forum = canonicalize_forum_name(source_forum)
+    if not canonical_forum or canonical_forum == source_forum:
+        return normalized_payload
+
+    normalized_payload["forum_source_value"] = source_forum
+    normalized_payload["forum_normalized"] = canonical_forum
+    if normalized_payload.get("forum"):
+        normalized_payload["forum"] = canonical_forum
+    normalized_payload["forum_key"] = stable_text_filter_key(canonical_forum)
+    return normalized_payload
 
 
 def _payload_value_matches(

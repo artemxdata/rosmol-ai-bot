@@ -30,6 +30,61 @@ def test_fallback_analysis_clarifies_generic_application_request() -> None:
     assert analysis.questions == []
 
 
+@pytest.mark.parametrize(
+    ("query", "topic"),
+    [
+        (
+            "Мне одобрили заявку на форум. Как подтвердить участие?",
+            "podtverzhdenie_uchastiya_v_forume",
+        ),
+        (
+            "Что означают статусы заявки «На рассмотрении», «Одобрена» и «Отклонена»?",
+            "statusy_zayavok",
+        ),
+        (
+            "Может ли техподдержка удалить мой аккаунт ФГАИС за меня?",
+            "udalenie_akkaunta",
+        ),
+        (
+            "Потерял доступ к старой почте. Как перенести данные в новый аккаунт?",
+            "obedinenie_akkauntov",
+        ),
+    ],
+)
+def test_fallback_analysis_answers_generic_platform_workflows(
+    query: str,
+    topic: str,
+) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "платформа_фгаис"
+    assert analysis.needs_clarification is False
+    assert analysis.should_escalate is False
+    assert [question.topic for question in analysis.questions] == [topic]
+
+
+def test_fallback_analysis_routes_about_rosmolodezh_to_general_knowledge() -> None:
+    query = "Что такое Росмолодёжь и чем она занимается?"
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "общее"
+    assert analysis.needs_clarification is False
+    assert [question.topic for question in analysis.questions] == [
+        "chto_takoe_rosmolodezh"
+    ]
+
+
+def test_fallback_analysis_does_not_confuse_declining_confirmed_trip_with_confirmation() -> None:
+    query = "Я подтвердил участие, но теперь не могу поехать. Что делать?"
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "форумы"
+    assert analysis.needs_clarification is True
+
+
 def test_fallback_analysis_clarifies_generic_help_request() -> None:
     analysis = _fallback_analysis(
         "Помогите",
@@ -341,7 +396,6 @@ def test_fallback_analysis_clarifies_forum_specific_question_without_forum() -> 
         "До какого возраста можно принимать участие?",
         "Можно ли прийти с ребёнком?",
         "Надо регистрировать детей?",
-        "Одобрили заявку, как подтвердить участие?",
         "Как зайти на дистанционное обучение?",
     ],
 )

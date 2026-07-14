@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from qdrant_client import models
 
+from src.rag.filter_keys import stable_text_filter_key
 from src.rag.retriever import Retriever, build_filter
 
 
@@ -22,6 +23,45 @@ def test_build_filter_contains_status_and_derived_keys() -> None:
     assert "forum_key" in field_keys
     assert "category_key" in field_keys
     assert "source_type" in field_keys
+
+
+def test_build_filter_expands_legacy_and_yonote_forum_spellings() -> None:
+    stable_filter = build_filter({"forum_normalized": "Островa"})
+    stable_condition = next(
+        condition
+        for condition in stable_filter.must
+        if getattr(condition, "key", None) == "forum_key"
+    )
+    assert isinstance(stable_condition.match, models.MatchAny)
+    assert stable_text_filter_key("Островa") in stable_condition.match.any
+    assert stable_text_filter_key("ОстроVа") in stable_condition.match.any
+
+    raw_filter = build_filter({"forum_normalized": "Островa"}, use_stable_keys=False)
+    raw_condition = next(
+        condition
+        for condition in raw_filter.must
+        if getattr(condition, "key", None) == "forum_normalized"
+    )
+    assert isinstance(raw_condition.match, models.MatchAny)
+    assert "Островa" in raw_condition.match.any
+    assert "ОстроVа" in raw_condition.match.any
+
+
+def test_build_filter_accepts_equivalent_topic_values() -> None:
+    stable_filter = build_filter(
+        {"topic": ["oplata_proezda", "kompensaciya"]}
+    )
+    stable_condition = next(
+        condition
+        for condition in stable_filter.must
+        if getattr(condition, "key", None) == "topic_key"
+    )
+
+    assert isinstance(stable_condition.match, models.MatchAny)
+    assert set(stable_condition.match.any) == {
+        stable_text_filter_key("oplata_proezda"),
+        stable_text_filter_key("kompensaciya"),
+    }
 
 
 class FakeEmbedder:

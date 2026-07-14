@@ -43,6 +43,31 @@ def test_seed_retriever_returns_filtered_published_chunks() -> None:
     assert [chunk.chunk_id for chunk in chunks] == ["travel"]
 
 
+def test_seed_retriever_matches_and_canonicalizes_yonote_forum_variant() -> None:
+    retriever = SeedRetriever(
+        [
+            {
+                "chunk_id": "ostrova_program",
+                "status": "published",
+                "text_clean": "Программа форума ОстроVа будет опубликована перед началом.",
+                "forum": "ОстроVа",
+                "forum_normalized": "ОстроVа",
+                "category": "форумы",
+            }
+        ]
+    )
+
+    chunks = retriever.retrieve(
+        "программа форума",
+        {"forum_normalized": "Островa", "category": "форумы"},
+        top_k=1,
+    )
+
+    assert [chunk.chunk_id for chunk in chunks] == ["ostrova_program"]
+    assert chunks[0].metadata["forum_normalized"] == "Островa"
+    assert chunks[0].metadata["forum_source_value"] == "ОстроVа"
+
+
 def test_seed_retriever_boosts_intent_examples() -> None:
     retriever = SeedRetriever(
         [
