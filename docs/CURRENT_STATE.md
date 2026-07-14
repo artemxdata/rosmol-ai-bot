@@ -2,11 +2,12 @@
 
 **Обновлено:** 14 июля 2026  
 **Ветка:** `master`  
-**Текущий release candidate:** `5ccc122 Fix pre-pilot technical support gate`
+**Текущий release candidate:** `a49a6c9 Fix pre-pilot quality gate regressions`
 **Git:** release candidate зафиксирован отдельным code/test commit; handoff-документация следует
 за ним отдельным commit.
-**Статус релиза:** локальные проверки зелёные, новый кандидат ещё не развёрнут и не прошёл
-повторный server-local gate.
+**Статус релиза:** локальные проверки зелёные; новый кандидат ещё не развёрнут. Предыдущий
+кандидат `5b97069` прошёл smoke `16/16`, но полный server-local suite выявил 10 точных
+регрессий. Они устранены одним ограниченным циклом; повторный gate обязателен.
 
 ## 1. Цель
 
@@ -113,10 +114,41 @@
 - validation KB — `2186` валидных опубликованных записей;
 - KB, prompts и reranker thresholds не менялись.
 
+### Gate-итерация `a49a6c9`
+
+После полного server-local suite для `5b97069` устранены только подтверждённые причины его
+падений:
+
+- explicit operator request определяется по исходному тексту до PII masking; в trace и историю
+  по-прежнему попадает только маскированный текст;
+- добавлены точные deterministic topics для волонтёрской заявки Добро.РФ, участников премии
+  «Патриот» и тематических смен «Территории смыслов»;
+- fresh Yonote может заменить точный legacy source только для трёх проверенных случаев:
+  компенсация проезда, combined питание/проживание и регистрационный `forum`-чанк;
+- во всех остальных equivalence-группах точный topic выше свежего соседнего topic; отдельные
+  regressions защищают документы форума от подмены программой;
+- acceptance учитывает канонические варианты имени форума, один вручную проверенный
+  Yonote-эквивалент регистрации Дня молодёжи и пробелы внутри числовой даты;
+- Yonote-секция suite остаётся строгой и не принимает legacy-equivalents.
+
+Локальные результаты:
+
+- reviewer-проверка — блокеров нет;
+- targeted tests — `462 passed`;
+- `ruff check .` — успешно;
+- полный `pytest` — `1013 passed`;
+- validation KB — `2186` валидных опубликованных записей;
+- KB, prompts и reranker thresholds не менялись.
+
 ## 6. Что уже выполнено на сервере
 
-- Код `fdea1e1` был подготовлен и отправлен в GitHub.
-- Пользователь сообщил об успешном точечном reindex `30` изменённых чанков.
+- На сервер развёрнут `5b97069 Fix grounded smoke acceptance`.
+- Оба `/ready` вернули HTTP 200; зависимости готовы, `knowledge_base = 2186`.
+- Пользователь ранее сообщил об успешном точечном reindex `30` изменённых чанков.
+- После очистки только semantic response cache быстрый server-local smoke прошёл `16/16`.
+- Полный server-local suite выполнил все `136` запросов без budget stop; HTTP success и trace
+  coverage — `100%`, стоимость — `7.002882 RUB`. Gate не пройден из-за 10 quality failures,
+  перечисленных ниже.
 
 Не считать серверный релиз подтверждённым, пока не завершён следующий раздел.
 
@@ -166,12 +198,58 @@ handoff в GitHub, вручную обновить staging, затем повт�
 Точный следующий шаг: обновить staging до acceptance-fix commit и повторить только шаг 3. Если
 smoke станет `16/16`, перейти к полному suite из шага 4 без дополнительных правок.
 
+### Полный suite после deployment `5b97069`
+
+Шаг 3 завершён успешно: `16/16`, pass rate `100%`, LLM cost `0`.
+
+Шаг 4 выполнил все `136` запросов: `120` одноходовых кейсов и `16` ходов четырёх диалогов.
+Budget stop не было, стоимость составила `7.002882 RUB`, HTTP success и trace coverage — `100%`.
+Результаты секций:
+
+- Yonote — `8/15` (`53.33%`);
+- forums — `9/11` (`81.82%`);
+- safety — `16/16` (`100%`);
+- off-topic — `8/8` (`100%`);
+- PII — `4/4` (`100%`);
+- adversarial — `65/66` (`98.48%`);
+- follow-up — `16/16` ходов и `4/4` диалога (`100%`).
+
+Фактические failing IDs:
+
+1. `yonote_dobro_volunteer_application`;
+2. `yonote_ladoga_registration_closed`;
+3. `yonote_ladoga_food_and_stay`;
+4. `yonote_ladoga_travel_compensation`;
+5. `yonote_patriot_registration_deadline`;
+6. `yonote_patriot_participants`;
+7. `yonote_territory_shifts`;
+8. `forum_north_core_dates_travel`;
+9. `forum_youth_day_registration_program_children`;
+10. `adv_operator_explicit_profanity`.
+
+Классификация по trace и ответам:
+
+- 7 product defects: три отсутствующих exact topics, три случая выбора legacy XLSX вместо более
+  свежего эквивалентного Yonote и explicit operator request, в котором Natasha ошибочно
+  замаскировала слово `Позови` как имя;
+- 3 acceptance defects: формат `12. 09. 2026`, канонический вариант имени «Российского Севера»
+  и новый семантически полный Yonote-источник регистрации Дня молодёжи с другим source label;
+- unsupported claims не обнаружены; KB gap не подтверждён.
+
+Один ограниченный correction cycle зафиксирован в `a49a6c9`. Он не меняет KB, prompts,
+reranker thresholds, API, БД или webhook-логику. После reviewer-регрессии общий freshness
+priority был запрещён: whitelist оставлен только для трёх подтверждённых Yonote-замен.
+
+Точный следующий шаг: отправить `a49a6c9` и этот handoff в GitHub, вручную обновить staging,
+затем повторить шаги 1–4 ниже. До нового полного результата код, routing, prompts, пороги и KB
+не менять. Ручные VK/HDE-сценарии выполнять только после зелёного шага 4.
+
 ### Шаг 1. Проверить runtime и количество чанков
 
 На сервере `/opt/rosmol-ai-bot`:
 
 ```bash
-git log -2 --oneline
+git log -3 --oneline
 
 python3 - <<'PY'
 from urllib.request import urlopen
@@ -193,7 +271,7 @@ print("response_cache", client.count("response_cache", exact=True).count)
 PY
 ```
 
-Ожидается, что история содержит release candidate `5ccc122`, оба `/ready` = HTTP 200,
+Ожидается, что история содержит release candidate `a49a6c9`, оба `/ready` = HTTP 200,
 `knowledge_base = 2186`.
 
 ### Шаг 2. Очистить только semantic response cache
@@ -284,7 +362,7 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 
 ### Шаг 6. Решение
 
-- Все критерии выполнены: допустить `fdea1e1` к операторскому тесту и зафиксировать результаты
+- Все критерии выполнены: допустить `a49a6c9` к операторскому тесту и зафиксировать результаты
   в этом файле.
 - Есть source/behavior regression: не включать широкий трафик, собрать точные failing case IDs.
 - Есть инфраструктурный сбой: сначала исправить runtime, не менять RAG-логику.
