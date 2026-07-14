@@ -106,7 +106,8 @@ CASES = (
         "id": "profane_fgais_support",
         "behavior": "answer",
         "query": "Какого хуя не грузится ФГАИС, что мне делать?",
-        "must_contain": ("ФГАИС",),
+        "must_contain": ("очисти кеш", "браузер"),
+        "expected_sources_any": ("xlsx_fallback_r0014_tehnicheskaya_oshibka",),
     },
     {
         "id": "rostov_registration_closed",

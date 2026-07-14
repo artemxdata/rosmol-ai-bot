@@ -20,6 +20,16 @@ def test_pre_demo_cases_cover_launch_boundary_failures() -> None:
     }.issubset(case_ids)
 
 
+def test_profane_fgais_smoke_requires_grounded_first_line_support() -> None:
+    case = next(case for case in run_pre_demo_smoke.CASES if case["id"] == "profane_fgais_support")
+
+    assert case["behavior"] == "answer"
+    assert case["must_contain"] == ("очисти кеш", "браузер")
+    assert case["expected_sources_any"] == (
+        "xlsx_fallback_r0014_tehnicheskaya_oshibka",
+    )
+
+
 @pytest.mark.parametrize("compose_host", ("postgres", "db"))
 def test_host_trace_dsn_rewrites_compose_postgres_host(
     monkeypatch: pytest.MonkeyPatch,

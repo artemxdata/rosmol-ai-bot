@@ -151,6 +151,21 @@
 handoff в GitHub, вручную обновить staging, затем повторить gate с шага 1. До зелёного smoke
 `16/16` шаг 4 и ручные VK/HDE-сценарии не запускать.
 
+### Повторный smoke после deployment `5ccc122`
+
+- Новый graph route сработал: `profane_fgais_support` ответил из
+  `xlsx_fallback_r0014_tehnicheskaya_oshibka` за `199 ms`, без LLM и без эскалации.
+- Smoke формально остался `15/16` только из-за устаревшего `must_contain="ФГАИС"`: официальный
+  first-line source содержит конкретные шаги (`очисти кеш`, `браузер`), но не повторяет название
+  платформы. `http_ok`, `trace_found`, `behavior_ok`, `source_ok` и `pii_ok` были зелёными.
+- Acceptance-критерий исправлен: теперь кейс требует troubleshooting-шаги и точный cited source,
+  поэтому проверяет полезность и groundedness, а не дословное повторение вопроса.
+- После изменения локально: `ruff check .` — успешно, полный `pytest` — `1002 passed`, KB
+  validation — `2186`.
+
+Точный следующий шаг: обновить staging до acceptance-fix commit и повторить только шаг 3. Если
+smoke станет `16/16`, перейти к полному suite из шага 4 без дополнительных правок.
+
 ### Шаг 1. Проверить runtime и количество чанков
 
 На сервере `/opt/rosmol-ai-bot`:
