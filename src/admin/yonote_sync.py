@@ -94,6 +94,10 @@ def _load_fresh_yonote_records(
     base_url = str(getattr(settings, "yonote_base_url", "") or "").strip()
     api_token = str(getattr(settings, "yonote_api_token", "") or "").strip()
     timeout_seconds = float(getattr(settings, "yonote_request_timeout_seconds", 30.0))
+    max_retries = int(getattr(settings, "yonote_max_retries", 2))
+    min_request_interval_seconds = float(
+        getattr(settings, "yonote_min_request_interval_seconds", 0.15)
+    )
 
     if not base_url:
         raise YonoteSyncConfigError("YONOTE_BASE_URL is not configured")
@@ -104,6 +108,8 @@ def _load_fresh_yonote_records(
         base_url=base_url,
         api_token=api_token,
         timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        min_request_interval_seconds=min_request_interval_seconds,
     ) as client:
         documents = load_yonote_documents(
             client,

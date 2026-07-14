@@ -9,6 +9,17 @@ import pytest
 from scripts import run_pre_demo_smoke
 
 
+def test_pre_demo_cases_cover_launch_boundary_failures() -> None:
+    case_ids = {case["id"] for case in run_pre_demo_smoke.CASES}
+
+    assert {
+        "offtopic_politics",
+        "abuse_without_request",
+        "profane_fgais_support",
+        "rostov_registration_closed",
+    }.issubset(case_ids)
+
+
 def test_host_trace_dsn_rewrites_compose_postgres_host() -> None:
     dsn = run_pre_demo_smoke._host_trace_dsn(
         {"POSTGRES_DSN": "postgresql://rosmol:pass@postgres:5432/rosmol_ai_bot"}

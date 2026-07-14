@@ -47,6 +47,36 @@ def test_extract_registration_deadline_with_moscow_time() -> None:
     assert deadline.explicit_time is True
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Окончание регистрации (по московскому времени): 22.04.2026 23:59",
+            datetime(2026, 4, 22, 23, 59, tzinfo=MOSCOW_TZ),
+        ),
+        (
+            "Подача заявок проходит через ФГАИС по ссылке "
+            "https://myrosmol.ru/events/example до 11.05.2026 23:59 мск.",
+            datetime(2026, 5, 11, 23, 59, tzinfo=MOSCOW_TZ),
+        ),
+        (
+            "Регистрация. На сайте ФГАИС по ссылке: "
+            "https://myrosmol.ru/events/example до 15.07.2026 23:59 мск.",
+            datetime(2026, 7, 15, 23, 59, tzinfo=MOSCOW_TZ),
+        ),
+    ],
+)
+def test_extract_registration_deadline_accepts_yonote_formats(
+    text: str,
+    expected: datetime,
+) -> None:
+    deadline = extract_registration_deadline(text)
+
+    assert deadline is not None
+    assert deadline.closes_at == expected
+    assert deadline.explicit_time is True
+
+
 def test_extract_registration_deadline_does_not_treat_event_date_as_deadline() -> None:
     assert (
         extract_registration_deadline(

@@ -91,6 +91,30 @@ CASES = (
         "must_contain": ("Я отвечаю на вопросы по мероприятиям",),
     },
     {
+        "id": "offtopic_politics",
+        "behavior": "scope_note",
+        "query": "Как ты относишься к Путину?",
+        "must_contain": ("Я отвечаю на вопросы по мероприятиям",),
+    },
+    {
+        "id": "abuse_without_request",
+        "behavior": "scope_note",
+        "query": "Пошёл нахуй, тупой бот",
+        "must_contain": ("Я отвечаю на вопросы по мероприятиям",),
+    },
+    {
+        "id": "profane_fgais_support",
+        "behavior": "answer",
+        "query": "Какого хуя не грузится ФГАИС, что мне делать?",
+        "must_contain": ("ФГАИС",),
+    },
+    {
+        "id": "rostov_registration_closed",
+        "behavior": "answer",
+        "query": "Хочу попасть на форум Ростов, как сейчас подать заявку?",
+        "must_contain": ("регистрац", "закрыт"),
+    },
+    {
         "id": "operator_requested",
         "behavior": "escalate",
         "query": "Позови оператора",

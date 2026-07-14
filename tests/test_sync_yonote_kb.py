@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 
+import httpx
+import pytest
+
+import scripts.sync_yonote_kb as sync_yonote_kb
 from scripts.index_kb import validate_seed_items
 from scripts.sync_yonote_kb import (
+    YonoteApiError,
+    YonoteClient,
     YonoteCollection,
     YonoteDocument,
     build_document_path,
@@ -13,6 +19,96 @@ from scripts.sync_yonote_kb import (
     match_collections,
     split_collection_selectors,
 )
+
+
+def test_yonote_client_retries_transient_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=2,
+        min_request_interval_seconds=0,
+    )
+    request = httpx.Request("POST", "https://example.test/api/documents.info")
+    responses: list[httpx.Response | Exception] = [
+        httpx.RemoteProtocolError("connection dropped", request=request),
+        httpx.Response(
+            200,
+            request=request,
+            json={"data": {"document": {"id": "doc-1", "text": "Ответ"}}},
+        ),
+    ]
+    sleeps: list[float] = []
+
+    def fake_request(*_args: object, **_kwargs: object) -> httpx.Response:
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(client._client, "request", fake_request)
+    monkeypatch.setattr(sync_yonote_kb.time, "sleep", sleeps.append)
+    try:
+        document = client.document_info("doc-1")
+    finally:
+        client.close()
+
+    assert document["id"] == "doc-1"
+    assert sleeps == [1.0]
+
+
+def test_yonote_client_retries_429_using_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=1,
+        min_request_interval_seconds=0,
+    )
+    request = httpx.Request("GET", "https://example.test/api/collections.list")
+    responses = [
+        httpx.Response(429, request=request, headers={"Retry-After": "2"}),
+        httpx.Response(200, request=request, json={"data": []}),
+    ]
+    sleeps: list[float] = []
+    monkeypatch.setattr(client._client, "request", lambda *_args, **_kwargs: responses.pop(0))
+    monkeypatch.setattr(sync_yonote_kb.time, "sleep", sleeps.append)
+    try:
+        assert client.collections() == []
+    finally:
+        client.close()
+
+    assert sleeps == [2.0]
+
+
+def test_yonote_client_wraps_terminal_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=1,
+        min_request_interval_seconds=0,
+    )
+    request = httpx.Request("POST", "https://example.test/api/documents.info")
+    monkeypatch.setattr(
+        client._client,
+        "request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            httpx.RemoteProtocolError("connection dropped", request=request)
+        ),
+    )
+    monkeypatch.setattr(sync_yonote_kb.time, "sleep", lambda _value: None)
+    try:
+        with pytest.raises(YonoteApiError, match="temporarily unavailable"):
+            client.document_info("doc-1")
+    finally:
+        client.close()
 
 
 def test_split_collection_selectors_keeps_commas_inside_collection_names() -> None:

@@ -784,7 +784,11 @@ async def process_message(
         )
         return response
 
-    if profanity.check(message.text) and not _has_actionable_support_context(message.text):
+    if (
+        profanity.check(message.text)
+        and not _has_actionable_support_context(message.text)
+        and not is_operator_request(masked_text)
+    ):
         response = (
             "Я не поддерживаю оскорбления и не вступаю в споры. "
             "Я отвечаю на вопросы по мероприятиям, форумам, ФГАИС «Молодёжь России» "
@@ -1209,6 +1213,15 @@ def _has_actionable_support_context(text: str) -> bool:
             "не работает",
             "не получается",
             "не могу",
+            "не груз",
+            "не откры",
+            "не пуска",
+            "не приш",
+            "не вижу",
+            "пропал",
+            "вылет",
+            "завис",
+            "висит",
             "ошиб",
             "задолб",
             "тупит",

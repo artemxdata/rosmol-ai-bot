@@ -33,6 +33,8 @@ class Settings(BaseSettings):
         "Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия"
     )
     yonote_request_timeout_seconds: float = Field(default=30.0, ge=1)
+    yonote_max_retries: int = Field(default=2, ge=0, le=5)
+    yonote_min_request_interval_seconds: float = Field(default=0.15, ge=0, le=5)
 
     cloud_ru_api_key: str = ""
     cloud_ru_chat_completions_url: str = (

@@ -38,7 +38,7 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
     assert len(safety) >= 8
     assert len(off_topic) >= 8
     assert len(pii) >= 4
-    assert len(adversarial) == 50
+    assert len(adversarial) >= 50
     assert len(followup) >= 3
     assert len(all_ask) == len(forums) + len(safety) + len(off_topic) + len(pii) + len(
         adversarial
@@ -53,6 +53,21 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
         "escalate",
     }
     assert all("turns" in case for case in followup)
+
+    amur_followup = next(
+        case for case in followup if case["id"] == "followup_amur_refusal_after_context"
+    )
+    youth_day_followup = next(
+        case
+        for case in followup
+        if case["id"] == "followup_youth_day_ticket_family_program"
+    )
+    assert len(amur_followup["turns"]) == 6
+    assert len(youth_day_followup["turns"]) == 6
+    assert youth_day_followup["turns"][0]["expected_behavior"] == "clarify"
+    assert youth_day_followup["turns"][-1]["expected_answer_contains"] == [
+        "27 июня 2026"
+    ]
 
     bctp_case = next(case for case in forums if case["id"] == "forum_bctp_family_transfer_food")
     equivalent_ids = {

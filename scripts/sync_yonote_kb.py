@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
@@ -38,6 +39,7 @@ DEFAULT_COLLECTION_NAMES = (
     "Росмолодёжь: общее, структура, направления",
     "Росмолодёжь: мероприятия",
 )
+TRANSIENT_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 ROOT_TITLES = {
     "росмолодёжь: общее, структура, направления",
     "росмолодёжь: мероприятия",
@@ -94,10 +96,18 @@ class YonoteClient:
         base_url: str,
         api_token: str,
         timeout_seconds: float,
+        max_retries: int = 2,
+        min_request_interval_seconds: float = 0.15,
     ) -> None:
         if not api_token.strip():
             raise YonoteApiError("YONOTE_API_TOKEN is required")
         self.base_url = base_url.rstrip("/")
+        self.max_retries = max(0, int(max_retries))
+        self.min_request_interval_seconds = max(
+            0.0,
+            float(min_request_interval_seconds),
+        )
+        self._last_request_at = 0.0
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10.0)),
@@ -138,11 +148,11 @@ class YonoteClient:
         )
 
     def document_info(self, document_id: str) -> dict[str, Any]:
-        response = self._client.post(
+        response = self._request(
+            "POST",
             "/api/documents.info",
             json={"id": document_id, "apiVersion": 2},
         )
-        self._raise_for_error(response, "/api/documents.info")
         payload = response.json()
         document = (payload.get("data") or {}).get("document")
         if not isinstance(document, dict):
@@ -161,8 +171,7 @@ class YonoteClient:
         records: list[dict[str, Any]] = []
         while True:
             request_params = {**params, "limit": limit, "offset": offset}
-            response = self._client.get(path, params=request_params)
-            self._raise_for_error(response, path)
+            response = self._request("GET", path, params=request_params)
             payload = response.json()
             data = payload.get("data") or []
             if not isinstance(data, list):
@@ -172,6 +181,48 @@ class YonoteClient:
                 break
             offset += limit
         return records
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        attempts = self.max_retries + 1
+        for attempt in range(attempts):
+            self._wait_for_request_slot()
+            try:
+                response = self._client.request(method, path, **kwargs)
+            except httpx.TransportError as exc:
+                self._last_request_at = time.monotonic()
+                if attempt >= self.max_retries:
+                    raise YonoteApiError(
+                        f"Yonote API {path} temporarily unavailable after {attempts} attempts"
+                    ) from exc
+                time.sleep(self._retry_delay(attempt))
+                continue
+
+            self._last_request_at = time.monotonic()
+            if response.status_code in TRANSIENT_STATUS_CODES and attempt < self.max_retries:
+                time.sleep(self._retry_delay(attempt, response))
+                continue
+            self._raise_for_error(response, path)
+            return response
+
+        raise YonoteApiError(f"Yonote API {path} request failed")
+
+    def _wait_for_request_slot(self) -> None:
+        if self.min_request_interval_seconds <= 0 or self._last_request_at <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        remaining = self.min_request_interval_seconds - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+    @staticmethod
+    def _retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
+        if response is not None:
+            retry_after = response.headers.get("Retry-After", "").strip()
+            try:
+                return min(max(float(retry_after), 0.0), 10.0)
+            except ValueError:
+                pass
+        return min(2.0**attempt, 4.0)
 
     @staticmethod
     def _raise_for_error(response: httpx.Response, path: str) -> None:

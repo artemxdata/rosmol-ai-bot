@@ -45,6 +45,8 @@ def test_safety_detects_operator_only_topics(text: str, reason: str | None) -> N
         "Какие документы нужны на форум?",
         "Где посмотреть медицинский пункт на площадке?",
         "Как пожаловаться на техническую ошибку?",
+        "Заявка была отправлена три дня назад",
+        "В письме опечатка: заявка была отравлена 8 мая",
     ],
 )
 def test_safety_allows_regular_support_questions(text: str) -> None:

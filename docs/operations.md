@@ -83,9 +83,16 @@ Required local/server `.env` values:
 YONOTE_API_TOKEN=<read-only-token>
 YONOTE_BASE_URL=https://rossmol.yonote.ru
 YONOTE_COLLECTION_NAMES=Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия
+YONOTE_REQUEST_TIMEOUT_SECONDS=30
+YONOTE_MAX_RETRIES=2
+YONOTE_MIN_REQUEST_INTERVAL_SECONDS=0.15
 YONOTE_SYNC_ENABLED=false
 YONOTE_SYNC_MODE=manual
 ```
+
+The client spaces read requests and retries temporary network, `429`, and
+`5xx` failures with backoff. These settings protect Yonote from request bursts;
+they do not grant write access or change any source document.
 
 Build normalized Yonote chunks from API and merge them into the published KB seed:
 

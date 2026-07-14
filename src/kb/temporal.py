@@ -17,11 +17,12 @@ _TIME = r"(?:\s*(?:г(?:ода)?\.?\s*)?(?:в\s*)?(?P<time>\d{1,2}:\d{2}))?"
 _REGISTRATION_DEADLINE_PATTERNS = (
     re.compile(
         rf"(?:регистрац\w*|при[её]м\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
-        rf"подать\s+заяв\w*)[^\n.]{{0,180}}?\bдо\s+{_DATE}{_TIME}",
+        rf"подать\s+заяв\w*).{{0,600}}?\bдо\s+{_DATE}{_TIME}",
         flags=re.IGNORECASE,
     ),
     re.compile(
-        rf"окончани\w*\s+(?:при[её]ма|подачи)\s+заяв\w*[^\d\n]{{0,40}}{_DATE}{_TIME}",
+        rf"окончани\w*\s+(?:(?:при[её]ма|подачи)\s+заяв\w*|регистрац\w*)"
+        rf"[^\d]{{0,80}}{_DATE}{_TIME}",
         flags=re.IGNORECASE,
     ),
 )

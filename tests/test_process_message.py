@@ -685,6 +685,8 @@ async def test_process_message_safe_offtopic_returns_scope_note_without_escalati
         "Как ты относишься к Путину?",
         "Чей Крым?",
         "Ты тупой?",
+        "Ты бесполезный",
+        "ЧатГПТ лучше",
         "Ваш Росмол — та ещё шарага, да?",
     ],
 )
@@ -728,15 +730,30 @@ async def test_process_message_uses_original_politics_text_after_pii_masking(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Да вы заебали, бот гавно",
+        "пошёл нахуй",
+        "хули ты не отвечаешь",
+        "ты охуел",
+        "сучара",
+        "мразь",
+        "иди в жопу",
+        "я твою маму ебал",
+        "заткнись",
+    ],
+)
 async def test_process_message_standalone_profanity_does_not_escalate_or_call_graph(
     no_llm_settings: None,
     captured_logs: list[dict[str, Any]],
+    text: str,
 ) -> None:
     app = _app()
     message = IncomingMessage(
         user_id="u1",
         channel=Channel.HDE,
-        text="Да вы заебали, бот гавно",
+        text=text,
     )
 
     response = await process_message(message, app)  # type: ignore[arg-type]
@@ -747,6 +764,25 @@ async def test_process_message_standalone_profanity_does_not_escalate_or_call_gr
     assert captured_logs[0]["escalation_reason"] is None
     assert captured_logs[0]["interaction_reason"] == "profanity"
     assert app.state.semantic_cache.check_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_message_explicit_operator_request_wins_over_profanity(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app()
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="Я твою маму ебал, позови оператора",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Передаю обращение специалисту."
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "operator_requested"
 
 
 @pytest.mark.asyncio
@@ -762,6 +798,23 @@ async def test_process_message_keeps_actionable_question_despite_profanity(
     response = await process_message(message, app, bypass_cache=True)  # type: ignore[arg-type]
 
     assert response == "Инструкция по подаче заявки"
+    assert graph.seen_state is not None
+    assert captured_logs[0].get("interaction_reason") is None
+
+
+@pytest.mark.asyncio
+async def test_process_message_keeps_actionable_technical_issue_despite_profanity(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Уточни, какая ошибка появляется при входе в ФГАИС")
+    app = _app(graph=graph)
+    text = "Какого хуя не грузится ФГАИС?"
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
+
+    response = await process_message(message, app, bypass_cache=True)  # type: ignore[arg-type]
+
+    assert response == "Уточни, какая ошибка появляется при входе в ФГАИС"
     assert graph.seen_state is not None
     assert captured_logs[0].get("interaction_reason") is None
 

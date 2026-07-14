@@ -334,7 +334,12 @@
       "forums",
       "multi_aspect",
       "forum:Машук"
-    ]
+    ],
+    "equivalent_chunk_ids": {
+      "xlsx_category_r0084_programma_foruma": [
+        "yonote_api_pmbmqm6lug_s0013_programma_foruma"
+      ]
+    }
   },
   {
     "id": "forum_youth_day_registration_program_children",

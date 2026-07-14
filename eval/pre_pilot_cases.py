@@ -459,7 +459,7 @@ def _pii_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
 
 
 def _followup_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
-    return [
+    cases = [
         {
             "id": "followup_amur_refusal_after_context",
             "tags": ["pre_pilot", "followup", "forum:Амур"],
@@ -540,6 +540,130 @@ def _followup_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
             ],
         },
     ]
+
+    cases[0]["turns"].extend(
+        [
+            _answer_case(
+                "followup_amur_refusal_after_context_t3",
+                "А где там жить участникам?",
+                [index.by_forum_topic("Амур", "usloviya_prozhivaniya")],
+                tags=["pre_pilot", "followup", "turn:3", "forum:Амур"],
+            ),
+            _answer_case(
+                "followup_amur_refusal_after_context_t4",
+                "Когда после него будет сертификат?",
+                [index.by_forum_topic("Амур", "kogda_budet_sertifikat")],
+                tags=["pre_pilot", "followup", "turn:4", "forum:Амур"],
+            ),
+            _answer_case(
+                "followup_amur_refusal_after_context_t5",
+                "Какие документы взять с собой?",
+                [index.by_forum_topic("Амур", "dokumenty_meropriyatiya")],
+                tags=["pre_pilot", "followup", "turn:5", "forum:Амур"],
+            ),
+            _answer_case(
+                "followup_amur_refusal_after_context_t6",
+                "А если моя заявка сейчас в резерве?",
+                [index.by_forum_topic("Амур", "rezervnyy_spisok")],
+                tags=["pre_pilot", "followup", "turn:6", "forum:Амур"],
+            ),
+        ]
+    )
+    cases.append(
+        {
+            "id": "followup_youth_day_ticket_family_program",
+            "tags": [
+                "pre_pilot",
+                "followup",
+                "forum:День молодёжи",
+                "long_context",
+            ],
+            "turns": [
+                {
+                    "id": "followup_youth_day_ticket_family_program_t1",
+                    "query": "Где мой билет?",
+                    "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t1",
+                    "channel": "api",
+                    "expected_behavior": "clarify",
+                    "expected_escalated": False,
+                    "tags": ["pre_pilot", "followup", "turn:1", "ambiguous"],
+                },
+                {
+                    "id": "followup_youth_day_ticket_family_program_t2",
+                    "query": "На День молодёжи.",
+                    "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t2",
+                    "channel": "api",
+                    "expected_behavior": "answer",
+                    "expected_escalated": False,
+                    "tags": [
+                        "pre_pilot",
+                        "followup",
+                        "turn:2",
+                        "forum:День молодёжи",
+                    ],
+                },
+                {
+                    "id": "followup_youth_day_ticket_family_program_t3",
+                    "query": "Мужу нужен отдельный билет?",
+                    "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t3",
+                    "channel": "api",
+                    "expected_behavior": "answer",
+                    "expected_escalated": False,
+                    "tags": [
+                        "pre_pilot",
+                        "followup",
+                        "turn:3",
+                        "forum:День молодёжи",
+                    ],
+                },
+                {
+                    "id": "followup_youth_day_ticket_family_program_t4",
+                    "query": "А ребёнку 10 лет?",
+                    "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t4",
+                    "channel": "api",
+                    "expected_behavior": "answer",
+                    "expected_answer_contains": ["13"],
+                    "expected_escalated": False,
+                    "tags": [
+                        "pre_pilot",
+                        "followup",
+                        "turn:4",
+                        "forum:День молодёжи",
+                    ],
+                },
+                {
+                    "id": "followup_youth_day_ticket_family_program_t5",
+                    "query": "Где потом посмотреть программу?",
+                    "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t5",
+                    "channel": "api",
+                    "expected_behavior": "answer",
+                    "expected_escalated": False,
+                    "tags": [
+                        "pre_pilot",
+                        "followup",
+                        "turn:5",
+                        "forum:День молодёжи",
+                    ],
+                },
+                {
+                    "id": "followup_youth_day_ticket_family_program_t6",
+                    "query": "И когда всё начинается?",
+                    "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t6",
+                    "channel": "api",
+                    "expected_behavior": "answer",
+                    "expected_answer_contains": ["27 июня 2026"],
+                    "expected_escalated": False,
+                    "tags": [
+                        "pre_pilot",
+                        "followup",
+                        "turn:6",
+                        "forum:День молодёжи",
+                    ],
+                },
+            ],
+        }
+    )
+    return cases
 
 
 def _answer_case(

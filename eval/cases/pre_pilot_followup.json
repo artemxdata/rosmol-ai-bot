@@ -58,6 +58,111 @@
           "turn:2",
           "forum:Амур"
         ]
+      },
+      {
+        "id": "followup_amur_refusal_after_context_t3",
+        "query": "А где там жить участникам?",
+        "user_id": "pre-pilot-followup_amur_refusal_after_context_t3",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0213_usloviya_prozhivaniya"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0213_usloviya_prozhivaniya"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:3",
+          "forum:Амур"
+        ]
+      },
+      {
+        "id": "followup_amur_refusal_after_context_t4",
+        "query": "Когда после него будет сертификат?",
+        "user_id": "pre-pilot-followup_amur_refusal_after_context_t4",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0223_kogda_budet_sertifikat"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0223_kogda_budet_sertifikat"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:4",
+          "forum:Амур"
+        ]
+      },
+      {
+        "id": "followup_amur_refusal_after_context_t5",
+        "query": "Какие документы взять с собой?",
+        "user_id": "pre-pilot-followup_amur_refusal_after_context_t5",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0208_dokumenty_meropriyatiya"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0208_dokumenty_meropriyatiya"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:5",
+          "forum:Амур"
+        ],
+        "equivalent_chunk_ids": {
+          "xlsx_category_r0208_dokumenty_meropriyatiya": [
+            "xlsx_category_r0224_pamyatka_uchastnika_foruma"
+          ]
+        }
+      },
+      {
+        "id": "followup_amur_refusal_after_context_t6",
+        "query": "А если моя заявка сейчас в резерве?",
+        "user_id": "pre-pilot-followup_amur_refusal_after_context_t6",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_chunk_ids": [
+          "xlsx_category_r0217_rezervnyy_spisok"
+        ],
+        "expected_cited_chunk_ids": [
+          "xlsx_category_r0217_rezervnyy_spisok"
+        ],
+        "expected_answer_contains": [],
+        "expected_escalated": false,
+        "expected_escalation_reason": null,
+        "expected_generator_model": null,
+        "expected_message_masked_contains": [],
+        "forbidden_message_masked_contains": [],
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:6",
+          "forum:Амур"
+        ]
       }
     ]
   },
@@ -197,6 +302,107 @@
           "followup",
           "turn:2",
           "grants"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "followup_youth_day_ticket_family_program",
+    "tags": [
+      "pre_pilot",
+      "followup",
+      "forum:День молодёжи",
+      "long_context"
+    ],
+    "turns": [
+      {
+        "id": "followup_youth_day_ticket_family_program_t1",
+        "query": "Где мой билет?",
+        "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t1",
+        "channel": "api",
+        "expected_behavior": "clarify",
+        "expected_escalated": false,
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:1",
+          "ambiguous"
+        ]
+      },
+      {
+        "id": "followup_youth_day_ticket_family_program_t2",
+        "query": "На День молодёжи.",
+        "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t2",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_escalated": false,
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:2",
+          "forum:День молодёжи"
+        ]
+      },
+      {
+        "id": "followup_youth_day_ticket_family_program_t3",
+        "query": "Мужу нужен отдельный билет?",
+        "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t3",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_escalated": false,
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:3",
+          "forum:День молодёжи"
+        ]
+      },
+      {
+        "id": "followup_youth_day_ticket_family_program_t4",
+        "query": "А ребёнку 10 лет?",
+        "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t4",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_answer_contains": [
+          "13"
+        ],
+        "expected_escalated": false,
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:4",
+          "forum:День молодёжи"
+        ]
+      },
+      {
+        "id": "followup_youth_day_ticket_family_program_t5",
+        "query": "Где потом посмотреть программу?",
+        "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t5",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_escalated": false,
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:5",
+          "forum:День молодёжи"
+        ]
+      },
+      {
+        "id": "followup_youth_day_ticket_family_program_t6",
+        "query": "И когда всё начинается?",
+        "user_id": "pre-pilot-followup_youth_day_ticket_family_program_t6",
+        "channel": "api",
+        "expected_behavior": "answer",
+        "expected_answer_contains": [
+          "27 июня 2026"
+        ],
+        "expected_escalated": false,
+        "tags": [
+          "pre_pilot",
+          "followup",
+          "turn:6",
+          "forum:День молодёжи"
         ]
       }
     ]
