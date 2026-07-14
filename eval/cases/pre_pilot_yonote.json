@@ -1,0 +1,406 @@
+[
+  {
+    "id": "yonote_fgais_merge_accounts",
+    "query": "Я потерял доступ к старой почте ФГАИС. Как перенести данные в новый аккаунт?",
+    "user_id": "pre-pilot-yonote_fgais_merge_accounts",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_answer_contains": [
+      "support@myrosmol.ru"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais"
+    ]
+  },
+  {
+    "id": "yonote_fgais_delete_account",
+    "query": "Может ли техподдержка удалить мой аккаунт ФГАИС за меня?",
+    "user_id": "pre-pilot-yonote_fgais_delete_account",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0007_udalenie_akkaunta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0007_udalenie_akkaunta"
+    ],
+    "expected_answer_contains": [
+      "только сам пользователь"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais"
+    ]
+  },
+  {
+    "id": "yonote_fgais_confirm_participation",
+    "query": "Мне одобрили заявку на форум. Как подтвердить участие?",
+    "user_id": "pre-pilot-yonote_fgais_confirm_participation",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0014_podtverzhdenie_uchastiya_v_forume"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0014_podtverzhdenie_uchastiya_v_forume"
+    ],
+    "expected_answer_contains": [
+      "подтвердить участие"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais",
+      "participation"
+    ]
+  },
+  {
+    "id": "yonote_fgais_application_statuses",
+    "query": "Что означают статусы заявки «На рассмотрении», «Одобрена» и «Отклонена»?",
+    "user_id": "pre-pilot-yonote_fgais_application_statuses",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_answer_contains": [
+      "на рассмотрении",
+      "одобрена",
+      "отклонена"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais",
+      "application"
+    ]
+  },
+  {
+    "id": "yonote_about_rosmolodezh",
+    "query": "Что такое Росмолодёжь и чем она занимается?",
+    "user_id": "pre-pilot-yonote_about_rosmolodezh",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_rtasiv0nlg_s0001_chto_takoe_rosmolodezh"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rtasiv0nlg_s0001_chto_takoe_rosmolodezh"
+    ],
+    "expected_answer_contains": [
+      "федеральное агентство"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "rosmolodezh"
+    ]
+  },
+  {
+    "id": "yonote_dobro_registration",
+    "query": "Как зарегистрироваться на Добро.РФ через новый кабинет?",
+    "user_id": "pre-pilot-yonote_dobro_registration",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta"
+    ],
+    "expected_answer_contains": [
+      "письмо"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "dobro"
+    ]
+  },
+  {
+    "id": "yonote_dobro_volunteer_application",
+    "query": "Как найти волонтёрское мероприятие и подать заявку на Добро.РФ?",
+    "user_id": "pre-pilot-yonote_dobro_volunteer_application",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_answer_contains": [
+      "волонтёр"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "dobro",
+      "application"
+    ]
+  },
+  {
+    "id": "yonote_ladoga_registration_closed",
+    "query": "Можно ли сейчас подать заявку на форум «Ладога»?",
+    "user_id": "pre-pilot-yonote_ladoga_registration_closed",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum"
+    ],
+    "expected_answer_contains": [
+      "30 июня 2026"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Ладога",
+      "temporal"
+    ]
+  },
+  {
+    "id": "yonote_ladoga_food_and_stay",
+    "query": "На форуме «Ладога» питание и проживание оплачивают организаторы?",
+    "user_id": "pre-pilot-yonote_ladoga_food_and_stay",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie"
+    ],
+    "expected_answer_contains": [
+      "3-разовое",
+      "за счет организаторов"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Ладога"
+    ]
+  },
+  {
+    "id": "yonote_ladoga_travel_compensation",
+    "query": "Компенсируют ли дорогу до форума «Ладога»?",
+    "user_id": "pre-pilot-yonote_ladoga_travel_compensation",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_answer_contains": [
+      "регион"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Ладога",
+      "travel"
+    ]
+  },
+  {
+    "id": "yonote_patriot_registration_deadline",
+    "query": "До какого числа можно подать заявку на Национальную премию «Патриот»?",
+    "user_id": "pre-pilot-yonote_patriot_registration_deadline",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya"
+    ],
+    "expected_answer_contains": [
+      "12.09.2026"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "event:Патриот",
+      "temporal"
+    ]
+  },
+  {
+    "id": "yonote_patriot_participants",
+    "query": "Кто может участвовать в Национальной премии «Патриот»?",
+    "user_id": "pre-pilot-yonote_patriot_participants",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_answer_contains": [
+      "18 до 35"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "event:Патриот"
+    ]
+  },
+  {
+    "id": "yonote_territory_shifts",
+    "query": "Какие смены будут на форуме «Территория смыслов» в 2026 году?",
+    "user_id": "pre-pilot-yonote_territory_shifts",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_answer_contains": [
+      "единство",
+      "правда",
+      "родина"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Территория смыслов"
+    ]
+  },
+  {
+    "id": "yonote_grant_report_review",
+    "query": "Какой срок проверки грантового отчёта?",
+    "user_id": "pre-pilot-yonote_grant_report_review",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_answer_contains": [
+      "30 рабочих дней"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "grants",
+      "reporting"
+    ]
+  },
+  {
+    "id": "yonote_grant_agreement_review",
+    "query": "Кто и сколько времени проверяет проект грантового соглашения?",
+    "user_id": "pre-pilot-yonote_grant_agreement_review",
+    "channel": "api",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya"
+    ],
+    "expected_answer_contains": [
+      "куратор",
+      "30 дней"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "grants",
+      "agreement"
+    ]
+  }
+]

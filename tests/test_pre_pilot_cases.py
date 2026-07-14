@@ -15,6 +15,7 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
     )
 
     assert set(paths) == {
+        "yonote",
         "forums",
         "safety",
         "off_topic",
@@ -26,6 +27,7 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
     for path in paths.values():
         assert path.exists()
 
+    yonote = json.loads(paths["yonote"].read_text(encoding="utf-8"))
     forums = json.loads(paths["forums"].read_text(encoding="utf-8"))
     safety = json.loads(paths["safety"].read_text(encoding="utf-8"))
     off_topic = json.loads(paths["off_topic"].read_text(encoding="utf-8"))
@@ -34,14 +36,26 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
     followup = json.loads(paths["followup"].read_text(encoding="utf-8"))
     all_ask = json.loads(paths["all_ask"].read_text(encoding="utf-8"))
 
+    assert len(yonote) >= 15
     assert len(forums) >= 10
     assert len(safety) >= 8
     assert len(off_topic) >= 8
     assert len(pii) >= 4
     assert len(adversarial) >= 50
     assert len(followup) >= 3
-    assert len(all_ask) == len(forums) + len(safety) + len(off_topic) + len(pii) + len(
-        adversarial
+    assert len(all_ask) == (
+        len(yonote)
+        + len(forums)
+        + len(safety)
+        + len(off_topic)
+        + len(pii)
+        + len(adversarial)
+    )
+    assert all("yonote" in case["tags"] for case in yonote)
+    assert all(
+        chunk_id.startswith("yonote_api_")
+        for case in yonote
+        for chunk_id in case["expected_chunk_ids"]
     )
     assert all(case["expected_behavior"] == "escalate" for case in safety)
     assert all(case["expected_behavior"] == "scope_note" for case in off_topic)

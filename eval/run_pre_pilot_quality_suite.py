@@ -36,7 +36,15 @@ from eval.run_ask import (
 )
 
 DEFAULT_OUTPUT_DIR = Path("reports/pre_pilot_quality_suite")
-DEFAULT_SECTIONS = ("forums", "safety", "off_topic", "pii", "adversarial", "followup")
+DEFAULT_SECTIONS = (
+    "yonote",
+    "forums",
+    "safety",
+    "off_topic",
+    "pii",
+    "adversarial",
+    "followup",
+)
 
 
 async def run_pre_pilot_quality_suite(

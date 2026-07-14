@@ -7,6 +7,7 @@ from typing import Any
 
 DEFAULT_CASES_DIR = Path("eval/cases")
 ASK_SECTION_FILES = {
+    "yonote": "pre_pilot_yonote.json",
     "forums": "pre_pilot_forums.json",
     "safety": "pre_pilot_safety.json",
     "off_topic": "pre_pilot_off_topic.json",
@@ -28,6 +29,7 @@ def build_pre_pilot_case_sets(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     sections: dict[str, list[dict[str, Any]]] = {
+        "yonote": _yonote_cases(index),
         "forums": _forum_cases(index),
         "safety": _safety_cases(),
         "off_topic": _off_topic_cases(),
@@ -102,6 +104,18 @@ class _ChunkIndex:
         if not matches:
             raise KeyError(f"Published chunk not found: topic={topic!r}")
         return str(matches[0]["chunk_id"])
+
+    def by_chunk_id(self, chunk_id: str, *, source_type: str | None = None) -> str:
+        record = self.by_id.get(chunk_id)
+        if record is None:
+            raise KeyError(f"Published chunk not found: chunk_id={chunk_id!r}")
+        if record.get("status", "published") != "published":
+            raise KeyError(f"Chunk is not published: chunk_id={chunk_id!r}")
+        if source_type is not None and record.get("source_type") != source_type:
+            raise KeyError(
+                f"Chunk source mismatch: chunk_id={chunk_id!r} source_type={source_type!r}"
+            )
+        return chunk_id
 
     def equivalent_chunk_ids(self, expected_chunk_ids: list[str]) -> dict[str, list[str]]:
         equivalents: dict[str, list[str]] = {}
@@ -224,6 +238,119 @@ def _attach_equivalent_chunk_ids(payload: Any, index: _ChunkIndex) -> None:
             generated[str(chunk_id)] = list(dict.fromkeys(merged))
     if generated:
         payload["equivalent_chunk_ids"] = generated
+
+
+def _yonote_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
+    def source(chunk_id: str) -> str:
+        return index.by_chunk_id(chunk_id, source_type="yonote")
+
+    return [
+        _answer_case(
+            "yonote_fgais_merge_accounts",
+            "Я потерял доступ к старой почте ФГАИС. Как перенести данные в новый аккаунт?",
+            [source("yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov")],
+            expected_answer_contains=["support@myrosmol.ru"],
+            tags=["pre_pilot", "yonote", "fgais"],
+        ),
+        _answer_case(
+            "yonote_fgais_delete_account",
+            "Может ли техподдержка удалить мой аккаунт ФГАИС за меня?",
+            [source("yonote_api_u7b5sscrri_s0007_udalenie_akkaunta")],
+            expected_answer_contains=["только сам пользователь"],
+            tags=["pre_pilot", "yonote", "fgais"],
+        ),
+        _answer_case(
+            "yonote_fgais_confirm_participation",
+            "Мне одобрили заявку на форум. Как подтвердить участие?",
+            [source("yonote_api_u7b5sscrri_s0014_podtverzhdenie_uchastiya_v_forume")],
+            expected_answer_contains=["подтвердить участие"],
+            tags=["pre_pilot", "yonote", "fgais", "participation"],
+        ),
+        _answer_case(
+            "yonote_fgais_application_statuses",
+            "Что означают статусы заявки «На рассмотрении», «Одобрена» и «Отклонена»?",
+            [source("yonote_api_u7b5sscrri_s0016_statusy_zayavok")],
+            expected_answer_contains=["на рассмотрении", "одобрена", "отклонена"],
+            tags=["pre_pilot", "yonote", "fgais", "application"],
+        ),
+        _answer_case(
+            "yonote_about_rosmolodezh",
+            "Что такое Росмолодёжь и чем она занимается?",
+            [source("yonote_api_rtasiv0nlg_s0001_chto_takoe_rosmolodezh")],
+            expected_answer_contains=["федеральное агентство"],
+            tags=["pre_pilot", "yonote", "rosmolodezh"],
+        ),
+        _answer_case(
+            "yonote_dobro_registration",
+            "Как зарегистрироваться на Добро.РФ через новый кабинет?",
+            [source("yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta")],
+            expected_answer_contains=["письмо"],
+            tags=["pre_pilot", "yonote", "dobro"],
+        ),
+        _answer_case(
+            "yonote_dobro_volunteer_application",
+            "Как найти волонтёрское мероприятие и подать заявку на Добро.РФ?",
+            [source("yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch")],
+            expected_answer_contains=["волонтёр"],
+            tags=["pre_pilot", "yonote", "dobro", "application"],
+        ),
+        _answer_case(
+            "yonote_ladoga_registration_closed",
+            "Можно ли сейчас подать заявку на форум «Ладога»?",
+            [source("yonote_api_irwwd4t2v8_s0006_forum")],
+            expected_answer_contains=["30 июня 2026"],
+            tags=["pre_pilot", "yonote", "forum:Ладога", "temporal"],
+        ),
+        _answer_case(
+            "yonote_ladoga_food_and_stay",
+            "На форуме «Ладога» питание и проживание оплачивают организаторы?",
+            [source("yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie")],
+            expected_answer_contains=["3-разовое", "за счет организаторов"],
+            tags=["pre_pilot", "yonote", "forum:Ладога"],
+        ),
+        _answer_case(
+            "yonote_ladoga_travel_compensation",
+            "Компенсируют ли дорогу до форума «Ладога»?",
+            [source("yonote_api_irwwd4t2v8_s0012_kompensaciya")],
+            expected_answer_contains=["регион"],
+            tags=["pre_pilot", "yonote", "forum:Ладога", "travel"],
+        ),
+        _answer_case(
+            "yonote_patriot_registration_deadline",
+            "До какого числа можно подать заявку на Национальную премию «Патриот»?",
+            [source("yonote_api_tnorqqrmvg_s0002_registraciya")],
+            expected_answer_contains=["12.09.2026"],
+            tags=["pre_pilot", "yonote", "event:Патриот", "temporal"],
+        ),
+        _answer_case(
+            "yonote_patriot_participants",
+            "Кто может участвовать в Национальной премии «Патриот»?",
+            [source("yonote_api_tnorqqrmvg_s0003_uchastniki")],
+            expected_answer_contains=["18 до 35"],
+            tags=["pre_pilot", "yonote", "event:Патриот"],
+        ),
+        _answer_case(
+            "yonote_territory_shifts",
+            "Какие смены будут на форуме «Территория смыслов» в 2026 году?",
+            [source("yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma")],
+            expected_answer_contains=["единство", "правда", "родина"],
+            tags=["pre_pilot", "yonote", "forum:Территория смыслов"],
+        ),
+        _answer_case(
+            "yonote_grant_report_review",
+            "Какой срок проверки грантового отчёта?",
+            [source("yonote_api_g4yfzssrsd_s0079_proverka_otcheta")],
+            expected_answer_contains=["30 рабочих дней"],
+            tags=["pre_pilot", "yonote", "grants", "reporting"],
+        ),
+        _answer_case(
+            "yonote_grant_agreement_review",
+            "Кто и сколько времени проверяет проект грантового соглашения?",
+            [source("yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya")],
+            expected_answer_contains=["куратор", "30 дней"],
+            tags=["pre_pilot", "yonote", "grants", "agreement"],
+        ),
+    ]
 
 
 def _forum_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
@@ -679,6 +806,7 @@ def _answer_case(
     query: str,
     expected_chunk_ids: list[str],
     *,
+    expected_answer_contains: list[str] | None = None,
     expected_message_masked_contains: list[str] | None = None,
     forbidden_message_masked_contains: list[str] | None = None,
     tags: list[str] | None = None,
@@ -691,7 +819,7 @@ def _answer_case(
         "expected_behavior": "answer",
         "expected_chunk_ids": expected_chunk_ids,
         "expected_cited_chunk_ids": expected_chunk_ids,
-        "expected_answer_contains": [],
+        "expected_answer_contains": expected_answer_contains or [],
         "expected_escalated": False,
         "expected_escalation_reason": None,
         "expected_generator_model": None,
