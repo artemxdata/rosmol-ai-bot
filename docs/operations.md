@@ -152,6 +152,22 @@ After indexing, run smoke checks against `http://127.0.0.1:8001/ask` with
 `X-Bypass-Cache: true`. For server rollout, repeat the same build/index
 commands on the staging host after pulling the latest commit.
 
+## Secure Admin Access
+
+Do not enter `ADMIN_AUTH_TOKEN` through the public `http://<server-ip>/admin/kb`
+address. Plain HTTP does not protect the login request or session cookie in
+transit. Until a domain and HTTPS certificate are configured, open the admin
+panel through an SSH tunnel from the operator workstation:
+
+```bash
+ssh -L 8080:127.0.0.1:80 root@<server-ip>
+```
+
+Keep that SSH session open and use `http://127.0.0.1:8080/admin/kb` in the
+browser. Public production use requires DNS, TLS termination, and an HTTPS-only
+admin session. The HDE webhook should also be moved to HTTPS before leaving the
+controlled test channel.
+
 ## Server Staging Deploy
 
 Current staging target: Ubuntu 24.04 host with Docker already installed.
