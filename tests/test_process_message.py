@@ -832,6 +832,99 @@ async def test_process_message_keeps_actionable_technical_issue_despite_profanit
 
 
 @pytest.mark.asyncio
+async def test_process_message_routes_colloquial_fgais_loading_failure_to_support_source(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    support_text = (
+        "Сожалеем, что пришлось столкнуться с техническими сложностями. "
+        "Очисти кеш и cookie браузера, открой сайт в другом браузере "
+        "и попробуй зайти с другого устройства."
+    )
+
+    class SupportRetriever:
+        def __init__(self) -> None:
+            self.metadata_calls: list[tuple[dict[str, Any], int]] = []
+
+        async def retrieve(
+            self,
+            query: str,
+            filters: dict[str, Any],
+            top_k: int,
+        ) -> list[Chunk]:
+            raise AssertionError("exact technical topic must use metadata retrieval")
+
+        async def retrieve_by_metadata(
+            self,
+            filters: dict[str, Any],
+            *,
+            top_k: int,
+        ) -> list[Chunk]:
+            self.metadata_calls.append((filters, top_k))
+            return [
+                Chunk(
+                    chunk_id="xlsx_fallback_r0014_tehnicheskaya_oshibka",
+                    text=support_text,
+                    metadata={
+                        "chunk_id": "xlsx_fallback_r0014_tehnicheskaya_oshibka",
+                        "category": "техподдержка",
+                        "topic": "tehnicheskaya_oshibka",
+                        "source_type": "xlsx",
+                        "is_generic": True,
+                    },
+                    score=0.9,
+                )
+            ]
+
+    class SupportReranker:
+        def rerank(
+            self,
+            query: str,
+            chunks: list[Chunk],
+            top_k: int,
+        ) -> list[ScoredChunk]:
+            raise AssertionError("trusted exact topic must not require ML reranking")
+
+    retriever = SupportRetriever()
+    reranker = SupportReranker()
+    app = _app(
+        graph=build_graph(),
+        retriever=retriever,
+        reranker=reranker,
+    )
+    text = "Какого хуя не грузится ФГАИС, что мне делать?"
+
+    response = await process_message(
+        IncomingMessage(user_id="u1", channel=Channel.API, text=text),
+        app,  # type: ignore[arg-type]
+        bypass_cache=True,
+    )
+
+    assert response == support_text
+    assert retriever.metadata_calls == [
+        (
+            {
+                "category": "техподдержка",
+                "topic": "tehnicheskaya_oshibka",
+            },
+            10,
+        )
+    ]
+    assert captured_logs[0]["analysis"].category == "техподдержка"
+    assert captured_logs[0]["analysis"].is_technical is True
+    assert captured_logs[0]["analysis"].questions[0].topic == "tehnicheskaya_oshibka"
+    assert captured_logs[0]["reranked_chunks"][0].chunk_id == (
+        "xlsx_fallback_r0014_tehnicheskaya_oshibka"
+    )
+    assert captured_logs[0]["max_confidence"] >= 0.7
+    assert captured_logs[0].get("should_escalate") is not True
+    assert captured_logs[0].get("escalation_reason") is None
+    assert captured_logs[0]["cited_sources"] == [
+        "xlsx_fallback_r0014_tehnicheskaya_oshibka"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_process_message_keeps_ambiguous_cabinet_issue_despite_profanity(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],

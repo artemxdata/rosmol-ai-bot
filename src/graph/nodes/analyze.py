@@ -282,6 +282,7 @@ def _fallback_analysis(
     payload = _coerce_analysis_payload(payload)
     _apply_deterministic_forum(payload, original_message)
     _apply_forum_category_guardrail(payload, original_message)
+    payload["is_technical"] = payload.get("category") == "техподдержка"
     _ensure_deterministic_questions(payload, original_message)
     analysis = QueryAnalysis.model_validate(payload)
     analysis = apply_session_context(analysis, masked_message, session)
@@ -1344,6 +1345,7 @@ def _infer_category_from_message(message: str) -> str | None:
             "ошиб",
             "баг",
             "не работает",
+            "не груз",
             "не могу выбрать",
             "не могу отправить",
             "не могу сохранить",
@@ -1593,6 +1595,7 @@ def _has_forum_technical_marker(message: str) -> bool:
     technical_markers = (
         "ошиб",
         "не работает",
+        "не груз",
         "не приходит письмо",
         "парол",
         "id проф",
@@ -1663,6 +1666,15 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     category = payload.get("category")
     forum = payload.get("forum_normalized") or payload.get("forum")
     normalized = message.casefold().replace("ё", "е")
+    if category == "техподдержка" and "не груз" in normalized:
+        return [
+            {
+                "text": "Что делать при технической ошибке или проблеме доступа?",
+                "topic": "tehnicheskaya_oshibka",
+                "category": "техподдержка",
+                "forum_normalized": None,
+            }
+        ]
     if _is_about_rosmolodezh_query(normalized):
         return [
             {

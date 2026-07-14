@@ -163,12 +163,16 @@ def _read_dotenv(path: Path = Path(".env")) -> dict[str, str]:
     return env
 
 
+def _is_container_runtime() -> bool:
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
 def _host_trace_dsn(env: dict[str, str]) -> str | None:
     dsn = env.get("POSTGRES_DSN") or os.getenv("POSTGRES_DSN")
     if not dsn:
         return None
     parsed = urlsplit(dsn)
-    if parsed.hostname not in {"postgres", "db"}:
+    if parsed.hostname not in {"postgres", "db"} or _is_container_runtime():
         return dsn
 
     username = parsed.username or ""

@@ -20,12 +20,28 @@ def test_pre_demo_cases_cover_launch_boundary_failures() -> None:
     }.issubset(case_ids)
 
 
-def test_host_trace_dsn_rewrites_compose_postgres_host() -> None:
+@pytest.mark.parametrize("compose_host", ("postgres", "db"))
+def test_host_trace_dsn_rewrites_compose_postgres_host(
+    monkeypatch: pytest.MonkeyPatch,
+    compose_host: str,
+) -> None:
+    monkeypatch.setattr(run_pre_demo_smoke, "_is_container_runtime", lambda: False)
     dsn = run_pre_demo_smoke._host_trace_dsn(
-        {"POSTGRES_DSN": "postgresql://rosmol:pass@postgres:5432/rosmol_ai_bot"}
+        {"POSTGRES_DSN": f"postgresql://rosmol:pass@{compose_host}:5432/rosmol_ai_bot"}
     )
 
     assert dsn == "postgresql://rosmol:pass@127.0.0.1:5432/rosmol_ai_bot"
+
+
+@pytest.mark.parametrize("compose_host", ("postgres", "db"))
+def test_container_trace_dsn_keeps_compose_postgres_host(
+    monkeypatch: pytest.MonkeyPatch,
+    compose_host: str,
+) -> None:
+    monkeypatch.setattr(run_pre_demo_smoke, "_is_container_runtime", lambda: True)
+    expected = f"postgresql://rosmol:pass@{compose_host}:5432/rosmol_ai_bot"
+
+    assert run_pre_demo_smoke._host_trace_dsn({"POSTGRES_DSN": expected}) == expected
 
 
 @pytest.mark.asyncio
