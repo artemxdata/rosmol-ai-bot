@@ -742,6 +742,7 @@ async def test_process_message_uses_original_politics_text_after_pii_masking(
         "иди в жопу",
         "я твою маму ебал",
         "заткнись",
+        "сдохни, бот",
     ],
 )
 async def test_process_message_standalone_profanity_does_not_escalate_or_call_graph(
