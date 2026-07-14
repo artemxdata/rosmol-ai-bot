@@ -15,6 +15,19 @@ KEYWORD_RECALL_TOP_K = 6
 KEYWORD_RECALL_SCAN_LIMIT = 2048
 OFFICIAL_KEYWORD_SOURCE_TYPES = ("xlsx", "docx")
 FALLBACK_KEYWORD_SOURCE_TYPES = ("ticket_answer_bank",)
+DIRECTIONAL_TOPIC_LOOKUP_ALIASES: dict[str, tuple[str, ...]] = {
+    "poluchenie_i_naznachenie_bileta": (
+        "bilet_ne_prishel_povtornoe_poluchenie",
+        "poluchenie_biletov_i_org_momenty",
+    )
+}
+STRICT_TOPIC_ONLY = frozenset(
+    {
+        "poluchenie_i_naznachenie_bileta",
+        "bilet_ne_prishel_povtornoe_poluchenie",
+        "poluchenie_biletov_i_org_momenty",
+    }
+)
 TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     (
         "o_meropriyatii",
@@ -165,7 +178,8 @@ async def retrieve(state: BotState) -> dict:
         try:
             found = []
             retrieval_query = expand_query_aliases(question.text)
-            strict_topic_only = _should_defer_broad_topic_attempts(
+            requires_exact_topic = _requires_exact_topic_coverage(question_filters)
+            strict_topic_only = requires_exact_topic or _should_defer_broad_topic_attempts(
                 question_filters,
                 topic_question_count,
             )
@@ -204,7 +218,7 @@ async def retrieve(state: BotState) -> dict:
                     allow_strict_forum_stop=allow_strict_forum_stop,
                 ):
                     break
-            if strict_topic_only and not strict_found:
+            if strict_topic_only and not strict_found and not requires_exact_topic:
                 needs_shared_broad_fallback = True
             chunks.extend(found)
         except MLDependencyError as exc:
@@ -308,6 +322,11 @@ def _should_defer_broad_topic_attempts(
     return topic_question_count > 1
 
 
+def _requires_exact_topic_coverage(filters: dict) -> bool:
+    topic = str(filters.get("topic") or "").strip()
+    return topic in STRICT_TOPIC_ONLY
+
+
 async def _retrieve_attempt(
     retriever: object,
     query: str,
@@ -331,6 +350,8 @@ def _topic_lookup_aliases(topic: str) -> list[str]:
     topic = topic.strip()
     if not topic:
         return []
+    if topic in DIRECTIONAL_TOPIC_LOOKUP_ALIASES:
+        return list(DIRECTIONAL_TOPIC_LOOKUP_ALIASES[topic])
     for group in TOPIC_LOOKUP_ALIAS_GROUPS:
         if topic in group:
             return [candidate for candidate in group if candidate != topic]

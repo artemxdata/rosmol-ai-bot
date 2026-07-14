@@ -1160,6 +1160,61 @@ async def test_process_message_resolves_ticket_after_forum_clarification(
 
 
 @pytest.mark.asyncio
+async def test_process_message_known_forum_ticket_does_not_use_neighbor_sources(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    class NeighborOnlyTicketRetriever:
+        def __init__(self) -> None:
+            self.metadata_calls: list[dict[str, Any]] = []
+
+        async def retrieve_by_metadata(self, filters: dict[str, Any], top_k: int):
+            self.metadata_calls.append(filters)
+            return []
+
+        async def retrieve(self, query: str, filters: dict[str, Any], top_k: int):
+            raise AssertionError("ticket lookup must not fall back to neighboring forum topics")
+
+    class EmptyReranker:
+        def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+            assert chunks == []
+            return []
+
+    session = Session(
+        user_id="dialog-user",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="Ростов",
+        last_messages=[
+            {
+                "user": "Как подать заявку на форум Ростов?",
+                "bot": "Регистрация завершена.",
+            }
+        ],
+    )
+    retriever = NeighborOnlyTicketRetriever()
+    app = _app(
+        graph=build_graph(),
+        retriever=retriever,
+        reranker=EmptyReranker(),
+        session=session,
+    )
+
+    response = await process_message(
+        IncomingMessage(user_id="dialog-user", channel=Channel.API, text="Где мой билет?"),
+        app,  # type: ignore[arg-type]
+        bypass_cache=True,
+    )
+
+    assert response == "Передаю обращение специалисту, чтобы не дать неточный ответ."
+    assert captured_logs[-1]["escalation_reason"] == "no_relevant_chunks"
+    assert captured_logs[-1].get("cited_sources", []) == []
+    assert retriever.metadata_calls
+    topics = retriever.metadata_calls[0]["topic"]
+    assert "poluchenie_i_naznachenie_bileta" in topics
+
+
+@pytest.mark.asyncio
 async def test_dialog_does_not_escalate_only_because_clarifications_are_long() -> None:
     app = _app()
     session = Session(

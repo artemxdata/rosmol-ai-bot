@@ -931,6 +931,265 @@ def test_fallback_questions_prefer_arrival_departure_over_generic_dates() -> Non
     assert [question.text for question in questions] == ["Когда заезд и выезд?"]
 
 
+def test_fallback_questions_do_not_rewrite_event_ticket_as_age_or_travel() -> None:
+    message = "Ростов: Где мой билет?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        message,
+    )
+
+    assert [(question.text, question.topic) for question in questions] == [
+        (message, "poluchenie_i_naznachenie_bileta")
+    ]
+
+
+def test_fallback_questions_do_not_find_family_stem_inside_forum_name() -> None:
+    message = "Агропродвижение: Где мой билет?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Агропродвижение"),
+        message,
+    )
+
+    assert questions[0].topic == "poluchenie_i_naznachenie_bileta"
+
+
+def test_fallback_questions_route_missing_event_ticket_to_exact_topic() -> None:
+    message = "День молодёжи: А если билет не пришёл на почту?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="День молодёжи"),
+        message,
+    )
+
+    assert [(question.text, question.topic) for question in questions] == [
+        (message, "bilet_ne_prishel_povtornoe_poluchenie")
+    ]
+
+
+def test_fallback_questions_prioritize_current_missing_ticket_over_generic_anchor() -> None:
+    message = (
+        "День молодёжи: Где мой билет? "
+        "Уточнение пользователя: А если билет не пришёл на почту?"
+    )
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="День молодёжи"),
+        message,
+    )
+
+    assert questions[0].topic == "bilet_ne_prishel_povtornoe_poluchenie"
+
+
+def test_fallback_questions_keep_other_aspects_with_event_ticket_lookup() -> None:
+    message = "Ростов: Где мой билет и когда проходит форум?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        message,
+    )
+
+    assert [(question.text, question.topic) for question in questions] == [
+        (message, "poluchenie_i_naznachenie_bileta"),
+        ("Какие даты и сроки?", None),
+    ]
+
+
+def test_fallback_questions_keep_travel_clause_with_event_ticket_lookup() -> None:
+    message = "Ростов: Где мой билет и кто оплачивает проезд?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        message,
+    )
+
+    assert [(question.text, question.topic) for question in questions] == [
+        (message, "poluchenie_i_naznachenie_bileta"),
+        ("Кто оплачивает проезд?", None),
+    ]
+
+
+def test_fallback_questions_keep_child_clause_with_event_ticket_lookup() -> None:
+    message = "Ростов: Где мой билет и нужен ли ребёнку отдельный?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        message,
+    )
+
+    assert [(question.text, question.topic) for question in questions] == [
+        (message, "poluchenie_i_naznachenie_bileta"),
+        ("Можно ли прийти с ребёнком или детьми?", None),
+    ]
+
+
+def test_fallback_questions_keep_transport_ticket_payment_as_travel() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        "Кто оплачивает билеты до мероприятия?",
+    )
+
+    assert [question.text for question in questions] == ["Кто оплачивает проезд?"]
+
+
+def test_fallback_questions_keep_age_word_as_age() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        "Можно участвовать, если мне 20 лет?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как подать заявку или зарегистрироваться?",
+        "Какие возрастные ограничения?",
+    ]
+
+
+def test_fallback_questions_keep_hyphenated_age_as_age() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        "Можно ли участвовать 20-летнему?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как подать заявку или зарегистрироваться?",
+        "Какие возрастные ограничения?",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Когда начинается летняя смена форума?", ["Когда начинается летняя смена форума?"]),
+        ("Будет ли летняя программа?", ["Где посмотреть программу и артистов?"]),
+    ],
+)
+def test_fallback_questions_do_not_treat_summer_word_as_age(
+    message: str,
+    expected: list[str],
+) -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        message,
+    )
+
+    assert [question.text for question in questions] == expected
+
+
+@pytest.mark.asyncio
+async def test_retrieve_does_not_fall_back_to_neighbor_topics_for_event_ticket() -> None:
+    class NeighborOnlyRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = 0
+
+        async def retrieve_by_metadata(self, filters, top_k):
+            return []
+
+        async def retrieve(self, query, filters, top_k):
+            self.semantic_calls += 1
+            return [
+                Chunk(
+                    chunk_id="rostov_travel",
+                    text="Проезд участники оплачивают самостоятельно.",
+                    metadata={
+                        "forum_normalized": "Ростов",
+                        "category": "форумы",
+                        "topic": "oplata_proezda",
+                    },
+                )
+            ]
+
+    retriever = NeighborOnlyRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+            "contextual_message": "Ростов: Где мой билет?",
+            "retriever": retriever,
+        }
+    )
+
+    assert result["retrieved_chunks"] == []
+    assert retriever.semantic_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retrieve_missing_ticket_topic_does_not_use_generic_alias() -> None:
+    class NoExactMissingTicketRetriever:
+        def __init__(self) -> None:
+            self.metadata_calls: list[dict] = []
+
+        async def retrieve_by_metadata(self, filters, top_k):
+            self.metadata_calls.append(filters)
+            return []
+
+        async def retrieve(self, query, filters, top_k):
+            raise AssertionError("missing-ticket lookup must remain exact and fail closed")
+
+    retriever = NoExactMissingTicketRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Больше, чем путешествие",
+            ),
+            "contextual_message": "Больше, чем путешествие: Билет не пришёл на почту",
+            "retriever": retriever,
+        }
+    )
+
+    assert result["retrieved_chunks"] == []
+    assert retriever.metadata_calls[0]["topic"] == (
+        "bilet_ne_prishel_povtornoe_poluchenie"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_exact_event_ticket_topic_without_semantic_fallback() -> None:
+    class ExactTicketRetriever:
+        def __init__(self) -> None:
+            self.semantic_calls = 0
+
+        async def retrieve_by_metadata(self, filters, top_k):
+            topics = filters.get("topic")
+            topics = topics if isinstance(topics, list) else [topics]
+            assert "poluchenie_i_naznachenie_bileta" in topics
+            return [
+                Chunk(
+                    chunk_id="youth_day_ticket",
+                    text="Билет доступен в чат-боте MAX и приходит на электронную почту.",
+                    metadata={
+                        "forum_normalized": "День молодёжи",
+                        "category": "форумы",
+                        "topic": "poluchenie_i_naznachenie_bileta",
+                    },
+                )
+            ]
+
+        async def retrieve(self, query, filters, top_k):
+            self.semantic_calls += 1
+            return []
+
+    retriever = ExactTicketRetriever()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="День молодёжи",
+            ),
+            "contextual_message": "День молодёжи: Где мой билет?",
+            "retriever": retriever,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "youth_day_ticket"
+    ]
+    assert retriever.semantic_calls == 0
+
+
 def test_fallback_questions_map_selection_deadline_to_results_not_event_dates() -> None:
     questions = build_effective_questions(
         QueryAnalysis(category="форумы", forum_normalized="Амур"),

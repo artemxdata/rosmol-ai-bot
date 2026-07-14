@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from src.models import QueryAnalysis, Question
 
 FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -45,7 +47,21 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
             "расход",
             "покрыва",
             "дорог",
-            "билет",
+            "оплачив",
+            "стоимост",
+            "компенс",
+            "возмест",
+            "до мероприятия",
+            "до форума",
+            "до места проведения",
+            "билет на поезд",
+            "билет на самол",
+            "авиабилет",
+            "жд билет",
+            "ж/д билет",
+            "поезд",
+            "самол",
+            "транспортн",
             "чартер",
             "доезд",
             "доехать",
@@ -358,6 +374,29 @@ def _base_questions(
                 forum_normalized=analysis.forum_normalized,
             )
         ]
+    event_ticket_topic = _event_ticket_lookup_topic(message)
+    if not analysis.questions and event_ticket_topic:
+        questions = [
+            Question(
+                text=message,
+                topic=event_ticket_topic,
+                category=analysis.category,
+                forum_normalized=analysis.forum_normalized,
+            )
+        ]
+        for text in _fallback_questions_from_message(
+            message,
+            extra_markers=extra_fallback_markers,
+            category=analysis.category,
+        ):
+            questions.append(
+                Question(
+                    text=text,
+                    category=analysis.category,
+                    forum_normalized=analysis.forum_normalized,
+                )
+            )
+        return questions
 
     if analysis.questions:
         filtered_questions = _filter_inferred_aspect_questions(
@@ -420,6 +459,83 @@ def _base_questions(
             forum_normalized=analysis.forum_normalized,
         )
     ]
+
+
+def _event_ticket_lookup_topic(message: str) -> str | None:
+    clauses = re.split(
+        r"[,;.!?]+|\s+(?:и|а)\s+",
+        str(message or ""),
+        flags=re.IGNORECASE,
+    )
+    topics = {
+        topic
+        for clause in clauses
+        if (topic := _event_ticket_topic_for_clause(clause)) is not None
+    }
+    if "bilet_ne_prishel_povtornoe_poluchenie" in topics:
+        return "bilet_ne_prishel_povtornoe_poluchenie"
+    if "poluchenie_i_naznachenie_bileta" in topics:
+        return "poluchenie_i_naznachenie_bileta"
+    return None
+
+
+def _event_ticket_topic_for_clause(clause: str) -> str | None:
+    normalized = str(clause or "").casefold().replace("ё", "е").strip()
+    if not re.search(r"(?<![\w])билет[а-я]*", normalized, flags=re.UNICODE):
+        return None
+    if not any(
+        marker in normalized
+        for marker in (
+            "где",
+            "найти",
+            "посмотреть",
+            "получить",
+            "не приш",
+            "не вижу",
+            "потер",
+        )
+    ):
+        return None
+    if any(
+        marker in normalized
+        for marker in (
+            "проезд",
+            "дорог",
+            "поезд",
+            "самолет",
+            "авиа",
+            "ж/д",
+            "транспорт",
+            "до форума",
+            "до мероприятия",
+            "до места проведения",
+            "оплат",
+            "стоимост",
+            "сколько стоит",
+            "компенс",
+            "возмещ",
+            "возмест",
+        )
+    ):
+        return None
+    if re.search(
+        r"(?<![\w])(?:ребен|дет|несовершеннолет|муж|жен|супруг)[а-я]*(?![\w])",
+        normalized,
+        flags=re.UNICODE,
+    ) or "другого человек" in normalized:
+        return None
+    if any(
+        marker in normalized
+        for marker in (
+            "не приш",
+            "не вижу",
+            "не могу найти",
+            "не получается найти",
+            "потер",
+        )
+    ):
+        return "bilet_ne_prishel_povtornoe_poluchenie"
+    return "poluchenie_i_naznachenie_bileta"
 
 
 def _has_combined_event_place_date_request(message: str) -> bool:
@@ -578,7 +694,7 @@ def _matched_marker_group_indexes(
     groups: set[int] = set()
     markers_to_scan = _fallback_marker_groups(extra_markers, category=category)
     for index, (markers, _question) in enumerate(markers_to_scan):
-        if any(marker in normalized for marker in markers):
+        if _has_any_marker(normalized, markers):
             groups.add(index)
     return groups
 
@@ -660,7 +776,7 @@ def _fallback_questions_from_message(
     questions: list[str] = []
     seen_aspects: set[str] = set()
     for markers, question in _fallback_marker_groups(extra_markers, category=category):
-        if any(marker in normalized for marker in markers):
+        if _has_any_marker(normalized, markers):
             if _should_skip_fallback_question(question, normalized, category=category):
                 continue
             aspect_key = _fallback_question_aspect_key(question)
@@ -668,6 +784,21 @@ def _fallback_questions_from_message(
                 questions.append(question)
                 seen_aspects.add(aspect_key)
     return questions
+
+
+def _has_any_marker(normalized: str, markers: tuple[str, ...]) -> bool:
+    for marker in markers:
+        if marker == "лет":
+            if re.search(
+                r"(?<![\w])лет(?![\w])|(?<![\w])\d{1,3}-летн[а-я]*(?![\w])",
+                normalized,
+                flags=re.UNICODE,
+            ):
+                return True
+            continue
+        if marker in normalized:
+            return True
+    return False
 
 
 def _fallback_question_aspect_key(question: str) -> str:
