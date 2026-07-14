@@ -160,12 +160,16 @@ transit. Until a domain and HTTPS certificate are configured, open the admin
 panel through an SSH tunnel from the operator workstation:
 
 ```bash
-ssh -L 8080:127.0.0.1:80 root@<server-ip>
+ssh -N -L 18088:127.0.0.1:80 root@<server-ip>
 ```
 
-Keep that SSH session open and use `http://127.0.0.1:8080/admin/kb` in the
-browser. Public production use requires DNS, TLS termination, and an HTTPS-only
-admin session. The HDE webhook should also be moved to HTTPS before leaving the
+Keep that SSH session open and use `http://127.0.0.1:18088/admin/kb` in the
+browser. Port `18088` is the team standard because local Docker Compose uses
+`8080` by default; using `8080` can silently open a developer's local admin
+instead of the server. Every team member must open their own SSH tunnel: the
+`127.0.0.1` URL is local to that workstation and is not a shared public link.
+Public production use requires DNS, TLS termination, and an HTTPS-only admin
+session. The HDE webhook should also be moved to HTTPS before leaving the
 controlled test channel.
 
 ## Server Staging Deploy
