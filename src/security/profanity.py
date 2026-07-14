@@ -26,9 +26,13 @@ PROFANITY_RE = re.compile(
     r"говн\w*|гавн\w*|задолб\w*|"
     r"мраз\w*|твар\w*|урод\w*|чмо\w*|шлюх\w*|"
     r"г[ао]ндон\w*|пид[ао]р\w*|жоп\w*|засран\w*|"
+    r"ублюд\w*|дебил\w*|идиот\w*|кретин\w*|гнид\w*|"
+    r"дегенерат\w*|имбецил\w*|шалав\w*|дроч\w*|залуп\w*|"
+    r"лох(?:а|у|ом|и|ов|ами)?|"
     r"fuck\w*|motherfuck\w*|bitch\w*|"
     r"(?:na)?hu(?:y|i|j)\w*|blya(?:t|d)?\w*|suka\w*|"
-    r"mudak\w*|pizd\w*|(?:y)?ebat\w*|pidor\w*|gandon\w*"
+    r"mudak\w*|pizd\w*|(?:y)?ebat\w*|pidor\w*|gandon\w*|"
+    r"debil\w*|idiot\w*|ublyud\w*|drocher\w*|loh"
     r")\b",
     re.IGNORECASE | re.UNICODE,
 )

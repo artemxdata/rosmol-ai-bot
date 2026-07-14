@@ -42,6 +42,16 @@ from src.security import profanity
         "п-и-з-д-е-ц",
         "xуй",
         "fuck you",
+        "ты дебил",
+        "идиот",
+        "ублюдок",
+        "гнида",
+        "дегенерат",
+        "дрочер",
+        "залупа",
+        "шалава",
+        "полный loh",
+        "ty debil",
     ],
 )
 def test_profanity_detects_common_russian_forms(text: str) -> None:

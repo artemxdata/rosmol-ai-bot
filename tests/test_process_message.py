@@ -743,6 +743,10 @@ async def test_process_message_uses_original_politics_text_after_pii_masking(
         "я твою маму ебал",
         "заткнись",
         "сдохни, бот",
+        "ты дебил",
+        "идиот",
+        "ублюдок",
+        "гнида",
     ],
 )
 async def test_process_message_standalone_profanity_does_not_escalate_or_call_graph(
@@ -787,13 +791,20 @@ async def test_process_message_explicit_operator_request_wins_over_profanity(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Как, блять, подать заявку на форум Ростов?",
+        "Ты идиот, как мне подать заявку на форум Ростов?",
+    ],
+)
 async def test_process_message_keeps_actionable_question_despite_profanity(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],
+    text: str,
 ) -> None:
     graph = CapturingGraph("Инструкция по подаче заявки")
     app = _app(graph=graph)
-    text = "Как, блять, подать заявку на форум Ростов?"
     message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
 
     response = await process_message(message, app, bypass_cache=True)  # type: ignore[arg-type]
