@@ -117,19 +117,43 @@ Screenshot-only обращение не должно приводить к вы�
 
 ## D-018. Текущий release candidate
 
-**Статус:** ограниченно допущен к операторскому тесту.
-Release candidate — `eea1972`, развёрнутый в составе handoff commit `e56894e`. Server-local gate,
-HDE smoke, runtime count и очистка semantic cache подтверждены. Допуск распространяется только на
-контролируемый тест операторов; широкий трафик остаётся закрыт до оценки ticket-level конверсии на
-свежих обращениях. При дефекте сначала классифицируется причина; rollback не выполняется
-автоматически.
+**Статус:** локально готов, server gate не закрыт.
+Текущий code release candidate — `6249b08`. На сервере пока развёрнут прежний handoff `e56894e`
+с code RC `eea1972`. Из-за изменения кода, KB, cache contract и схемы trace прежний `LIMITED GO`
+аннулирован. Новый кандидат допускается к операторам только после migration `007`, published-only
+индексации, server-local smoke/full suite и короткого HDE/VK smoke. Широкий трафик остаётся закрыт
+до оценки ticket-level конверсии на свежих обращениях.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
-**Статус:** принято.
+**Статус:** принято; freeze начнётся после нового server gate.
 На время независимого теста не меняются код, routing, prompts, thresholds и KB. Главный результат
 считается по полным tickets: direct answer и успешное разрешение после уточнения являются закрытием
 без оператора; одно уточнение само по себе закрытием не считается. Новые обращения не исправляются
 по одному: часть сохраняется как holdout, остальные после теста разбираются одним пакетным циклом.
 Исторические XLSX и regression suite используются как baseline и защита от поломок, но не как
 доказательство обобщающей способности текущего RC.
+
+## D-020. В runtime индексируются только published records
+
+**Статус:** принято.
+Seed может содержать archived records для воспроизводимости source corrections, но Qdrant
+`knowledge_base` получает только `status=published`. Полная индексация требует forum registry и
+`--prune-stale`; после любого успешного изменения KB semantic response cache очищается полностью.
+Для RC `6249b08` ожидаемый runtime count — `2152`, а не полный seed count `2186`.
+
+## D-021. HDE delivery работает fail-closed и наблюдаемо
+
+**Статус:** принято для контролируемого теста.
+Webhook обязан иметь стабильный event/ticket identity. Redis lease не позволяет параллельно
+обработать один event; Redis failure или collision возвращает retryable 503, успешная отправка
+фиксируется как delivered, ошибка освобождает lease. Migration `007` добавляет delivery telemetry.
+FastAPI BackgroundTasks не является durable outbox и остаётся блокером широкого трафика, но не
+короткого наблюдаемого операторского теста.
+
+## D-022. Pseudonymization использует отдельный секрет
+
+**Статус:** принято.
+В staging/production `USER_HASH_SECRET` обязателен и не может подменяться API, webhook или admin
+token. Секрет создаётся один раз без вывода в терминал и не ротируется в обычном deployment:
+ротация намеренно разрывает pseudonym ID, session continuity и ticket-level аналитику.

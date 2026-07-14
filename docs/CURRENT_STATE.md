@@ -2,12 +2,13 @@
 
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
-**Текущий release candidate:** `eea1972 Fix event ticket fallback routing`
-**Git:** на сервере развёрнут handoff commit `e56894e`, содержащий code RC `eea1972`.
-**Статус релиза:** server-local и channel gate закрыты для ограниченного операторского теста:
-`16/16` smoke, полный suite `passed=true`, `knowledge_base = 2186`, `response_cache = 2 -> 0`.
-HDE подтвердил одну trace-строку на webhook, корректную изоляцию реальных tickets и исправленный
-ticket-flow. Это `LIMITED GO` на независимый тест операторов, а не допуск широкого трафика.
+**Текущий release candidate:** `6249b08 Harden pre-operator quality and delivery`
+**Git:** новый code RC подготовлен локально; на сервере пока остаётся handoff commit `e56894e`
+с прежним code RC `eea1972`.
+**Статус релиза:** `LOCAL GO / SERVER NO GO`. Локальный gate нового RC зелёный, но migration `007`,
+полная published-only переиндексация и server-local/channel gate ещё не выполнены. Прежний
+`LIMITED GO` отменён изменением кода и KB. Операторам новый тест не начинать до закрытия текущего
+раздела 7.
 
 ## 1. Цель
 
@@ -23,9 +24,10 @@ ticket-flow. Это `LIMITED GO` на независимый тест опера
 `docs/complex_request_quality_baseline.md`. Зелёный regression gate не подменяет измерение
 конверсии на свежих обращениях операторов.
 
-Свежий read-only аудит кода, всех 2186 чанков, БД/trace-схемы и корневых материалов с ошибками
-зафиксирован в `docs/conversion_growth_audit_20260715.md`. Его backlog не применять во время
-операторского freeze: текущий следующий шаг остаётся сбором полной ticket-level разметки.
+Read-only аудит кода, всех 2186 seed-записей, БД/trace-схемы и корневых материалов зафиксирован в
+`docs/conversion_growth_audit_20260715.md`. По прямому решению пользователя freeze был снят для
+одного срочного pre-operator correction cycle. Он завершён в code RC `6249b08`; точный следующий
+шаг — ручной deployment и новый release gate, а не дополнительные изменения качества.
 
 ## 2. Что представляет собой проект
 
@@ -75,7 +77,8 @@ ticket-flow. Это `LIMITED GO` на независимый тест опера
 - Ограничение HDE учитывает общий лимит 300 RPM и резерв для других процессов.
 - Yonote preview/apply, validation и reindex доступны через админ-панель.
 - Операционный отчёт в админке: latency, стоимость, cache, эскалации и проблемные темы.
-- Миграция БД `006_conversation_memory` применена на сервере.
+- Миграция БД `006_conversation_memory` применена на сервере; новая
+  `007_hde_delivery_telemetry` входит в RC и на сервере ещё не применена.
 
 ## 5. Последняя итерация `fdea1e1`
 
@@ -151,6 +154,8 @@ ticket-flow. Это `LIMITED GO` на независимый тест опера
 
 ## 6. Что уже выполнено на сервере
 
+Этот раздел описывает прежний runtime `e56894e`, а не новый RC `6249b08`.
+
 - На сервер развёрнут `e56894e`, содержащий code RC `eea1972`.
 - Оба внутренних `/ready` вернули HTTP 200; Redis, PostgreSQL, Qdrant и ML prewarm готовы.
 - `knowledge_base = 2186`; перед финальным channel smoke очищена только semantic-коллекция
@@ -160,7 +165,59 @@ ticket-flow. Это `LIMITED GO` на независимый тест опера
   — `100%`, стоимость — `7.420207 RUB`.
 - Ручной HDE smoke подтвердил policy, grounded sources, fail-closed routing и multi-turn ticket flow.
 
-## 7. Release gate — закрыт для ограниченного операторского теста
+## 7. Release gate нового RC — ожидает deployment и server-local проверку
+
+### Срочный pre-operator correction cycle 15 июля 2026
+
+Пользователь явно разрешил до операторского теста исправить findings полного аудита. Новый code
+RC — `6249b08`. В нём закрыты подтверждённые дефекты четырёх слоёв:
+
+- RAG/routing: multi-forum и multi-aspect вопросы сохраняют область каждого аспекта; stale
+  session context не выбирает случайный форум; exact/source-only fast path не обходят semantic
+  rerank без topic/lexical signal; verifier проверяет cited claims; deterministic guard работает
+  до verifier и не имеет права сужать составной ответ до одного факта;
+- KB: добавлен versioned correction manifest и semantic audit; 34 cross-event/stale записи
+  архивированы; индексатор берёт только `status=published`, требует forum registry, удаляет stale
+  Qdrant points через `--prune-stale` и после KB mutation полностью очищает semantic response
+  cache; Yonote Apply валидирует merged seed до атомарной записи;
+- cache/temporal: semantic cache schema v2 сохраняет citations/analysis, не обслуживает
+  multi-forum и temporal ответы; активность фактов проверяется по московской дате;
+- HDE/security/privacy: stable event id и Redis lease защищают от duplicate delivery, Redis
+  failure работает fail-closed, delivery state пишется в trace через migration `007`; lock TTL
+  покрывает timeout; pseudonymization требует отдельный `USER_HASH_SECRET` вне local/test;
+  retention script fail-safe; сырые source materials исключены из image/runtime mounts.
+
+Локальный gate для `6249b08`:
+
+- независимый финальный review P1 — блокеров нет;
+- `ruff check .` — успешно;
+- полный `pytest` — `1165 passed`;
+- Docker Compose config — успешно;
+- Alembic head — `007_hde_delivery_telemetry`;
+- KB validation — `2186` seed-записей: `2152 published`, `34 archived`;
+- semantic audit — `0 errors`, `4 warnings`;
+- versioned calibration set — `11/11` валидных кейсов;
+- offline lexical retrieval — Recall@5 `90.91%`, Recall@10 `100%`, regression threshold `85%`
+  пройден.
+
+Текущий release decision — `NO GO` до серверных результатов. На сервере всё ещё прежний runtime:
+Qdrant содержит 2186 точек, migration `007` не применена, новый cache/lease/delivery contract не
+проверен. Единственный следующий шаг:
+
+1. вручную выполнить раздел 2 `docs/pre_pilot_release_checklist.md` в maintenance window;
+2. до остановки runtime проверить/создать без вывода значения стабильный `USER_HASH_SECRET`,
+   сделать backup PostgreSQL и snapshot Qdrant;
+3. применить migration `007`, выполнить полную индексацию с registry и `--prune-stale`, затем
+   ожидать `knowledge_base = 2152` и `response_cache = 0`;
+4. проверить оба `/ready`, smoke `16/16`, полный server-local suite и короткий HDE/VK smoke с
+   одной delivery/trace-строкой на inbound;
+5. только после фиксации результатов здесь вернуть `LIMITED GO` и заморозить кандидат на время
+   независимого операторского теста.
+
+До завершения этих пяти пунктов не менять код, routing, prompts, thresholds или KB и не начинать
+операторский тест.
+
+### История предыдущего gate (архив)
 
 ### Результат прогона 14 июля 2026 — gate остановлен на шаге 3
 
@@ -379,10 +436,10 @@ UTC сценарии 1–4 повторены в HDE и создали ровн�
 заморожены. Широкий трафик не включать до измерения полной ticket-level конверсии и разбора
 свежего holdout.
 
-### Архивная процедура gate
+### Архивная процедура gate для `eea1972` — не применять к `6249b08`
 
-Шаги ниже сохранены как воспроизводимый runbook; для текущего RC они выполнены и не требуют
-повторного запуска перед операторским тестом.
+Шаги ниже сохранены только как история прежнего RC. Для нового RC использовать актуальный раздел
+2 `docs/pre_pilot_release_checklist.md`.
 
 ### Шаг 1. Проверить runtime и количество чанков
 
@@ -514,36 +571,42 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 - Rollback выполнять только по инструкции из `docs/pre_pilot_release_checklist.md` и только после
   фиксации логов и предыдущего commit.
 
-## 8. Известные ограничения, не блокирующие тестовый запуск
+## 8. Известные ограничения и остаточные риски
 
 - Изображения и screenshot-only обращения не распознаются; применяется controlled escalation.
 - Не подключены как версионируемые источники сайт ФГАИС, официальные соцсети, ответы второй
   линии и внутренний новостной чат операторов.
 - Бот-анализатор HDE и автоматическая еженедельная генерация gap-ТЗ пока не подключены.
 - Нет независимой финальной оценки полной multi-turn конверсии на свежем holdout операторов.
-- Read-only аудит после gate обнаружил пять опубликованных legacy cross-event чанков. Они не
-  исправляются во время явно заданного freeze и являются accepted known risk только для
-  контролируемого внутреннего теста; широкий трафик блокируют. IDs и план исправления — в
-  `docs/conversion_growth_audit_20260715.md`.
+- Semantic audit не имеет ошибок. Остались четыре не блокирующих класса warnings: grant taxonomy
+  (`236` записей), normalized duplicate text (`234` группы/совпадения), одно registry-событие без
+  published chunks (`Время молодых`) и `79` Yonote/event labels вне pilot registry. Их нельзя
+  массово исправлять перед операторами без отдельной разметки: это риск taxonomy/dedup, а не
+  подтверждённая потеря ответа.
+- HDE всё ещё исполняет отправку через FastAPI `BackgroundTasks`, а не durable outbox. Stable
+  event id, lease lifecycle и fail-closed 503 существенно снижают риск дубля/потери при retry, но
+  не дают exactly-once после аварии процесса. Для контролируемого теста это наблюдаемый residual;
+  широкий трафик требует durable outbox.
 - Публичные admin/HDE endpoints пока без TLS; админка используется через SSH tunnel.
 - Админка отвечает HTTP 200 на `/admin/kb`; безопасный доступ до TLS:
   `ssh -N -L 18088:127.0.0.1:80 root@139.100.225.44`, затем
   `http://127.0.0.1:18088/admin/kb`. Это стандарт команды: каждый сотрудник открывает свой
   tunnel. Порт `8080` не использовать, потому что его по умолчанию занимает локальный Compose.
   Не вводить admin token через публичный HTTP.
-- Список чанков в админке по умолчанию ограничен 50 строками; это не размер KB. На runtime
-  находятся 2186 чанков, из них 1436 — Yonote, 714 — XLSX, 36 — DOCX.
+- Список чанков в админке по умолчанию ограничен 50 строками; это не размер KB. Старый runtime
+  пока содержит 2186 точек. После новой published-only индексации ожидается 2152; полный seed
+  содержит 2186 записей (`2152 published`, `34 archived`).
 - Панель `Quality` может показывать старый локальный presentation-report: актуальный server-local
   итог хранится в `/app/data/private/prelaunch_20260714/full/summary.json` и не подменяется
   устаревшим UI-отчётом.
 - Активный Nginx пока не отдаёт настроенные security headers и скрытие версии. Перед работой с
   авторизованной админкой проверить `nginx -t` и выполнить штатный `nginx -s reload`; это
   операционная правка конфигурации, не изменение кода или KB.
-- Во время freeze в админке разрешены только read-only действия: просмотр/поиск, `Validate`,
-  ops/quality reports и `Yonote Preview`. Не использовать `Save`, `Reindex` и `Apply to KB` до
-  пакетного разбора операторского теста.
+- После закрытия нового gate на время freeze в админке разрешены только read-only действия:
+  просмотр/поиск, `Validate`, ops/quality reports и `Yonote Preview`. Не использовать `Save`,
+  `Reindex` и `Apply to KB` до пакетного разбора операторского теста.
 
-## 9. План после допуска к операторскому тесту
+## 9. План после нового допуска к операторскому тесту
 
 1. Заморозить routing и KB на время независимого теста операторов.
 2. Для каждого полного ticket фиксировать исход: direct answer, resolved after clarification,
@@ -570,4 +633,5 @@ docs/operator_response_policy.md и docs/pre_pilot_release_checklist.md.
 текущую цель, завершённые работы, незакрытый release gate и следующий один шаг.
 ```
 
-До получения результатов раздела 7 не вносить новые улучшения в routing, prompts или KB.
+До получения серверных результатов текущего раздела 7 не вносить новые улучшения в routing,
+prompts, thresholds или KB.
