@@ -148,6 +148,13 @@ def _build_sync_report(
     )
     unchanged_count = len((old_ids & fresh_ids) - set(changed_ids))
 
+    added_items = [_record_summary(fresh_by_id[chunk_id]) for chunk_id in added_ids]
+    removed_items = [_record_summary(old_by_id[chunk_id]) for chunk_id in removed_ids]
+    changed_items = [
+        _changed_record_summary(old_by_id[chunk_id], fresh_by_id[chunk_id])
+        for chunk_id in changed_ids
+    ]
+
     return {
         "ok": True,
         "applied": applied,
@@ -165,8 +172,15 @@ def _build_sync_report(
         "added_sample": added_ids[:10],
         "changed_sample": changed_ids[:10],
         "removed_sample": removed_ids[:10],
+        "added_items": added_items,
+        "changed_items": changed_items,
+        "removed_items": removed_items,
         "category_counts": _count_field(fresh_yonote_records, "category"),
         "forum_counts": _count_field(fresh_yonote_records, "forum_normalized"),
+        "collection_counts": _count_field(
+            fresh_yonote_records,
+            "source_collection_name",
+        ),
         "message": _human_message(
             applied=applied,
             changed=len(changed_ids),
@@ -174,6 +188,59 @@ def _build_sync_report(
             removed=len(removed_ids),
         ),
     }
+
+
+def _record_summary(record: dict[str, Any]) -> dict[str, Any]:
+    heading_path = record.get("source_heading_path")
+    heading = ""
+    if isinstance(heading_path, list):
+        heading = " / ".join(str(item).strip() for item in heading_path if str(item).strip())
+
+    title = str(record.get("intent_name") or "").strip()
+    if not title and isinstance(heading_path, list) and heading_path:
+        title = str(heading_path[-1] or "").strip()
+    if not title:
+        title = str(record.get("topic") or record.get("chunk_id") or "Без названия").strip()
+
+    return {
+        "chunk_id": str(record.get("chunk_id") or ""),
+        "title": title,
+        "heading": heading,
+        "collection": str(record.get("source_collection_name") or "").strip(),
+        "forum": str(record.get("forum_normalized") or "").strip(),
+        "category": str(record.get("category") or "").strip(),
+        "source_url": str(record.get("source_url") or "").strip(),
+        "updated_at": str(
+            record.get("source_document_updated_at") or record.get("updated_at") or ""
+        ).strip(),
+        "text_preview": _text_preview(record.get("text_clean") or record.get("text_raw") or ""),
+    }
+
+
+def _changed_record_summary(
+    old: dict[str, Any],
+    fresh: dict[str, Any],
+) -> dict[str, Any]:
+    summary = _record_summary(fresh)
+    summary["changed_fields"] = [
+        field
+        for field in COMPARE_FIELDS
+        if _normalize_compare(old.get(field)) != _normalize_compare(fresh.get(field))
+    ]
+    summary["before_text"] = _text_preview(
+        old.get("text_clean") or old.get("text_raw") or ""
+    )
+    summary["after_text"] = _text_preview(
+        fresh.get("text_clean") or fresh.get("text_raw") or ""
+    )
+    return summary
+
+
+def _text_preview(value: Any, *, limit: int = 360) -> str:
+    normalized = " ".join(str(value or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "…"
 
 
 def _record_changed(old: dict[str, Any], fresh: dict[str, Any]) -> bool:

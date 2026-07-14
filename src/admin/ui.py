@@ -110,7 +110,7 @@ _HTML_TEMPLATE = """
       border-color: var(--cyan);
     }
     .topbar {
-      min-height: 58px;
+      min-height: 64px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -127,15 +127,21 @@ _HTML_TEMPLATE = """
     .logo-mark {
       display: grid;
       place-items: center;
-      width: 142px;
-      height: 38px;
+      width: 154px;
+      height: 46px;
       flex: 0 0 auto;
       border-radius: 5px;
       background: #fff;
-      padding: 5px 10px;
-      overflow: hidden;
+      padding: 6px 11px;
+      overflow: visible;
     }
-    .logo-mark img { width: 100%; height: 100%; display: block; object-fit: contain; }
+    .logo-mark img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+      object-position: center;
+    }
     .brand-copy { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
     h1 { margin: 0; font-size: 15px; line-height: 1.2; font-weight: 750; white-space: nowrap; }
     .subtitle { color: var(--muted-dark); font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -171,11 +177,11 @@ _HTML_TEMPLATE = """
     .auth-head p { margin: 0; color: #aab5c3; line-height: 1.5; font-size: 13px; }
     .auth-body { padding: 20px; display: grid; gap: 10px; }
     .auth-body input { width: 100%; }
-    .workspace { min-height: calc(100vh - 58px); display: grid; grid-template-columns: 214px minmax(0, 1fr); }
+    .workspace { min-height: calc(100vh - 64px); display: grid; grid-template-columns: 214px minmax(0, 1fr); }
     .nav-rail {
       position: sticky;
-      top: 58px;
-      height: calc(100vh - 58px);
+      top: 64px;
+      height: calc(100vh - 64px);
       display: flex;
       flex-direction: column;
       padding: 12px 9px;
@@ -319,6 +325,28 @@ _HTML_TEMPLATE = """
     .ops-meta { color: var(--muted); font-size: 11px; line-height: 1.4; }
     .ops-preview { color: var(--text); font-size: 12px; line-height: 1.45; }
     .quality-note { border-left: 3px solid var(--cyan); background: #edf8fa; padding: 10px 12px; color: var(--text); line-height: 1.45; }
+    .sync-guide { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+    .sync-step { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+    .sync-step-number { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-bottom: 7px; border-radius: 50%; background: var(--shell); color: #fff; font-size: 11px; font-weight: 800; }
+    .sync-step b { display: block; margin-bottom: 4px; color: var(--text-strong); font-size: 12px; }
+    .sync-step span { display: block; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .change-list { display: grid; max-height: 420px; overflow: auto; }
+    .change-card { padding: 10px 11px; border-bottom: 1px solid var(--line); }
+    .change-card:last-child { border-bottom: 0; }
+    .change-card summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
+    .change-card summary::-webkit-details-marker { display: none; }
+    .change-title { min-width: 0; color: var(--text-strong); font-size: 12px; font-weight: 750; }
+    .change-meta { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .change-preview { margin-top: 8px; padding: 8px 9px; border-radius: 5px; background: var(--surface-soft); color: var(--text); font-size: 11px; line-height: 1.5; }
+    .change-preview.before { border-left: 3px solid #c5ccd5; }
+    .change-preview.after { border-left: 3px solid var(--cyan); }
+    .change-badge { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; font-size: 9px; font-weight: 800; }
+    .change-badge.added { background: var(--ok-soft); color: var(--ok); }
+    .change-badge.changed { background: var(--warn-soft); color: var(--warn); }
+    .change-badge.removed { background: #feeceb; color: var(--danger); }
+    .report-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .report-actions .action-note { color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .case-query { color: var(--text-strong); font-size: 12px; font-weight: 700; line-height: 1.45; }
     .quality-ok { color: var(--ok); font-weight: 800; }
     .quality-bad { color: var(--danger); font-weight: 800; }
     .toast-region { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
@@ -350,13 +378,14 @@ _HTML_TEMPLATE = """
       .layout { grid-template-columns: 1fr; min-height: 0; }
       .table-wrap { height: 430px; min-height: 320px; }
       #textClean { height: 430px; }
+      .sync-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 700px) {
-      .topbar { min-height: 54px; padding: 8px 10px; }
-      .logo-mark { width: 112px; height: 34px; }
+      .topbar { min-height: 58px; padding: 7px 10px; }
+      .logo-mark { width: 126px; height: 40px; padding: 5px 8px; }
       .brand-copy { display: none; }
       .product-chip { display: none; }
-      .workspace { min-height: calc(100vh - 54px); }
+      .workspace { min-height: calc(100vh - 58px); }
       .nav-rail { top: 0; }
       .nav-item span { display: none; }
       .panel-head { align-items: flex-start; flex-direction: column; }
@@ -375,6 +404,7 @@ _HTML_TEMPLATE = """
       .field-grid { grid-template-columns: 1fr 1fr; }
       .field-grid .meta-field:first-child { grid-column: 1 / -1; }
       .ops-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .sync-guide { grid-template-columns: 1fr; }
       #textClean { min-height: 360px; height: 55vh; }
     }
     @media (max-width: 520px) {
@@ -609,8 +639,14 @@ _HTML_TEMPLATE = """
               <button id="reindexButton" class="secondary" type="button" disabled>
                 <svg class="icon"><use href="#icon-refresh"></use></svg>Обновить индекс
               </button>
-              <button id="relatedCasesButton" class="secondary" type="button" disabled>
-                <svg class="icon"><use href="#icon-flask"></use></svg>Тест-кейсы
+              <button
+                id="relatedCasesButton"
+                class="secondary"
+                type="button"
+                title="Контрольные вопросы, которыми проверяется этот источник"
+                disabled
+              >
+                <svg class="icon"><use href="#icon-flask"></use></svg>Проверочные вопросы
               </button>
             </div>
           </div>
@@ -669,6 +705,7 @@ _HTML_TEMPLATE = """
             <div id="qualityDashboard" class="quality-dashboard hidden"></div>
             <div id="opsDashboard" class="ops-dashboard hidden"></div>
             <div id="yonoteDashboard" class="quality-dashboard hidden"></div>
+            <div id="casesDashboard" class="quality-dashboard hidden"></div>
             <details id="rawReportDetails" class="raw-report">
               <summary>Технические данные ответа API</summary>
               <pre id="reportOutput"></pre>
@@ -685,6 +722,7 @@ _HTML_TEMPLATE = """
     let editorOriginalText = "";
     let editorOriginalStatus = "";
     let editorDirty = false;
+    let lastYonoteReport = null;
 
     function setStatus(id, message, cls = "") {
       const el = document.getElementById(id);
@@ -853,7 +891,7 @@ _HTML_TEMPLATE = """
       return value || "не определено";
     }
     function escapeHtml(value) {
-      return String(value || "")
+      return String(value ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
@@ -884,10 +922,16 @@ _HTML_TEMPLATE = """
       dashboard.classList.add("hidden");
       dashboard.innerHTML = "";
     }
+    function hideCasesDashboard() {
+      const dashboard = document.getElementById("casesDashboard");
+      dashboard.classList.add("hidden");
+      dashboard.innerHTML = "";
+    }
     function hideReportDashboards() {
       hideOpsDashboard();
       hideQualityDashboard();
       hideYonoteDashboard();
+      hideCasesDashboard();
     }
     function opsRows(items, fields) {
       const rows = (items || []).slice(0, 6);
@@ -1116,83 +1160,247 @@ _HTML_TEMPLATE = """
         </div>
       `;
     }
+    function yonoteFieldLabel(field) {
+      const labels = {
+        text_clean: "текст ответа",
+        status: "статус публикации",
+        category: "категория",
+        forum_normalized: "форум или мероприятие",
+        topic: "тема",
+        intent_name: "название вопроса",
+        source_url: "ссылка на источник",
+        source_document_updated_at: "дата обновления документа",
+      };
+      return labels[field] || field;
+    }
+    function yonoteItemMeta(item) {
+      return [item.collection, item.forum, item.category]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    function renderYonoteCollections(counts) {
+      const rows = Object.entries(counts || {}).map(([name, count]) => `
+        <div class="ops-item">
+          <div class="ops-line">
+            <span>${escapeHtml(name)}</span>
+            <span>${escapeHtml(count)} чанков</span>
+          </div>
+        </div>
+      `).join("");
+      return `
+        <section class="ops-section">
+          <h3>Какие коллекции Yonote прочитаны</h3>
+          <div class="ops-list">
+            ${rows || '<div class="ops-item"><span class="ops-meta">Коллекции не определены</span></div>'}
+          </div>
+        </section>
+      `;
+    }
+    function renderYonoteChangeGroup(title, items, count, kind) {
+      const visibleItems = (items || []).slice(0, 16);
+      const badgeLabels = {
+        added: "новое",
+        changed: "обновится",
+        removed: "исчезнет локально",
+      };
+      const cards = visibleItems.map((item, index) => {
+        const fields = (item.changed_fields || []).map(yonoteFieldLabel).join(", ");
+        const body = kind === "changed"
+          ? `
+              <div class="change-preview before"><b>Сейчас:</b> ${escapeHtml(item.before_text || "нет текста")}</div>
+              <div class="change-preview after"><b>После обновления:</b> ${escapeHtml(item.after_text || "нет текста")}</div>
+            `
+          : `
+              <div class="change-preview ${kind === "added" ? "after" : "before"}">
+                ${escapeHtml(item.text_preview || "нет текстового фрагмента")}
+              </div>
+            `;
+        return `
+          <details class="change-card" ${index === 0 ? "open" : ""}>
+            <summary>
+              <div>
+                <div class="change-title">${escapeHtml(item.title || item.chunk_id)}</div>
+                <div class="change-meta">
+                  ${escapeHtml(yonoteItemMeta(item) || "Источник Yonote")}
+                  ${fields ? ` · меняется: ${escapeHtml(fields)}` : ""}
+                </div>
+              </div>
+              <span class="change-badge ${kind}">${badgeLabels[kind]}</span>
+            </summary>
+            ${body}
+            <div class="change-meta mono">${escapeHtml(item.chunk_id)}</div>
+          </details>
+        `;
+      }).join("");
+      const remainder = Number(count || 0) - visibleItems.length;
+      return `
+        <section class="ops-section">
+          <h3>${escapeHtml(title)} — ${escapeHtml(count || 0)}</h3>
+          <div class="change-list">
+            ${cards || '<div class="ops-item"><span class="ops-meta">Изменений нет</span></div>'}
+            ${remainder > 0
+              ? `<div class="ops-item"><span class="ops-meta">Ещё ${remainder} позиций есть в полном текстовом отчёте.</span></div>`
+              : ""}
+          </div>
+        </section>
+      `;
+    }
+    function buildYonoteTextReport(data) {
+      const lines = [
+        "ОТЧЁТ О СИНХРОНИЗАЦИИ YONOTE",
+        `Сформирован: ${new Date().toLocaleString("ru-RU")}`,
+        `Режим: ${data.applied ? "изменения записаны в базу бота" : "предпросмотр, база бота не изменена"}`,
+        "Yonote используется только для чтения и этим действием не изменяется.",
+        "",
+        `Документов прочитано: ${data.documents || 0}`,
+        `Актуальных чанков из Yonote: ${data.fresh_yonote_records || 0}`,
+        `Добавится новых чанков: ${data.added || 0}`,
+        `Обновится существующих чанков: ${data.changed || 0}`,
+        `Исчезнет из локального Yonote-слоя: ${data.removed || 0}`,
+        `Всего чанков в базе после применения: ${data.merged_records || 0}`,
+      ];
+      const collections = Object.entries(data.collection_counts || {});
+      if (collections.length) {
+        lines.push("", "КОЛЛЕКЦИИ YONOTE");
+        collections.forEach(([name, count]) => lines.push(`- ${name}: ${count} чанков`));
+      }
+      const groups = [
+        ["ДОБАВЯТСЯ", data.added_items || [], "added"],
+        ["ИЗМЕНЯТСЯ", data.changed_items || [], "changed"],
+        ["ИСЧЕЗНУТ ИЗ ЛОКАЛЬНОЙ БАЗЫ", data.removed_items || [], "removed"],
+      ];
+      groups.forEach(([heading, items, kind]) => {
+        lines.push("", `${heading} — ${items.length}`);
+        if (!items.length) {
+          lines.push("Изменений нет.");
+          return;
+        }
+        items.forEach((item, index) => {
+          lines.push("", `${index + 1}. ${item.title || item.chunk_id}`);
+          const meta = yonoteItemMeta(item);
+          if (meta) lines.push(`   Раздел: ${meta}`);
+          lines.push(`   ID: ${item.chunk_id}`);
+          if (item.source_url) lines.push(`   Источник: ${item.source_url}`);
+          if (kind === "changed") {
+            const fields = (item.changed_fields || []).map(yonoteFieldLabel).join(", ");
+            if (fields) lines.push(`   Что меняется: ${fields}`);
+            lines.push(`   Было: ${item.before_text || "нет текста"}`);
+            lines.push(`   Станет: ${item.after_text || "нет текста"}`);
+          } else {
+            lines.push(`   Текст: ${item.text_preview || "нет текста"}`);
+          }
+        });
+      });
+      lines.push(
+        "",
+        "ВАЖНО",
+        data.applied
+          ? "Изменения записаны в knowledge_base_seed.json. Для ответов бота нужна переиндексация Qdrant."
+          : "Это только предпросмотр. Ничего не записано в базу бота."
+      );
+      return lines.join("\\n");
+    }
+    function downloadYonoteReport() {
+      if (!lastYonoteReport) return;
+      const blob = new Blob([buildYonoteTextReport(lastYonoteReport)], {
+        type: "text/plain;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 16).replaceAll(":", "-");
+      link.href = url;
+      link.download = `yonote-sync-${stamp}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
     function renderYonoteDashboard(data) {
+      lastYonoteReport = data;
       const dashboard = document.getElementById("yonoteDashboard");
       dashboard.classList.remove("hidden");
       const shouldShowApply = !data.applied;
       dashboard.innerHTML = `
+        <div class="sync-guide">
+          <div class="sync-step"><span class="sync-step-number">1</span><b>Проверить Yonote</b><span>Читаем документы и считаем разницу. База бота не меняется.</span></div>
+          <div class="sync-step"><span class="sync-step-number">2</span><b>Изучить отчёт</b><span>Проверь названия тем, старый и новый текст. Полный список можно скачать.</span></div>
+          <div class="sync-step"><span class="sync-step-number">3</span><b>Записать изменения</b><span>Обновится только локальная база бота. В Yonote ничего не записывается.</span></div>
+          <div class="sync-step"><span class="sync-step-number">4</span><b>Обновить RAG</b><span>После применения нужна полная индексация Qdrant и контрольный вопрос боту.</span></div>
+        </div>
         <div class="ops-kpis">
-          <div class="metric">
-            <span class="metric-value">${escapeHtml(data.documents || 0)}</span>
-            <span class="metric-label">документов Yonote</span>
-          </div>
-          <div class="metric">
-            <span class="metric-value">${escapeHtml(data.fresh_yonote_records || 0)}</span>
-            <span class="metric-label">новых Yonote-чанков</span>
-          </div>
-          <div class="metric">
-            <span class="metric-value">${escapeHtml(data.changed || 0)}</span>
-            <span class="metric-label">изменённых чанков</span>
-          </div>
-          <div class="metric">
-            <span class="metric-value">${escapeHtml(data.merged_records || 0)}</span>
-            <span class="metric-label">всего после синка</span>
-          </div>
+          <div class="metric"><span class="metric-value">${escapeHtml(data.documents || 0)}</span><span class="metric-label">документов прочитано</span></div>
+          <div class="metric"><span class="metric-value">${escapeHtml(data.added || 0)}</span><span class="metric-label">новых чанков добавится</span></div>
+          <div class="metric"><span class="metric-value">${escapeHtml(data.changed || 0)}</span><span class="metric-label">существующих обновится</span></div>
+          <div class="metric"><span class="metric-value">${escapeHtml(data.removed || 0)}</span><span class="metric-label">исчезнет из локальной базы</span></div>
         </div>
         <div class="quality-note">
-          <b>${data.applied ? "Обновление применено" : "Предпросмотр Yonote"}</b>.
-          Добавится: ${escapeHtml(data.added || 0)} ·
-          изменится: ${escapeHtml(data.changed || 0)} ·
-          удалится из Yonote-слоя: ${escapeHtml(data.removed || 0)}.
+          <b>${data.applied ? "Изменения записаны в базу бота." : "Это безопасный предпросмотр."}</b>
           ${data.applied
-            ? [
-                "Seed обновлён. Чтобы бот начал отвечать по новым данным,",
-                "нужна полная переиндексация Qdrant.",
-              ].join(" ")
-            : "Это только проверка: knowledge_base_seed.json ещё не изменён."}
+            ? "Yonote не изменён. Чтобы бот отвечал по новым данным, теперь переиндексируй Qdrant."
+            : "Сейчас ничего не изменено ни в базе бота, ни в Yonote. Сначала изучи список ниже или скачай отчёт."}
+          После применения в базе будет ${escapeHtml(data.merged_records || 0)} чанков.
         </div>
-        <div class="ops-section">
-          <h3>Примеры изменений</h3>
-          <div class="ops-list">
-            <div class="ops-item">
-              <div class="ops-line">
-                <span>Добавятся</span>
-                <span>${escapeHtml(data.added || 0)}</span>
-              </div>
-              <div class="ops-meta">
-                ${escapeHtml((data.added_sample || []).join(", ") || "нет")}
-              </div>
-            </div>
-            <div class="ops-item">
-              <div class="ops-line">
-                <span>Изменятся</span>
-                <span>${escapeHtml(data.changed || 0)}</span>
-              </div>
-              <div class="ops-meta">
-                ${escapeHtml((data.changed_sample || []).join(", ") || "нет")}
-              </div>
-            </div>
-            <div class="ops-item">
-              <div class="ops-line">
-                <span>Удалятся из Yonote-слоя</span>
-                <span>${escapeHtml(data.removed || 0)}</span>
-              </div>
-              <div class="ops-meta">
-                ${escapeHtml((data.removed_sample || []).join(", ") || "нет")}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="editor-actions">
+        ${renderYonoteCollections(data.collection_counts)}
+        ${renderYonoteChangeGroup("Новые знания", data.added_items, data.added, "added")}
+        ${renderYonoteChangeGroup("Обновлённые знания", data.changed_items, data.changed, "changed")}
+        ${renderYonoteChangeGroup("Удалённые из локального Yonote-слоя", data.removed_items, data.removed, "removed")}
+        <div class="report-actions">
+          <button id="downloadYonoteReportButton" class="secondary" type="button">Скачать полный отчёт .txt</button>
           ${shouldShowApply
-            ? '<button id="applyYonoteButton" class="primary" type="button">Применить в KB</button>'
-            : '<button class="secondary" type="button" disabled>Применено</button>'}
+            ? '<button id="applyYonoteButton" class="primary" type="button">Записать изменения в базу бота</button>'
+            : '<button class="secondary" type="button" disabled>Изменения записаны</button>'}
+          <span class="action-note">Yonote работает только на чтение. Кнопка не меняет документы коллег.</span>
         </div>
       `;
+      document.getElementById("downloadYonoteReportButton").addEventListener(
+        "click",
+        downloadYonoteReport
+      );
       const applyButton = document.getElementById("applyYonoteButton");
       if (applyButton) {
         applyButton.addEventListener("click", applyYonoteSync);
       }
+    }
+    function expectedBehaviorLabel(value) {
+      const labels = {
+        answer: "бот должен ответить по базе",
+        clarify: "бот должен задать уточняющий вопрос",
+        escalate: "бот должен передать диалог специалисту",
+        scope_note: "бот должен объяснить свою тематику",
+      };
+      return labels[value] || value || "ожидаемое поведение не задано";
+    }
+    function renderRelatedCasesDashboard(data) {
+      const dashboard = document.getElementById("casesDashboard");
+      dashboard.classList.remove("hidden");
+      const items = data.items || [];
+      const rows = items.map((item, index) => `
+        <div class="ops-item">
+          <div class="ops-line">
+            <span>Вопрос ${index + 1}</span>
+            <span>${escapeHtml(expectedBehaviorLabel(item.expected_behavior))}</span>
+          </div>
+          <div class="case-query">${escapeHtml(item.query || "Текст вопроса не задан")}</div>
+          <div class="ops-meta">
+            Набор проверки: ${escapeHtml(item.source_file || "не указан")}
+            ${item.tags && item.tags.length ? ` · метки: ${escapeHtml(item.tags.join(", "))}` : ""}
+          </div>
+        </div>
+      `).join("");
+      dashboard.innerHTML = `
+        <div class="quality-note">
+          <b>Что такое проверочные вопросы?</b>
+          Это заранее подготовленные пользовательские формулировки, которыми проверяется,
+          что бот находит именно этот источник и ведёт себя ожидаемым образом.
+          Они не добавляются в ответ пользователю и не меняют текст чанка.
+        </div>
+        <section class="ops-section">
+          <h3>Связанные проверочные вопросы — ${escapeHtml(data.total || 0)}</h3>
+          <div class="ops-list">
+            ${rows || '<div class="ops-item"><span class="ops-meta">Для этого чанка проверочные вопросы пока не заведены.</span></div>'}
+          </div>
+        </section>
+      `;
     }
     function renderListLoading() {
       const row = [
@@ -1402,15 +1610,16 @@ _HTML_TEMPLATE = """
     async function showRelatedCases() {
       if (!selectedChunkId) return;
       try {
+        setWorkspaceMode("cases", "Проверочные вопросы");
         hideReportDashboards();
-        setStatus("detailStatus", "Загрузка тест-кейсов...");
+        setStatus("detailStatus", "Загружаю проверочные вопросы для этого источника...");
         const data = await requestJson(
           "/admin/kb/chunks/" + encodeURIComponent(selectedChunkId) + "/eval-cases",
           {method: "GET"}
         );
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        document.getElementById("rawReportDetails").open = true;
-        setStatus("detailStatus", `Тест-кейсов: ${data.total}`, "ok");
+        renderRelatedCasesDashboard(data);
+        setStatus("detailStatus", `Проверочных вопросов: ${data.total}`, "ok");
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }
@@ -1433,8 +1642,7 @@ _HTML_TEMPLATE = """
       try {
         setActiveNav("qualityButton");
         setWorkspaceMode("quality", "Отчёт качества");
-        hideOpsDashboard();
-        hideYonoteDashboard();
+        hideReportDashboards();
         const data = await requestJson("/admin/kb/quality-check", {
           method: "POST",
           body: JSON.stringify({include_latest_eval_report: true}),
@@ -1452,8 +1660,7 @@ _HTML_TEMPLATE = """
       try {
         setActiveNav("opsButton");
         setWorkspaceMode("ops", "Работа бота");
-        hideQualityDashboard();
-        hideYonoteDashboard();
+        hideReportDashboards();
         const data = await requestJson("/admin/kb/ops-report?days=7", {method: "GET"});
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         renderOpsDashboard(data);
@@ -1470,8 +1677,7 @@ _HTML_TEMPLATE = """
       try {
         setActiveNav("yonoteButton");
         setWorkspaceMode("yonote", "Синхронизация Yonote");
-        hideOpsDashboard();
-        hideQualityDashboard();
+        hideReportDashboards();
         setStatus("detailStatus", "Читаю Yonote и считаю изменения. База бота пока не меняется...");
         const data = await requestJson("/admin/kb/yonote/preview", {
           method: "POST",
@@ -1491,14 +1697,14 @@ _HTML_TEMPLATE = """
     }
     async function applyYonoteSync() {
       const confirmed = window.confirm(
-        "Применить данные Yonote в knowledge_base_seed.json? " +
-        "Yonote не будет изменён. После применения нужна полная индексация Qdrant."
+        "Записать показанные изменения в локальную базу знаний бота? " +
+        "Документы Yonote не изменятся. После записи потребуется полная индексация Qdrant."
       );
       if (!confirmed) return;
       try {
         setStatus(
           "detailStatus",
-          "Применяю Yonote в KB seed. Это не пишет ничего в Yonote..."
+          "Записываю проверенные изменения в локальную базу бота. Yonote остаётся без изменений..."
         );
         const data = await requestJson("/admin/kb/yonote/apply", {
           method: "POST",
@@ -1509,10 +1715,17 @@ _HTML_TEMPLATE = """
         renderYonoteDashboard(data);
         setStatus(
           "detailStatus",
-          "Yonote применён в KB seed. Теперь нужна полная переиндексация Qdrant.",
+          "Изменения записаны в базу бота. Теперь нужна полная переиндексация Qdrant.",
           "warn"
         );
-        await Promise.allSettled([loadChunks(), showValidation()]);
+        const refreshResults = await Promise.allSettled([
+          loadChunks(),
+          requestJson("/admin/kb/validate", {method: "POST", body: "{}"}),
+        ]);
+        const validation = refreshResults[1];
+        if (validation.status === "fulfilled") {
+          setMetric("metricValid", validation.value.valid_records);
+        }
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
       }

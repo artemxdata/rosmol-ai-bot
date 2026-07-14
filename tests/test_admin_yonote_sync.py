@@ -62,6 +62,10 @@ def test_preview_sync_does_not_write_seed_and_counts_changes(
                 "category": "forums",
                 "forum_normalized": "Amur",
                 "source_type": "yonote",
+                "intent_name": "How to join Amur",
+                "source_collection_name": "Forum knowledge",
+                "source_heading_path": ["Amur", "Registration"],
+                "source_url": "https://example.test/amur",
             },
         ]
 
@@ -78,6 +82,25 @@ def test_preview_sync_does_not_write_seed_and_counts_changes(
     assert report["added"] == 1
     assert report["changed"] == 1
     assert report["removed"] == 1
+    assert report["added_items"] == [
+        {
+            "chunk_id": "yonote_added",
+            "title": "How to join Amur",
+            "heading": "Amur / Registration",
+            "collection": "Forum knowledge",
+            "forum": "Amur",
+            "category": "forums",
+            "source_url": "https://example.test/amur",
+            "updated_at": "",
+            "text_preview": "Added Yonote answer",
+        }
+    ]
+    assert report["changed_items"][0]["title"] == "yonote_old_changed"
+    assert report["changed_items"][0]["changed_fields"] == ["text_clean"]
+    assert report["changed_items"][0]["before_text"] == "Old Yonote answer"
+    assert report["changed_items"][0]["after_text"] == "Fresh Yonote answer"
+    assert report["removed_items"][0]["title"] == "yonote_removed"
+    assert report["collection_counts"] == {"Forum knowledge": 1, "unknown": 1}
     assert seed_path.read_text(encoding="utf-8") == original
 
 
