@@ -2,10 +2,11 @@
 
 **Обновлено:** 14 июля 2026  
 **Ветка:** `master`  
-**Текущий commit:** `fdea1e1 Harden Yonote routing before launch`  
-**Git:** локальная ветка синхронизирована с `origin/master`, незакоммиченных изменений до
-создания этого handoff не было.  
-**Статус релиза:** код готов, финальная проверка production-контура ещё не завершена.
+**Текущий release candidate:** `5ccc122 Fix pre-pilot technical support gate`
+**Git:** release candidate зафиксирован отдельным code/test commit; handoff-документация следует
+за ним отдельным commit.
+**Статус релиза:** локальные проверки зелёные, новый кандидат ещё не развёрнут и не прошёл
+повторный server-local gate.
 
 ## 1. Цель
 
@@ -90,6 +91,28 @@
 - рабочая ветка — чистая;
 - commit отправлен в GitHub.
 
+### Исправляющая итерация `5ccc122`
+
+После первого server-local smoke устранены два подтверждённых дефекта:
+
+- `scripts/run_pre_demo_smoke.py` сохраняет Docker hostname `postgres`/`db`, когда запускается
+  внутри Docker/Podman, и по-прежнему использует `127.0.0.1` при host-side запуске;
+- разговорная формулировка `не грузится` детерминированно распознаётся как первая техническая
+  проблема и получает точный topic `tehnicheskaya_oshibka`;
+- retrieval идёт к опубликованному first-line чанку
+  `xlsx_fallback_r0014_tehnicheskaya_oshibka`, без подмены KB и без снижения reranker-порогов;
+- добавлен regression-тест полного пути `process_message -> graph -> analyze -> retrieve ->
+  rerank -> generate -> verify -> respond`, который проверяет отсутствие эскалации и cited
+  source.
+
+Локальные результаты для нового кандидата:
+
+- targeted analyzer/graph/process/smoke tests — `424 passed`;
+- `ruff check .` — успешно;
+- полный `pytest` — `1001 passed`;
+- validation KB — `2186` валидных опубликованных записей;
+- KB, prompts и reranker thresholds не менялись.
+
 ## 6. Что уже выполнено на сервере
 
 - Код `fdea1e1` был подготовлен и отправлен в GitHub.
@@ -99,12 +122,41 @@
 
 ## 7. Незакрытый release gate — выполнить первым в новом чате
 
+### Результат прогона 14 июля 2026 — gate остановлен на шаге 3
+
+- Шаг 1 пройден: на сервере commit `fdea1e1`, оба `/ready` вернули HTTP 200,
+  `knowledge_base = 2186`, перед очисткой `response_cache = 33`.
+- Шаг 2 пройден: очищена только коллекция `response_cache`, результат `33 -> 0`;
+  `knowledge_base` сохранилась на `2186`. PostgreSQL, Redis и история диалогов не удалялись.
+- Первый запуск шага 3 не является валидным результатом качества: запущенный внутри `app-ml`
+  smoke-runner переписал Docker hostname PostgreSQL на `127.0.0.1`, не смог прочитать
+  `request_traces` и формально отметил все 16 кейсов как failing. API при этом возвращал HTTP
+  200. Повторный запуск выполнен без изменения кода или server config с process-local DSN на
+  внутренний адрес PostgreSQL.
+- Валидный результат шага 3: `15/16`, `93.75%`; trace coverage доступен, единственный failing ID
+  — `profane_fgais_support`.
+- Наблюдаемый дефект: вопрос `Какого хуя не грузится ФГАИС, что мне делать?` завершился
+  controlled escalation `low_confidence`, хотя ругательство должно игнорироваться, а первая
+  техническая проблема должна получить подтверждённые шаги первой линии без оператора.
+- Trace failing-кейса: deterministic analyze выбрал `category=платформа_фгаис`, но
+  `is_technical=false`; retrieval вернул 30 ФГАИС-кандидатов, rerank занял около 60.5 секунд,
+  `max_reranker_score=0.0049066`, после чего ответ был эскалирован. Опубликованный чанк первой
+  линии `xlsx_fallback_r0014_tehnicheskaya_oshibka` находится в категории `техподдержка` и под
+  такой metadata filter не попал.
+- В соответствии с шагом 6 это behavior/routing regression: шаг 4 и ручные VK/HDE-сценарии не
+  запускались, широкий трафик включать нельзя. Код, routing, prompts и KB во время gate не
+  изменялись.
+
+Исправление зафиксировано в `5ccc122`. Точный следующий шаг: отправить release candidate и этот
+handoff в GitHub, вручную обновить staging, затем повторить gate с шага 1. До зелёного smoke
+`16/16` шаг 4 и ручные VK/HDE-сценарии не запускать.
+
 ### Шаг 1. Проверить runtime и количество чанков
 
 На сервере `/opt/rosmol-ai-bot`:
 
 ```bash
-git log -1 --oneline
+git log -2 --oneline
 
 python3 - <<'PY'
 from urllib.request import urlopen
@@ -126,7 +178,8 @@ print("response_cache", client.count("response_cache", exact=True).count)
 PY
 ```
 
-Ожидается commit `fdea1e1`, оба `/ready` = HTTP 200, `knowledge_base = 2186`.
+Ожидается, что история содержит release candidate `5ccc122`, оба `/ready` = HTTP 200,
+`knowledge_base = 2186`.
 
 ### Шаг 2. Очистить только semantic response cache
 
