@@ -57,6 +57,7 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
         for case in yonote
         for chunk_id in case["expected_chunk_ids"]
     )
+    assert all(not case.get("equivalent_chunk_ids") for case in yonote)
     assert all(case["expected_behavior"] == "escalate" for case in safety)
     assert all(case["expected_behavior"] == "scope_note" for case in off_topic)
     assert any(case["forbidden_message_masked_contains"] for case in pii)
@@ -101,6 +102,26 @@ def test_build_pre_pilot_case_sets_writes_separate_sections(tmp_path: Path) -> N
         "xlsx_category_r0613_programma_i_artisty",
         "xlsx_category_r0612_poseschenie_festivalya_s_detmi",
     }.issubset(set(youth_day_case["expected_chunk_ids"]))
+    youth_day_equivalent_ids = {
+        item
+        for values in youth_day_case["equivalent_chunk_ids"].values()
+        for item in values
+    }
+    assert (
+        "yonote_api_nwr3m74g03_s0003_sposob_1_cherez_chat_bot_v_mah_"
+        "https_max_ru_youthday_bot"
+    ) in youth_day_equivalent_ids
+    assert "yonote_api_nwr3m74g03_s0002_registraciya" not in youth_day_equivalent_ids
+
+    north_case = next(
+        case for case in forums if case["id"] == "forum_north_core_dates_travel"
+    )
+    north_equivalent_ids = {
+        item
+        for values in north_case["equivalent_chunk_ids"].values()
+        for item in values
+    }
+    assert "yonote_api_mgure5zzya_s0001_o_meropriyatii" in north_equivalent_ids
 
 
 def test_effective_questions_keep_youth_day_program_and_children_aspects() -> None:

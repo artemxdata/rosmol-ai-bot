@@ -1048,14 +1048,6 @@ def _topic_source_for_question(
 ) -> ScoredChunk | None:
     if not str(question.topic or "").strip():
         return None
-    exact_matches = [
-        chunk
-        for chunk in candidates
-        if _source_topic_match_rank(question, chunk) == 0
-        and _chunk_matches_analysis_scope(chunk, analysis)
-    ]
-    if exact_matches:
-        return _rank_source_candidates_for_question(analysis, question, exact_matches)[0]
     matches = [
         chunk
         for chunk in candidates
@@ -1385,14 +1377,63 @@ def _source_topic_match_rank(question: Question, chunk: ScoredChunk) -> int:
         chunk_topic == "forum"
         and question_topic_group
         == _equivalent_topic_group("podacha_zayavki_na_proekt")
-        and "регистрац" in chunk.text.casefold()
+        and any(marker in chunk.text.casefold() for marker in ("регистрац", "заявк"))
     ):
-        return 0
+        return 1
+    if _is_combined_food_housing_source(question_topic_group, chunk_topic, chunk.text):
+        return 1
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
-        return 0
+        return 1
     if _is_housing_compatible_travel_source(question_topic_group, chunk_topic, chunk.text):
         return 1
     return 2
+
+
+def _topic_source_preference_rank(
+    question: Question,
+    chunk: ScoredChunk,
+    topic_rank: int,
+) -> int:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    is_fresh_yonote = source_type == "yonote"
+    if is_fresh_yonote and topic_rank == 0:
+        return 0
+    if is_fresh_yonote and _is_preferred_fresh_topic_replacement(question, chunk):
+        return 1
+    if topic_rank == 0:
+        return 2
+    if topic_rank <= 1:
+        return 3 if is_fresh_yonote else 4
+    return 5
+
+
+def _is_preferred_fresh_topic_replacement(
+    question: Question,
+    chunk: ScoredChunk,
+) -> bool:
+    question_topic_group = _question_topic_group(question)
+    chunk_topic = str((chunk.metadata or {}).get("topic") or "").strip()
+    if (
+        chunk_topic == "kompensaciya"
+        and question_topic_group == _equivalent_topic_group("oplata_proezda")
+    ):
+        return True
+    if (
+        chunk_topic == "forum"
+        and question_topic_group
+        == _equivalent_topic_group("podacha_zayavki_na_proekt")
+        and any(marker in chunk.text.casefold() for marker in ("регистрац", "заявк"))
+    ):
+        return True
+    if chunk_topic != "pitanie_i_prozhivanie":
+        return False
+    return question_topic_group == _equivalent_topic_group(
+        "informaciya_o_ploschadke_pitanie_pite"
+    ) or _is_combined_food_housing_source(
+        question_topic_group,
+        chunk_topic,
+        chunk.text,
+    )
 
 
 def _question_topic_group(question: Question) -> str | None:
@@ -1411,6 +1452,19 @@ def _is_housing_compatible_travel_source(
     if question_topic_group != _equivalent_topic_group("usloviya_prozhivaniya"):
         return False
     if chunk_topic not in HOUSING_COMPATIBLE_TRAVEL_TOPICS:
+        return False
+    normalized_text = _normalize(chunk_text)
+    return any(marker in normalized_text for marker in HOUSING_TEXT_MARKERS)
+
+
+def _is_combined_food_housing_source(
+    question_topic_group: str | None,
+    chunk_topic: str,
+    chunk_text: str,
+) -> bool:
+    if question_topic_group != _equivalent_topic_group("usloviya_prozhivaniya"):
+        return False
+    if chunk_topic != "pitanie_i_prozhivanie":
         return False
     normalized_text = _normalize(chunk_text)
     return any(marker in normalized_text for marker in HOUSING_TEXT_MARKERS)
@@ -1483,13 +1537,14 @@ def _source_candidate_priority(
         unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
         grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
         topic_rank = _source_topic_match_rank(question, chunk)
+        topic_preference_rank = _topic_source_preference_rank(question, chunk, topic_rank)
         freshness_rank = _source_freshness_rank(chunk)
         confidence = float(chunk.reranker_score or chunk.score or 0)
         return (
             0,
             unscoped_grant_rank,
             grant_source_category_rank,
-            topic_rank,
+            topic_preference_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1504,6 +1559,7 @@ def _source_candidate_priority(
     unscoped_grant_rank = _unscoped_grant_rank(analysis, chunk)
     grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
     topic_rank = _source_topic_match_rank(question, chunk)
+    topic_preference_rank = _topic_source_preference_rank(question, chunk, topic_rank)
     freshness_rank = _source_freshness_rank(chunk)
     confidence = float(chunk.reranker_score or chunk.score or 0)
     if str(question.topic or "").strip() and topic_rank <= 1:
@@ -1511,7 +1567,7 @@ def _source_candidate_priority(
             0,
             unscoped_grant_rank,
             grant_source_category_rank,
-            topic_rank,
+            topic_preference_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1523,7 +1579,7 @@ def _source_candidate_priority(
             0,
             unscoped_grant_rank,
             grant_source_category_rank,
-            topic_rank,
+            topic_preference_rank,
             freshness_rank,
             -float(intent_score * 100) - field_score,
             source_rank,
@@ -1535,7 +1591,7 @@ def _source_candidate_priority(
             1,
             unscoped_grant_rank,
             grant_source_category_rank,
-            topic_rank,
+            topic_preference_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1547,7 +1603,7 @@ def _source_candidate_priority(
             2,
             unscoped_grant_rank,
             grant_source_category_rank,
-            topic_rank,
+            topic_preference_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1558,7 +1614,7 @@ def _source_candidate_priority(
         3,
         unscoped_grant_rank,
         grant_source_category_rank,
-        topic_rank,
+        topic_preference_rank,
         freshness_rank,
         0,
         source_rank,

@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from src.kb.forum_registry import canonicalize_forum_name
 
 DEFAULT_CASES_DIR = Path("eval/cases")
 ASK_SECTION_FILES = {
@@ -134,13 +139,15 @@ class _ChunkIndex:
 
     def _equivalent_records(self, record: dict[str, Any]) -> list[dict[str, Any]]:
         forum = record.get("forum_normalized")
+        canonical_forum = canonicalize_forum_name(forum)
         topic = str(record.get("topic") or "")
         topic_group = _equivalent_topic_group(topic)
         return [
             candidate
             for candidate in self.records
             if candidate.get("status", "published") == "published"
-            and candidate.get("forum_normalized") == forum
+            and canonicalize_forum_name(candidate.get("forum_normalized"))
+            == canonical_forum
             and _equivalent_topic_group(str(candidate.get("topic") or "")) == topic_group
         ]
 
@@ -228,6 +235,8 @@ def _attach_equivalent_chunk_ids(payload: Any, index: _ChunkIndex) -> None:
         if str(chunk_id)
     ]
     if not expected_chunk_ids or payload.get("expected_behavior") != "answer":
+        return
+    if "yonote" in (payload.get("tags") or []):
         return
 
     generated = index.equivalent_chunk_ids(expected_chunk_ids)
@@ -496,6 +505,17 @@ def _forum_cases(index: _ChunkIndex) -> list[dict[str, Any]]:
                 index.by_forum_topic("День молодёжи", "programma_i_artisty"),
                 index.by_forum_topic("День молодёжи", "poseschenie_festivalya_s_detmi"),
             ],
+            equivalent_chunk_ids={
+                index.by_forum_topic(
+                    "День молодёжи", "registraciya_na_meropriyatie"
+                ): [
+                    index.by_chunk_id(
+                        "yonote_api_nwr3m74g03_s0003_sposob_1_cherez_chat_bot_v_mah_"
+                        "https_max_ru_youthday_bot",
+                        source_type="yonote",
+                    )
+                ]
+            },
             tags=["pre_pilot", "forums", "multi_aspect", "forum:День молодёжи"],
         ),
     ]
@@ -809,9 +829,10 @@ def _answer_case(
     expected_answer_contains: list[str] | None = None,
     expected_message_masked_contains: list[str] | None = None,
     forbidden_message_masked_contains: list[str] | None = None,
+    equivalent_chunk_ids: dict[str, list[str]] | None = None,
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    case = {
         "id": case_id,
         "query": query,
         "user_id": f"pre-pilot-{case_id}",
@@ -827,6 +848,9 @@ def _answer_case(
         "forbidden_message_masked_contains": forbidden_message_masked_contains or [],
         "tags": tags or ["pre_pilot"],
     }
+    if equivalent_chunk_ids:
+        case["equivalent_chunk_ids"] = equivalent_chunk_ids
+    return case
 
 
 def _behavior_case(

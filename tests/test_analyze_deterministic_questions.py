@@ -64,6 +64,40 @@ def test_fallback_analysis_answers_generic_platform_workflows(
     assert [question.topic for question in analysis.questions] == [topic]
 
 
+@pytest.mark.parametrize(
+    ("query", "forum", "topic"),
+    [
+        (
+            "Как найти волонтёрское мероприятие и подать заявку на Добро.РФ?",
+            "Добро.РФ",
+            "volonterskaya_pomosch",
+        ),
+        (
+            "Кто может участвовать в Национальной премии «Патриот»?",
+            "Национальная премия «Патриот»",
+            "uchastniki",
+        ),
+        (
+            "Какие смены будут на форуме «Территория смыслов» в 2026 году?",
+            "Территория смыслов",
+            "tematicheskie_smeny_foruma",
+        ),
+    ],
+)
+def test_fallback_analysis_routes_exact_fresh_yonote_topics(
+    query: str,
+    forum: str,
+    topic: str,
+) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.category == "форумы"
+    assert analysis.forum_normalized == forum
+    assert analysis.needs_clarification is False
+    assert [question.topic for question in analysis.questions] == [topic]
+
+
 def test_fallback_analysis_routes_about_rosmolodezh_to_general_knowledge() -> None:
     query = "Что такое Росмолодёжь и чем она занимается?"
     analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)

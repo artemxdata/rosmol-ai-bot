@@ -791,6 +791,33 @@ async def test_process_message_explicit_operator_request_wins_over_profanity(
 
 
 @pytest.mark.asyncio
+async def test_process_message_detects_operator_request_before_pii_masking(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    app = _app(
+        masked_text="[ИМЯ] уже, блять, оператора",
+        pii_mapping={"name": ["Позови"]},
+    )
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.HDE,
+        text="Позови уже, блять, оператора",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Передаю обращение специалисту."
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.sessions.appended == [
+        ("[ИМЯ] уже, блять, оператора", "Передаю обращение специалисту.")
+    ]
+    assert captured_logs[0]["message_masked"] == "[ИМЯ] уже, блять, оператора"
+    assert captured_logs[0]["should_escalate"] is True
+    assert captured_logs[0]["escalation_reason"] == "operator_requested"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "text",
     [

@@ -4248,6 +4248,7 @@ async def test_rerank_prefers_fresh_yonote_source_for_equivalent_topic(
     result = await rerank(
         {
             "message_masked": "Does Ladoga reimburse travel?",
+            "analyzer_mode": "deterministic",
             "analysis": QueryAnalysis(
                 category="forums",
                 forum_normalized="Ladoga",
@@ -4266,6 +4267,272 @@ async def test_rerank_prefers_fresh_yonote_source_for_equivalent_topic(
     )
 
     assert result["reranked_chunks"][0].chunk_id == "fresh_compensation"
+
+
+@pytest.mark.asyncio
+async def test_rerank_prefers_exact_topic_between_equally_fresh_yonote_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="generic_registration",
+            text="Create a new account before applying.",
+            metadata={
+                "forum_normalized": "Dobro",
+                "category": "forums",
+                "source_type": "yonote",
+                "topic": "registraciya_s_pomoschyu_sozdaniya_kabineta",
+            },
+            score=0.95,
+        ),
+        Chunk(
+            chunk_id="volunteer_application",
+            text="Find a volunteer event and submit the application from its page.",
+            metadata={
+                "forum_normalized": "Dobro",
+                "category": "forums",
+                "source_type": "yonote",
+                "topic": "volonterskaya_pomosch",
+            },
+            score=0.5,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "How do I apply for a volunteer event on Dobro?",
+            "analyzer_mode": "deterministic",
+            "analysis": QueryAnalysis(
+                category="forums",
+                forum_normalized="Dobro",
+                questions=[
+                    Question(
+                        text="How do I apply for a volunteer event?",
+                        topic="volonterskaya_pomosch",
+                        category="forums",
+                        forum_normalized="Dobro",
+                    )
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == [
+        "volunteer_application"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rerank_uses_fresh_combined_food_and_housing_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="legacy_housing",
+            text="Legacy housing answer.",
+            metadata={
+                "forum_normalized": "Ladoga",
+                "category": "forums",
+                "source_type": "xlsx",
+                "topic": "usloviya_prozhivaniya",
+            },
+            score=0.9,
+        ),
+        Chunk(
+            chunk_id="legacy_food",
+            text="Legacy food answer.",
+            metadata={
+                "forum_normalized": "Ladoga",
+                "category": "forums",
+                "source_type": "xlsx",
+                "topic": "informaciya_o_ploschadke_pitanie_pite",
+            },
+            score=0.9,
+        ),
+        Chunk(
+            chunk_id="fresh_food_and_housing",
+            text="Fresh three meals and проживание are covered by organizers.",
+            metadata={
+                "forum_normalized": "Ladoga",
+                "category": "forums",
+                "source_type": "yonote",
+                "topic": "pitanie_i_prozhivanie",
+            },
+            score=0.7,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Does Ladoga cover food and housing?",
+            "analyzer_mode": "deterministic",
+            "analysis": QueryAnalysis(
+                category="forums",
+                forum_normalized="Ladoga",
+                questions=[
+                    Question(
+                        text="Is housing covered?",
+                        topic="usloviya_prozhivaniya",
+                        category="forums",
+                        forum_normalized="Ladoga",
+                    ),
+                    Question(
+                        text="Is food covered?",
+                        topic="informaciya_o_ploschadke_pitanie_pite",
+                        category="forums",
+                        forum_normalized="Ladoga",
+                    ),
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == [
+        "fresh_food_and_housing"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rerank_trusted_topic_fast_path_does_not_cross_categories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="fresh_platform_registration",
+            text="Create an account on the platform.",
+            metadata={
+                "category": "платформа_фгаис",
+                "source_type": "yonote",
+                "topic": "registraciya",
+            },
+            score=0.95,
+        ),
+        Chunk(
+            chunk_id="grant_registration",
+            text="Submit the grant application during the competition window.",
+            metadata={
+                "category": "гранты",
+                "forum_normalized": "Гранты для физических лиц",
+                "source_type": "xlsx",
+                "topic": "registraciya",
+            },
+            score=0.5,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "How do I register for a grant competition?",
+            "analyzer_mode": "deterministic",
+            "analysis": QueryAnalysis(
+                category="гранты",
+                questions=[
+                    Question(
+                        text="How do I register for a grant competition?",
+                        topic="registraciya",
+                        category="гранты",
+                    )
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == [
+        "grant_registration"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rerank_exact_documents_beat_fresh_equivalent_program(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    chunks = [
+        Chunk(
+            chunk_id="fresh_program",
+            text="Актуальная программа форума опубликована в канале участников.",
+            metadata={
+                "forum_normalized": "Машук",
+                "category": "форумы",
+                "source_type": "yonote",
+                "topic": "programma_foruma",
+            },
+            score=0.95,
+        ),
+        Chunk(
+            chunk_id="exact_documents",
+            text="Документы форума доступны в карточке мероприятия.",
+            metadata={
+                "forum_normalized": "Машук",
+                "category": "форумы",
+                "source_type": "xlsx",
+                "topic": "dokumenty_meropriyatiya",
+            },
+            score=0.5,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Где найти документы форума Машук?",
+            "analyzer_mode": "deterministic",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Машук",
+                questions=[
+                    Question(
+                        text="Где найти документы форума?",
+                        topic="dokumenty_meropriyatiya",
+                        category="форумы",
+                        forum_normalized="Машук",
+                    )
+                ],
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": FailingReranker(),
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == [
+        "exact_documents"
+    ]
 
 
 @pytest.mark.asyncio
@@ -6475,6 +6742,124 @@ async def test_generate_accepts_travel_source_when_it_explicitly_covers_housing(
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["ivolga_travel_housing"]
     assert "fully covered" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_prefers_fresh_yonote_equivalent_over_exact_legacy_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    legacy = ScoredChunk(
+        chunk_id="legacy_travel",
+        text="Legacy travel answer.",
+        metadata={
+            "source_type": "xlsx",
+            "category": "forums",
+            "forum_normalized": "Ladoga",
+            "topic": "oplata_proezda",
+        },
+        score=0.9,
+        reranker_score=0.9,
+    )
+    fresh = ScoredChunk(
+        chunk_id="fresh_compensation",
+        text="Fresh travel compensation answer.",
+        metadata={
+            "source_type": "yonote",
+            "category": "forums",
+            "forum_normalized": "Ladoga",
+            "topic": "kompensaciya",
+        },
+        score=0.7,
+        reranker_score=0.7,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="forums",
+                forum_normalized="Ladoga",
+                questions=[
+                    Question(
+                        text="Does Ladoga reimburse travel?",
+                        topic="oplata_proezda",
+                        category="forums",
+                        forum_normalized="Ladoga",
+                    )
+                ],
+            ),
+            "reranked_chunks": [legacy, fresh],
+            "max_confidence": 0.9,
+            "message_masked": "Does Ladoga reimburse travel?",
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["fresh_compensation"]
+    assert "Fresh travel compensation" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_exact_documents_beat_fresh_equivalent_program(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    fresh_program = ScoredChunk(
+        chunk_id="fresh_program",
+        text="Актуальная программа форума опубликована в канале участников.",
+        metadata={
+            "source_type": "yonote",
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "programma_foruma",
+        },
+        score=0.9,
+        reranker_score=0.9,
+    )
+    exact_documents = ScoredChunk(
+        chunk_id="exact_documents",
+        text="Документы форума доступны в карточке мероприятия.",
+        metadata={
+            "source_type": "xlsx",
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "dokumenty_meropriyatiya",
+        },
+        score=0.7,
+        reranker_score=0.7,
+    )
+
+    result = await generate(
+        {
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Машук",
+                questions=[
+                    Question(
+                        text="Где найти документы форума?",
+                        topic="dokumenty_meropriyatiya",
+                        category="форумы",
+                        forum_normalized="Машук",
+                    )
+                ],
+            ),
+            "reranked_chunks": [fresh_program, exact_documents],
+            "max_confidence": 0.9,
+            "message_masked": "Где найти документы форума Машук?",
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == ["exact_documents"]
+    assert "Документы форума" in result["generated_response"]
 
 
 @pytest.mark.asyncio

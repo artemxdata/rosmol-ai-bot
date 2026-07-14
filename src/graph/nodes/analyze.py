@@ -1808,6 +1808,21 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             ),
         ),
         (
+            "volonterskaya_pomosch",
+            "Как найти волонтёрское мероприятие и подать заявку?",
+            ("волонтер",),
+        ),
+        (
+            "uchastniki",
+            "Кто может участвовать?",
+            ("кто может участв", "кто может стать участ"),
+        ),
+        (
+            "tematicheskie_smeny_foruma",
+            "Какие тематические смены будут на форуме?",
+            ("какие смены", "тематические смены", "смены будут"),
+        ),
+        (
             "kak_zaregistrirovatsya_na_fgais",
             "Как подать заявку или зарегистрироваться?",
             ("регистрац", "зарегистр"),
@@ -1974,6 +1989,9 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
     seen_topics: set[str] = set()
     forum_only_topics = {
         "o_meropriyatii",
+        "volonterskaya_pomosch",
+        "uchastniki",
+        "tematicheskie_smeny_foruma",
         "oplata_proezda",
         "usloviya_prozhivaniya",
         "otkaz_ot_uchastiya",
@@ -2005,6 +2023,8 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
         if topic in forum_only_topics and category != "форумы":
             continue
         if topic == "rosmolodezh_granty" and category == "гранты":
+            continue
+        if topic == "podacha_zayavki_na_proekt" and "волонтер" in normalized:
             continue
         if topic == "daty_nachala_meropriyatiya" and _has_personal_date_without_event_context(
             normalized

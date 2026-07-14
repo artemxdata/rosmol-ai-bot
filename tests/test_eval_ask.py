@@ -163,6 +163,31 @@ def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:
     assert result["passed"] is True
 
 
+def test_score_case_normalizes_spacing_inside_numeric_dates() -> None:
+    case = _normalize_case(
+        {
+            "id": "date-spacing",
+            "query": "До какого числа можно подать заявку?",
+            "expected_answer_contains": ["12.09.2026"],
+        }
+    )
+
+    result = score_case(
+        case,
+        {
+            "http_status": 200,
+            "request_id": "11111111-1111-1111-1111-111111111111",
+            "response": "Подать заявку можно до 12. 09. 2026 включительно.",
+            "latency_ms": 20,
+            "error": None,
+        },
+        None,
+    )
+
+    assert result["answer_contains_match"] is True
+    assert result["passed"] is True
+
+
 def test_normalize_case_accepts_expected_behavior_aliases() -> None:
     case = _normalize_case(
         {

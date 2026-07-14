@@ -739,6 +739,7 @@ async def process_message(
 
     is_safe, safety_reason = safety.check(message.text)
     masked_text, pii_mapping = fastapi_app.state.pii_masker.mask(message.text)
+    operator_requested = is_operator_request(message.text)
     session = await fastapi_app.state.sessions.get_or_create(
         message.channel.value,
         message.user_id,
@@ -787,7 +788,7 @@ async def process_message(
     if (
         profanity.check(message.text)
         and not _has_actionable_support_context(message.text)
-        and not is_operator_request(masked_text)
+        and not operator_requested
     ):
         response = (
             "Я не поддерживаю оскорбления и не вступаю в споры. "
@@ -818,7 +819,7 @@ async def process_message(
             ex=settings.session_ttl_seconds,
         )
 
-    if is_operator_request(masked_text):
+    if operator_requested:
         response = "Передаю обращение специалисту."
         session = await _clear_pending_clarification(fastapi_app, session)
         await fastapi_app.state.sessions.append_turn(session, masked_text, response)

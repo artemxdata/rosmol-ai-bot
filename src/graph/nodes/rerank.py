@@ -584,15 +584,20 @@ def _exact_topic_fast_path_candidates(
 
     selected: list[Chunk] = []
     seen: set[str] = set()
+    official_chunks = _official_source_chunks(scoped_chunks)
     for question in questions:
-        matches = [
+        scoped_topic_chunks = [
             chunk
-            for chunk in scoped_chunks
-            if _chunk_matches_exact_question_topic(analysis, question, chunk)
+            for chunk in official_chunks
+            if _chunk_matches_trusted_topic_scope(analysis, question, chunk)
         ]
-        if not matches:
+        candidate = _topic_candidate_for_question(
+            analysis,
+            question,
+            scoped_topic_chunks,
+        )
+        if candidate is None:
             return []
-        candidate = _best_exact_topic_candidate(question.text, matches)
         if candidate.chunk_id in seen:
             continue
         selected.append(candidate)
@@ -606,17 +611,12 @@ def _has_trusted_topic_analysis(state: BotState) -> bool:
     )
 
 
-def _chunk_matches_exact_question_topic(
+def _chunk_matches_trusted_topic_scope(
     analysis: Any,
     question: Question,
     chunk: Chunk,
 ) -> bool:
     metadata = chunk.metadata or {}
-    if str(metadata.get("source_type") or "").strip() not in {"xlsx", "docx", "yonote"}:
-        return False
-    if str(metadata.get("topic") or "").strip() != str(question.topic or "").strip():
-        return False
-
     category = str(question.category or getattr(analysis, "category", None) or "").strip()
     chunk_category = str(metadata.get("category") or "").strip()
     if category and chunk_category != category:
@@ -638,19 +638,6 @@ def _chunk_matches_exact_question_topic(
 def _is_general_grant_scope(value: str) -> bool:
     normalized = _normalize(value)
     return "грант" in normalized and "физичес" in normalized
-
-
-def _best_exact_topic_candidate(question: str, matches: list[Chunk]) -> Chunk:
-    ranked = _candidate_chunks_for_question(question, matches, 1)
-    if ranked:
-        return ranked[0]
-    return max(
-        matches,
-        key=lambda chunk: (
-            _source_reliability_score(chunk),
-            float(chunk.score or 0.0),
-        ),
-    )
 
 
 def _chunk_matches_exact_forum(chunk: Chunk, forum: str) -> bool:
@@ -737,7 +724,7 @@ def _topic_candidate_for_question(
         field_score = _metadata_field_score(_tokens(question.text), chunk)
         matches.append(
             (
-                topic_rank,
+                _topic_source_preference_rank(question, chunk, topic_rank),
                 _source_freshness_rank(chunk),
                 _source_type_rank(chunk),
                 -field_score,
@@ -764,14 +751,60 @@ def _topic_match_rank(question: Question, chunk: Chunk) -> int:
         chunk_topic == "forum"
         and question_topic_group
         == _equivalent_topic_group("podacha_zayavki_na_proekt")
-        and "регистрац" in chunk.text.casefold()
+        and any(marker in chunk.text.casefold() for marker in ("регистрац", "заявк"))
     ):
-        return 0
+        return 1
+    if _is_combined_food_housing_source(question_topic_group, chunk_topic, chunk.text):
+        return 1
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
-        return 0
+        return 1
     if _is_housing_compatible_travel_source(question_topic_group, chunk_topic, chunk.text):
         return 1
     return 2
+
+
+def _topic_source_preference_rank(
+    question: Question,
+    chunk: Chunk,
+    topic_rank: int,
+) -> int:
+    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
+    is_fresh_yonote = source_type == "yonote"
+    if is_fresh_yonote and topic_rank == 0:
+        return 0
+    if is_fresh_yonote and _is_preferred_fresh_topic_replacement(question, chunk):
+        return 1
+    if topic_rank == 0:
+        return 2
+    if topic_rank <= 1:
+        return 3 if is_fresh_yonote else 4
+    return 5
+
+
+def _is_preferred_fresh_topic_replacement(question: Question, chunk: Chunk) -> bool:
+    question_topic_group = _question_topic_group(question)
+    chunk_topic = str((chunk.metadata or {}).get("topic") or "").strip()
+    if (
+        chunk_topic == "kompensaciya"
+        and question_topic_group == _equivalent_topic_group("oplata_proezda")
+    ):
+        return True
+    if (
+        chunk_topic == "forum"
+        and question_topic_group
+        == _equivalent_topic_group("podacha_zayavki_na_proekt")
+        and any(marker in chunk.text.casefold() for marker in ("регистрац", "заявк"))
+    ):
+        return True
+    if chunk_topic != "pitanie_i_prozhivanie":
+        return False
+    return question_topic_group == _equivalent_topic_group(
+        "informaciya_o_ploschadke_pitanie_pite"
+    ) or _is_combined_food_housing_source(
+        question_topic_group,
+        chunk_topic,
+        chunk.text,
+    )
 
 
 def _question_topic_group(question: Question) -> str | None:
@@ -790,6 +823,19 @@ def _is_housing_compatible_travel_source(
     if question_topic_group != _equivalent_topic_group("usloviya_prozhivaniya"):
         return False
     if chunk_topic not in HOUSING_COMPATIBLE_TRAVEL_TOPICS:
+        return False
+    normalized_text = _normalize(chunk_text)
+    return any(marker in normalized_text for marker in HOUSING_TEXT_MARKERS)
+
+
+def _is_combined_food_housing_source(
+    question_topic_group: str | None,
+    chunk_topic: str,
+    chunk_text: str,
+) -> bool:
+    if question_topic_group != _equivalent_topic_group("usloviya_prozhivaniya"):
+        return False
+    if chunk_topic != "pitanie_i_prozhivanie":
         return False
     normalized_text = _normalize(chunk_text)
     return any(marker in normalized_text for marker in HOUSING_TEXT_MARKERS)

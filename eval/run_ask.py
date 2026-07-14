@@ -33,6 +33,7 @@ FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
     r"информаци[яи][^.!?]{0,160}отсутств)",
     flags=re.IGNORECASE,
 )
+DATE_SEPARATOR_SPACING_RE = re.compile(r"(?<=\d)\s*([./-])\s*(?=\d)")
 NON_ANSWER_RE = re.compile(
     r"(уже\s+был[ао]?\s+предоставлен[ао]?\s+в\s+источник(?:е|ах)|"
     r"смотрите\s+источник|"
@@ -487,9 +488,10 @@ def score_case(
             equivalent_cited_hit if equivalent_chunk_ids else exact_cited_hit
         )
     if expected_answer_contains:
-        normalized_response = response_text.lower()
+        normalized_response = _normalize_answer_contains_text(response_text)
         answer_contains_match = all(
-            expected.lower() in normalized_response for expected in expected_answer_contains
+            _normalize_answer_contains_text(expected) in normalized_response
+            for expected in expected_answer_contains
         )
         checks["answer_contains_match"] = answer_contains_match
         required_checks["answer_contains_match"] = answer_contains_match
@@ -1055,6 +1057,12 @@ def _equivalent_chunk_id_map(value: Any, expected_chunk_ids: list[str]) -> dict[
     if not equivalents:
         return {}
     return {chunk_id: equivalents for chunk_id in expected_chunk_ids}
+
+
+def _normalize_answer_contains_text(value: Any) -> str:
+    normalized = str(value or "").casefold().replace("ё", "е")
+    normalized = DATE_SEPARATOR_SPACING_RE.sub(r"\1", normalized)
+    return " ".join(normalized.split())
 
 
 def _missing_expected_or_equivalent_ids(

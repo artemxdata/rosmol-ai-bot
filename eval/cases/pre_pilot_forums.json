@@ -136,7 +136,8 @@
     ],
     "equivalent_chunk_ids": {
       "docx_forum_rossiyskiy_sever_intenty_001_sut_foruma_i_napravleniya": [
-        "xlsx_category_r0644_o_meropriyatii"
+        "xlsx_category_r0644_o_meropriyatii",
+        "yonote_api_mgure5zzya_s0001_o_meropriyatii"
       ],
       "docx_forum_rossiyskiy_sever_intenty_007_mesto_i_daty_provedeniya_meropriyatiya": [
         "xlsx_category_r0650_daty_nachala_meropriyatiya"
@@ -382,6 +383,9 @@
       ],
       "xlsx_category_r0612_poseschenie_festivalya_s_detmi": [
         "xlsx_category_r0607_registraciya_detey"
+      ],
+      "xlsx_category_r0608_registraciya_na_meropriyatie": [
+        "yonote_api_nwr3m74g03_s0003_sposob_1_cherez_chat_bot_v_mah_https_max_ru_youthday_bot"
       ]
     }
   }
