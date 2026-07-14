@@ -31,6 +31,7 @@ DEFAULT_OUTPUT = Path("data/knowledge_base_seed.json")
 
 MIN_SECTION_CHARS = 20
 MAX_CHUNK_CHARS = 2400
+SOCIAL_PLACEHOLDER_RE = re.compile(r"\b(?:VK|TG|MAX|Youtube|OK|Бот)\b", re.IGNORECASE)
 
 FORUM_NAME_ALIASES = {
     "иволга": "Иволга",
@@ -236,10 +237,25 @@ def clean_markdown_text(text: str) -> str:
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</?[^>]+>", "", text)
     text = strip_markdown_markup(text)
+    text = _remove_unresolved_social_link_lines(text)
     text = re.sub(r"^\s*\|[-:\s|]+\|\s*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _remove_unresolved_social_link_lines(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        placeholder_count = len(SOCIAL_PLACEHOLDER_RE.findall(line))
+        if placeholder_count >= 2 and not re.search(
+            r"https?://|[\w.+-]+@[\w.-]+\.\w+|\+?\d[\d() -]{6,}",
+            line,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        cleaned_lines.append(re.sub(r"\bVK\s+TG\b", "", line, flags=re.IGNORECASE))
+    return "\n".join(cleaned_lines)
 
 
 def strip_markdown_markup(text: str) -> str:
@@ -335,7 +351,15 @@ def merge_records(
             for record in base_records
             if str(record.get("source_type") or "") != "yonote"
         ]
-    return [*base_records, *yonote_records]
+    merged_records = [*base_records, *yonote_records]
+    return [_normalize_record_links(record) for record in merged_records]
+
+
+def _normalize_record_links(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(record)
+    if "links" in normalized:
+        normalized["links"] = extract_links(str(normalized.get("text_clean") or ""))
+    return normalized
 
 
 def parse_args() -> argparse.Namespace:

@@ -254,7 +254,11 @@ def _fallback_analysis(
         should_escalate = False
         review_reason = None
     if should_escalate and not category:
-        category = "техподдержка" if review_reason == "technical_issue" else "навигация"
+        category = (
+            "техподдержка"
+            if review_reason in {"technical_issue", "repeated_support_failure"}
+            else "навигация"
+        )
     if (
         allow_unknown_clarification
         and not category
@@ -720,6 +724,8 @@ def _looks_like_unknown_name_after_clarification(
 
 def _session_followup_review_reason(message: str, session: object | None) -> str | None:
     normalized = _normalize_for_session(message)
+    if _is_repeated_support_followup(normalized, session):
+        return "repeated_support_failure"
     if not (
         "заяв" in normalized
         and any(marker in normalized for marker in ("что по", "что с", "а по"))
@@ -738,6 +744,41 @@ def _session_followup_review_reason(message: str, session: object | None) -> str
     ):
         return "personal_status"
     return None
+
+
+def _is_repeated_support_followup(normalized: str, session: object | None) -> bool:
+    if not any(
+        marker in normalized
+        for marker in (
+            "не помогло",
+            "не помогает",
+            "не сработало",
+            "все равно не работает",
+            "все равно не грузится",
+            "так и не работает",
+            "так и не грузится",
+            "проблема осталась",
+            "ошибка осталась",
+        )
+    ):
+        return False
+    last_bot = _last_session_message(session, "bot")
+    return any(
+        marker in last_bot
+        for marker in (
+            "очисти кеш",
+            "очистить кеш",
+            "очисти кэш",
+            "очистить кэш",
+            "cookie",
+            "другом браузере",
+            "другого браузера",
+            "другого устройства",
+            "vpn",
+            "повтори попытку",
+            "повторить попытку",
+        )
+    )
 
 
 def _session_mentions(session: object | None, markers: tuple[str, ...]) -> bool:

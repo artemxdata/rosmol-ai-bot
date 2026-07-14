@@ -13,7 +13,7 @@ STRICT_RETRIEVAL_TOP_K = 10
 BROAD_RETRIEVAL_TOP_K = 30
 KEYWORD_RECALL_TOP_K = 6
 KEYWORD_RECALL_SCAN_LIMIT = 2048
-OFFICIAL_KEYWORD_SOURCE_TYPES = ("xlsx", "docx")
+OFFICIAL_KEYWORD_SOURCE_TYPES = ("yonote", "xlsx", "docx")
 FALLBACK_KEYWORD_SOURCE_TYPES = ("ticket_answer_bank",)
 DIRECTIONAL_TOPIC_LOOKUP_ALIASES: dict[str, tuple[str, ...]] = {
     "poluchenie_i_naznachenie_bileta": (

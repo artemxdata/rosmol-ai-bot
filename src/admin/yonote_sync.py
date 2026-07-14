@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from scripts.build_yonote_kb_seed import merge_records
-from scripts.index_kb import validate_seed_items
+from scripts.index_kb import (
+    load_forum_registry,
+    validate_seed_items,
+    validate_semantic_seed_items,
+)
 from scripts.sync_yonote_kb import (
     YonoteClient,
     build_records_from_api_documents,
@@ -47,7 +51,7 @@ def preview_sync(
         fresh_yonote_records,
         replace_existing_yonote=True,
     )
-    validate_seed_items(merged_records)
+    _validate_merged_seed(seed_path, merged_records)
     return _build_sync_report(
         current_records=current_records,
         fresh_yonote_records=fresh_yonote_records,
@@ -74,7 +78,7 @@ def apply_sync(
         fresh_yonote_records,
         replace_existing_yonote=True,
     )
-    validate_seed_items(merged_records)
+    _validate_merged_seed(seed_path, merged_records)
     _write_seed_records(seed_path, merged_records)
     return _build_sync_report(
         current_records=current_records,
@@ -124,6 +128,14 @@ def _load_fresh_yonote_records(
     )
     validate_seed_items(records)
     return documents, records
+
+
+def _validate_merged_seed(seed_path: Path, records: list[dict[str, Any]]) -> None:
+    validate_seed_items(records)
+    validate_semantic_seed_items(
+        records,
+        forum_registry=load_forum_registry(seed_path),
+    )
 
 
 def _build_sync_report(

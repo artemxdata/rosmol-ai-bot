@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from typing import Any
 
 import asyncpg
 
+from src.config import get_settings
 from src.models import Channel, MemoryRecord
 
 
 def hash_user_id(channel: str, user_id: str) -> str:
-    return hashlib.sha256(f"{channel}:{user_id}".encode()).hexdigest()
+    payload = f"{channel}:{user_id}".encode()
+    settings = get_settings()
+    secret = str(getattr(settings, "user_hash_secret", "") or "").strip()
+    if secret:
+        return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    # Local/test environments may intentionally run without secrets. Non-local startup is
+    # rejected in src.main unless a dedicated USER_HASH_SECRET is configured.
+    return hashlib.sha256(payload).hexdigest()
 
 
 class UserMemory:

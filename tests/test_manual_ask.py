@@ -136,6 +136,8 @@ async def test_run_manual_ask_without_db_trace_uses_http_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         assert payload["text"] == "Привет"
+        assert request.headers["X-Eval-Run-Id"].startswith("manual-ask-")
+        assert request.headers["X-Eval-Case-Id"] == "hello"
         return httpx.Response(
             200,
             json={
@@ -153,6 +155,7 @@ async def test_run_manual_ask_without_db_trace_uses_http_response() -> None:
     )
 
     assert report["cases_total"] == 1
+    assert report["eval_run_id"].startswith("manual-ask-")
     assert report["http_success_count"] == 1
     assert report["trace_found_count"] == 0
     assert report["verdict_counts"] == {"answer_without_trace": 1}

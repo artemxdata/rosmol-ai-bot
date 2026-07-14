@@ -55,6 +55,7 @@ def test_foreign_registration_response_uses_separate_yonote_link(tmp_path) -> No
         json.dumps(
             [
                 {
+                    "chunk_id": "yonote_rostov_foreign_registration",
                     "forum_normalized": "Ростов",
                     "source_type": "yonote",
                     "text_clean": (
@@ -79,3 +80,68 @@ def test_foreign_registration_response_uses_separate_yonote_link(tmp_path) -> No
         "Для иностранных участников регистрация на форум «Ростов» доступна отдельно: "
         "https://wyffest.com/events/rostov-26"
     )
+
+
+def test_foreign_registration_ignores_archived_and_future_seed_records(tmp_path) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    seed_path.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "archived",
+                    "forum_normalized": "Ростов",
+                    "source_type": "yonote",
+                    "status": "archived",
+                    "text_clean": (
+                        "Регистрация для иностранных участников: https://bad.example/archived"
+                    ),
+                },
+                {
+                    "chunk_id": "future",
+                    "forum_normalized": "Ростов",
+                    "source_type": "yonote",
+                    "status": "published",
+                    "valid_from": "2099-01-01",
+                    "text_clean": (
+                        "Регистрация для иностранных участников: https://bad.example/future"
+                    ),
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    response = foreign_registration_response(
+        message="Как иностранному участнику зарегистрироваться на Ростов?",
+        analysis=QueryAnalysis(forum_normalized="Ростов"),
+        chunks=[],
+        seed_path=seed_path,
+    )
+
+    assert response is None
+
+
+def test_place_date_fact_ignores_archived_chunk() -> None:
+    chunk = ScoredChunk(
+        chunk_id="archived_place",
+        text=(
+            "Дата и место проведения: с 6 по 10 сентября 2026 года. "
+            "Форум будет проходить в Ростовской области. Участники: молодёжь."
+        ),
+        metadata={
+            "forum_normalized": "Ростов",
+            "source_type": "yonote",
+            "status": "archived",
+        },
+        score=1.0,
+        reranker_score=0.9,
+    )
+
+    response = concise_event_place_date_response(
+        message="Где и когда проходит форум Ростов?",
+        analysis=QueryAnalysis(forum_normalized="Ростов"),
+        chunks=[chunk],
+    )
+
+    assert response is None

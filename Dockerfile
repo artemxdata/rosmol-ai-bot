@@ -37,6 +37,11 @@ RUN apt-get update \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY . .
+# .dockerignore excludes every local report except this reviewed aggregate.
+# Keep the explicit COPY so the admin quality artifact remains an intentional
+# part of the runtime image instead of an accidental consequence of COPY . .
+COPY reports/presentation_quality/presentation_quality_report.json \
+    /app/reports/presentation_quality/presentation_quality_report.json
 RUN chown -R app:app /app
 
 EXPOSE 8000

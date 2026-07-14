@@ -1,16 +1,37 @@
-name: KB Eval
+name: KB Offline Regression
 
 on:
   push:
     paths:
       - "data/knowledge_base_seed.json"
+      - "data/forums_registry.json"
+      - "data/kb_source_corrections.json"
       - "data/golden_set.json"
+      - "src/kb/**"
       - "src/rag/**"
       - "eval/**"
+      - "scripts/audit_kb_seed.py"
+      - "scripts/index_kb.py"
+      - ".github/workflows/eval.yml"
+  pull_request:
+    paths:
+      - "data/knowledge_base_seed.json"
+      - "data/forums_registry.json"
+      - "data/kb_source_corrections.json"
+      - "data/golden_set.json"
+      - "src/kb/**"
+      - "src/rag/**"
+      - "eval/**"
+      - "scripts/audit_kb_seed.py"
+      - "scripts/index_kb.py"
+      - ".github/workflows/eval.yml"
 
 jobs:
   eval:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,5 +39,37 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install ".[dev]"
-      - name: Check regression
-        run: python eval/check_regression.py --threshold 0.85
+      - name: Validate KB seed structure
+        run: >-
+          python scripts/index_kb.py
+          --validate-only
+          --forums-registry data/forums_registry.json
+      - name: Audit semantic KB integrity
+        run: >-
+          python scripts/audit_kb_seed.py
+          --forums-registry data/forums_registry.json
+          --fail-on error
+      # This is a deterministic calibration/regression gate, not an independent holdout score.
+      - name: Validate versioned calibration labels
+        run: >-
+          python -m eval.validate_golden_set
+          --golden eval/cases/pre_pilot_forums.json
+          --kb-seed data/knowledge_base_seed.json
+          --min-cases 10
+          --allow-missing-reference-answer
+          --output /tmp/pre_pilot_forums_validation.json
+          --markdown /tmp/pre_pilot_forums_validation.md
+      - name: Run reproducible offline retrieval calibration
+        run: >-
+          python -m eval.run_retrieval
+          --golden eval/cases/pre_pilot_forums.json
+          --kb-seed data/knowledge_base_seed.json
+          --backend lexical
+          --top-k 10
+          --output /tmp/pre_pilot_forums_metrics.json
+      - name: Check regression fail-closed
+        run: >-
+          python eval/check_regression.py
+          --metrics /tmp/pre_pilot_forums_metrics.json
+          --threshold 0.85
+          --min-cases 10

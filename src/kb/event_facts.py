@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from src.kb.temporal import is_published_active_record
 from src.models import Chunk, QueryAnalysis
 
 _PLACE_DATE_QUERY_RE = re.compile(
@@ -48,16 +49,27 @@ def concise_event_place_date_response(
     analysis: QueryAnalysis | None,
     chunks: Iterable[Chunk],
 ) -> str | None:
+    fact = concise_event_place_date_fact(message=message, analysis=analysis, chunks=chunks)
+    return fact[0] if fact else None
+
+
+def concise_event_place_date_fact(
+    *,
+    message: str,
+    analysis: QueryAnalysis | None,
+    chunks: Iterable[Chunk],
+) -> tuple[str, Chunk] | None:
     if not _PLACE_DATE_QUERY_RE.search(str(message or "")):
         return None
 
     forum = analysis.forum_normalized if analysis else None
+    if not forum:
+        return None
     candidates = [
         chunk
         for chunk in chunks
-        if not forum
-        or not chunk.metadata.get("forum_normalized")
-        or str(chunk.metadata.get("forum_normalized")).casefold() == forum.casefold()
+        if is_published_active_record(chunk.metadata)
+        and _same_forum(chunk.metadata, forum)
     ]
     candidates.sort(
         key=lambda chunk: (
@@ -75,11 +87,14 @@ def concise_event_place_date_response(
         if date_match and place_match:
             subject = f"Форум «{forum}»" if forum else "Мероприятие"
             return (
-                f"{subject} пройдёт {date_match.group('value')} "
-                f"{place_match.group('value').strip()}."
+                (
+                    f"{subject} пройдёт {date_match.group('value')} "
+                    f"{place_match.group('value').strip()}."
+                ),
+                chunk,
             )
         if value:
-            return value
+            return value, chunk
     return None
 
 
@@ -90,6 +105,22 @@ def foreign_registration_response(
     chunks: Iterable[Chunk],
     seed_path: str | Path | None = None,
 ) -> str | None:
+    fact = foreign_registration_fact(
+        message=message,
+        analysis=analysis,
+        chunks=chunks,
+        seed_path=seed_path,
+    )
+    return fact[0] if fact else None
+
+
+def foreign_registration_fact(
+    *,
+    message: str,
+    analysis: QueryAnalysis | None,
+    chunks: Iterable[Chunk],
+    seed_path: str | Path | None = None,
+) -> tuple[str, Chunk] | None:
     if not (
         _FOREIGN_REGISTRATION_QUERY_RE.search(str(message or ""))
         and _REGISTRATION_QUERY_RE.search(str(message or ""))
@@ -97,16 +128,20 @@ def foreign_registration_response(
         return None
 
     forum = analysis.forum_normalized if analysis else None
-    texts = [chunk.text for chunk in chunks if _same_forum(chunk.metadata, forum)]
+    if not forum:
+        return None
+    candidates = [chunk for chunk in chunks if _same_forum(chunk.metadata, forum)]
     if seed_path:
-        texts.extend(
-            str(record.get("text_clean") or record.get("text_raw") or "")
+        candidates.extend(
+            _chunk_from_seed_record(record)
             for record in _load_seed_records(Path(seed_path))
             if str(record.get("source_type") or "") == "yonote"
+            and is_published_active_record(record)
             and _same_forum(record, forum)
+            and record.get("chunk_id")
         )
-    for text in texts:
-        match = _FOREIGN_REGISTRATION_LINK_RE.search(" ".join(text.split()))
+    for chunk in candidates:
+        match = _FOREIGN_REGISTRATION_LINK_RE.search(" ".join(chunk.text.split()))
         if match is None:
             continue
         url_match = _URL_RE.search(match.group(0))
@@ -114,17 +149,28 @@ def foreign_registration_response(
             continue
         subject = f"на форум «{forum}»" if forum else "на мероприятие"
         return (
-            f"Для иностранных участников регистрация {subject} доступна отдельно: "
-            f"{url_match.group(0).rstrip('.,')}"
+            (
+                f"Для иностранных участников регистрация {subject} доступна отдельно: "
+                f"{url_match.group(0).rstrip('.,')}"
+            ),
+            chunk,
         )
     return None
 
 
 def _same_forum(metadata: dict[str, Any], forum: str | None) -> bool:
     if not forum:
-        return True
+        return False
     item_forum = str(metadata.get("forum_normalized") or "").strip()
-    return not item_forum or item_forum.casefold() == forum.casefold()
+    return bool(item_forum) and item_forum.casefold() == forum.casefold()
+
+
+def _chunk_from_seed_record(record: dict[str, Any]) -> Chunk:
+    return Chunk(
+        chunk_id=str(record["chunk_id"]),
+        text=str(record.get("text_clean") or record.get("text_raw") or ""),
+        metadata=dict(record),
+    )
 
 
 def _load_seed_records(path: Path) -> list[dict[str, Any]]:

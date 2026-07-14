@@ -10,6 +10,7 @@ import pytest
 from src.graph.graph import build_graph
 from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE
 from src.main import (
+    _save_cache,
     _update_dialog_session,
     _with_explicit_forum_context,
     _with_pending_clarification_context,
@@ -25,6 +26,7 @@ from src.models import (
     ScoredChunk,
     Session,
 )
+from src.rag.cache import CachedResponse
 from src.session.memory import hash_user_id
 
 
@@ -86,17 +88,29 @@ class FakeSessions:
 
 
 class FakeSemanticCache:
-    def __init__(self, response: str | None = None) -> None:
+    def __init__(self, response: str | CachedResponse | None = None) -> None:
         self.response = response
         self.check_calls: list[tuple[str, str | None]] = []
-        self.save_calls: list[tuple[str, str | None, str]] = []
+        self.save_calls: list[tuple[str, CachedResponse]] = []
 
-    async def check(self, query: str, forum: str | None) -> str | None:
+    async def check(self, query: str, forum: str | None) -> CachedResponse | None:
         self.check_calls.append((query, forum))
+        if isinstance(self.response, str):
+            return CachedResponse(
+                response=self.response,
+                forum_normalized=forum,
+                analysis=QueryAnalysis(
+                    forum=forum,
+                    forum_normalized=forum,
+                    category="форумы" if forum else "общее",
+                ),
+                cited_sources=["cached_source"],
+                generator_model="source_chunk",
+            )
         return self.response
 
-    async def save(self, query: str, forum: str | None, response: str) -> None:
-        self.save_calls.append((query, forum, response))
+    async def save(self, query: str, cached_response: CachedResponse) -> None:
+        self.save_calls.append((query, cached_response))
         return None
 
 
@@ -215,7 +229,7 @@ class HighConfidenceReranker:
 def _app(
     *,
     allowed: bool = True,
-    cached_response: str | None = None,
+    cached_response: str | CachedResponse | None = None,
     masked_text: str | None = None,
     pii_mapping: dict[str, Any] | None = None,
     graph: Any | None = None,
@@ -420,6 +434,133 @@ async def test_process_message_returns_semantic_cache_hit(
     assert response == "Ответ из кэша"
     assert app.state.sessions.appended == [("Кто платит за дорогу?", "Ответ из кэша")]
     assert captured_logs[0]["cache_hit"] is True
+    assert captured_logs[0]["cited_sources"] == ["cached_source"]
+
+
+@pytest.mark.asyncio
+async def test_process_message_cache_hit_restores_forum_and_topic_context(
+    no_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    cached = CachedResponse(
+        response="Проезд участник оплачивает самостоятельно.",
+        forum_normalized="Амур",
+        analysis=QueryAnalysis(
+            forum="Амур",
+            forum_normalized="Амур",
+            category="форумы",
+            topics=["oplata_proezda"],
+        ),
+        cited_sources=["xlsx_amur_travel"],
+        generator_model="source_chunk",
+    )
+    app = _app(cached_response=cached)
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.API,
+        text="Амур: кто платит за дорогу?",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == cached.response
+    assert app.state.sessions.session.forum_context == "Амур"
+    assert app.state.sessions.session.extracted_entities["last_topics"] == [
+        "oplata_proezda"
+    ]
+    assert captured_logs[0]["cited_sources"] == ["xlsx_amur_travel"]
+
+
+@pytest.mark.asyncio
+async def test_save_cache_persists_only_complete_grounded_answers() -> None:
+    cache = FakeSemanticCache()
+    app = SimpleNamespace(state=SimpleNamespace(semantic_cache=cache))
+    analysis = QueryAnalysis(
+        forum="Амур",
+        forum_normalized="Амур",
+        category="форумы",
+        topics=["oplata_proezda"],
+    )
+
+    await _save_cache(
+        app,  # type: ignore[arg-type]
+        "Амур: кто платит за дорогу?",
+        "Проезд участник оплачивает самостоятельно.",
+        {
+            "analysis": analysis,
+            "cited_sources": ["xlsx_amur_travel"],
+            "generator_model": "source_chunk",
+            "verifier_triggered": False,
+        },
+    )
+
+    assert len(cache.save_calls) == 1
+    query, cached = cache.save_calls[0]
+    assert query == "Амур: кто платит за дорогу?"
+    assert cached.analysis == analysis
+    assert cached.cited_sources == ["xlsx_amur_travel"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state_update",
+    (
+        {"analysis": QueryAnalysis(needs_clarification=True)},
+        {"partial_source_missing_coverage": ["проживание"]},
+        {"cited_sources": []},
+        {"should_escalate": True},
+    ),
+)
+async def test_save_cache_rejects_non_final_or_ungrounded_response(
+    state_update: dict[str, Any],
+) -> None:
+    cache = FakeSemanticCache()
+    app = SimpleNamespace(state=SimpleNamespace(semantic_cache=cache))
+    state: dict[str, Any] = {
+        "analysis": QueryAnalysis(category="форумы"),
+        "cited_sources": ["source"],
+    }
+    state.update(state_update)
+
+    await _save_cache(
+        app,  # type: ignore[arg-type]
+        "Вопрос",
+        "Ответ",
+        state,
+    )
+
+    assert cache.save_calls == []
+
+
+@pytest.mark.asyncio
+async def test_save_cache_rejects_temporally_bounded_sources() -> None:
+    cache = FakeSemanticCache()
+    app = SimpleNamespace(state=SimpleNamespace(semantic_cache=cache))
+    analysis = QueryAnalysis(
+        forum="Ростов",
+        forum_normalized="Ростов",
+        category="форумы",
+        topics=["registraciya"],
+    )
+    chunk = ScoredChunk(
+        chunk_id="rostov_registration",
+        text="Регистрация завершилась.",
+        metadata={"valid_to": "2026-07-06"},
+        reranker_score=0.99,
+    )
+
+    await _save_cache(
+        app,  # type: ignore[arg-type]
+        "Когда закончилась регистрация на Ростов?",
+        "Регистрация завершилась 6 июля.",
+        {
+            "analysis": analysis,
+            "cited_sources": [chunk.chunk_id],
+            "reranked_chunks": [chunk],
+        },
+    )
+
+    assert cache.save_calls == []
 
 
 @pytest.mark.asyncio
@@ -552,6 +693,28 @@ async def test_process_message_scopes_cache_by_detected_forum_before_graph(
 
 
 @pytest.mark.asyncio
+async def test_process_message_skips_cache_for_multi_forum_query(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+) -> None:
+    graph = CapturingGraph("Сравнение из graph")
+    app = _app(cached_response="Ответ только про Амур", graph=graph)
+    message = IncomingMessage(
+        user_id="u1",
+        channel=Channel.API,
+        text="Сравни Амур и Машук по оплате проезда",
+    )
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Сравнение из graph"
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+    assert graph.seen_state is not None
+    assert graph.seen_state["cache_allowed"] is False
+
+
+@pytest.mark.asyncio
 async def test_process_message_escalates_when_llm_is_not_configured(
     no_llm_settings: None,
     captured_logs: list[dict[str, Any]],
@@ -567,7 +730,7 @@ async def test_process_message_escalates_when_llm_is_not_configured(
 
 
 @pytest.mark.asyncio
-async def test_process_message_masks_pii_before_graph_and_logs_trace(
+async def test_process_message_masks_pii_without_persisting_raw_mapping(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],
 ) -> None:
@@ -591,7 +754,7 @@ async def test_process_message_masks_pii_before_graph_and_logs_trace(
     assert app.state.sessions.appended == [
         ("Меня зовут [ИМЯ], хочу на Машук", "Ответ по найденным источникам")
     ]
-    assert app.state.redis.set_calls
+    assert app.state.redis.set_calls == []
     assert captured_logs[0]["final_response"] == "Ответ по найденным источникам"
 
 
@@ -627,6 +790,7 @@ async def test_http_ask_uses_mocked_app_state(
         response = await client.post(
             "/ask",
             json={"user_id": "u1", "channel": "api", "text": "Иван спрашивает про Машук"},
+            headers={"X-Eval-Run-Id": "run-1", "X-Eval-Case-Id": "case-1"},
         )
 
     assert response.status_code == 200
@@ -634,6 +798,8 @@ async def test_http_ask_uses_mocked_app_state(
     assert graph.seen_state is not None
     assert graph.seen_state["message_masked"] == "[ИМЯ] спрашивает про Машук"
     assert captured_logs[0]["final_response"] == "HTTP ответ"
+    assert captured_logs[0]["eval_run_id"] == "run-1"
+    assert captured_logs[0]["eval_case_id"] == "case-1"
 
 
 @pytest.mark.asyncio

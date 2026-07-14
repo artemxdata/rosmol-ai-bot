@@ -11,7 +11,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
@@ -257,6 +257,7 @@ async def _run_case(
     case: dict[str, Any],
     pool: asyncpg.Pool | None,
     require_trace: bool = True,
+    eval_run_id: str | None = None,
 ) -> dict[str, Any]:
     started = perf_counter()
     status: int | None = None
@@ -264,9 +265,13 @@ async def _run_case(
     response_text = ""
     error = None
     try:
+        request_headers = dict(headers)
+        if eval_run_id:
+            request_headers["X-Eval-Run-Id"] = eval_run_id
+            request_headers["X-Eval-Case-Id"] = str(case["id"])
         response = await client.post(
             target,
-            headers=headers,
+            headers=request_headers,
             json={
                 "user_id": f"pre-demo-smoke-{case['id']}",
                 "channel": "api",
@@ -375,6 +380,7 @@ async def run_smoke(
     require_trace: bool = True,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
+    eval_run_id = f"pre-demo-smoke-{uuid4()}"
     env = _read_dotenv()
     trace_dsn = _host_trace_dsn(env)
     pool = None
@@ -395,6 +401,7 @@ async def run_smoke(
                 case=case,
                 pool=pool,
                 require_trace=require_trace,
+                eval_run_id=eval_run_id,
             )
             for case in CASES
         ]
@@ -404,6 +411,7 @@ async def run_smoke(
     passed = sum(1 for item in results if item["passed"])
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
+        "eval_run_id": eval_run_id,
         "target": target,
         "require_trace": require_trace,
         "trace_error": trace_error,

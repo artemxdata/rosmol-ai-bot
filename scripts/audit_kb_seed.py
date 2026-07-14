@@ -93,7 +93,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--path", type=Path, default=Path("data/knowledge_base_seed.json"))
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--markdown", type=Path, default=None)
-    parser.add_argument("--forums-registry", type=Path, default=None)
+    parser.add_argument(
+        "--forums-registry",
+        type=Path,
+        default=Path("data/forums_registry.json"),
+    )
     parser.add_argument("--min-forum-chunks", type=int, default=0)
     parser.add_argument("--min-forum-topics", type=int, default=0)
     parser.add_argument("--fail-on", choices=["error", "warning"], default=None)

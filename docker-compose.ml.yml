@@ -19,6 +19,7 @@ services:
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
       WEBHOOK_AUTH_TOKEN: ${WEBHOOK_AUTH_TOKEN:-}
       ADMIN_AUTH_TOKEN: ${ADMIN_AUTH_TOKEN:-}
+      USER_HASH_SECRET: ${USER_HASH_SECRET:-}
       ADMIN_QUALITY_REPORT_PATH: ${ADMIN_QUALITY_REPORT_PATH:-reports/presentation_quality/presentation_quality_report.json}
       YONOTE_API_TOKEN: ${YONOTE_API_TOKEN:-}
       YONOTE_BASE_URL: ${YONOTE_BASE_URL:-https://rossmol.yonote.ru}
@@ -34,6 +35,9 @@ services:
       HDE_API_KEY: ${HDE_API_KEY:-}
       HDE_BOT_USER_ID: ${HDE_BOT_USER_ID:-}
       HDE_REQUEST_TIMEOUT_SECONDS: ${HDE_REQUEST_TIMEOUT_SECONDS:-20}
+      HDE_RATE_LIMIT_RPM: ${HDE_RATE_LIMIT_RPM:-250}
+      HDE_RATE_LIMIT_REMAINING_RESERVE: ${HDE_RATE_LIMIT_REMAINING_RESERVE:-30}
+      HDE_RATE_LIMIT_BAN_SECONDS: ${HDE_RATE_LIMIT_BAN_SECONDS:-1200}
       CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:-}
       CLOUD_RU_CHAT_COMPLETIONS_URL: ${CLOUD_RU_CHAT_COMPLETIONS_URL:-https://foundation-models.api.cloud.ru/v1/chat/completions}
       CLOUD_RU_MODEL: ${CLOUD_RU_MODEL:-}
@@ -73,6 +77,7 @@ services:
       - "127.0.0.1:${APP_ML_HOST_PORT:-8001}:8000"
     volumes:
       - ./data:/app/data
+      - ./data/private/runtime:/app/data/private
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
     depends_on:
@@ -132,7 +137,7 @@ services:
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     volumes:
-      - ./data:/app/data
+      - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
     depends_on:

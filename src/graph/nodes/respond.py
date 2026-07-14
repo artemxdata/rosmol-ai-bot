@@ -3,13 +3,7 @@ from __future__ import annotations
 import re
 from time import perf_counter
 
-from src.config import get_settings
 from src.graph.state import BotState
-from src.kb.event_facts import (
-    concise_event_place_date_response,
-    foreign_registration_response,
-)
-from src.kb.temporal import expired_registration_response
 
 SOURCE_RE = re.compile(r"[ \t]*\[src:[^\]]+\][ \t]*")
 TRAILING_LINE_SPACE_RE = re.compile(r"[ \t]+\n")
@@ -75,17 +69,28 @@ PROTECTED_TOKEN_RE = re.compile(
     (?:
         [A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}
         |
-        https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+
+        https?://(?:
+            [A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+
+            |
+            (?:[А-Яа-яЁё0-9-]+\.)+рф
+            (?:/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?
+        )
         |
-        (?<!@)\b(?:[A-Za-z0-9-]+\.)+(?:ru|рф|com|org|net|gov|su|io|ai|cloud)\b
+        (?<!@)\b(?:[\w-]+\.)+(?:ru|рф|com|org|net|gov|su|io|ai|me|cloud)\b
         (?:/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?
     )
     """,
     flags=re.IGNORECASE | re.VERBOSE,
 )
 DOMAIN_SPACE_RE = re.compile(
-    r"\b([A-Za-z0-9][A-Za-z0-9-]*)\s*\.\s*"
-    r"(ru|рф|com|org|net|gov|su|io|ai|cloud)\b",
+    r"\b([\w][\w-]*)\s*\.\s*"
+    r"(ru|рф|com|org|net|gov|su|io|ai|me|cloud)\b",
+    flags=re.IGNORECASE,
+)
+BARE_DOMAIN_RE = re.compile(
+    r"(?<![@/\w.-])"
+    r"(?P<url>(?:[\w-]+\.)+(?:ru|рф|com|org|net|gov|su|io|ai|me|cloud)"
+    r"(?::\d{1,5})?(?:/[^\s<>()]*)?)",
     flags=re.IGNORECASE,
 )
 EMAIL_SPACE_RE = re.compile(
@@ -116,34 +121,12 @@ async def respond(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     response = state.get("generated_response") or state.get("final_response") or ""
-    settings = get_settings()
-    foreign_response = foreign_registration_response(
-        message=state.get("message_masked") or state.get("message") or "",
-        analysis=state.get("analysis"),
-        chunks=state.get("reranked_chunks") or [],
-        seed_path=settings.kb_seed_path,
-    )
-    event_fact_response = concise_event_place_date_response(
-        message=state.get("message_masked") or state.get("message") or "",
-        analysis=state.get("analysis"),
-        chunks=state.get("reranked_chunks") or [],
-    )
-    temporal_response = expired_registration_response(
-        message=state.get("message_masked") or state.get("message") or "",
-        analysis=state.get("analysis"),
-        chunks=state.get("reranked_chunks") or [],
-        seed_path=settings.kb_seed_path,
-    )
-    if foreign_response or event_fact_response or temporal_response:
-        response = foreign_response or event_fact_response or temporal_response or response
     final = normalize_final_response(response)
     if tracer:
         tracer.add(
             "respond",
             int((perf_counter() - started_at) * 1000),
-            temporal_guard="registration_closed" if temporal_response else None,
-            event_fact_guard="place_and_date" if event_fact_response else None,
-            foreign_registration_guard=bool(foreign_response),
+            response_guard=state.get("response_guard"),
         )
     return {"final_response": final}
 
@@ -185,8 +168,21 @@ def _normalize_spacing(response: str) -> str:
     )
     response = _restore_structured_tokens(protected, tokens)
     response = _repair_structured_token_spacing(response)
+    response = _prefix_bare_domains(response)
     response = re.sub(r"[ \t]{2,}", " ", response)
     return response
+
+
+def _prefix_bare_domains(response: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        url = match.group("url")
+        suffix = ""
+        while url.endswith((".", ",", ";", ":", "!", "?")):
+            suffix = url[-1] + suffix
+            url = url[:-1]
+        return f"https://{url}{suffix}"
+
+    return BARE_DOMAIN_RE.sub(replace, response)
 
 
 def _repair_structured_token_spacing(response: str) -> str:
@@ -238,6 +234,7 @@ def _ends_with_known_tld(token: str) -> bool:
             ".su",
             ".io",
             ".ai",
+            ".me",
             ".cloud",
         )
     )

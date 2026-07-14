@@ -12,5 +12,5 @@ class ChannelAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def send(self, user_id: str, text: str) -> None:
+    async def send(self, user_id: str, text: str) -> Any:
         raise NotImplementedError

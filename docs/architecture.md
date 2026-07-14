@@ -117,7 +117,8 @@
 ### MVP-источники базы знаний
 
 На этапе MVP базой знаний считаются три локальных источника:
-- `Новый бот Росмол .xlsx` — основная выгрузка ответов, fallback-ответов, примеров интентов и словаря событий;
+- `data/private/source_materials/Новый бот Росмол .xlsx` — локальная основная выгрузка ответов,
+  fallback-ответов, примеров интентов и словаря событий; исходный файл не попадает в Git/image;
 - `Форум «Российский Север» интенты.docx` — актуальные ответы по форуму «Российский Север»;
 - `Фестиваль «Больше, чем путешествие» Интенты .docx` — актуальные ответы по фестивалю «Больше, чем путешествие».
 
@@ -667,23 +668,20 @@ for field in ["forum_normalized", "category", "topic", "status"]:
 
 Два режима: Git (для разработчика) и админ-панель (для редактора).
 
-**Режим 1: Git + CI (для разработчика/Артёма)**
+**Режим 1: Git + CI (текущее состояние)**
 
 ```
-1. Редактор правит markdown-файл в Git-репозитории
-   (knowledge-base/форумы/машук/оплата_проезда.md)
+1. Разработчик меняет versioned seed/registry или воспроизводимый source-correction manifest.
 
-2. Commit + push в main
+2. Commit + push в `master`.
 
 3. CI (GitHub Actions):
-   - Парсит YAML-фронтматтер (метаданные)
-   - Генерирует dense + sparse векторы через bge-m3
-   - Upsert в Qdrant
-   - Помечает старую версию status: "archived"
-   - Запускает eval pipeline (раздел 9)
-   - Если eval прошёл — публикация; если нет — блокировка
+   - Валидирует seed и semantic integrity;
+   - Запускает versioned forum regression и offline Recall@5 gate;
+   - Не индексирует production Qdrant и не выполняет deployment.
 
-4. Бот сразу использует новую версию
+4. Пользователь вручную обновляет сервер, выполняет миграцию, контролируемую индексацию с
+   `--prune-stale`, server-local quality suite и короткий HDE/VK smoke.
 ```
 
 **Режим 2: Админ-панель (для редактора/Насти)**
@@ -895,7 +893,11 @@ Redis TTL бот восстанавливает событие, тему, сущ
 
 ### Стек админ-панели
 
-Backend: те же FastAPI-эндпоинты (CRUD для чанков в PostgreSQL + Qdrant upsert). Frontend: React (или даже Streamlit для скорости). Авторизация: HTTP Basic или API key — не нужен OAuth для 3 человек.
+Текущее состояние: FastAPI-эндпоинты, embedded HTML/CSS/JS UI, versioned JSON seed и точечный
+Qdrant upsert. Авторизация — `X-Admin-Token` с короткой HttpOnly session-cookie после входа.
+До TLS админка доступна команде только через SSH tunnel. PostgreSQL `chunk_versions`, React и
+автоматическая публикация из CI не участвуют в текущем publish flow: таблица `chunk_versions`
+создана начальной миграцией, но админка и индексатор сейчас используют versioned JSON seed.
 
 ### Жизненный цикл документа
 
@@ -907,8 +909,10 @@ Backend: те же FastAPI-эндпоинты (CRUD для чанков в Postg
   Архив (archived)
 
 Бот ищет только среди status = "published".
-Архивные версии сохраняются в PostgreSQL (таблица chunk_versions).
-Откат: один клик возвращает предыдущую версию в published.
+Архивный статус сохраняется в versioned seed; такие записи не индексируются, а `--prune-stale`
+удаляет их прежние точки из Qdrant. Таблица `chunk_versions` существует, но текущий admin/publish
+flow её не использует. Откат выполняется через проверенный Git/seed rollback; one-click rollback
+в текущей админке не реализован.
 ```
 
 ---
@@ -1191,10 +1195,10 @@ jobs:
 | Реляционная БД | **PostgreSQL** | Логи, память, версии, админка |
 | Кэш + сессии | **Redis** | TTL, быстрый, stateless |
 | PII-маскирование | **Natasha + regex** | Проверено в HDE→n8n пайплайне |
-| Админ-панель | **React** (или Streamlit для MVP) | Минимальный UI для редакторов |
+| Админ-панель | **FastAPI + embedded HTML/CSS/JS** | Фактически реализованный минимальный UI для редакторов |
 | Развёртывание | **Docker Compose** | Один сервер, воспроизводимость |
 | Сервер | **Selectel** | 152-ФЗ, опыт |
-| CI/CD | **GitHub Actions** | KB-индексация, eval pipeline, тесты |
+| CI/CD | **GitHub Actions + ручной deployment** | Offline KB/regression gate и тесты; production не индексируется автоматически |
 
 ### Серверные требования
 
@@ -1301,7 +1305,7 @@ RAG-фильтрации, коротких промптов, отказа от L
 
 **Результат:** HTTP API — `POST /ask` → JSON с ответом, источниками, trace.
 
-### Phase 3: Каналы, админка, продакшн (2 недели)
+### Исторический план Phase 3: каналы, админка, продакшн
 
 **Неделя 5:**
 - Channel Adapters (VK, MAX, HDE webhook)
@@ -1315,7 +1319,8 @@ RAG-фильтрации, коротких промптов, отказа от L
 - Мониторинг: latency, error rate, escalation rate, cache hit rate
 - Дашборд качества в админке
 
-**Результат:** Полноценный MVP на реальном трафике, параллельно с Chatme.
+Этот раздел сохранён как исторический план. Фактический статус, release gate и незакрытые
+действия всегда брать из `CURRENT_STATE.md`, `DECISIONS.md` и `pre_pilot_release_checklist.md`.
 
 ### Phase 4: Шлифовка (2-4 недели, после запуска)
 

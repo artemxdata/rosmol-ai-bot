@@ -1,0 +1,328 @@
+{
+  "record_overrides": {
+    "xlsx_category_r0023_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "Территория смыслов",
+        "text_contains": "форуме «На волне»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0045_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "Иволга",
+        "text_contains": "форуме «Арктика. Лёд тронулся»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0184_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Экосистема",
+        "text_contains": "Форума «Истоки»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0260_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "На волне",
+        "text_contains": "форума «АГРОПРОдвижение»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0329_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "Островa",
+        "text_contains": "Стать волонтером: https://dobro.ru/event/11672722"
+      },
+      "set": {
+        "text_clean": "Упс! 🙈 Регистрация участников на форум уже завершена — сейчас идёт активный этап отбора финалистов…\nНо не расстраивайся! Мы знаем, как хочется стать частью события, поэтому у тебя есть классная возможность присоединиться к нам в роли волонтёра! ✨\nПоверь, это ни с чем не сравнимый опыт — ты увидишь закулисье форума, обретёшь новых друзей и окунёшься в самую гущу событий❤️\nЗаявки на волонтёрский корпус принимаем до 31 мая включительно. Присоединяйся к команде по ссылке ниже 👉 Стать волонтёром: https://dobro.ru/event/11672722"
+      }
+    },
+    "xlsx_category_r0348_rezervnyy_spisok": {
+      "expected": {
+        "forum_normalized": "Ладога",
+        "text_contains": "форума «ОстроVа»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0350_otkaz_ot_uchastiya": {
+      "expected": {
+        "forum_normalized": "Ладога",
+        "text_contains": "форума «ОстроVа»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0351_pochemu_otklonili_zayavku": {
+      "expected": {
+        "forum_normalized": "Ладога",
+        "text_contains": "Положении форума «ОстроVа»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0354_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Ладога",
+        "text_contains": "Форума «ОстроVа»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0371_pochemu_otklonili_zayavku": {
+      "expected": {
+        "forum_normalized": "Шерегеш",
+        "text_contains": "Положении форума «ОстроVа»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0374_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Шерегеш",
+        "text_contains": "Форума «ОстроVа»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0393_usloviya_prozhivaniya": {
+      "expected": {
+        "forum_normalized": "Студенческий спецназ",
+        "text_contains": "форума «Шерегеш»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0418_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "Волга",
+        "text_contains": "форуме «Полюс»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0420_pochemu_otklonili_zayavku": {
+      "expected": {
+        "forum_normalized": "Волга",
+        "text_contains": "Положении слёта «Студенческий спецназ»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0423_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Волга",
+        "text_contains": "Форума «Студенческий спецназ»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0499_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Арктика. Лёд тронулся",
+        "text_contains": "форума «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0530_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Добрино",
+        "text_contains": "форума «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0559_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "Шум",
+        "text_contains": "форума «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0590_pamyatka_uchastnika_foruma": {
+      "expected": {
+        "forum_normalized": "ГосСтарт",
+        "text_contains": "форума «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0614_mesto_i_ploschadka_provedeniya": {
+      "expected": {
+        "forum_normalized": "День молодёжи",
+        "text_contains": "https://max.ru/youthday_bot'Место"
+      },
+      "set": {
+        "text_clean": "Главную площадку Дня молодёжи в твоём городе ищи в популярных парках, на набережных, площадях, в культурных пространствах или университетах 📍\nПодробная информация по выбранному городу появится в программе события в чат-боте MAX после регистрации ближе к дате проведения: https://max.ru/youthday_bot"
+      }
+    },
+    "xlsx_category_r0098_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "ТИМ Бирюса",
+        "text_contains": "форум «УТРО»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0273_rezultaty_rm": {
+      "expected": {
+        "forum_normalized": "Область будущего",
+        "text_contains": "форум «АГРОПРОдвижение»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0369_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "Шерегеш",
+        "text_contains": "форум «Каспий»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0398_podacha_zayavki_na_proekt": {
+      "expected": {
+        "forum_normalized": "Студенческий спецназ",
+        "text_contains": "форум «УТРО»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0419_otkaz_ot_uchastiya": {
+      "expected": {
+        "forum_normalized": "Волга",
+        "text_contains": "форум «Утро»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0496_vnesti_izmeneniya_v_zayavku": {
+      "expected": {
+        "forum_normalized": "Арктика. Лёд тронулся",
+        "text_contains": "форум «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0527_vnesti_izmeneniya_v_zayavku": {
+      "expected": {
+        "forum_normalized": "Добрино",
+        "text_contains": "форум «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0556_vnesti_izmeneniya_v_zayavku": {
+      "expected": {
+        "forum_normalized": "Шум",
+        "text_contains": "форум «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0570_usloviya_i_sroki_uchastiya_granty": {
+      "expected": {
+        "forum_normalized": "Шум",
+        "text_contains": "форум «Добрино»"
+      },
+      "set": {
+        "forum": "Добрино",
+        "forum_normalized": "Добрино",
+        "source_category": "Добрино",
+        "quality_review_reason": "corrected_cross_event_metadata"
+      }
+    },
+    "xlsx_category_r0587_vnesti_izmeneniya_v_zayavku": {
+      "expected": {
+        "forum_normalized": "ГосСтарт",
+        "text_contains": "форум «Ростов»"
+      },
+      "set": {
+        "status": "archived",
+        "quality_review_reason": "cross_event_text_conflict"
+      }
+    },
+    "xlsx_category_r0633_volontery_foruma": {
+      "expected": {
+        "forum_normalized": "Больше, чем путешествие",
+        "text_contains": "прямой ссылке:https://dobro.ru/event/11719677 Отбор"
+      },
+      "set": {
+        "text_clean": "Хочешь создавать этот яркий праздник вместе с нами? Набор волонтёров открыт! Регистрируйся на платформе Добро.РФ по прямой ссылке: https://dobro.ru/event/11719677. Отбор и обучение проводит Ресурсный центр добровольчества Мордовии. Условия для волонтёров: до Саранска иногородние волонтёры добираются самостоятельно. Логистику от Саранска до площадки фестиваля, питание и экипировку полностью оплачивают организаторы. Проживание за счёт организаторов предоставляется иногородним волонтёрам и тем, кому по функциям необходимо находиться на площадке круглосуточно. Все подробности направят после прохождения отбора.",
+        "quality_review_reason": "corrected_missing_spacing_and_url_boundary"
+      }
+    }
+  },
+  "registry_alias_additions": {
+    "Гранты 1 сезон": [
+      "Росмолодёжь.Гранты 1 сезон"
+    ],
+    "Полюс": [
+      "молодых учёных «Полюс»"
+    ]
+  },
+  "registry_alias_removals": {
+    "Гранты для физических лиц": [
+      "грант",
+      "гранты"
+    ]
+  }
+}

@@ -28,6 +28,10 @@ class IncomingMessage(BaseModel):
     request_id: UUID = Field(default_factory=uuid4)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     forum_context: str | None = None
+    upstream_event_id: str | None = Field(default=None, max_length=255)
+    upstream_event_id_source: str | None = Field(default=None, max_length=100)
+    eval_run_id: str | None = Field(default=None, max_length=200)
+    eval_case_id: str | None = Field(default=None, max_length=200)
 
 
 class OutgoingMessage(BaseModel):

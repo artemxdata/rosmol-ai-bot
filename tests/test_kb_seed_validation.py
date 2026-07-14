@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from scripts import index_kb as index_kb_module
 from scripts.index_kb import (
     build_embedding_text,
+    clear_response_cache,
     collect_existing_chunk_ids,
     prune_stale_points,
     select_records_for_indexing,
@@ -71,6 +74,57 @@ def test_validate_only_prints_record_count(tmp_path, capsys: pytest.CaptureFixtu
     validate_only(path)
 
     assert "valid_records=1" in capsys.readouterr().out
+
+
+def test_validate_only_rejects_semantic_forum_conflict(tmp_path) -> None:
+    path = tmp_path / "knowledge_base_seed.json"
+    registry = tmp_path / "reviewed_forums_registry.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "wrong_event",
+                    "text": "Регистрация на форум «Ростов» закрыта.",
+                    "status": "published",
+                    "forum_normalized": "Добрино",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    registry.write_text(
+        json.dumps(
+            [
+                {"name": "Добрино", "normalized": "Добрино", "aliases": []},
+                {"name": "Ростов", "normalized": "Ростов", "aliases": []},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="forum_text_conflict=1"):
+        validate_only(path, registry)
+
+
+def test_validate_only_fails_closed_when_forum_registry_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "candidate.json"
+    path.write_text(
+        json.dumps([{"chunk_id": "ctx_1", "text": "Текст"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        index_kb_module,
+        "DEFAULT_FORUM_REGISTRY_PATH",
+        tmp_path / "missing_registry.json",
+    )
+
+    with pytest.raises(ValueError, match="forums registry does not exist"):
+        validate_only(path)
 
 
 def test_validate_quality_gate_accepts_passed_report(tmp_path) -> None:
@@ -142,6 +196,26 @@ def test_select_records_for_indexing_keeps_full_allowed_set_for_prune() -> None:
     assert allowed_chunk_ids == {"existing", "missing"}
 
 
+def test_select_records_for_indexing_excludes_archived_and_draft_records() -> None:
+    records = validate_seed_items(
+        [
+            {"chunk_id": "published", "text": "Рабочий чанк", "status": "published"},
+            {"chunk_id": "archived", "text": "Ошибочный чанк", "status": "archived"},
+            {"chunk_id": "draft", "text": "Черновик", "status": "draft"},
+        ]
+    )
+
+    selected, skipped, allowed_chunk_ids = select_records_for_indexing(
+        records,
+        existing_chunk_ids=set(),
+        only_missing=False,
+    )
+
+    assert [record.chunk_id for record in selected] == ["published"]
+    assert skipped == 0
+    assert allowed_chunk_ids == {"published"}
+
+
 class FakeQdrantForPrune:
     def __init__(self) -> None:
         self.scroll_calls = []
@@ -155,6 +229,30 @@ class FakeQdrantForPrune:
                 SimpleNamespace(id="missing-chunk-id", payload={}),
             ],
         ]
+
+    async def scroll(self, **kwargs):
+        self.scroll_calls.append(kwargs)
+        page_index = len(self.scroll_calls) - 1
+        next_page_offset = "next" if page_index + 1 < len(self.pages) else None
+        return self.pages[page_index], next_page_offset
+
+    async def delete(self, **kwargs):
+        self.delete_calls.append(kwargs)
+
+
+class FakeQdrantForCacheClear:
+    def __init__(self, *, exists: bool = True) -> None:
+        self.exists = exists
+        self.scroll_calls = []
+        self.delete_calls = []
+        self.pages = [
+            [SimpleNamespace(id="cache-1"), SimpleNamespace(id="cache-2")],
+            [SimpleNamespace(id="cache-3")],
+        ]
+
+    async def collection_exists(self, collection: str) -> bool:
+        assert collection == "response_cache"
+        return self.exists
 
     async def scroll(self, **kwargs):
         self.scroll_calls.append(kwargs)
@@ -202,3 +300,32 @@ async def test_prune_stale_points_removes_only_chunks_missing_from_seed() -> Non
         ["stale-point"],
         ["missing-chunk-id"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_clear_response_cache_removes_every_cached_point() -> None:
+    qdrant = FakeQdrantForCacheClear()
+
+    deleted = await clear_response_cache(
+        qdrant,  # type: ignore[arg-type]
+        delete_batch_size=2,
+    )
+
+    assert deleted == 3
+    assert len(qdrant.scroll_calls) == 2
+    assert [call["points_selector"].points for call in qdrant.delete_calls] == [
+        ["cache-1", "cache-2"],
+        ["cache-3"],
+    ]
+    assert all(call["wait"] is True for call in qdrant.delete_calls)
+
+
+@pytest.mark.asyncio
+async def test_clear_response_cache_is_noop_when_collection_is_missing() -> None:
+    qdrant = FakeQdrantForCacheClear(exists=False)
+
+    deleted = await clear_response_cache(qdrant)  # type: ignore[arg-type]
+
+    assert deleted == 0
+    assert qdrant.scroll_calls == []
+    assert qdrant.delete_calls == []

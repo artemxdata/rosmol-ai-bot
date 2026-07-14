@@ -12,6 +12,7 @@ from src.kb.source_extractors import (
     extract_dates,
     extract_event_registry,
     extract_intent_examples,
+    extract_links,
     extract_phones,
     parse_docx_intent_blocks,
     read_xlsx_sheets,
@@ -22,6 +23,22 @@ def test_clean_bot_text_preserves_content_and_removes_markup() -> None:
     assert clean_bot_text("<b>Привет</b><br><br>Ссылка: https://myrosmol.ru") == (
         "Привет\nСсылка: https://myrosmol.ru"
     )
+
+
+def test_extract_links_normalizes_bare_domains_and_trailing_punctuation() -> None:
+    assert extract_links(
+        "Сайт myrosmol.ru/profile. Почта help@example.org, "
+        "документ https://example.org/file.pdf; и деньмолодёжи.рф. "
+        "Telegram t.me/rostovforum. Слитно https://dobro.ru/event/11719677Отбор "
+        "и экспорт https://max.ru/youthday_bot'Место"
+    ) == [
+        "https://myrosmol.ru/profile",
+        "https://example.org/file.pdf",
+        "https://деньмолодёжи.рф",
+        "https://t.me/rostovforum",
+        "https://dobro.ru/event/11719677",
+        "https://max.ru/youthday_bot",
+    ]
 
 
 def test_clean_bot_text_strips_export_quote_artifact() -> None:
@@ -46,6 +63,12 @@ def test_clean_bot_text_fixes_known_source_artifacts() -> None:
         "Паспорт и личные документы.\n"
         "⚡️Важный момент: сделать это возможно."
     )
+
+
+def test_clean_bot_text_separates_sentence_word_appended_to_numeric_url() -> None:
+    assert clean_bot_text(
+        "Ссылка:https://dobro.ru/event/11719677Отбор проводят организаторы."
+    ) == "Ссылка:https://dobro.ru/event/11719677 Отбор проводят организаторы."
 
 
 def test_read_xlsx_sheets_reads_inline_strings(tmp_path: Path) -> None:

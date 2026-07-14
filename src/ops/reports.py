@@ -4,7 +4,11 @@ import json
 from typing import Any
 
 EXPECTED_ESCALATION_REASONS = {
+    "attachment_only",
     "operator_requested",
+    "personal_status",
+    "repeated_support_failure",
+    "rate_limited",
     "needs_operator",
     "low_confidence",
     "no_relevant_chunks",
@@ -12,8 +16,10 @@ EXPECTED_ESCALATION_REASONS = {
     "safety_bullying",
     "safety_dangerous_instruction",
     "safety_medical_emergency",
+    "safety_psychological_crisis",
     "safety_self_harm",
     "safety_threat",
+    "unsafe_sensitive_data_request",
     "unsupported_instruction",
 }
 
@@ -26,6 +32,13 @@ async def build_trace_report(conn: Any, days: int) -> dict[str, Any]:
                 COUNT(*)::int AS request_count,
                 COUNT(*) FILTER (WHERE was_escalated)::int AS escalated_count,
                 COUNT(*) FILTER (WHERE cache_hit)::int AS cache_hit_count,
+                COUNT(*) FILTER (WHERE channel = 'hde')::int AS hde_request_count,
+                COUNT(*) FILTER (
+                    WHERE channel = 'hde' AND delivery_status IS NOT NULL
+                )::int AS hde_delivery_recorded_count,
+                COUNT(*) FILTER (
+                    WHERE channel = 'hde' AND delivery_status = 'delivered'
+                )::int AS hde_delivered_count,
                 COALESCE(ROUND(AVG(total_latency_ms))::int, 0) AS avg_latency_ms,
                 COALESCE(
                     percentile_cont(0.95) WITHIN GROUP (ORDER BY total_latency_ms),
@@ -53,12 +66,38 @@ async def build_trace_report(conn: Any, days: int) -> dict[str, Any]:
     summary["quality_issue_count"] = quality_issue_count
     summary["quality_issue_rate"] = _ratio(quality_issue_count, request_count)
     summary["cache_hit_rate"] = _ratio(summary["cache_hit_count"], request_count)
+    summary["hde_delivery_coverage_rate"] = _ratio(
+        summary.get("hde_delivery_recorded_count", 0),
+        summary.get("hde_request_count", 0),
+    )
+    summary["hde_delivery_success_rate"] = _ratio(
+        summary.get("hde_delivered_count", 0),
+        summary.get("hde_delivery_recorded_count", 0),
+    )
+    ticket_outcomes = [dict(row) for row in await _fetch_ticket_outcomes(conn, days)]
+    ticket_count = sum(int(row.get("tickets") or 0) for row in ticket_outcomes)
+    first_turn_resolved = _ticket_outcome_count(
+        ticket_outcomes,
+        "bot_resolved_first_turn",
+    )
+    multi_turn_resolved = _ticket_outcome_count(
+        ticket_outcomes,
+        "bot_resolved_multi_turn",
+    )
+    bot_resolved = first_turn_resolved + multi_turn_resolved
+    summary["hde_ticket_count"] = ticket_count
+    summary["hde_bot_resolved_ticket_count"] = bot_resolved
+    summary["hde_ticket_resolution_rate"] = _ratio(bot_resolved, ticket_count)
+    summary["hde_first_turn_resolution_rate"] = _ratio(first_turn_resolved, ticket_count)
+    summary["hde_multi_turn_resolution_rate"] = _ratio(multi_turn_resolved, ticket_count)
 
     return {
         "days": days,
         "summary": summary,
         "model_usage": [dict(row) for row in await _fetch_model_usage(conn, days)],
         "routing": [dict(row) for row in await _fetch_routing(conn, days)],
+        "ticket_outcomes": ticket_outcomes,
+        "delivery_statuses": [dict(row) for row in await _fetch_delivery_statuses(conn, days)],
         "escalations": [dict(row) for row in await _fetch_escalations(conn, days)],
         "expected_escalations": [
             dict(row) for row in await _fetch_escalations(conn, days, expected_only=True)
@@ -83,6 +122,21 @@ def format_trace_report(report: dict[str, Any]) -> str:
         f"- ожидаемые эскалации: {summary['expected_escalation_rate']:.2%}",
         f"- проблемы качества: {summary['quality_issue_rate']:.2%}",
         f"- попадания в кэш: {summary['cache_hit_rate']:.2%}",
+        f"- HDE delivery telemetry coverage: {summary.get('hde_delivery_coverage_rate', 0):.2%}",
+        f"- HDE успешно доставлено: {summary.get('hde_delivery_success_rate', 0):.2%}",
+        f"- HDE тикетов: {summary.get('hde_ticket_count', 0)}",
+        (
+            "- HDE закрыто ботом без оператора: "
+            f"{summary.get('hde_ticket_resolution_rate', 0):.2%}"
+        ),
+        (
+            "- HDE закрыто с первого ответа: "
+            f"{summary.get('hde_first_turn_resolution_rate', 0):.2%}"
+        ),
+        (
+            "- HDE закрыто после диалога: "
+            f"{summary.get('hde_multi_turn_resolution_rate', 0):.2%}"
+        ),
         f"- средняя задержка, мс: {summary['avg_latency_ms']}",
         f"- p95 задержка, мс: {summary['p95_latency_ms']:.0f}",
         f"- LLM-токены всего: {summary['llm_total_tokens']}",
@@ -94,6 +148,12 @@ def format_trace_report(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Маршрутизация")
     lines.extend(_format_rows(report["routing"], empty="- данных по маршрутизации нет"))
+    lines.append("")
+    lines.append("Исходы обращений")
+    lines.extend(_format_rows(report.get("ticket_outcomes", []), empty="- исходов нет"))
+    lines.append("")
+    lines.append("Доставка HDE")
+    lines.extend(_format_rows(report.get("delivery_statuses", []), empty="- данных нет"))
     lines.append("")
     lines.append("Эскалации")
     lines.extend(_format_rows(report["escalations"], empty="- эскалаций не было"))
@@ -144,6 +204,73 @@ async def _fetch_routing(conn: Any, days: int) -> list[Any]:
         WHERE timestamp >= NOW() - ($1::int * INTERVAL '1 day')
         GROUP BY complexity, reason
         ORDER BY requests DESC, complexity, reason
+        """,
+        days,
+    )
+
+
+async def _fetch_ticket_outcomes(conn: Any, days: int) -> list[Any]:
+    return await conn.fetch(
+        """
+        WITH recent_tickets AS (
+            SELECT DISTINCT ticket_id_hash
+            FROM request_traces
+            WHERE timestamp >= NOW() - ($1::int * INTERVAL '1 day')
+              AND channel = 'hde'
+              AND ticket_id_hash IS NOT NULL
+        ),
+        ordered_turns AS (
+            SELECT
+                trace.ticket_id_hash,
+                trace.ticket_outcome,
+                trace.delivery_status,
+                trace.was_escalated,
+                COUNT(*) OVER (PARTITION BY trace.ticket_id_hash)::int AS turns,
+                BOOL_OR(trace.was_escalated) OVER (
+                    PARTITION BY trace.ticket_id_hash
+                ) AS had_escalation,
+                ROW_NUMBER() OVER (
+                    PARTITION BY trace.ticket_id_hash
+                    ORDER BY trace.timestamp DESC, trace.request_id DESC
+                ) AS recency_rank
+            FROM request_traces AS trace
+            INNER JOIN recent_tickets USING (ticket_id_hash)
+            WHERE trace.channel = 'hde'
+        ),
+        tickets AS (
+            SELECT
+                CASE
+                    WHEN had_escalation THEN 'operator_required'
+                    WHEN delivery_status IS NULL THEN 'delivery_unknown'
+                    WHEN delivery_status <> 'delivered' THEN 'not_delivered'
+                    WHEN ticket_outcome = 'answered' AND turns = 1
+                        THEN 'bot_resolved_first_turn'
+                    WHEN ticket_outcome = 'answered' THEN 'bot_resolved_multi_turn'
+                    WHEN ticket_outcome = 'clarification' THEN 'unresolved_clarification'
+                    WHEN ticket_outcome = 'error' THEN 'error'
+                    ELSE 'unresolved'
+                END AS outcome
+            FROM ordered_turns
+            WHERE recency_rank = 1
+        )
+        SELECT outcome, COUNT(*)::int AS tickets
+        FROM tickets
+        GROUP BY outcome
+        ORDER BY tickets DESC, outcome
+        """,
+        days,
+    )
+
+
+async def _fetch_delivery_statuses(conn: Any, days: int) -> list[Any]:
+    return await conn.fetch(
+        """
+        SELECT COALESCE(delivery_status, 'unknown') AS status, COUNT(*)::int AS requests
+        FROM request_traces
+        WHERE timestamp >= NOW() - ($1::int * INTERVAL '1 day')
+          AND channel = 'hde'
+        GROUP BY status
+        ORDER BY requests DESC, status
         """,
         days,
     )
@@ -266,3 +393,11 @@ def _format_rows(rows: list[dict[str, Any]], empty: str) -> list[str]:
 
 def _ratio(value: int, total: int) -> float:
     return float(value or 0) / total if total else 0.0
+
+
+def _ticket_outcome_count(rows: list[dict[str, Any]], outcome: str) -> int:
+    return sum(
+        int(row.get("tickets") or 0)
+        for row in rows
+        if row.get("outcome") == outcome
+    )

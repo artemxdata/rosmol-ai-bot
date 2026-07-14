@@ -139,6 +139,8 @@ async def test_run_smoke_supports_mock_transport_without_db_trace(
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["X-Eval-Run-Id"].startswith("pre-demo-smoke-")
+        assert request.headers["X-Eval-Case-Id"] == "answer"
         return httpx.Response(
             200,
             json={
@@ -155,6 +157,7 @@ async def test_run_smoke_supports_mock_transport_without_db_trace(
     )
 
     assert summary["cases_total"] == 1
+    assert summary["eval_run_id"].startswith("pre-demo-smoke-")
     assert summary["passed"] == 1
     assert summary["pass_rate"] == 1.0
     assert summary["require_trace"] is False

@@ -8,7 +8,10 @@
 cd D:\projects\rosmol-ai-bot
 .venv\Scripts\ruff.exe check .
 .venv\Scripts\python.exe -m pytest
-.venv\Scripts\python.exe scripts\index_kb.py --validate-only
+.venv\Scripts\python.exe scripts\index_kb.py --validate-only `
+  --forums-registry data\forums_registry.json
+.venv\Scripts\python.exe scripts\audit_kb_seed.py `
+  --forums-registry data\forums_registry.json --fail-on error
 ```
 
 Если поднят Docker ML-контур:
@@ -51,7 +54,10 @@ Quality suite:
 
 ## 2. Серверное обновление
 
-Выполняется вручную на сервере:
+Выполняется вручную на сервере. Этот RC меняет схему PostgreSQL и опубликованный состав KB,
+поэтому нужен короткий maintenance window: операторы не должны тестировать во время migration и
+полной индексации. Migration `007` backfill-ит старые trace и создаёт индексы; сначала сделать
+backup. `--prune-stale` удалит из Qdrant архивные/stale-точки; сначала создать Qdrant snapshot.
 
 ```bash
 ssh root@139.100.225.44
@@ -60,30 +66,89 @@ git fetch origin
 git status --short --branch
 git pull --ff-only
 git log -1 --oneline
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml up -d --build app app-ml nginx
 ```
 
-Если менялся `data/knowledge_base_seed.json`, после обновления кода переиндексировать KB:
+Новый runtime fail-closed требует отдельный стабильный `USER_HASH_SECRET` при `APP_ENV=staging`
+или `production`. Команда ниже сохраняет уже заданное значение, а если переменная отсутствует или
+пуста — генерирует её без вывода секрета в терминал. Не ротировать существующее значение: ротация
+намеренно создаёт новое пространство pseudonym ID и разрывает связь с прежними сессиями.
 
 ```bash
+python3 - <<'PY'
+import os
+from pathlib import Path
+from secrets import token_urlsafe
+
+path = Path('.env')
+lines = path.read_text(encoding='utf-8').splitlines()
+result = []
+seen = False
+for line in lines:
+    if line.startswith('USER_HASH_SECRET='):
+        seen = True
+        if line.split('=', 1)[1].strip():
+            result.append(line)
+        else:
+            result.append('USER_HASH_SECRET=' + token_urlsafe(48))
+    else:
+        result.append(line)
+if not seen:
+    result.append('USER_HASH_SECRET=' + token_urlsafe(48))
+path.write_text('\n'.join(result) + '\n', encoding='utf-8')
+os.chmod(path, 0o600)
+print('USER_HASH_SECRET is configured; value was not printed')
+PY
+```
+
+Backup и snapshot до остановки runtime:
+
+```bash
+umask 077
+docker compose exec -T postgres pg_dump -U rosmol -d rosmol_ai_bot -Fc \
+  > /root/rosmol_ai_bot_pre_007.dump
+test -s /root/rosmol_ai_bot_pre_007.dump
+curl -fsS -X POST \
+  http://127.0.0.1:6333/collections/knowledge_base/snapshots
+```
+
+Сначала собрать новые images, затем остановить ingress/runtime, применить migration, обновить
+payload indexes и выполнить полную индексацию. Indexer берёт только `published` records,
+удаляет stale-точки и после успешного изменения автоматически очищает semantic cache.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  build app app-ml index-kb
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  stop nginx app app-ml
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  run --rm migrate
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  run --rm index-kb python scripts/init_qdrant.py
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb \
-  python scripts/index_kb.py --path data/knowledge_base_seed.json --embedding-batch-size 32
+  python scripts/index_kb.py --path data/knowledge_base_seed.json \
+    --forums-registry data/forums_registry.json --embedding-batch-size 32 --prune-stale
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  up -d app app-ml nginx
 ```
 
-Проверить количество точек:
+Проверить migration и оба Qdrant count:
 
 ```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml alembic current
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml exec -T app-ml python - <<'PY'
 from qdrant_client import QdrantClient
 from src.config import get_settings
 
 s = get_settings()
 client = QdrantClient(url=s.qdrant_url)
-print(client.count(collection_name=s.qdrant_knowledge_collection, exact=True).count)
+for collection in (s.qdrant_knowledge_collection, 'response_cache'):
+    print(collection, client.count(collection_name=collection, exact=True).count)
 PY
 ```
 
-Ожидаемо: количество равно числу валидных опубликованных чанков в `knowledge_base_seed.json`.
+Для этого RC ожидается: Alembic head `007_hde_delivery_telemetry`, `knowledge_base = 2152`,
+`response_cache = 0`. Если migration, index или count не совпали, runtime не отдавать операторам.
 
 ## 3. Серверные smoke-проверки
 

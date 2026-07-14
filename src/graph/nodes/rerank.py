@@ -265,7 +265,7 @@ def _rerank_for_state(
                 if len(selected) >= 4:
                     break
             return selected
-        if _source_only_fast_path_allowed(analysis, scoped_chunks):
+        if _source_only_fast_path_allowed(analysis, questions, scoped_chunks):
             return _source_only_ranked_candidates(candidates, priority_candidate, 4)
         ranked = reranker.rerank(rerank_query, candidates, 4)
         if priority_candidate and _is_promotable_priority_candidate(
@@ -309,7 +309,7 @@ def _rerank_for_state(
         chunk.chunk_id for chunk in query_candidates
     }:
         query_candidates = [original_priority_candidate, *query_candidates]
-    if _source_only_fast_path_allowed(analysis, scoped_chunks):
+    if _source_only_fast_path_allowed(analysis, questions, scoped_chunks):
         for candidate in query_candidates:
             _append_chunk(selected, seen, _source_candidate(candidate))
             if len(selected) >= target_size:
@@ -561,14 +561,69 @@ def _rerank_groups(
     return [reranker.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
 
 
-def _source_only_fast_path_allowed(analysis: Any, scoped_chunks: list[Chunk]) -> bool:
+def _source_only_fast_path_allowed(
+    analysis: Any,
+    questions: list[Question],
+    scoped_chunks: list[Chunk],
+) -> bool:
     if not analysis or not scoped_chunks:
         return False
     forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
     category = str(getattr(analysis, "category", None) or "").strip()
     if not forum or category != "\u0444\u043e\u0440\u0443\u043c\u044b":
         return False
+    if not questions or any(
+        not _question_has_source_only_ranking_signal(
+            question,
+            scoped_chunks,
+            forum=forum,
+        )
+        for question in questions
+    ):
+        return False
     return any(_chunk_matches_exact_forum(chunk, forum) for chunk in scoped_chunks)
+
+
+def _question_has_source_only_ranking_signal(
+    question: Question,
+    chunks: list[Chunk],
+    *,
+    forum: str | None = None,
+) -> bool:
+    if _question_topic_group(question):
+        return True
+    ignored_tokens = {
+        "какой",
+        "какая",
+        "какие",
+        "куда",
+        "когда",
+        "можно",
+        "нужно",
+        "форум",
+        "форуме",
+        "участник",
+        "участники",
+        "участников",
+    }
+    forum_tokens = _tokens(question.forum_normalized or forum or "")
+    question_tokens = _tokens(question.text) - ignored_tokens - forum_tokens
+    if not question_tokens:
+        return False
+    for chunk in chunks:
+        metadata = chunk.metadata or {}
+        haystack = " ".join(
+            str(value or "")
+            for value in (
+                metadata.get("intent_name"),
+                metadata.get("topic"),
+                metadata.get("source_category"),
+                chunk.text[:500],
+            )
+        )
+        if question_tokens & _tokens(haystack):
+            return True
+    return False
 
 
 def _exact_topic_fast_path_candidates(

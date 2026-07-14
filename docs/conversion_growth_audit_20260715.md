@@ -8,6 +8,13 @@
 
 **Решение release gate:** `LIMITED GO` для ограниченного операторского теста
 
+> **Статус после аудита.** Пользователь явно снял прежний freeze и разрешил срочный
+> pre-operator correction cycle. Этот документ остаётся снимком исходных findings; фактический
+> статус нового кандидата фиксируется в `docs/CURRENT_STATE.md`. В новом цикле закрыты
+> подтверждённые cross-event/link defects, lifecycle/guard/cache ошибки, ticket telemetry,
+> HDE ordering/dedup, Docker privacy boundary, HMAC и retention fail-safe. Старый `LIMITED GO`
+> больше не действует до нового server-local gate.
+
 ## Короткий вывод
 
 Конверсию можно заметно улучшить без переписывания проекта. Рабочая planning hypothesis первого

@@ -48,6 +48,22 @@ docker compose up -d qdrant
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb
 ```
 
+Обычная команда делает upsert и не удаляет существующие точки. Для release-замены seed сначала
+выполни validation и сохрани контрольное количество точек, затем явно добавь `--prune-stale`:
+
+```bash
+python scripts/index_kb.py --validate-only --forums-registry data/forums_registry.json
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb \
+  python scripts/index_kb.py --path data/knowledge_base_seed.json \
+    --forums-registry data/forums_registry.json --prune-stale
+```
+
+`--prune-stale` удаляет из коллекции точки, которых нет среди опубликованных записей текущего
+seed; `draft` и `archived` никогда не индексируются. Любое успешное изменение полной KB очищает
+semantic response cache. После live-индексации перезапусти `app/app-ml`, чтобы сбросить также
+process-local keyword snapshot. Не используй `--prune-stale` для частичной индексации или до
+проверки кандидата.
+
 Для поиска индексируется расширенный `embedding_text`: исходный ответ плюс intent/topic/forum
 и примеры пользовательских формулировок. В ответах пользователю сохраняется исходный `text_clean`.
 

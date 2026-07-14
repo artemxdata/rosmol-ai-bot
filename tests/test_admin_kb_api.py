@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from src.main import _admin_reindex_record
 from src.main import app as fastapi_app
 
 
@@ -103,6 +104,97 @@ def _write_quality_report(path: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+@pytest.mark.asyncio
+async def test_admin_reindex_invalidates_keyword_and_semantic_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalidated_keyword_sources: list[str | None] = []
+    invalidated_forums: list[str | None] = []
+
+    async def fake_upsert(*_args, **_kwargs):
+        return {"ok": True, "chunk_id": "travel"}
+
+    class FakeRetriever:
+        def invalidate_keyword_cache(self, source_type: str | None = None) -> None:
+            invalidated_keyword_sources.append(source_type)
+
+    class FakeCache:
+        async def invalidate_forum(self, forum: str | None) -> None:
+            invalidated_forums.append(forum)
+
+    monkeypatch.setattr("src.main.kb_index.upsert_chunk", fake_upsert)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(qdrant_knowledge_collection="knowledge_base"),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                qdrant=object(),
+                embedder=object(),
+                retriever=FakeRetriever(),
+                semantic_cache=FakeCache(),
+            )
+        )
+    )
+
+    result = await _admin_reindex_record(
+        request,  # type: ignore[arg-type]
+        {
+            "chunk_id": "travel",
+            "source_type": "xlsx",
+            "forum_normalized": "Машук",
+        },
+    )
+
+    assert invalidated_keyword_sources == ["xlsx"]
+    assert invalidated_forums == ["Машук"]
+    assert result["keyword_cache_invalidated_source"] == "xlsx"
+    assert result["cache_invalidated_forum"] == "Машук"
+
+
+@pytest.mark.asyncio
+async def test_admin_reindex_invalidates_global_cache_for_unscoped_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalidated_forums: list[str | None] = []
+
+    async def fake_upsert(*_args, **_kwargs):
+        return {"ok": True, "chunk_id": "general"}
+
+    class FakeRetriever:
+        def invalidate_keyword_cache(self, source_type: str | None = None) -> None:
+            return None
+
+    class FakeCache:
+        async def invalidate_forum(self, forum: str | None) -> None:
+            invalidated_forums.append(forum)
+
+    monkeypatch.setattr("src.main.kb_index.upsert_chunk", fake_upsert)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(qdrant_knowledge_collection="knowledge_base"),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                qdrant=object(),
+                embedder=object(),
+                retriever=FakeRetriever(),
+                semantic_cache=FakeCache(),
+            )
+        )
+    )
+
+    result = await _admin_reindex_record(
+        request,  # type: ignore[arg-type]
+        {"chunk_id": "general", "source_type": "yonote"},
+    )
+
+    assert invalidated_forums == [None]
+    assert result["cache_invalidated_forum"] == "global"
 
 
 @pytest.mark.asyncio

@@ -103,6 +103,13 @@ def apply_session_context(
     if _has_explicit_non_forum_context(analysis):
         return analysis
 
+    # An explicit multi-event request must never be narrowed to the event stored
+    # by an earlier turn.  ``forum_normalized`` intentionally remains empty for
+    # comparisons and clause-scoped questions; inheriting the session forum here
+    # would make retrieval filter all current questions to an unrelated event.
+    if len(detect_forums_from_text(message)) > 1:
+        return analysis
+
     if _is_topic_followup(message):
         previous_category = last_category_from_session(session)
         if (
@@ -194,7 +201,10 @@ def is_context_dependent_followup(message: str, session: Session | None) -> bool
         return False
     if detect_forums_from_text(text):
         return False
-    if _is_forum_followup(text) and last_forum_from_session(session):
+    if _is_forum_followup(text) and (
+        last_forum_from_session(session)
+        or str(getattr(session, "forum_context", None) or "").strip()
+    ):
         return True
     if _is_topic_followup(text) and last_user_message_from_session(session):
         return True
@@ -205,19 +215,25 @@ def last_forum_from_session(session: Session | None) -> str | None:
     if session is None:
         return None
 
+    for message in reversed((session.last_messages or [])[-RECENT_CONTEXT_TURNS:]):
+        detected = detect_forums_from_text(str(message.get("user") or ""))
+        if len(detected) == 1:
+            return detected[0]
+        if len(detected) > 1:
+            return None
+
+    for line in reversed(str(session.conversation_summary or "").splitlines()):
+        if not line.startswith("Пользователь:"):
+            continue
+        detected = detect_forums_from_text(line.removeprefix("Пользователь:").strip())
+        if len(detected) == 1:
+            return detected[0]
+        if len(detected) > 1:
+            return None
+
     forum = str(session.forum_context or "").strip()
     if forum:
         return forum
-
-    for message in reversed((session.last_messages or [])[-RECENT_CONTEXT_TURNS:]):
-        for field in ("user", "bot"):
-            detected = detect_forums_from_text(str(message.get(field) or ""))
-            if detected:
-                return detected[-1]
-
-    detected = detect_forums_from_text(str(session.conversation_summary or ""))
-    if detected:
-        return detected[-1]
 
     return None
 

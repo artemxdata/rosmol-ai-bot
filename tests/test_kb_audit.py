@@ -271,3 +271,174 @@ def test_audit_kb_seed_reads_forum_registry_for_coverage(tmp_path: Path) -> None
     codes = {finding["code"] for finding in report["findings"]}
     assert {"registry_forum_without_published_chunks", "low_forum_chunk_coverage"} <= codes
     assert json.loads(output.read_text(encoding="utf-8"))["warnings"] == 2
+
+
+def test_audit_blocks_unresolved_social_link_placeholders() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "contacts_without_urls",
+                "text_clean": "Соцсети: VK TG",
+                "status": "published",
+                "category": "форумы",
+                "topic": "contacts",
+                "source_type": "yonote",
+                "source_file": "yonote",
+            }
+        ]
+    )
+
+    finding = next(
+        item
+        for item in report["findings"]
+        if item["code"] == "unresolved_social_link_placeholder"
+    )
+    assert finding["severity"] == "error"
+    assert finding["chunk_ids"] == ["contacts_without_urls"]
+
+
+def test_audit_detects_published_forum_text_conflict() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "wrong_event",
+                "text_clean": "Регистрация на форум «Ростов» уже закрыта.",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Добрино",
+                "topic": "registration",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            }
+        ],
+        forum_registry=[
+            {"name": "Добрино", "normalized": "Добрино", "aliases": []},
+            {"name": "Ростов", "normalized": "Ростов", "aliases": []},
+        ],
+    )
+
+    finding = next(item for item in report["findings"] if item["code"] == "forum_text_conflict")
+    assert finding["severity"] == "error"
+    assert finding["records"][0]["chunk_id"] == "wrong_event"
+
+
+def test_audit_detects_inflected_forum_alias_and_slet_conflicts() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "wrong_alias",
+                "text_clean": "Регистрация на форуме «ОстроVа» уже закрыта.",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Ладога",
+                "topic": "registration",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            },
+            {
+                "chunk_id": "wrong_slet",
+                "text_clean": "Критерии опубликованы в Положении слёта «Спецназ».",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Волга",
+                "topic": "selection",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            },
+        ],
+        forum_registry=[
+            {"name": "Ладога", "normalized": "Ладога", "aliases": []},
+            {"name": "Острова", "normalized": "Острова", "aliases": ["ОстроVа"]},
+            {"name": "Волга", "normalized": "Волга", "aliases": []},
+            {"name": "Спецназ", "normalized": "Спецназ", "aliases": []},
+        ],
+    )
+
+    finding = next(item for item in report["findings"] if item["code"] == "forum_text_conflict")
+    assert {item["chunk_id"] for item in finding["records"]} == {
+        "wrong_alias",
+        "wrong_slet",
+    }
+
+
+def test_audit_allows_reviewed_cross_event_overview() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "xlsx_category_r0662_o_meropriyatii",
+                "text_clean": "Одна из программ проходит на форуме «Бирюса».",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Ямолод",
+                "topic": "overview",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            }
+        ],
+        forum_registry=[
+            {"name": "Ямолод", "normalized": "Ямолод", "aliases": []},
+            {"name": "Бирюса", "normalized": "Бирюса", "aliases": []},
+        ],
+    )
+
+    assert "forum_text_conflict" not in {item["code"] for item in report["findings"]}
+
+
+def test_audit_ignores_archived_conflict_and_nested_parent_event() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "archived",
+                "text_clean": "Регистрация на форум «Ростов» закрыта.",
+                "status": "archived",
+                "category": "форумы",
+                "forum_normalized": "Добрино",
+                "topic": "registration",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            },
+            {
+                "chunk_id": "nested",
+                "text_clean": "Регистрация на форум «Истоки» закрыта.",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Истоки Школа",
+                "topic": "registration",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            },
+        ],
+        forum_registry=[
+            {"name": "Добрино", "normalized": "Добрино", "aliases": []},
+            {"name": "Ростов", "normalized": "Ростов", "aliases": []},
+            {"name": "Истоки", "normalized": "Истоки", "aliases": []},
+            {"name": "Истоки Школа", "normalized": "Истоки Школа", "aliases": []},
+        ],
+    )
+
+    assert "forum_text_conflict" not in {item["code"] for item in report["findings"]}
+
+
+def test_audit_detects_malformed_link_metadata_and_known_domain_typo() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "broken_links",
+                "text_clean": (
+                    "Подать заявку: https://events.myrosmol.rru/ "
+                    "[https://example.org/apply|Подать] "
+                    "https://max.ru/example'Контакты"
+                ),
+                "links": ["https://example.org/apply|Подать"],
+                "status": "published",
+                "category": "форумы",
+                "topic": "registration",
+                "source_type": "xlsx",
+                "source_file": "source.xlsx",
+            }
+        ]
+    )
+
+    findings = {item["code"]: item for item in report["findings"]}
+    assert findings["malformed_link"]["severity"] == "error"
+    assert findings["suspicious_link_domain"]["severity"] == "error"

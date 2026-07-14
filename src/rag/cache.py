@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from pydantic import BaseModel, Field, ValidationError
 from qdrant_client import AsyncQdrantClient, models
 
 from src.config import get_settings
+from src.models import QueryAnalysis
 from src.rag.embedder import Embedder
+
+CACHE_SCHEMA_VERSION = 2
+GLOBAL_CACHE_SCOPE = "__global__"
+
+
+class CachedResponse(BaseModel):
+    response: str = Field(min_length=1)
+    forum_normalized: str | None = None
+    analysis: QueryAnalysis
+    cited_sources: list[str] = Field(min_length=1)
+    generator_model: str | None = None
+    verifier_triggered: bool = False
+    disposition: Literal["answered"] = "answered"
 
 
 class SemanticCache:
@@ -16,16 +32,18 @@ class SemanticCache:
         self.embedder = embedder
         self.settings = get_settings()
 
-    async def check(self, query: str, forum: str | None) -> str | None:
+    async def check(self, query: str, forum: str | None) -> CachedResponse | None:
         dense, _ = await asyncio.to_thread(self.embedder.encode, query)
-        must: list[models.Condition] = []
-        if forum:
-            must.append(
-                models.FieldCondition(
-                    key="forum_normalized",
-                    match=models.MatchValue(value=forum),
-                )
-            )
+        must: list[models.Condition] = [
+            models.FieldCondition(
+                key="scope_key",
+                match=models.MatchValue(value=_scope_key(forum)),
+            ),
+            models.FieldCondition(
+                key="cache_schema_version",
+                match=models.MatchValue(value=CACHE_SCHEMA_VERSION),
+            ),
+        ]
 
         min_cached_at = datetime.now(UTC) - timedelta(hours=self.settings.cache_ttl_hours)
         must.append(
@@ -46,38 +64,50 @@ class SemanticCache:
         )
         if not result.points:
             return None
-        return str((result.points[0].payload or {}).get("response") or "")
+        try:
+            return CachedResponse.model_validate(result.points[0].payload or {})
+        except ValidationError:
+            return None
 
-    async def save(self, query: str, forum: str | None, response: str) -> None:
+    async def save(self, query: str, cached_response: CachedResponse) -> None:
         dense, _ = await asyncio.to_thread(self.embedder.encode, query)
-        point_id = str(uuid5(NAMESPACE_URL, f"{forum or ''}:{query}"))
+        forum = cached_response.forum_normalized
+        point_id = str(uuid5(NAMESPACE_URL, f"{_scope_key(forum)}:{query}"))
+        payload = cached_response.model_dump(mode="json")
+        payload.update(
+            {
+                "cache_schema_version": CACHE_SCHEMA_VERSION,
+                "scope_key": _scope_key(forum),
+                "cached_at": datetime.now(UTC).isoformat(),
+                "query_text": query,
+            }
+        )
         await self.qdrant.upsert(
             collection_name="response_cache",
             points=[
                 models.PointStruct(
                     id=point_id,
                     vector={"dense": dense.tolist()},
-                    payload={
-                        "response": response,
-                        "forum_normalized": forum,
-                        "cached_at": datetime.now(UTC).isoformat(),
-                        "query_text": query,
-                    },
+                    payload=payload,
                 )
             ],
         )
 
-    async def invalidate_forum(self, forum: str) -> None:
+    async def invalidate_forum(self, forum: str | None) -> None:
         await self.qdrant.delete(
             collection_name="response_cache",
             points_selector=models.FilterSelector(
                 filter=models.Filter(
                     must=[
                         models.FieldCondition(
-                            key="forum_normalized",
-                            match=models.MatchValue(value=forum),
+                            key="scope_key",
+                            match=models.MatchValue(value=_scope_key(forum)),
                         )
                     ]
                 )
             ),
         )
+
+
+def _scope_key(forum: str | None) -> str:
+    return str(forum or "").strip() or GLOBAL_CACHE_SCOPE

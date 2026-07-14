@@ -7,6 +7,7 @@ from zipfile import ZipFile
 
 from scripts.build_yonote_kb_seed import (
     build_yonote_records,
+    clean_markdown_text,
     merge_records,
 )
 from scripts.index_kb import validate_seed_items
@@ -71,3 +72,29 @@ def test_merge_records_can_replace_existing_yonote_records() -> None:
 
     assert [record["chunk_id"] for record in merged] == ["xlsx_base", "yonote_new"]
     json.dumps(merged, ensure_ascii=False)
+
+
+def test_merge_records_rebuilds_clean_link_metadata_from_text() -> None:
+    base = [
+        {
+            "chunk_id": "xlsx_base",
+            "text_clean": "Кабинет: myrosmol.ru/profile. Почта: help@example.org.",
+            "links": ["myrosmol.ru/profile."],
+            "status": "published",
+            "source_type": "xlsx",
+        }
+    ]
+
+    merged = merge_records(base, [], replace_existing_yonote=False)
+
+    assert merged[0]["links"] == ["https://myrosmol.ru/profile"]
+
+
+def test_clean_markdown_text_removes_unresolved_social_link_labels() -> None:
+    assert clean_markdown_text("Соцсети: VK TG\n\nСайт") == "Сайт"
+    assert clean_markdown_text(
+        "Сайт VK TG\n\nЭлектронная почта: test@example.ru"
+    ) == "Электронная почта: test@example.ru"
+    assert clean_markdown_text(
+        "Контакты: test@example.ru, VK TG"
+    ) == "Контакты: test@example.ru,"

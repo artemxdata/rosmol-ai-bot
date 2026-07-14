@@ -4,6 +4,17 @@
 
 - Do not commit `.env`, raw HDE/ticket exports, API keys, tokens, passwords, or server dumps.
 - Keep private ticket datasets only under `data/private/`; this path is ignored by Git.
+- Keep local XLSX/PDF source materials under `data/private/source_materials/`, never in the
+  repository root. `scripts/build_kb_seed.py` uses that private path by default.
+- Application containers mount `data/` so the admin flow can atomically replace the versioned
+  seed. A nested `data/private/runtime/` mount masks the host `data/private/` tree inside the
+  container: raw source materials, ticket exports and operator datasets remain inaccessible.
+  The one-shot indexer receives only `data/knowledge_base_seed.json` read-only.
+- Set a stable, dedicated `USER_HASH_SECRET` in production. User and ticket identifiers are then
+  pseudonymized with HMAC-SHA256. Rotating this secret intentionally starts a new pseudonym space;
+  existing Redis sessions expire normally and old memory rows are removed by the retention job.
+  Startup fails outside `local`/`test` when the variable is empty; operational API/webhook/admin
+  tokens are intentionally not reused as the pseudonymization key.
 - Run LLM evals with an explicit budget: `--max-llm-cost-rub` or `--max-cases`.
 - Run KB validation before indexing:
   `python scripts/index_kb.py --validate-only`.
@@ -67,9 +78,45 @@ docker compose exec -T app alembic current
 docker compose exec -T postgres psql -U rosmol -d rosmol_ai_bot -P pager=off -c "select count(*) from conversation_turns;"
 ```
 
-The production retention period for `conversation_turns` must be approved
-before enabling scheduled cleanup. Do not delete production history manually
-during deployment.
+The production retention period for `conversation_turns`, `user_memory`, and
+`request_traces` must be approved before enabling scheduled cleanup. No cron or
+systemd timer is installed by this repository.
+
+The retention command is read-only by default. It applies `MEMORY_TTL_DAYS` to
+both conversation tables so the long-term summary and its stored turns expire
+together. `request_traces` are excluded unless a separately approved TTL is
+passed explicitly.
+
+Preview the eligible row counts without exposing stored text:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml python scripts/purge_old_memory.py
+```
+
+After the data owner approves the TTL and a PostgreSQL backup has completed,
+apply memory retention and immediately repeat the dry run:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml python scripts/purge_old_memory.py --apply
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml python scripts/purge_old_memory.py
+```
+
+`request_traces` require a separate approved value. Preview first, back up the
+database, then repeat the same command with `--apply` only after approval:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml python scripts/purge_old_memory.py \
+  --request-trace-ttl-days <approved-days>
+```
+
+The JSON result must show `mode=dry-run` during preview, the expected TTLs, and
+only aggregate counts. Do not add a production scheduler during deployment;
+schedule it as a separate, reviewed operations change with alerting and a
+single-run lock.
 
 ## Yonote KB Refresh
 
@@ -145,12 +192,14 @@ Rebuild the local Docker services and reindex Qdrant:
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml up -d --build app app-ml nginx
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb `
-  python scripts/index_kb.py --path data/knowledge_base_seed.json --embedding-batch-size 32 --prune-stale
+  python scripts/index_kb.py --path data/knowledge_base_seed.json `
+    --forums-registry data/forums_registry.json --embedding-batch-size 32 --prune-stale
 ```
 
-After indexing, run smoke checks against `http://127.0.0.1:8001/ask` with
-`X-Bypass-Cache: true`. For server rollout, repeat the same build/index
-commands on the staging host after pulling the latest commit.
+The indexer validates the registry, selects only `status=published`, removes stale points when
+explicitly requested, and clears all semantic responses after a successful KB mutation. Restart
+`app`/`app-ml` after a live full index so process-local keyword snapshots cannot survive the
+release. Then run smoke checks against `http://127.0.0.1:8001/ask` with `X-Bypass-Cache: true`.
 
 ## Secure Admin Access
 
@@ -235,7 +284,8 @@ INSTALL_ML=false
 
 Also set real secrets and strong database credentials in `.env`: Cloud.ru API
 key, API/webhook/admin tokens, `POSTGRES_PASSWORD`, and matching
-`POSTGRES_DSN`.
+`POSTGRES_DSN`. `USER_HASH_SECRET` is mandatory outside local/test and must be a separate stable
+random value; do not copy one of the operational tokens into it and do not print it in logs.
 
 Start and verify:
 
@@ -275,6 +325,7 @@ For the HDE dispatcher rule that starts bot processing for a new ticket:
     }
   },
   "message": {
+    "id": "{stable_hde_post_id}",
     "kind": "visitor",
     "text": "{HDE_TRIGGER_PREFIX} {answer_last_without_html}"
   }
@@ -294,6 +345,7 @@ For the HDE dispatcher rule that sends a user's next reply to the bot:
     }
   },
   "message": {
+    "id": "{stable_hde_post_id}",
     "kind": "visitor",
     "text": "{answer_last_without_html}"
   }
@@ -303,6 +355,24 @@ For the HDE dispatcher rule that sends a user's next reply to the bot:
 The HDE adapter uses `chat_id` as the bot conversation id because replies must
 be bound to the ticket. The trigger prefix is stripped before the message reaches
 PII masking, RAG, or LLM.
+
+`message.id` must be mapped to the stable identifier of the source HDE post, not to the
+ticket id or a generated timestamp. The adapter also accepts `message.message_id`,
+`message.post_id`, `data.message.id`, `event.id`, root `event_id`, `message_id` and `post_id`.
+Repeated delivery of the same stable id for one ticket is acknowledged with HTTP 200 but does
+not generate or send a second answer. Payloads without a stable id remain accepted for backward
+compatibility, but use a per-request fallback and therefore cannot be deduplicated reliably.
+
+HDE turns are protected by distributed Redis locks: one ticket is processed and delivered in
+sequence, while different tickets may run concurrently. Redis inbox keys are retained for seven
+days. A stable event first receives a short `processing` lease; only confirmed HDE delivery turns
+it into `done`. A known non-delivery releases the lease so upstream retry can try again. Redis
+failure or a still-active processing collision returns HTTP 503, so the dispatcher must retry;
+an already completed duplicate returns HTTP 200 without a second answer. This avoids concurrent
+or duplicate public replies, but the current in-process `BackgroundTasks` implementation is not
+a durable outbox: a process restart after HTTP acknowledgement can still lose an accepted turn
+until the processing lease expires and upstream retries. Do not describe this residual risk as
+closed until a persistent worker/outbox with retry is deployed.
 
 If an HDE rule is dedicated to one known event, it may pass an explicit optional
 context at the root of either payload:
@@ -326,6 +396,20 @@ POST /api/v2/tickets/{ticket_id}/posts/
 Authorization: Basic <HDE_API_EMAIL:HDE_API_KEY>
 Content-Type: application/x-www-form-urlencoded
 ```
+
+Migration `007_hde_delivery_telemetry` adds hashed ticket linkage, upstream/eval identifiers,
+turn outcome and typed delivery telemetry to `request_traces`. The admin ops report exposes HDE
+telemetry coverage, delivery success, outcome and delivery-status counts. `delivered`,
+`rate_limited`, `timeout`, `not_configured`, `network_error`, `http_error` and
+`ordering_failed` are distinct outcomes; a generated response is not considered delivered until
+the trace has `delivery_status=delivered`.
+
+For HDE, one `chat_id`/`ticket_id` is one product ticket. The ops report groups all turns by its
+HMAC pseudonym and reports `bot_resolved_first_turn`, `bot_resolved_multi_turn`,
+`operator_required`, `unresolved_clarification`, `not_delivered`, `delivery_unknown`, `error` or
+`unresolved`. The primary conversion is the share of tickets whose latest turn is a delivered
+answer and which never escalated to an operator; a clarification followed by a delivered answer
+therefore counts as multi-turn resolution, not as an unresolved ticket.
 
 Form fields:
 

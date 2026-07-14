@@ -14,7 +14,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
@@ -140,6 +140,7 @@ async def run_eval(
     require_budget_for_large_runs: bool = True,
     large_run_threshold: int = 20,
 ) -> dict[str, Any]:
+    eval_run_id = f"ask-eval-{uuid4()}"
     cases, generated_smoke_cases = await _load_cases(
         cases_path=cases_path,
         kb_seed_path=kb_seed_path,
@@ -162,6 +163,7 @@ async def run_eval(
     )
     if not cases:
         metrics = _empty_metrics(target=target, cases_path=cases_path, auto_smoke_cases=False)
+        metrics["eval_run_id"] = eval_run_id
         _apply_run_limits(
             metrics,
             original_cases_total=original_cases_total,
@@ -206,6 +208,7 @@ async def run_eval(
                     client=client,
                     target=target,
                     headers=headers,
+                    eval_run_id=eval_run_id,
                     case=case,
                     semaphore=semaphore,
                     trace_pool=trace_pool,
@@ -222,6 +225,7 @@ async def run_eval(
                     client=client,
                     target=target,
                     headers=headers,
+                    eval_run_id=eval_run_id,
                     case=case,
                     semaphore=sequential_semaphore,
                     trace_pool=trace_pool,
@@ -241,6 +245,7 @@ async def run_eval(
         generated_smoke_cases=generated_smoke_cases,
         trace_lookup_error=trace_lookup_error,
     )
+    metrics["eval_run_id"] = eval_run_id
     _apply_run_limits(
         metrics,
         original_cases_total=original_cases_total,
@@ -857,6 +862,7 @@ async def _run_case(
     client: httpx.AsyncClient,
     target: str,
     headers: dict[str, str],
+    eval_run_id: str,
     case: dict[str, Any],
     semaphore: asyncio.Semaphore,
     trace_pool: asyncpg.Pool | None,
@@ -872,9 +878,14 @@ async def _run_case(
             }
             if case.get("forum_context"):
                 request_payload["forum_context"] = case["forum_context"]
+            request_headers = {
+                **headers,
+                "X-Eval-Run-Id": eval_run_id,
+                "X-Eval-Case-Id": str(case["id"]),
+            }
             response = await client.post(
                 target,
-                headers=headers,
+                headers=request_headers,
                 json=request_payload,
             )
             latency_ms = int((perf_counter() - started_at) * 1000)

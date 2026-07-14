@@ -783,6 +783,8 @@ async def test_run_eval_writes_json_and_markdown_without_db(tmp_path: Path) -> N
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         assert payload["text"] == "Привет"
+        assert request.headers["X-Eval-Run-Id"].startswith("ask-eval-")
+        assert request.headers["X-Eval-Case-Id"] == "hello"
         return httpx.Response(
             200,
             json={
@@ -803,6 +805,7 @@ async def test_run_eval_writes_json_and_markdown_without_db(tmp_path: Path) -> N
 
     assert metrics["cases_total"] == 1
     assert metrics["pass_rate"] == 1.0
+    assert metrics["eval_run_id"].startswith("ask-eval-")
     assert json.loads(output.read_text(encoding="utf-8"))["results"][0]["passed"] is True
     assert "Ask Eval Report" in markdown.read_text(encoding="utf-8")
 

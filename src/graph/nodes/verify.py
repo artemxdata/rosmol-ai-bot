@@ -675,11 +675,12 @@ def _missing_source_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
     if len(questions) < 2:
         return []
 
+    source_chunks = _source_chunks_for_coverage(state, chunks)
     missing: list[str] = []
     for question in questions:
         if question.forum_normalized not in detected_forums:
             continue
-        if not _question_has_source_coverage(question, chunks):
+        if not _question_has_source_coverage(question, source_chunks):
             missing.append(_coverage_label(question))
     return missing
 
@@ -772,7 +773,10 @@ def _source_chunks_for_coverage(
     state: BotState,
     chunks: list[ScoredChunk],
 ) -> list[ScoredChunk]:
-    cited_sources = set(state.get("cited_sources") or [])
+    cited_sources = set(
+        state.get("cited_sources")
+        or SOURCE_RE.findall(str(state.get("generated_response") or ""))
+    )
     if not cited_sources:
         return chunks
     return [chunk for chunk in chunks if chunk.chunk_id in cited_sources]
@@ -981,8 +985,11 @@ def _normalize(text: str) -> str:
 
 
 def _can_skip_llm_judge(state: BotState, confidence: float) -> bool:
-    if state.get("generator_model") != "source_chunk":
-        return _can_skip_official_llm_judge(state, confidence)
+    if state.get("generator_model") not in {"source_chunk", "source_only"}:
+        # Retrieval confidence measures source relevance, not whether every generated
+        # date, URL and number is entailed by that source. LLM synthesis must therefore
+        # always pass the judge, including answers citing official chunks.
+        return False
     if confidence >= get_settings().reranker_threshold_high:
         return True
     return _can_skip_low_confidence_technical_source_chunk(state)
@@ -1017,24 +1024,6 @@ def _can_skip_low_confidence_technical_source_chunk(state: BotState) -> bool:
         category=getattr(state.get("analysis"), "category", None),
     )
     return _question_has_source_coverage(question, cited_chunks)
-
-
-def _can_skip_official_llm_judge(state: BotState, confidence: float) -> bool:
-    if confidence < get_settings().reranker_threshold_high:
-        return False
-    model = state.get("generator_model")
-    if not model or model in {"source_chunk", "source_only"}:
-        return False
-    cited_sources = set(state.get("cited_sources") or SOURCE_RE.findall(
-        str(state.get("generated_response") or "")
-    ))
-    if not cited_sources:
-        return False
-    chunks = state.get("reranked_chunks", [])
-    cited_chunks = [chunk for chunk in chunks if chunk.chunk_id in cited_sources]
-    if len(cited_chunks) != len(cited_sources):
-        return False
-    return all(_source_type(chunk) in OFFICIAL_SOURCE_TYPES for chunk in cited_chunks)
 
 
 def _requires_source_citations(state: BotState) -> bool:

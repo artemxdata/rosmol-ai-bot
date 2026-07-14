@@ -6,6 +6,28 @@ from typing import Any
 
 REQUIRED_METADATA = ("category", "topic", "source_type", "source_file")
 
+# These KMOЦ overview sections intentionally enumerate related forums. They are not
+# event-answer chunks copied under the wrong metadata, so the high-confidence conflict
+# gate must not reject them. Nested parent/subevent names are handled generically below.
+FORUM_TEXT_CROSS_REFERENCE_ALLOWLIST = frozenset(
+    {
+        "xlsx_category_r0662_o_meropriyatii",
+        "xlsx_category_r0666_oplata_proezda",
+        "yonote_api_1azaurjxgj_s0003_programmy_i_meropriyatiya",
+        "yonote_api_1azaurjxgj_s0007_svyaz_s_platformoy",
+        "yonote_api_gbj3t9ecv2_s0001_opisanie",
+        "yonote_api_ojnqfaxmmm_s0004_obrazovatelnye_meropriyatiya",
+        "yonote_api_ojnqfaxmmm_s0005_infrastruktura",
+        "yonote_api_s25v8pw7fx_s0005_kruglogodichnyy_cikl_programm_centra_vklyuchaet",
+        "yonote_api_s25v8pw7fx_s0006_populyarizaciya_nauki",
+        "yonote_api_s25v8pw7fx_s0014_programma_postsoprovozhdeniya_polyus",
+        "yonote_api_s25v8pw7fx_s0020_prodvizhenie_oflayn_organizaciya_lokalnyh_aktivnostey_v_regi",
+        "yonote_api_s25v8pw7fx_s0021_vserossiyskiy_forum_molodyh_uchenyh_polyus",
+        "yonote_api_s25v8pw7fx_s0032_partnerstva_i_predstavitelstvo",
+        "yonote_api_s25v8pw7fx_s0034_plany_centra_na_2025_god",
+    }
+)
+
 
 def audit_seed_records(
     records: list[dict[str, Any]],
@@ -23,6 +45,7 @@ def audit_seed_records(
         *_find_offtopic_records_with_context(records),
         *_find_grant_records_with_forum(records),
         *_find_duplicate_texts(records),
+        *semantic_integrity_findings(records, forum_registry=forum_registry),
         *_find_forum_coverage_findings(
             records,
             forum_registry=forum_registry,
@@ -39,6 +62,184 @@ def audit_seed_records(
         "summary": _summarize_records(records),
         "findings": findings,
     }
+
+
+def semantic_integrity_findings(
+    records: list[dict[str, Any]],
+    *,
+    forum_registry: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return blocking semantic defects that are unsafe to publish or index."""
+
+    return [
+        *_find_forum_text_conflicts(records, forum_registry or []),
+        *_find_malformed_links(records),
+        *_find_suspicious_link_domains(records),
+        *_find_unresolved_social_link_placeholders(records),
+    ]
+
+
+def _find_forum_text_conflicts(
+    records: list[dict[str, Any]],
+    forum_registry: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    alias_to_canonical: dict[str, str] = {}
+    detectable_names: dict[str, set[str]] = defaultdict(set)
+    for item in forum_registry:
+        if not isinstance(item, dict):
+            continue
+        canonical = str(item.get("normalized") or item.get("name") or "").strip()
+        canonical_key = _normalize_for_match(canonical)
+        if not canonical_key:
+            continue
+        for value in [canonical, str(item.get("name") or ""), *(item.get("aliases") or [])]:
+            normalized = _normalize_for_match(str(value))
+            if normalized:
+                alias_to_canonical[normalized] = canonical
+        for value in [canonical, str(item.get("name") or ""), *(item.get("aliases") or [])]:
+            normalized = _normalize_for_match(value)
+            if normalized:
+                detectable_names[canonical].add(normalized)
+
+    conflicts: list[dict[str, str]] = []
+    for record in records:
+        if str(record.get("status") or "published") != "published":
+            continue
+        chunk_id = str(record.get("chunk_id") or "")
+        if chunk_id in FORUM_TEXT_CROSS_REFERENCE_ALLOWLIST:
+            continue
+        forum = str(record.get("forum_normalized") or record.get("forum") or "").strip()
+        if not forum:
+            continue
+        record_forum = alias_to_canonical.get(_normalize_for_match(forum), forum)
+        text = _normalize_for_match(str(record.get("text_clean") or record.get("text") or ""))
+        for mentioned_forum, names in detectable_names.items():
+            if mentioned_forum == record_forum:
+                continue
+            if _event_names_are_nested(record_forum, mentioned_forum):
+                continue
+            if any(_explicit_event_reference(text, name) for name in names):
+                conflicts.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "record_forum": forum,
+                        "mentioned_forum": mentioned_forum,
+                    }
+                )
+
+    if not conflicts:
+        return []
+    return [
+        {
+            "code": "forum_text_conflict",
+            "severity": "error",
+            "message": "published chunk metadata conflicts with an explicitly named event",
+            "count": len(conflicts),
+            "records": conflicts[:50],
+        }
+    ]
+
+
+def _explicit_event_reference(text: str, event_name: str) -> bool:
+    return bool(
+        re.search(
+            rf"\b(?:форум\w*|фестивал\w*|мероприят\w*|слет\w*)\s+"
+            rf"{re.escape(event_name)}(?:\b|$)",
+            text,
+        )
+    )
+
+
+def _event_names_are_nested(left: str, right: str) -> bool:
+    left_normalized = f" {_normalize_for_match(left)} "
+    right_normalized = f" {_normalize_for_match(right)} "
+    return left_normalized in right_normalized or right_normalized in left_normalized
+
+
+def _find_malformed_links(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    malformed: list[dict[str, str]] = []
+    for record in records:
+        if str(record.get("status") or "published") != "published":
+            continue
+        chunk_id = str(record.get("chunk_id") or "")
+        text = str(record.get("text_clean") or record.get("text") or "")
+        if any(
+            pattern.search(text)
+            for pattern in (
+                re.compile(r"\[[^\]]+\]\(https?://[^)]*[.,;:!?]\)"),
+                re.compile(r"\[https?://[^\]\n]+\|[^\]\n]+\]"),
+                re.compile(r"https?://[^\s<>()]*['\"]\w"),
+            )
+        ):
+            malformed.append({"chunk_id": chunk_id, "location": "text"})
+        for link in record.get("links") or []:
+            value = str(link).strip()
+            if re.search(r"[\s<>\[\]()|'\"]", value):
+                malformed.append({"chunk_id": chunk_id, "location": "links"})
+                break
+
+    if not malformed:
+        return []
+    return [
+        {
+            "code": "malformed_link",
+            "severity": "error",
+            "message": "published chunk contains malformed Markdown or link metadata",
+            "count": len(malformed),
+            "records": malformed[:50],
+        }
+    ]
+
+
+def _find_suspicious_link_domains(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    chunk_ids: list[str] = []
+    typo_pattern = re.compile(r"\bevents\.myrosmol\.rru\b", flags=re.IGNORECASE)
+    for record in records:
+        if str(record.get("status") or "published") != "published":
+            continue
+        values = [
+            str(record.get("text_clean") or record.get("text") or ""),
+            *(str(link) for link in record.get("links") or []),
+        ]
+        if any(typo_pattern.search(value) for value in values):
+            chunk_ids.append(str(record.get("chunk_id") or ""))
+    if not chunk_ids:
+        return []
+    return [
+        {
+            "code": "suspicious_link_domain",
+            "severity": "error",
+            "message": "published chunk contains a known malformed service domain",
+            "count": len(chunk_ids),
+            "chunk_ids": chunk_ids[:50],
+        }
+    ]
+
+
+def _find_unresolved_social_link_placeholders(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    chunk_ids = [
+        str(record.get("chunk_id") or "")
+        for record in records
+        if str(record.get("status") or "published") == "published"
+        and re.search(
+            r"\bVK\s+TG\b",
+            str(record.get("text_clean") or record.get("text") or ""),
+            flags=re.IGNORECASE,
+        )
+    ]
+    if not chunk_ids:
+        return []
+    return [
+        {
+            "code": "unresolved_social_link_placeholder",
+            "severity": "error",
+            "message": "published chunk exposes unresolved VK/TG link labels as an answer",
+            "count": len(chunk_ids),
+            "chunk_ids": chunk_ids[:50],
+        }
+    ]
 
 
 def _summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -344,6 +545,12 @@ def _find_duplicate_texts(records: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.casefold().replace("ё", "е")).strip()
+
+
+def _normalize_for_match(value: str) -> str:
+    normalized = value.casefold().replace("ё", "е")
+    normalized = re.sub(r"[^0-9a-zа-я]+", " ", normalized)
+    return " ".join(normalized.split())
 
 
 def _field_or_missing(record: dict[str, Any], field: str) -> str:

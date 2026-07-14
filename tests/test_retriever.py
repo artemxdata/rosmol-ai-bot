@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pytest
 from qdrant_client import models
@@ -62,6 +64,35 @@ def test_build_filter_accepts_equivalent_topic_values() -> None:
         stable_text_filter_key("oplata_proezda"),
         stable_text_filter_key("kompensaciya"),
     }
+
+
+def test_build_filter_requires_record_to_be_active_on_requested_date() -> None:
+    active_on = date(2026, 7, 15)
+
+    query_filter = build_filter({}, as_of=active_on)
+
+    window_filters = [
+        condition for condition in query_filter.must if isinstance(condition, models.Filter)
+    ]
+    assert len(window_filters) == 2
+
+    valid_from = next(
+        condition
+        for condition in window_filters
+        if any(getattr(item, "key", None) == "valid_from" for item in condition.should)
+    )
+    valid_to = next(
+        condition
+        for condition in window_filters
+        if any(getattr(item, "key", None) == "valid_to" for item in condition.should)
+    )
+    valid_from_range = next(item for item in valid_from.should if hasattr(item, "range"))
+    valid_to_range = next(item for item in valid_to.should if hasattr(item, "range"))
+
+    assert valid_from_range.range.lte.date() == active_on
+    assert valid_to_range.range.gte.date() == active_on
+    assert any(isinstance(item, models.IsNullCondition) for item in valid_from.should)
+    assert any(isinstance(item, models.IsNullCondition) for item in valid_to.should)
 
 
 class FakeEmbedder:
@@ -290,3 +321,82 @@ async def test_retriever_keyword_candidates_prioritize_exact_intent_examples() -
         if hasattr(condition, "key")
     ]
     assert "source_type" in field_keys
+
+
+@pytest.mark.asyncio
+async def test_retriever_invalidates_keyword_payload_cache_by_source_type() -> None:
+    qdrant = FakeScrollQdrant()
+    retriever = Retriever(
+        qdrant,
+        FakeEmbedder(),  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
+    assert len(qdrant.scroll_calls) == 1
+
+    retriever.invalidate_keyword_cache("ticket_answer_bank")
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
+
+    assert len(qdrant.scroll_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_retriever_does_not_reuse_truncated_keyword_payload_snapshot() -> None:
+    qdrant = FakeScrollQdrant()
+    retriever = Retriever(
+        qdrant,
+        FakeEmbedder(),  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=1)
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
+
+    assert len(qdrant.scroll_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_retriever_refreshes_keyword_payload_snapshot_on_new_moscow_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_on = {"value": date(2026, 7, 15)}
+    monkeypatch.setattr(
+        "src.rag.retriever.moscow_today",
+        lambda: active_on["value"],
+    )
+    qdrant = FakeScrollQdrant()
+    retriever = Retriever(
+        qdrant,
+        FakeEmbedder(),  # type: ignore[arg-type]
+        collection_name="knowledge_base_sandbox",
+    )
+
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
+    active_on["value"] = date(2026, 7, 16)
+    await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
+
+    assert len(qdrant.scroll_calls) == 2
+
+
+def test_build_filter_uses_moscow_business_date_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.rag.retriever.moscow_today",
+        lambda: date(2026, 7, 16),
+    )
+
+    query_filter = build_filter({})
+
+    window_filters = [
+        condition for condition in query_filter.must if isinstance(condition, models.Filter)
+    ]
+    valid_from = next(
+        condition
+        for condition in window_filters
+        if any(getattr(item, "key", None) == "valid_from" for item in condition.should)
+    )
+    valid_from_range = next(item for item in valid_from.should if hasattr(item, "range"))
+    assert valid_from_range.range.lte.date() == date(2026, 7, 16)

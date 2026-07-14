@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 
+from src.kb.forum_registry import forum_filter_values
 from src.models import QueryAnalysis, Question
+
+FORUM_CLAUSE_NON_WORD_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
 
 FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
@@ -345,6 +348,7 @@ def build_effective_questions(analysis: QueryAnalysis, message: str | None) -> l
             base_questions,
             detected_forums,
             default_category=analysis.category,
+            message=message,
         )
 
     return _base_questions(analysis, message)
@@ -358,14 +362,11 @@ def _base_questions(
 ) -> list[Question]:
     message = str(message or "").strip()
     if _has_combined_event_place_date_request(message):
-        return [
-            Question(
-                text="Где и когда проходит мероприятие?",
-                topic="opisanie",
-                category=analysis.category,
-                forum_normalized=analysis.forum_normalized,
-            )
-        ]
+        return _combined_event_place_date_questions(
+            analysis,
+            message,
+            extra_fallback_markers=extra_fallback_markers,
+        )
     if _has_feedback_context(message):
         return [
             Question(
@@ -459,6 +460,67 @@ def _base_questions(
             forum_normalized=analysis.forum_normalized,
         )
     ]
+
+
+def _combined_event_place_date_questions(
+    analysis: QueryAnalysis,
+    message: str,
+    *,
+    extra_fallback_markers: tuple[tuple[tuple[str, ...], str], ...],
+) -> list[Question]:
+    """Keep place/date as one aspect without dropping other explicit questions."""
+
+    combined = Question(
+        text="Где и когда проходит мероприятие?",
+        topic="opisanie",
+        category=analysis.category,
+        forum_normalized=analysis.forum_normalized,
+    )
+    candidates = _filter_inferred_aspect_questions(
+        analysis.questions,
+        message,
+        extra_markers=extra_fallback_markers,
+        category=analysis.category,
+    )
+    detected = _fallback_questions_from_message(
+        message,
+        extra_markers=extra_fallback_markers,
+        category=analysis.category,
+    )
+    _append_missing_fallback_questions(
+        candidates,
+        detected,
+        category=analysis.category,
+        forum_normalized=analysis.forum_normalized,
+    )
+
+    result = [combined]
+    seen = {combined.text.casefold().replace("ё", "е")}
+    for question in candidates:
+        if _is_place_or_date_question(question):
+            continue
+        key = question.text.casefold().replace("ё", "е")
+        if key in seen:
+            continue
+        result.append(question)
+        seen.add(key)
+    return result
+
+
+def _is_place_or_date_question(question: Question) -> bool:
+    topic = str(question.topic or "").casefold()
+    if topic in {
+        "opisanie",
+        "daty_nachala_meropriyatiya",
+        "mesto_i_ploschadka_provedeniya",
+    }:
+        return True
+    normalized = question.text.casefold().replace("ё", "е")
+    return normalized in {
+        "где и когда проходит мероприятие?",
+        "где проходит мероприятие?",
+        "какие даты и сроки?",
+    }
 
 
 def _event_ticket_lookup_topic(message: str) -> str | None:
@@ -720,14 +782,29 @@ def _expand_questions_for_forums(
     forums: list[str],
     *,
     default_category: str | None,
+    message: str | None,
 ) -> list[Question]:
     expanded: list[Question] = []
     seen: set[tuple[str, str | None, str | None, str | None]] = set()
+    clause_marker_groups = _forum_clause_marker_groups(
+        message or "",
+        forums,
+        category=default_category,
+    )
     for question in questions:
         if question.forum_normalized in forums:
             _append_question(expanded, seen, question)
             continue
-        for forum in forums:
+        question_groups = _matched_marker_group_indexes(
+            question.text,
+            category=question.category or default_category,
+        )
+        scoped_forums = [
+            forum
+            for forum in forums
+            if question_groups and question_groups & clause_marker_groups.get(forum, set())
+        ]
+        for forum in scoped_forums or forums:
             _append_question(
                 expanded,
                 seen,
@@ -739,6 +816,87 @@ def _expand_questions_for_forums(
                 ),
             )
     return expanded
+
+
+def _forum_clause_marker_groups(
+    message: str,
+    forums: list[str],
+    *,
+    category: str | None,
+) -> dict[str, set[int]]:
+    normalized = _normalize_for_forum_clause(message)
+    if not normalized or _is_multi_forum_comparison(normalized):
+        return {}
+
+    occurrences = _forum_clause_occurrences(normalized, forums)
+    if len(occurrences) < 2:
+        return {}
+
+    scoped: dict[str, set[int]] = {}
+    for index, (start, forum) in enumerate(occurrences):
+        end = occurrences[index + 1][0] if index + 1 < len(occurrences) else len(normalized)
+        clause = normalized[start:end]
+        groups = _matched_marker_group_indexes(clause, category=category)
+        if groups:
+            scoped.setdefault(forum, set()).update(groups)
+    return scoped
+
+
+def _forum_clause_occurrences(
+    normalized_message: str,
+    forums: list[str],
+) -> list[tuple[int, str]]:
+    padded_message = f" {normalized_message} "
+    candidates: list[tuple[int, int, str]] = []
+    for forum in forums:
+        for raw_alias in forum_filter_values(forum):
+            alias = _normalize_for_forum_clause(raw_alias)
+            if not alias:
+                continue
+            pattern = f" {alias} "
+            start = 0
+            while True:
+                index = padded_message.find(pattern, start)
+                if index < 0:
+                    break
+                # ``index`` points at the padding/boundary space, which has the
+                # same offset as the alias start in the unpadded normalized text.
+                candidates.append((index, index + len(alias), forum))
+                start = index + len(pattern) - 1
+
+    # The registry can contain both a long canonical name and a shorter alias at
+    # the same location.  Prefer the longest match so one textual mention creates
+    # exactly one clause boundary.
+    candidates.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    selected: list[tuple[int, int, str]] = []
+    for start, end, forum in candidates:
+        if any(
+            selected_start <= start and end <= selected_end
+            for selected_start, selected_end, _ in selected
+        ):
+            continue
+        selected.append((start, end, forum))
+    return [(start, forum) for start, _end, forum in selected]
+
+
+def _normalize_for_forum_clause(value: str) -> str:
+    normalized = str(value or "").casefold().replace("ё", "е").replace("ë", "е")
+    return " ".join(FORUM_CLAUSE_NON_WORD_RE.sub(" ", normalized).split())
+
+
+def _is_multi_forum_comparison(normalized_message: str) -> bool:
+    return any(
+        marker in normalized_message
+        for marker in (
+            "чем отлич",
+            "сравни",
+            "разниц",
+            "у какого",
+            "у кого",
+            "в обоих",
+            "для обоих",
+        )
+    )
 
 
 def _append_question(

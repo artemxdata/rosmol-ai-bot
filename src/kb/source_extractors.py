@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import html
+import json
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -22,6 +23,9 @@ OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relations
 
 ALLOWED_STATUS = "published"
 EXAMPLE_LIMIT = 30
+SOURCE_CORRECTIONS_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "kb_source_corrections.json"
+)
 
 CYRILLIC_TRANSLIT = str.maketrans(
     {
@@ -227,6 +231,8 @@ def build_seed_from_sources(
     xlsx_path: Path,
     docx_paths: list[Path],
     extraction_date: date | None = None,
+    *,
+    corrections_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     extraction_date = extraction_date or date.today()
     sheets = read_xlsx_sheets(xlsx_path)
@@ -259,7 +265,86 @@ def build_seed_from_sources(
         records.extend(build_docx_records(docx_path, registry, extraction_date))
 
     registry = _extend_registry_from_records(registry, records)
+    if corrections_path is not None:
+        corrections = json.loads(corrections_path.read_text(encoding="utf-8"))
+        apply_source_corrections(records, registry, corrections)
     return records, registry
+
+
+def apply_source_corrections(
+    records: list[dict[str, Any]],
+    registry: list[dict[str, Any]],
+    corrections: dict[str, Any],
+) -> None:
+    """Apply reviewed source corrections and fail when their preconditions become stale.
+
+    The legacy XLSX is immutable input. Keeping reviewed corrections in a tracked manifest
+    makes a future seed rebuild reproducible, while strict ``expected`` checks force a human
+    review after the source row is fixed, removed or moved.
+    """
+
+    record_by_id = {str(record.get("chunk_id") or ""): record for record in records}
+    for chunk_id, override in (corrections.get("record_overrides") or {}).items():
+        record = record_by_id.get(chunk_id)
+        if record is None:
+            raise ValueError(f"source correction references missing chunk_id: {chunk_id}")
+        expected = override.get("expected") or {}
+        expected_text = expected.get("text_contains")
+        if expected_text is not None:
+            expected_fragments = (
+                [expected_text] if isinstance(expected_text, str) else list(expected_text)
+            )
+            text = str(record.get("text_clean") or "")
+            if not all(str(fragment) in text for fragment in expected_fragments):
+                raise ValueError(
+                    f"source correction precondition changed: {chunk_id} text_contains"
+                )
+        for field, expected_value in expected.items():
+            if field == "text_contains":
+                continue
+            if record.get(field) != expected_value:
+                raise ValueError(
+                    "source correction precondition changed: "
+                    f"{chunk_id} field={field} expected={expected_value!r} "
+                    f"actual={record.get(field)!r}"
+                )
+        updates = override.get("set") or {}
+        record.update(updates)
+        if "text_clean" in updates:
+            text_clean = str(record.get("text_clean") or "")
+            record["links"] = extract_links(text_clean)
+            record["emails"] = extract_emails(text_clean)
+            record["phones"] = extract_phones(text_clean)
+            record["dates"] = extract_dates(text_clean)
+            record["char_count"] = len(text_clean)
+            registration_deadline = registration_deadline_iso(text_clean)
+            if registration_deadline:
+                record["registration_deadline"] = registration_deadline
+            else:
+                record.pop("registration_deadline", None)
+        if "forum" in updates:
+            record["is_generic"] = not bool(record.get("forum"))
+
+    registry_by_name = {
+        str(item.get("normalized") or item.get("name") or ""): item for item in registry
+    }
+    for event, aliases in (corrections.get("registry_alias_additions") or {}).items():
+        item = registry_by_name.get(event)
+        if item is None:
+            raise ValueError(f"source correction references missing registry event: {event}")
+        current = [str(alias) for alias in item.get("aliases") or []]
+        item["aliases"] = _dedupe_preserve_order([*current, *map(str, aliases)])
+
+    for event, aliases in (corrections.get("registry_alias_removals") or {}).items():
+        item = registry_by_name.get(event)
+        if item is None:
+            raise ValueError(f"source correction references missing registry event: {event}")
+        removed = {_normalize_for_match(str(alias)) for alias in aliases}
+        item["aliases"] = [
+            str(alias)
+            for alias in item.get("aliases") or []
+            if _normalize_for_match(str(alias)) not in removed
+        ]
 
 
 def build_excel_answer_records(
@@ -422,6 +507,8 @@ def base_record(
 def clean_bot_text(value: str) -> str:
     value = _render_known_random_template(value)
     text = html.unescape(value)
+    text = _render_vk_style_links(text)
+    text = _render_markdown_links(text)
     text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
     text = re.sub(r"<[^>]+>", "", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -447,10 +534,40 @@ def _fix_known_text_artifacts(value: str) -> str:
         ("регистрация форум", "регистрация на форум"),
         ("деньмолодёжи. рф", "деньмолодёжи.рф"),
         ("деньмолодежи. рф", "деньмолодежи.рф"),
+        ("events.myrosmol.rru", "events.myrosmol.ru"),
     )
     for source, target in replacements:
         value = value.replace(source, target)
+    value = re.sub(r"(?<=\d)(?=[А-ЯЁ][а-яё]+\b)", " ", value)
     return re.sub(r"(?<=[А-Яа-яЁё]):(?=[А-Яа-яЁё])", ": ", value)
+
+
+def _render_markdown_links(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        label = match.group("label").strip()
+        target = match.group("target").rstrip(".,;:!?")
+        if label.rstrip(".,;:!?") == target:
+            return target
+        return f"{label}: {target}"
+
+    return re.sub(
+        r"\[(?P<label>[^\]]+)\]\((?P<target>https?://[^\s)]+)\)",
+        replace,
+        value,
+    )
+
+
+def _render_vk_style_links(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        target = match.group("target").rstrip(".,;:!?")
+        label = match.group("label").strip()
+        return f"{label}: {target} "
+
+    return re.sub(
+        r"\[(?P<target>https?://[^\s|\]]+)\|(?P<label>[^\]]+)\]",
+        replace,
+        value,
+    )
 
 
 def _render_known_random_template(value: str) -> str:
@@ -571,10 +688,20 @@ def has_conditional_logic(text: str) -> bool:
 
 
 def extract_links(text: str) -> list[str]:
-    links = re.findall(
-        r"https?://[^\s<>)]+|(?:[\w-]+\.)+[\w-]+/[^\s<>)]+",
+    candidates = re.findall(
+        r"https?://[^\s<>)\]|'\"]+|"
+        r"(?<![@/\w.-])(?:[\w-]+\.)+(?:ru|рф|com|org|net|gov|su|io|ai|me|cloud)"
+        r"(?::\d{1,5})?(?:/[^\s<>()\]|'\"]*)?",
         text,
+        flags=re.IGNORECASE,
     )
+    links = []
+    for candidate in candidates:
+        link = candidate.rstrip(".,;:!?")
+        link = re.sub(r"(?<=[0-9A-Za-z])[А-ЯЁ][А-Яа-яЁё]+$", "", link)
+        if not link.casefold().startswith(("http://", "https://")):
+            link = f"https://{link}"
+        links.append(link)
     return _dedupe_preserve_order(links)
 
 

@@ -13,6 +13,7 @@ from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
 
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
+MAX_EXTRACTIVE_SINGLE_SOURCE_CHARS = 1200
 INSUFFICIENT_SOURCE_RESPONSE_RE = re.compile(
     r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
     r"в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:достаточных\s+)?(?:данных|сведений)|"
@@ -570,6 +571,11 @@ def _should_synthesize_with_llm(
     if not source_chunks:
         return False
     if _is_contextual_synthesis_case(state):
+        return True
+    if (
+        len(source_chunks) == 1
+        and len(source_chunks[0].text.strip()) > MAX_EXTRACTIVE_SINGLE_SOURCE_CHARS
+    ):
         return True
     if _should_use_extractive_multi_source_answer(analysis, source_chunks):
         return False

@@ -52,7 +52,7 @@ _FOREIGN_PARTICIPANT_RE = re.compile(
 )
 _SEED_DEADLINE_CACHE: dict[
     str,
-    tuple[int, int, dict[str, RegistrationDeadline]],
+    tuple[int, int, date, dict[str, tuple[RegistrationDeadline, Chunk]]],
 ] = {}
 
 
@@ -91,6 +91,26 @@ def registration_deadline_iso(text: str) -> str | None:
     return deadline.closes_at.isoformat() if deadline else None
 
 
+def moscow_today() -> date:
+    return datetime.now(MOSCOW_TZ).date()
+
+
+def is_published_active_record(
+    record: dict[str, Any],
+    *,
+    as_of: date | None = None,
+) -> bool:
+    if str(record.get("status") or "published").strip() != "published":
+        return False
+    active_on = as_of or moscow_today()
+    valid_from = _metadata_date(record.get("valid_from"))
+    valid_to = _metadata_date(record.get("valid_to"))
+    return not (
+        (valid_from is not None and valid_from > active_on)
+        or (valid_to is not None and valid_to < active_on)
+    )
+
+
 def is_registration_query(text: str, topics: Iterable[str] = ()) -> bool:
     if _REGISTRATION_QUERY_RE.search(str(text or "")):
         return True
@@ -108,6 +128,24 @@ def expired_registration_response(
     now: datetime | None = None,
     seed_path: str | Path | None = None,
 ) -> str | None:
+    fact = expired_registration_fact(
+        message=message,
+        analysis=analysis,
+        chunks=chunks,
+        now=now,
+        seed_path=seed_path,
+    )
+    return fact[0] if fact else None
+
+
+def expired_registration_fact(
+    *,
+    message: str,
+    analysis: QueryAnalysis | None,
+    chunks: Iterable[Chunk],
+    now: datetime | None = None,
+    seed_path: str | Path | None = None,
+) -> tuple[str, Chunk] | None:
     topics = analysis.topics if analysis else ()
     if not is_registration_query(message, topics):
         return None
@@ -116,9 +154,18 @@ def expired_registration_response(
         return None
 
     forum = analysis.forum_normalized if analysis else None
-    deadline_candidates: list[tuple[RegistrationDeadline, Chunk | None]] = []
+    if not forum:
+        return None
+    current = now or datetime.now(MOSCOW_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MOSCOW_TZ)
+    else:
+        current = current.astimezone(MOSCOW_TZ)
+    deadline_candidates: list[tuple[RegistrationDeadline, Chunk]] = []
     matching_chunks: list[Chunk] = []
     for chunk in chunks:
+        if not is_published_active_record(chunk.metadata, as_of=current.date()):
+            continue
         chunk_forum = str(chunk.metadata.get("forum_normalized") or "").strip()
         if forum and chunk_forum and chunk_forum.casefold() != forum.casefold():
             continue
@@ -130,9 +177,13 @@ def expired_registration_response(
         deadline_candidates.append((deadline, chunk))
         matching_chunks.append(chunk)
 
-    seed_deadline = _seed_registration_deadline(forum, seed_path)
-    if seed_deadline is not None:
-        deadline_candidates.append((seed_deadline, None))
+    seed_candidate = _seed_registration_deadline(
+        forum,
+        seed_path,
+        as_of=current.date(),
+    )
+    if seed_candidate is not None:
+        deadline_candidates.append(seed_candidate)
 
     if not deadline_candidates:
         return None
@@ -140,18 +191,12 @@ def expired_registration_response(
     yonote_candidates = [
         item
         for item in deadline_candidates
-        if item[1] is None
-        or str(item[1].metadata.get("source_type") or "").strip() == "yonote"
+        if str(item[1].metadata.get("source_type") or "").strip() == "yonote"
     ]
     if yonote_candidates:
         deadline_candidates = yonote_candidates
     # If trusted sources disagree, declaring closure after the latest deadline is safer.
-    deadline = _latest_deadline(item[0] for item in deadline_candidates)
-    current = now or datetime.now(MOSCOW_TZ)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=MOSCOW_TZ)
-    else:
-        current = current.astimezone(MOSCOW_TZ)
+    deadline, source_chunk = _latest_deadline_candidate(deadline_candidates)
     if current <= deadline.closes_at:
         return None
 
@@ -170,10 +215,13 @@ def expired_registration_response(
         f" в {deadline.closes_at:%H:%M} (мск)" if deadline.explicit_time else ""
     )
     return (
-        f"Регистрация {subject} закрыта: приём заявок завершился "
-        f"{date_label}{time_label}.\n"
-        "Новую заявку сейчас подать нельзя. Следи за обновлениями в карточке "
-        "мероприятия на платформе ФГАИС «Молодёжь России»."
+        (
+            f"Регистрация {subject} закрыта: приём заявок завершился "
+            f"{date_label}{time_label}.\n"
+            "Новую заявку сейчас подать нельзя. Следи за обновлениями в карточке "
+            "мероприятия на платформе ФГАИС «Молодёжь России»."
+        ),
+        source_chunk,
     )
 
 
@@ -210,14 +258,20 @@ def _is_trusted_temporal_chunk(chunk: Chunk, forum: str | None) -> bool:
 def _seed_registration_deadline(
     forum: str | None,
     seed_path: str | Path | None,
-) -> RegistrationDeadline | None:
+    *,
+    as_of: date,
+) -> tuple[RegistrationDeadline, Chunk] | None:
     if not forum or not seed_path:
         return None
-    deadlines = _load_seed_deadlines(Path(seed_path))
+    deadlines = _load_seed_deadlines(Path(seed_path), as_of=as_of)
     return deadlines.get(forum.casefold())
 
 
-def _load_seed_deadlines(path: Path) -> dict[str, RegistrationDeadline]:
+def _load_seed_deadlines(
+    path: Path,
+    *,
+    as_of: date,
+) -> dict[str, tuple[RegistrationDeadline, Chunk]]:
     try:
         stat = path.stat()
     except OSError:
@@ -225,8 +279,8 @@ def _load_seed_deadlines(path: Path) -> dict[str, RegistrationDeadline]:
     cache_key = str(path.resolve())
     cached = _SEED_DEADLINE_CACHE.get(cache_key)
     signature = (stat.st_mtime_ns, stat.st_size)
-    if cached and cached[:2] == signature:
-        return cached[2]
+    if cached and cached[:3] == (*signature, as_of):
+        return cached[3]
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -235,9 +289,11 @@ def _load_seed_deadlines(path: Path) -> dict[str, RegistrationDeadline]:
     if not isinstance(raw, list):
         return {}
 
-    grouped: dict[str, list[RegistrationDeadline]] = {}
+    grouped: dict[str, list[tuple[RegistrationDeadline, Chunk]]] = {}
     for item in raw:
         if not isinstance(item, dict):
+            continue
+        if not is_published_active_record(item, as_of=as_of):
             continue
         if str(item.get("source_type") or "").strip() != "yonote":
             continue
@@ -245,15 +301,25 @@ def _load_seed_deadlines(path: Path) -> dict[str, RegistrationDeadline]:
         if not forum:
             continue
         deadline = _deadline_from_record(item)
-        if deadline is not None:
-            grouped.setdefault(forum.casefold(), []).append(deadline)
+        chunk_id = str(item.get("chunk_id") or "").strip()
+        if deadline is not None and chunk_id:
+            grouped.setdefault(forum.casefold(), []).append(
+                (
+                    deadline,
+                    Chunk(
+                        chunk_id=chunk_id,
+                        text=str(item.get("text_clean") or item.get("text_raw") or ""),
+                        metadata=dict(item),
+                    ),
+                )
+            )
 
     deadlines = {
-        forum: _latest_deadline(items)
+        forum: _latest_deadline_candidate(items)
         for forum, items in grouped.items()
         if items
     }
-    _SEED_DEADLINE_CACHE[cache_key] = (*signature, deadlines)
+    _SEED_DEADLINE_CACHE[cache_key] = (*signature, as_of, deadlines)
     return deadlines
 
 
@@ -286,6 +352,15 @@ def _parse_date(value: str) -> date | None:
         return None
 
 
+def _metadata_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except ValueError:
+        return None
+
+
 def _latest_deadline(deadlines: Iterable[RegistrationDeadline]) -> RegistrationDeadline:
     # An explicit time is authoritative over an inferred end-of-day time on the same date.
     return max(
@@ -294,6 +369,19 @@ def _latest_deadline(deadlines: Iterable[RegistrationDeadline]) -> RegistrationD
             item.closes_at.date(),
             item.explicit_time,
             item.closes_at.time(),
+        ),
+    )
+
+
+def _latest_deadline_candidate(
+    candidates: Iterable[tuple[RegistrationDeadline, Chunk]],
+) -> tuple[RegistrationDeadline, Chunk]:
+    return max(
+        candidates,
+        key=lambda item: (
+            item[0].closes_at.date(),
+            item[0].explicit_time,
+            item[0].closes_at.time(),
         ),
     )
 

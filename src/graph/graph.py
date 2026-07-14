@@ -7,6 +7,7 @@ from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.clarify import clarify
 from src.graph.nodes.escalate import escalate
 from src.graph.nodes.generate import generate
+from src.graph.nodes.guard import apply_response_guards
 from src.graph.nodes.rerank import rerank
 from src.graph.nodes.respond import respond
 from src.graph.nodes.retrieve import retrieve
@@ -20,6 +21,7 @@ def build_graph():
     graph.add_node("retrieve", retrieve)
     graph.add_node("rerank", rerank)
     graph.add_node("generate", generate)
+    graph.add_node("guard", apply_response_guards)
     graph.add_node("verify", verify)
     graph.add_node("respond", respond)
     graph.add_node("clarify", clarify)
@@ -37,7 +39,8 @@ def build_graph():
         route_after_rerank,
         {"generate": "generate", "escalate": "escalate"},
     )
-    graph.add_edge("generate", "verify")
+    graph.add_edge("generate", "guard")
+    graph.add_edge("guard", "verify")
     graph.add_conditional_edges(
         "verify",
         route_after_verify,

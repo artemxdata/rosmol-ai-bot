@@ -458,7 +458,7 @@ async def test_verifier_judges_llm_generation_even_with_high_confidence() -> Non
 
 
 @pytest.mark.asyncio
-async def test_verifier_skips_judge_for_high_confidence_official_llm_answer() -> None:
+async def test_verifier_judges_high_confidence_official_llm_answer() -> None:
     llm = JudgeLLM('{"has_hallucination": true, "confidence": 0.0}')
 
     result = await verify(
@@ -479,10 +479,42 @@ async def test_verifier_skips_judge_for_high_confidence_official_llm_answer() ->
         }
     )
 
-    assert llm.calls == 0
-    assert result["verification"].has_hallucination is False
-    assert result["verification"].triggered_llm_judge is False
-    assert result["verifier_triggered"] is False
+    assert llm.calls == 1
+    assert result["verification"].has_hallucination is True
+    assert result["verification"].triggered_llm_judge is True
+    assert result["verifier_triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_verifier_rejects_invented_date_despite_official_citation() -> None:
+    llm = JudgeLLM(
+        '{"has_hallucination": true, "confidence": 0.02, '
+        '"details": "The cited source does not contain the generated date."}'
+    )
+
+    result = await verify(
+        {
+            "generated_response": (
+                "Форум пройдёт 31 декабря 2026 года. [src:official_forum]"
+            ),
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "cited_sources": ["official_forum"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="official_forum",
+                    text="Официальная информация о программе форума.",
+                    metadata={"source_type": "yonote"},
+                    reranker_score=0.95,
+                )
+            ],
+            "max_confidence": 0.95,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["verification"].has_hallucination is True
+    assert result["verification"].triggered_llm_judge is True
 
 
 @pytest.mark.asyncio
@@ -836,6 +868,44 @@ async def test_verifier_escalates_multi_forum_partial_source_coverage() -> None:
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "partial_source_coverage"
     assert "Машук" in result["verification"].details
+
+
+@pytest.mark.asyncio
+async def test_verifier_checks_multi_forum_coverage_only_against_cited_sources() -> None:
+    result = await verify(
+        {
+            "message_masked": "Кто оплачивает проезд на Амур и Ростов?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                extracted_params={"detected_forums": ["Амур", "Ростов"]},
+            ),
+            "generated_response": "На Амур проезд оплачивает участник. [src:amur_travel]",
+            "generator_model": "source_chunk",
+            "cited_sources": ["amur_travel"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="amur_travel",
+                    text="На Амур проезд оплачивает участник.",
+                    metadata={"forum_normalized": "Амур", "intent_name": "Оплата проезда"},
+                    reranker_score=0.9,
+                ),
+                ScoredChunk(
+                    chunk_id="rostov_travel",
+                    text="На Ростов проезд оплачивает участник.",
+                    metadata={"forum_normalized": "Ростов", "intent_name": "Оплата проезда"},
+                    reranker_score=0.9,
+                ),
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["should_escalate"] is False
+    assert any(
+        "Ростов" in item for item in result["partial_source_missing_coverage"]
+    )
+    assert "в базе нет подтверждённых данных" in result["generated_response"]
 
 
 @pytest.mark.asyncio

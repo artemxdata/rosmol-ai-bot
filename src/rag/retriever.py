@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from qdrant_client import AsyncQdrantClient, models
@@ -13,6 +13,7 @@ from src.kb.forum_registry import (
     forum_filter_values,
     forums_are_equivalent,
 )
+from src.kb.temporal import MOSCOW_TZ
 from src.models import Chunk
 from src.rag.embedder import Embedder, sparse_to_indices_values
 from src.rag.filter_keys import category_filter_key, stable_text_filter_key
@@ -48,7 +49,17 @@ class Retriever:
         self.embedder = embedder
         self.collection_name = collection_name
         self._query_vector_cache: dict[str, tuple[Any, dict[str, float]]] = {}
-        self._keyword_payload_cache: dict[str, list[dict[str, Any]]] = {}
+        self._keyword_payload_cache: dict[tuple[str, int, date], list[dict[str, Any]]] = {}
+
+    def invalidate_keyword_cache(self, source_type: str | None = None) -> None:
+        """Drop keyword-recall payload snapshots after KB index changes."""
+
+        if source_type is None:
+            self._keyword_payload_cache.clear()
+            return
+        for key in tuple(self._keyword_payload_cache):
+            if key[0] == source_type:
+                self._keyword_payload_cache.pop(key, None)
 
     async def retrieve(
         self,
@@ -188,11 +199,13 @@ class Retriever:
         source_type: str,
         scan_limit: int,
     ) -> list[dict[str, Any]]:
-        cached = self._keyword_payload_cache.get(source_type)
+        active_on = moscow_today()
+        cache_key = (source_type, scan_limit, active_on)
+        cached = self._keyword_payload_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        query_filter = build_filter({"source_type": source_type})
+        query_filter = build_filter({"source_type": source_type}, as_of=active_on)
         payloads: list[dict[str, Any]] = []
         next_page_offset: Any = None
         while len(payloads) < scan_limit:
@@ -210,11 +223,16 @@ class Retriever:
             if not next_page_offset:
                 break
 
-        self._keyword_payload_cache[source_type] = payloads
+        self._keyword_payload_cache[cache_key] = payloads
         return payloads
 
 
-def build_filter(filters: dict[str, Any], *, use_stable_keys: bool = True) -> models.Filter:
+def build_filter(
+    filters: dict[str, Any],
+    *,
+    use_stable_keys: bool = True,
+    as_of: date | None = None,
+) -> models.Filter:
     must: list[models.Condition] = [
         models.FieldCondition(key="status", match=models.MatchValue(value="published"))
     ]
@@ -289,11 +307,34 @@ def build_filter(filters: dict[str, Any], *, use_stable_keys: bool = True) -> mo
             models.FieldCondition(key="source_type", match=models.MatchValue(value=source_type))
         )
 
-    should: list[models.Condition] = [
-        models.FieldCondition(key="valid_to", range=models.DatetimeRange(gte=str(date.today()))),
-        models.IsNullCondition(is_null=models.PayloadField(key="valid_to")),
-    ]
-    return models.Filter(must=must, should=should)
+    active_on = str(as_of or moscow_today())
+    must.extend(
+        [
+            models.Filter(
+                should=[
+                    models.FieldCondition(
+                        key="valid_from",
+                        range=models.DatetimeRange(lte=active_on),
+                    ),
+                    models.IsNullCondition(is_null=models.PayloadField(key="valid_from")),
+                ]
+            ),
+            models.Filter(
+                should=[
+                    models.FieldCondition(
+                        key="valid_to",
+                        range=models.DatetimeRange(gte=active_on),
+                    ),
+                    models.IsNullCondition(is_null=models.PayloadField(key="valid_to")),
+                ]
+            ),
+        ]
+    )
+    return models.Filter(must=must)
+
+
+def moscow_today() -> date:
+    return datetime.now(MOSCOW_TZ).date()
 
 
 def _can_fallback_to_raw_metadata_filter(filters: dict[str, Any]) -> bool:

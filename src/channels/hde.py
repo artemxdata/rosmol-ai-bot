@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from dataclasses import dataclass
+from enum import StrEnum
 from time import monotonic
 from typing import Any
 from urllib.parse import quote
@@ -12,6 +14,7 @@ from loguru import logger
 from src.channels.base import ChannelAdapter
 from src.config import get_settings
 from src.models import Channel, IncomingMessage
+from src.session.memory import hash_user_id
 
 HDE_FIELD_CATEGORY_BOT = 23
 HDE_FIELD_ESCALATION_BOT = 25
@@ -19,6 +22,35 @@ HDE_FIELD_SUMMARY_BOT = 29
 DEFAULT_HDE_LIMIT_RPM = 250
 DEFAULT_HDE_REMAINING_RESERVE = 30
 DEFAULT_HDE_BAN_SECONDS = 1200
+HDE_TICKET_ID_MAX_LENGTH = 255
+HDE_MESSAGE_TEXT_MAX_LENGTH = 4000
+
+
+class HDEPayloadError(ValueError):
+    """Safe validation error for an incoming HDE webhook payload."""
+
+
+class HDEDeliveryStatus(StrEnum):
+    DELIVERED = "delivered"
+    NOT_CONFIGURED = "not_configured"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    NETWORK_ERROR = "network_error"
+    HTTP_ERROR = "http_error"
+    ORDERING_FAILED = "ordering_failed"
+
+
+@dataclass(frozen=True, slots=True)
+class HDEDeliveryResult:
+    status: HDEDeliveryStatus
+    attempted: bool
+    status_code: int | None = None
+    retry_after_seconds: float | None = None
+    error_code: str | None = None
+
+    @property
+    def delivered(self) -> bool:
+        return self.status == HDEDeliveryStatus.DELIVERED
 
 
 class HDEOutgoingRateLimiter:
@@ -65,31 +97,35 @@ class HDEAdapter(ChannelAdapter):
         self._rate_limiter = rate_limiter or HDEOutgoingRateLimiter()
 
     def parse(self, payload: dict[str, Any]) -> IncomingMessage:
-        visitor = payload.get("visitor") if isinstance(payload.get("visitor"), dict) else {}
-        visitor_fields = (
+        visitor: dict[str, Any] = (
+            payload.get("visitor") if isinstance(payload.get("visitor"), dict) else {}
+        )
+        visitor_fields: dict[str, Any] = (
             visitor.get("fields") if isinstance(visitor.get("fields"), dict) else {}
         )
         message = payload.get("message")
-        message_payload = message if isinstance(message, dict) else {}
+        message_payload: dict[str, Any] = message if isinstance(message, dict) else {}
 
-        chat_id = _first_non_empty(payload.get("chat_id"), payload.get("ticket_id"))
-        visitor_id = _first_non_empty(
-            visitor.get("id"),
-            payload.get("user_id"),
-            payload.get("client_id"),
+        ticket_id = _required_bounded_string(
+            _first_non_empty(payload.get("chat_id"), payload.get("ticket_id")),
+            field_name="ticket_id",
+            limit=HDE_TICKET_ID_MAX_LENGTH,
         )
-        user_id = _first_non_empty(chat_id, visitor_id, "unknown")
         text = _first_non_empty(
             message_payload.get("text"),
             payload.get("text"),
             message if isinstance(message, str) else None,
             "",
         )
+        normalized_text = self._strip_trigger_prefix(str(text))
+        if len(normalized_text) > HDE_MESSAGE_TEXT_MAX_LENGTH:
+            raise HDEPayloadError("message_text_too_long")
 
-        return IncomingMessage(
-            user_id=str(user_id),
+        upstream_event_id, upstream_event_id_source = _extract_upstream_event_id(payload)
+        incoming = IncomingMessage(
+            user_id=ticket_id,
             channel=Channel.HDE,
-            text=self._strip_trigger_prefix(str(text)),
+            text=normalized_text,
             attachments=_normalize_attachments(
                 payload.get("attachments") or message_payload.get("attachments") or []
             ),
@@ -100,10 +136,19 @@ class HDEAdapter(ChannelAdapter):
                 visitor_fields.get("forum_context"),
             )
             or None,
+            upstream_event_id=upstream_event_id,
+            upstream_event_id_source=upstream_event_id_source,
+            eval_run_id=_optional_string(payload.get("eval_run_id"), limit=200),
+            eval_case_id=_optional_string(payload.get("eval_case_id"), limit=200),
         )
+        if incoming.upstream_event_id is None:
+            incoming.upstream_event_id = str(incoming.request_id)
+            incoming.upstream_event_id_source = "request_id_fallback"
+        return incoming
 
-    async def send(self, user_id: str, text: str) -> None:
+    async def send(self, user_id: str, text: str) -> HDEDeliveryResult:
         settings = get_settings()
+        ticket_id_hash = hash_user_id(Channel.HDE.value, user_id)
         base_url = str(getattr(settings, "hde_base_url", "") or "").strip()
         api_email = str(getattr(settings, "hde_api_email", "") or "").strip()
         api_key = str(getattr(settings, "hde_api_key", "") or "").strip()
@@ -126,34 +171,66 @@ class HDEAdapter(ChannelAdapter):
         if not base_url or not api_email or not api_key:
             logger.warning(
                 "hde_send_skipped_not_configured",
-                ticket_id=user_id,
+                ticket_id_hash=ticket_id_hash,
                 has_base_url=bool(base_url),
                 has_api_email=bool(api_email),
                 has_api_key=bool(api_key),
             )
-            return
+            return HDEDeliveryResult(
+                HDEDeliveryStatus.NOT_CONFIGURED,
+                attempted=False,
+                error_code="hde_not_configured",
+            )
 
         allowed, reason, retry_after = await self._rate_limiter.try_acquire(rpm=rpm)
         if not allowed:
             logger.warning(
                 "hde_send_skipped_rate_limited",
-                ticket_id=user_id,
+                ticket_id_hash=ticket_id_hash,
                 reason=reason,
                 retry_after_seconds=round(retry_after or 0.0, 2),
                 configured_rpm=rpm,
             )
-            return
+            return HDEDeliveryResult(
+                HDEDeliveryStatus.RATE_LIMITED,
+                attempted=False,
+                retry_after_seconds=retry_after,
+                error_code=reason,
+            )
 
         payload = {"text": text}
         if bot_user_id:
             payload["user_id"] = bot_user_id
 
         url = _build_hde_posts_url(base_url, user_id)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                data=payload,
-                auth=httpx.BasicAuth(api_email, api_key),
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    data=payload,
+                    auth=httpx.BasicAuth(api_email, api_key),
+                )
+        except httpx.TimeoutException:
+            logger.warning(
+                "hde_send_timeout",
+                ticket_id_hash=ticket_id_hash,
+                timeout_seconds=timeout,
+            )
+            return HDEDeliveryResult(
+                HDEDeliveryStatus.TIMEOUT,
+                attempted=True,
+                error_code="hde_timeout",
+            )
+        except httpx.RequestError as exc:
+            logger.warning(
+                "hde_send_network_error",
+                ticket_id_hash=ticket_id_hash,
+                error_type=type(exc).__name__,
+            )
+            return HDEDeliveryResult(
+                HDEDeliveryStatus.NETWORK_ERROR,
+                attempted=True,
+                error_code=type(exc).__name__,
             )
 
         await _apply_hde_response_rate_limits(
@@ -161,24 +238,48 @@ class HDEAdapter(ChannelAdapter):
             self._rate_limiter,
             remaining_reserve=remaining_reserve,
             ban_seconds=ban_seconds,
-            ticket_id=user_id,
+            ticket_id_hash=ticket_id_hash,
         )
         if _is_hde_rate_limit_response(response):
             logger.warning(
                 "hde_send_skipped_hde_rate_limit_response",
-                ticket_id=user_id,
+                ticket_id_hash=ticket_id_hash,
                 status_code=response.status_code,
                 hde_rate_limit=_int_header(response, "x-rate-limit"),
                 hde_rate_limit_remaining=_int_header(response, "x-rate-limit-remaining"),
             )
-            return
-        response.raise_for_status()
+            return HDEDeliveryResult(
+                HDEDeliveryStatus.RATE_LIMITED,
+                attempted=True,
+                status_code=response.status_code,
+                retry_after_seconds=_retry_after_seconds(response, default=ban_seconds),
+                error_code="hde_remote_rate_limit",
+            )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.warning(
+                "hde_send_http_error",
+                ticket_id_hash=ticket_id_hash,
+                status_code=response.status_code,
+            )
+            return HDEDeliveryResult(
+                HDEDeliveryStatus.HTTP_ERROR,
+                attempted=True,
+                status_code=response.status_code,
+                error_code=f"http_{response.status_code}",
+            )
 
         logger.info(
             "hde_send_ok",
-            ticket_id=user_id,
+            ticket_id_hash=ticket_id_hash,
             status_code=response.status_code,
             fields=[HDE_FIELD_CATEGORY_BOT, HDE_FIELD_ESCALATION_BOT, HDE_FIELD_SUMMARY_BOT],
+        )
+        return HDEDeliveryResult(
+            HDEDeliveryStatus.DELIVERED,
+            attempted=True,
+            status_code=response.status_code,
         )
 
     def _strip_trigger_prefix(self, text: str) -> str:
@@ -202,6 +303,56 @@ def _first_non_empty(*values: Any) -> Any:
             continue
         return value
     return ""
+
+
+def _optional_string(value: Any, *, limit: int | None = None) -> str | None:
+    normalized = "" if value is None else str(value).strip()
+    if limit is not None:
+        normalized = normalized[:limit]
+    return normalized or None
+
+
+def _required_bounded_string(value: Any, *, field_name: str, limit: int) -> str:
+    normalized = "" if value is None else str(value).strip()
+    if not normalized:
+        raise HDEPayloadError(f"{field_name}_required")
+    if len(normalized) > limit:
+        raise HDEPayloadError(f"{field_name}_too_long")
+    return normalized
+
+
+def _extract_upstream_event_id(payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    message: dict[str, Any] = (
+        payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    )
+    event: dict[str, Any] = (
+        payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    )
+    data: dict[str, Any] = (
+        payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    )
+    data_message: dict[str, Any] = (
+        data.get("message") if isinstance(data.get("message"), dict) else {}
+    )
+    candidates = (
+        (message.get("id"), "message.id"),
+        (message.get("message_id"), "message.message_id"),
+        (message.get("post_id"), "message.post_id"),
+        (data_message.get("id"), "data.message.id"),
+        (data_message.get("message_id"), "data.message.message_id"),
+        (event.get("id"), "event.id"),
+        (event.get("event_id"), "event.event_id"),
+        (payload.get("event_id"), "event_id"),
+        (payload.get("message_id"), "message_id"),
+        (payload.get("post_id"), "post_id"),
+    )
+    for value, source in candidates:
+        normalized = _optional_string(value)
+        if normalized:
+            if len(normalized) > HDE_TICKET_ID_MAX_LENGTH:
+                raise HDEPayloadError("upstream_event_id_too_long")
+            return normalized, source
+    return None, None
 
 
 def _normalize_attachments(raw_attachments: Any) -> list[dict[str, Any]]:
@@ -231,7 +382,7 @@ async def _apply_hde_response_rate_limits(
     *,
     remaining_reserve: int,
     ban_seconds: int,
-    ticket_id: str,
+    ticket_id_hash: str,
 ) -> None:
     if _is_hde_rate_limit_response(response):
         await limiter.block_for(_retry_after_seconds(response, default=ban_seconds))
@@ -244,7 +395,7 @@ async def _apply_hde_response_rate_limits(
         await limiter.block_for(60.0)
         logger.warning(
             "hde_send_rate_limit_remaining_low",
-            ticket_id=ticket_id,
+            ticket_id_hash=ticket_id_hash,
             hde_rate_limit=_int_header(response, "x-rate-limit"),
             hde_rate_limit_remaining=remaining,
             reserve=remaining_reserve,

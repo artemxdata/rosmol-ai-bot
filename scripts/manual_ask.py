@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
@@ -56,6 +56,7 @@ async def run_manual_ask(
     bypass_cache: bool = False,
     isolate_users: bool = False,
 ) -> dict[str, Any]:
+    eval_run_id = f"manual-ask-{uuid4()}"
     trace_pool: asyncpg.Pool | None = None
     trace_lookup_error: str | None = None
     if trace_lookup:
@@ -84,6 +85,7 @@ async def run_manual_ask(
                     client=client,
                     target=target,
                     headers=headers,
+                    eval_run_id=eval_run_id,
                     case=case,
                     user_id=f"{user_id}-{index}" if isolate_users else user_id,
                     channel=channel,
@@ -99,6 +101,7 @@ async def run_manual_ask(
 
     report: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
+        "eval_run_id": eval_run_id,
         "target": target,
         "bypass_cache": bypass_cache,
         "isolate_users": isolate_users,
@@ -230,6 +233,7 @@ async def _run_manual_case(
     client: httpx.AsyncClient,
     target: str,
     headers: dict[str, str],
+    eval_run_id: str,
     case: dict[str, Any],
     user_id: str,
     channel: str,
@@ -240,9 +244,14 @@ async def _run_manual_case(
         started_at = perf_counter()
         request_id: str | None = None
         try:
+            request_headers = {
+                **headers,
+                "X-Eval-Run-Id": eval_run_id,
+                "X-Eval-Case-Id": str(case["id"]),
+            }
             response = await client.post(
                 target,
-                headers=headers,
+                headers=request_headers,
                 json={"user_id": user_id, "channel": channel, "text": case["query"]},
             )
             latency_ms = int((perf_counter() - started_at) * 1000)

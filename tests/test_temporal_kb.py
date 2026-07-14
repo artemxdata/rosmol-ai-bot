@@ -3,14 +3,16 @@ from datetime import datetime
 
 import pytest
 
+from src.graph.nodes.guard import apply_response_guards
 from src.graph.nodes.respond import respond
+from src.graph.nodes.verify import verify
 from src.kb.temporal import (
     MOSCOW_TZ,
     expired_registration_response,
     extract_registration_deadline,
     is_registration_query,
 )
-from src.models import Complexity, QueryAnalysis, ScoredChunk
+from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
 
 
 def _rostov_chunk(text: str) -> ScoredChunk:
@@ -189,23 +191,31 @@ def test_seed_yonote_deadline_applies_when_retrieval_only_returned_legacy_chunk(
 
 @pytest.mark.asyncio
 async def test_respond_replaces_stale_registration_call_to_action() -> None:
-    result = await respond(
-        {
-            "message": "Хочу попасть на форум Ростов, что нужно сделать?",
-            "message_masked": "Хочу попасть на форум Ростов, что нужно сделать?",
-            "analysis": _analysis(),
-            "reranked_chunks": [
-                _rostov_chunk(
-                    "Хочешь попасть на форум? Окончание приёма заявок — "
-                    "06.07.2026 г. Регистрируйся прямо сейчас!"
-                )
-            ],
-            "generated_response": "Регистрируйся прямо сейчас!",
-        }
-    )
+    state = {
+        "message": "Хочу попасть на форум Ростов, что нужно сделать?",
+        "message_masked": "Хочу попасть на форум Ростов, что нужно сделать?",
+        "analysis": _analysis(),
+        "reranked_chunks": [
+            _rostov_chunk(
+                "Хочешь попасть на форум Ростов? Окончание приёма заявок — "
+                "06.07.2026 г. Регистрируйся прямо сейчас!"
+            )
+        ],
+        "max_confidence": 0.9,
+        "generated_response": "Регистрируйся прямо сейчас!",
+    }
+
+    guarded = await apply_response_guards(state)
+    verified = await verify({**state, **guarded})
+    result = await respond({**state, **guarded, **verified})
 
     assert result["final_response"].startswith("Регистрация на форум «Ростов» закрыта")
     assert "Регистрируйся прямо сейчас" not in result["final_response"]
+    assert len(guarded["cited_sources"]) == 1
+    assert guarded["cited_sources"][0] in {
+        chunk.chunk_id for chunk in guarded["reranked_chunks"]
+    }
+    assert verified["verification"].has_hallucination is False
 
 
 @pytest.mark.asyncio
@@ -222,3 +232,183 @@ async def test_respond_does_not_change_non_registration_answer() -> None:
     )
 
     assert result["final_response"] == "Форум пройдёт в Ростовской области."
+
+
+@pytest.mark.asyncio
+async def test_response_guards_skip_ambiguous_multi_forum_request() -> None:
+    analysis = QueryAnalysis(
+        forum_normalized="Машук",
+        category="форумы",
+        extracted_params={"detected_forums": ["Ростов", "Машук"]},
+    )
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": "Как иностранцу зарегистрироваться на Ростов и Машук?",
+            "analysis": analysis,
+            "reranked_chunks": [],
+        }
+    )
+
+    assert guarded == {}
+
+
+@pytest.mark.asyncio
+async def test_response_guards_preserve_multi_aspect_single_forum_answer() -> None:
+    analysis = QueryAnalysis(
+        forum="Ростов",
+        forum_normalized="Ростов",
+        category="форумы",
+        questions=[
+            Question(
+                text="Где и когда проходит мероприятие?",
+                topic="daty_nachala_meropriyatiya",
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+            Question(
+                text="Как подать заявку или зарегистрироваться?",
+                topic="podacha_zayavki_na_proekt",
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+        ],
+    )
+    place_chunk = ScoredChunk(
+        chunk_id="yonote_rostov_description",
+        text=(
+            "Дата и место проведения: с 6 по 10 сентября 2026 года. "
+            "Форум будет проходить в Ростовской области."
+        ),
+        metadata={"forum_normalized": "Ростов", "source_type": "yonote"},
+        score=1.0,
+        reranker_score=0.9,
+    )
+    registration_chunk = _rostov_chunk("Регистрация проходит через ФГАИС.")
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": (
+                "Где и когда проходит форум Ростов и как зарегистрироваться?"
+            ),
+            "analysis": analysis,
+            "reranked_chunks": [place_chunk, registration_chunk],
+            "generated_response": "Полный ответ по месту, датам и регистрации.",
+            "cited_sources": [place_chunk.chunk_id, registration_chunk.chunk_id],
+        }
+    )
+
+    assert guarded == {}
+
+
+@pytest.mark.asyncio
+async def test_registration_guard_does_not_drop_place_date_when_extractor_misses() -> None:
+    analysis = QueryAnalysis(
+        forum="Ростов",
+        forum_normalized="Ростов",
+        category="форумы",
+        questions=[
+            Question(
+                text="Где и когда проходит мероприятие?",
+                topic="daty_nachala_meropriyatiya",
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+            Question(
+                text="До какого числа можно зарегистрироваться?",
+                topic="podacha_zayavki_na_proekt",
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+        ],
+    )
+    place_chunk = ScoredChunk(
+        chunk_id="rostov_place_without_guard_format",
+        text="Форум состоится 6 сентября 2026 года в Ростовской области.",
+        metadata={"forum_normalized": "Ростов", "source_type": "yonote"},
+        score=1.0,
+        reranker_score=0.9,
+    )
+    registration_chunk = _rostov_chunk(
+        "Регистрация во ФГАИС доступна до 06.07.2026 23:59 мск."
+    )
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": (
+                "Где и когда проходит форум Ростов и до какого числа регистрация?"
+            ),
+            "analysis": analysis,
+            "reranked_chunks": [place_chunk, registration_chunk],
+            "generated_response": "Полный ответ по месту, датам и сроку регистрации.",
+            "cited_sources": [place_chunk.chunk_id, registration_chunk.chunk_id],
+        }
+    )
+
+    assert guarded == {}
+
+
+@pytest.mark.asyncio
+async def test_registration_deadline_questions_remain_one_guard_aspect() -> None:
+    analysis = QueryAnalysis(
+        forum="Ростов",
+        forum_normalized="Ростов",
+        category="форумы",
+        questions=[
+            Question(
+                text="Какие даты и сроки?",
+                topic="daty_nachala_meropriyatiya",
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+            Question(
+                text="До какого числа можно зарегистрироваться?",
+                topic="podacha_zayavki_na_proekt",
+                category="форумы",
+                forum_normalized="Ростов",
+            ),
+        ],
+    )
+    registration_chunk = _rostov_chunk(
+        "Регистрация во ФГАИС доступна до 06.07.2026 23:59 мск."
+    )
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": "До какого числа регистрация на форум Ростов?",
+            "analysis": analysis,
+            "reranked_chunks": [registration_chunk],
+            "generated_response": "Регистрация открыта.",
+        }
+    )
+
+    assert guarded["response_guard"] == "registration_closed"
+
+
+def test_seed_deadline_ignores_archived_record(tmp_path) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    seed_path.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "archived_deadline",
+                    "forum_normalized": "Ростов",
+                    "source_type": "yonote",
+                    "status": "archived",
+                    "text_clean": "Регистрация открыта до 06.07.2026 23:59 мск.",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    response = expired_registration_response(
+        message="Как подать заявку на Ростов?",
+        analysis=_analysis(),
+        chunks=[],
+        now=datetime(2026, 7, 10, 12, 0, tzinfo=MOSCOW_TZ),
+        seed_path=seed_path,
+    )
+
+    assert response is None

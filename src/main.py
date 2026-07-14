@@ -5,8 +5,10 @@ import hashlib
 import hmac
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from hmac import compare_digest
 from ipaddress import ip_address
+from math import ceil
 from pathlib import Path
 from time import perf_counter, time
 from typing import Any
@@ -30,14 +32,19 @@ from src.admin.yonote_sync import (
 from src.admin.yonote_sync import (
     preview_sync as preview_yonote_sync,
 )
-from src.channels.hde import HDEAdapter
+from src.channels.hde import (
+    HDEAdapter,
+    HDEDeliveryResult,
+    HDEDeliveryStatus,
+    HDEPayloadError,
+)
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
 from src.config import get_settings
 from src.graph.context import NON_FORUM_CONTEXT_CATEGORIES, is_context_dependent_followup
 from src.graph.graph import build_graph
 from src.graph.nodes.analyze import is_safe_offtopic_message
-from src.kb.forum_registry import detect_forum_from_text
+from src.kb.forum_registry import detect_forum_from_text, detect_forums_from_text
 from src.kb.temporal import is_registration_query
 from src.llm.client import CloudRuLLMClient
 from src.llm.routing import estimate_routing_hint
@@ -46,11 +53,11 @@ from src.llm.usage import (
     start_llm_usage_collection,
     summarize_llm_usage,
 )
-from src.logging.db_logger import log_request
+from src.logging.db_logger import log_request, update_delivery_outcome
 from src.logging.tracer import Tracer
 from src.models import Channel, Chunk, IncomingMessage, QueryAnalysis, Session
 from src.ops.reports import build_trace_report
-from src.rag.cache import SemanticCache
+from src.rag.cache import CachedResponse, SemanticCache
 from src.rag.embedder import Embedder
 from src.rag.errors import MLDependencyError
 from src.rag.reranker import Reranker
@@ -80,6 +87,7 @@ _MEANINGFUL_WORD_RE = re.compile(r"[а-яa-z0-9]{3,}", flags=re.IGNORECASE)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    _validate_runtime_security(settings)
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.pg_pool = await asyncpg.create_pool(settings.postgres_dsn, min_size=1, max_size=5)
     app.state.qdrant = AsyncQdrantClient(url=settings.qdrant_url)
@@ -118,6 +126,36 @@ hde_adapter = HDEAdapter()
 
 ADMIN_SESSION_COOKIE = "rosmol_admin_session"
 ADMIN_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+HDE_EVENT_DEDUP_TTL_SECONDS = 7 * 24 * 60 * 60
+HDE_EVENT_PROCESSING_MIN_TTL_SECONDS = 5 * 60
+HDE_EVENT_PROCESSING_MARGIN_SECONDS = 60
+_HDE_EVENT_MARK_DONE_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+end
+return false
+"""
+_HDE_EVENT_RELEASE_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class _HDEEventReservation:
+    key: str | None = None
+    token: str | None = None
+
+
+def _validate_runtime_security(settings: Any) -> None:
+    app_env = str(getattr(settings, "app_env", "local") or "local").strip().casefold()
+    user_hash_secret = str(getattr(settings, "user_hash_secret", "") or "").strip()
+    if app_env not in {"local", "test"} and not user_hash_secret:
+        raise RuntimeError(
+            "USER_HASH_SECRET is required outside local/test environments"
+        )
 
 
 class AskPayload(BaseModel):
@@ -203,12 +241,19 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
         text=payload.text,
         attachments=payload.attachments,
         forum_context=payload.forum_context,
+        eval_run_id=_optional_trace_identifier(request.headers.get("x-eval-run-id")),
+        eval_case_id=_optional_trace_identifier(request.headers.get("x-eval-case-id")),
     )
     if _should_bypass_cache(request):
         response = await process_message(message, request.app, bypass_cache=True)
     else:
         response = await process_message(message, request.app)
     return {"request_id": str(message.request_id), "response": response}
+
+
+def _optional_trace_identifier(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized[:200] or None
 
 
 @app.get("/admin/kb", response_class=HTMLResponse)
@@ -466,31 +511,262 @@ async def hde_webhook(request: Request, background_tasks: BackgroundTasks) -> di
         getattr(get_settings(), "webhook_auth_token", ""),
         "x-webhook-secret",
     )
-    message = hde_adapter.parse(await request.json())
-    background_tasks.add_task(_process_hde_message, message, request.app)
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid HDE payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Invalid HDE payload")
+    try:
+        message = hde_adapter.parse(payload)
+    except HDEPayloadError as exc:
+        logger.warning("hde_payload_rejected", reason=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    reservation = await _reserve_hde_event(message, request.app)
+    if reservation is None:
+        return {"ok": True}
+    background_tasks.add_task(_process_hde_message, message, request.app, reservation)
     return {"ok": True}
 
 
-async def _process_hde_message(message: IncomingMessage, fastapi_app: FastAPI) -> None:
+async def _process_hde_message(
+    message: IncomingMessage,
+    fastapi_app: FastAPI,
+    reservation: _HDEEventReservation | None = None,
+) -> None:
+    sessions = getattr(fastapi_app.state, "sessions", None)
+    serializer = getattr(sessions, "serialized_hde_turn", None)
+    delivery: HDEDeliveryResult | None = None
+    try:
+        if serializer is None:
+            delivery = await _process_hde_message_ordered(message, fastapi_app)
+        else:
+            async with serializer(message.user_id):
+                delivery = await _process_hde_message_ordered(message, fastapi_app)
+    except Exception as exc:
+        logger.exception(
+            "hde_turn_lock_failed",
+            request_id=str(message.request_id),
+            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
+            error_type=type(exc).__name__,
+        )
+        await _safe_log(
+            fastapi_app,
+            {
+                "request_id": message.request_id,
+                "channel": message.channel.value,
+                "user_id_hash": hash_user_id(message.channel.value, message.user_id),
+                "message_masked": "[hde_ordering_failed]",
+                "final_response": None,
+                "should_escalate": True,
+                "escalation_reason": "hde_ordering_failed",
+                "error": type(exc).__name__,
+                "upstream_event_id": message.upstream_event_id,
+                "upstream_event_id_source": message.upstream_event_id_source,
+                "eval_run_id": message.eval_run_id,
+                "eval_case_id": message.eval_case_id,
+            },
+        )
+        delivery = HDEDeliveryResult(
+            HDEDeliveryStatus.ORDERING_FAILED,
+            attempted=False,
+            error_code=type(exc).__name__,
+        )
+        await _record_hde_delivery(fastapi_app, message, delivery)
+    finally:
+        if reservation is not None:
+            await _finalize_hde_event(fastapi_app, message, reservation, delivery)
+
+
+async def _process_hde_message_ordered(
+    message: IncomingMessage,
+    fastapi_app: FastAPI,
+) -> HDEDeliveryResult:
     try:
         response = await process_message(message, fastapi_app)
     except Exception as exc:
         logger.exception(
             "hde_background_processing_failed",
             request_id=str(message.request_id),
-            ticket_id=message.user_id,
+            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
             error=str(exc),
         )
         response = "Передаю обращение специалисту."
+        await _safe_log(
+            fastapi_app,
+            {
+                "request_id": message.request_id,
+                "channel": message.channel.value,
+                "user_id_hash": hash_user_id(message.channel.value, message.user_id),
+                "message_masked": "[hde_processing_failed]",
+                "final_response": response,
+                "should_escalate": True,
+                "escalation_reason": "hde_processing_failed",
+                "error": type(exc).__name__,
+                "upstream_event_id": message.upstream_event_id,
+                "upstream_event_id_source": message.upstream_event_id_source,
+                "eval_run_id": message.eval_run_id,
+                "eval_case_id": message.eval_case_id,
+            },
+        )
 
     try:
-        await hde_adapter.send(message.user_id, response)
+        delivery = await hde_adapter.send(message.user_id, response)
     except Exception as exc:
         logger.exception(
             "hde_background_send_failed",
             request_id=str(message.request_id),
-            ticket_id=message.user_id,
+            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
             error=str(exc),
+        )
+        delivery = HDEDeliveryResult(
+            HDEDeliveryStatus.NETWORK_ERROR,
+            attempted=True,
+            error_code=type(exc).__name__,
+        )
+    await _record_hde_delivery(fastapi_app, message, delivery)
+    return delivery
+
+
+async def _reserve_hde_event(
+    message: IncomingMessage,
+    fastapi_app: FastAPI,
+) -> _HDEEventReservation | None:
+    if message.upstream_event_id_source in {None, "request_id_fallback"}:
+        return _HDEEventReservation()
+    fingerprint = hash_user_id(
+        "hde-inbox",
+        f"{message.user_id}\0{message.upstream_event_id}",
+    )
+    key = f"hde-inbox:v2:{fingerprint}"
+    token = f"processing:{message.request_id}"
+    redis = getattr(fastapi_app.state, "redis", None)
+    if redis is None:
+        logger.error(
+            "hde_inbox_unavailable",
+            request_id=str(message.request_id),
+            reason="redis_not_initialized",
+        )
+        raise HTTPException(status_code=503, detail="HDE inbox unavailable")
+    try:
+        reserved = await redis.set(
+            key,
+            token,
+            nx=True,
+            ex=_hde_event_processing_ttl_seconds(),
+        )
+        if not reserved:
+            current = await redis.get(key)
+            if current is None:
+                reserved = await redis.set(
+                    key,
+                    token,
+                    nx=True,
+                    ex=_hde_event_processing_ttl_seconds(),
+                )
+            if not reserved and str(current or "").startswith("done:"):
+                logger.info(
+                    "hde_duplicate_event_skipped",
+                    request_id=str(message.request_id),
+                    ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
+                    upstream_event_id_source=message.upstream_event_id_source,
+                )
+                return None
+            if not reserved:
+                raise HTTPException(status_code=503, detail="HDE event is still processing")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "hde_inbox_reservation_failed",
+            request_id=str(message.request_id),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail="HDE inbox unavailable") from exc
+    return _HDEEventReservation(key=key, token=token)
+
+
+def _hde_event_processing_ttl_seconds() -> int:
+    settings = get_settings()
+    configured_window = ceil(
+        max(0.0, float(getattr(settings, "request_timeout_seconds", 45.0) or 0.0))
+        + max(0.0, float(getattr(settings, "hde_request_timeout_seconds", 20.0) or 0.0))
+        + HDE_EVENT_PROCESSING_MARGIN_SECONDS
+    )
+    return max(HDE_EVENT_PROCESSING_MIN_TTL_SECONDS, configured_window)
+
+
+async def _finalize_hde_event(
+    fastapi_app: FastAPI,
+    message: IncomingMessage,
+    reservation: _HDEEventReservation,
+    delivery: HDEDeliveryResult | None,
+) -> None:
+    if not reservation.key or not reservation.token:
+        return
+    redis = getattr(fastapi_app.state, "redis", None)
+    if redis is None:
+        logger.error(
+            "hde_inbox_finalize_failed",
+            request_id=str(message.request_id),
+            reason="redis_not_initialized",
+        )
+        return
+    try:
+        if delivery is not None and delivery.delivered:
+            updated = await redis.eval(
+                _HDE_EVENT_MARK_DONE_SCRIPT,
+                1,
+                reservation.key,
+                reservation.token,
+                f"done:{message.request_id}",
+                HDE_EVENT_DEDUP_TTL_SECONDS,
+            )
+            if not updated:
+                logger.warning(
+                    "hde_inbox_done_ownership_lost",
+                    request_id=str(message.request_id),
+                    ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
+                )
+            return
+        await redis.eval(
+            _HDE_EVENT_RELEASE_SCRIPT,
+            1,
+            reservation.key,
+            reservation.token,
+        )
+    except Exception as exc:
+        logger.exception(
+            "hde_inbox_finalize_failed",
+            request_id=str(message.request_id),
+            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
+            delivery_status=delivery.status.value if delivery is not None else "cancelled",
+            error_type=type(exc).__name__,
+        )
+
+
+async def _record_hde_delivery(
+    fastapi_app: FastAPI,
+    message: IncomingMessage,
+    delivery: HDEDeliveryResult,
+) -> None:
+    try:
+        await update_delivery_outcome(
+            fastapi_app.state.pg_pool,
+            message.request_id,
+            status=delivery.status.value,
+            attempted=delivery.attempted,
+            http_status=delivery.status_code,
+            retry_after_seconds=delivery.retry_after_seconds,
+            error_code=delivery.error_code,
+        )
+    except Exception as exc:
+        logger.exception(
+            "hde_delivery_trace_update_failed",
+            request_id=str(message.request_id),
+            delivery_status=delivery.status.value,
+            error_type=type(exc).__name__,
         )
 
 
@@ -559,19 +835,37 @@ async def _admin_reindex_record(request: Request, record: dict[str, Any]) -> dic
             ),
         ) from exc
 
-    forum = str(record.get("forum_normalized") or "").strip()
-    if forum:
+    source_type = str(record.get("source_type") or "").strip()
+    invalidate_keyword_cache = getattr(
+        request.app.state.retriever,
+        "invalidate_keyword_cache",
+        None,
+    )
+    if callable(invalidate_keyword_cache):
         try:
-            await request.app.state.semantic_cache.invalidate_forum(forum)
-            result["cache_invalidated_forum"] = forum
+            invalidate_keyword_cache(source_type or None)
+            result["keyword_cache_invalidated_source"] = source_type or "all"
         except Exception as exc:
             logger.warning(
-                "admin_cache_invalidation_failed",
+                "admin_keyword_cache_invalidation_failed",
                 chunk_id=record.get("chunk_id"),
-                forum=forum,
+                source_type=source_type or None,
                 error=str(exc),
             )
-            result["cache_invalidation_warning"] = type(exc).__name__
+            result["keyword_cache_invalidation_warning"] = type(exc).__name__
+
+    forum = str(record.get("forum_normalized") or "").strip()
+    try:
+        await request.app.state.semantic_cache.invalidate_forum(forum or None)
+        result["cache_invalidated_forum"] = forum or "global"
+    except Exception as exc:
+        logger.warning(
+            "admin_cache_invalidation_failed",
+            chunk_id=record.get("chunk_id"),
+            forum=forum or None,
+            error=str(exc),
+        )
+        result["cache_invalidation_warning"] = type(exc).__name__
     return result
 
 
@@ -713,9 +1007,36 @@ async def process_message(
     *,
     bypass_cache: bool = False,
 ) -> str:
+    serializer = getattr(fastapi_app.state.sessions, "serialized", None)
+    if serializer is None:
+        return await _process_message_unlocked(
+            message,
+            fastapi_app,
+            bypass_cache=bypass_cache,
+        )
+    async with serializer(message.channel.value, message.user_id):
+        return await _process_message_unlocked(
+            message,
+            fastapi_app,
+            bypass_cache=bypass_cache,
+        )
+
+
+async def _process_message_unlocked(
+    message: IncomingMessage,
+    fastapi_app: FastAPI,
+    *,
+    bypass_cache: bool = False,
+) -> str:
     started_at = perf_counter()
     settings = get_settings()
     user_id_hash = hash_user_id(message.channel.value, message.user_id)
+    trace_identifiers = {
+        "upstream_event_id": message.upstream_event_id,
+        "upstream_event_id_source": message.upstream_event_id_source,
+        "eval_run_id": message.eval_run_id,
+        "eval_case_id": message.eval_case_id,
+    }
 
     if not await fastapi_app.state.rate_limiter.check(message.user_id, message.channel.value):
         response = (
@@ -725,6 +1046,7 @@ async def process_message(
         await _safe_log(
             fastapi_app,
             {
+                **trace_identifiers,
                 "request_id": message.request_id,
                 "channel": message.channel.value,
                 "user_id_hash": user_id_hash,
@@ -738,7 +1060,7 @@ async def process_message(
         return response
 
     is_safe, safety_reason = safety.check(message.text)
-    masked_text, pii_mapping = fastapi_app.state.pii_masker.mask(message.text)
+    masked_text, _ = fastapi_app.state.pii_masker.mask(message.text)
     operator_requested = is_operator_request(message.text)
     session = await fastapi_app.state.sessions.get_or_create(
         message.channel.value,
@@ -755,6 +1077,7 @@ async def process_message(
         await _safe_log(
             fastapi_app,
             {
+                **trace_identifiers,
                 "request_id": message.request_id,
                 "channel": message.channel.value,
                 "user_id_hash": user_id_hash,
@@ -773,6 +1096,7 @@ async def process_message(
         await _safe_log(
             fastapi_app,
             {
+                **trace_identifiers,
                 "request_id": message.request_id,
                 "channel": message.channel.value,
                 "user_id_hash": user_id_hash,
@@ -799,6 +1123,7 @@ async def process_message(
         await _safe_log(
             fastapi_app,
             {
+                **trace_identifiers,
                 "request_id": message.request_id,
                 "channel": message.channel.value,
                 "user_id_hash": user_id_hash,
@@ -812,13 +1137,6 @@ async def process_message(
         )
         return response
 
-    if pii_mapping:
-        await fastapi_app.state.redis.set(
-            f"pii:{message.request_id}",
-            str(pii_mapping),
-            ex=settings.session_ttl_seconds,
-        )
-
     if operator_requested:
         response = "Передаю обращение специалисту."
         session = await _clear_pending_clarification(fastapi_app, session)
@@ -826,6 +1144,7 @@ async def process_message(
         await _safe_log(
             fastapi_app,
             {
+                **trace_identifiers,
                 "request_id": message.request_id,
                 "channel": message.channel.value,
                 "user_id_hash": user_id_hash,
@@ -857,16 +1176,19 @@ async def process_message(
         explicit_forum_context,
     )
     routing_hint = estimate_routing_hint(graph_masked_text)
-    detected_forum = detect_forum_from_text(graph_message)
+    detected_forums = detect_forums_from_text(graph_message)
+    detected_forum = detected_forums[0] if len(detected_forums) == 1 else None
     cache_allowed = not is_context_dependent_followup(
         graph_masked_text,
         session,
     ) and not is_safe_offtopic_message(graph_message)
     cache_allowed = cache_allowed and not is_registration_query(graph_masked_text)
     cache_allowed = cache_allowed and not pending_context_applied
+    cache_allowed = cache_allowed and len(detected_forums) <= 1
 
     tracer = Tracer()
     state = {
+        **trace_identifiers,
         "request_id": message.request_id,
         "channel": message.channel.value,
         "user_id": message.user_id,
@@ -892,21 +1214,37 @@ async def process_message(
             detected_forum or session.forum_context,
         )
     if cached_response:
+        response = cached_response.response
         state.update(
             {
                 "cache_hit": True,
-                "final_response": cached_response,
+                "analysis": cached_response.analysis,
+                "cited_sources": cached_response.cited_sources,
+                "generator_model": cached_response.generator_model,
+                "verifier_triggered": cached_response.verifier_triggered,
+                "cache_disposition": cached_response.disposition,
+                "final_response": response,
                 "total_latency_ms": int((perf_counter() - started_at) * 1000),
             }
         )
-        session = await _clear_pending_clarification(
+        session, response = await _update_dialog_session(
             fastapi_app,
             session,
-            detected_forum=detected_forum,
+            state,
+            pending_text=graph_masked_text,
+            response=response,
         )
-        await fastapi_app.state.sessions.append_turn(session, masked_text, cached_response)
+        state["final_response"] = response
+        session = await fastapi_app.state.sessions.append_turn(session, masked_text, response)
+        await _update_memory(
+            fastapi_app,
+            user_id_hash,
+            message.channel.value,
+            state,
+            session=session,
+        )
         await _safe_log(fastapi_app, state)
-        return cached_response
+        return response
 
     if not settings.cloud_ru_api_key:
         response = "Передаю обращение специалисту, потому что LLM-доступ ещё не настроен."
@@ -958,7 +1296,7 @@ async def process_message(
         session=session,
     )
     if not bypass_cache and cache_allowed:
-        await _save_cache(fastapi_app, masked_text, response, result)
+        await _save_cache(fastapi_app, graph_masked_text, response, result)
     await _safe_log(fastapi_app, result)
     return response
 
@@ -1231,7 +1569,11 @@ def _has_actionable_support_context(text: str) -> bool:
     )
 
 
-async def _check_cache(fastapi_app: FastAPI, query: str, forum: str | None) -> str | None:
+async def _check_cache(
+    fastapi_app: FastAPI,
+    query: str,
+    forum: str | None,
+) -> CachedResponse | None:
     try:
         return await fastapi_app.state.semantic_cache.check(query, forum)
     except Exception as exc:
@@ -1245,14 +1587,52 @@ async def _save_cache(
     response: str,
     state: dict[str, Any],
 ) -> None:
-    if state.get("should_escalate") or not response:
+    if (
+        state.get("should_escalate")
+        or state.get("partial_source_missing_coverage")
+        or not response
+    ):
         return
     analysis = state.get("analysis")
-    forum = getattr(analysis, "forum_normalized", None) if analysis else None
+    if not isinstance(analysis, QueryAnalysis) or analysis.needs_clarification:
+        return
+    cited_sources = [str(item) for item in state.get("cited_sources") or [] if item]
+    if not cited_sources:
+        return
+    if _has_temporally_bounded_cited_source(state, cited_sources):
+        return
+    verification = state.get("verification")
+    if verification is not None and getattr(verification, "has_hallucination", False):
+        return
+    cached_response = CachedResponse(
+        response=response,
+        forum_normalized=analysis.forum_normalized,
+        analysis=analysis,
+        cited_sources=cited_sources,
+        generator_model=str(state.get("generator_model") or "") or None,
+        verifier_triggered=bool(state.get("verifier_triggered")),
+    )
     try:
-        await fastapi_app.state.semantic_cache.save(query, forum, response)
+        await fastapi_app.state.semantic_cache.save(query, cached_response)
     except Exception as exc:
         logger.warning("semantic_cache_save_failed", error=str(exc))
+
+
+def _has_temporally_bounded_cited_source(
+    state: dict[str, Any],
+    cited_sources: list[str],
+) -> bool:
+    cited_ids = set(cited_sources)
+    for chunk in state.get("reranked_chunks") or []:
+        chunk_id = str(getattr(chunk, "chunk_id", "") or "")
+        if chunk_id not in cited_ids:
+            continue
+        metadata = getattr(chunk, "metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        if any(str(metadata.get(field) or "").strip() for field in ("valid_from", "valid_to")):
+            return True
+    return False
 
 
 async def _update_memory(

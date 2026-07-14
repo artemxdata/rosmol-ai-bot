@@ -9,9 +9,9 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from scripts.index_kb import validate_seed_items
-from src.kb.source_extractors import build_seed_from_sources
+from src.kb.source_extractors import SOURCE_CORRECTIONS_PATH, build_seed_from_sources
 
-DEFAULT_XLSX = Path("Новый бот Росмол .xlsx")
+DEFAULT_XLSX = Path("data/private/source_materials/Новый бот Росмол .xlsx")
 DEFAULT_DOCX = [
     Path.home() / "Downloads" / "Форум «Российский Север» интенты.docx",
     Path.home() / "Downloads" / "Фестиваль «Больше, чем путешествие» Интенты .docx",
@@ -30,7 +30,12 @@ def build_kb_seed(
         formatted = "\n".join(str(path) for path in missing)
         raise FileNotFoundError(f"KB source file not found:\n{formatted}")
 
-    records, forum_registry = build_seed_from_sources(xlsx_path, docx_paths, extraction_date)
+    records, forum_registry = build_seed_from_sources(
+        xlsx_path,
+        docx_paths,
+        extraction_date,
+        corrections_path=SOURCE_CORRECTIONS_PATH,
+    )
     validate_seed_items(records)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

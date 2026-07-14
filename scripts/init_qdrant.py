@@ -63,6 +63,8 @@ async def ensure_collections(
         )
     for field, schema in (
         ("forum_normalized", models.PayloadSchemaType.KEYWORD),
+        ("scope_key", models.PayloadSchemaType.KEYWORD),
+        ("cache_schema_version", models.PayloadSchemaType.INTEGER),
         ("cached_at", models.PayloadSchemaType.DATETIME),
     ):
         await create_payload_index_if_missing(

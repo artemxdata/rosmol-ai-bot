@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.logging.db_logger import log_request
+from src.logging.db_logger import log_request, update_delivery_outcome
 from src.logging.tracer import Tracer
 
 
@@ -39,6 +39,10 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
             "channel": "api",
             "user_id_hash": "hash",
             "message_masked": "Регистрация на форум",
+            "upstream_event_id": "message-1",
+            "upstream_event_id_source": "message.id",
+            "eval_run_id": "run-1",
+            "eval_case_id": "case-1",
             "routing_hint": {"complexity": "simple", "reason": "registration_faq"},
             "trace": tracer,
             "generated_response": "Ответ по источнику [src:chunk_1] [src:chunk_1] [src:chunk_2]",
@@ -69,3 +73,36 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
     assert trace_events[0]["metadata"] == {"model": "model-a"}
     assert trace_events[1]["node"] == "retrieve"
     assert trace_events[1]["error"] == "boom"
+    assert pool.args[27] == "message-1"
+    assert pool.args[28] == "message.id"
+    assert pool.args[29] == "hash"
+    assert pool.args[30] == "run-1"
+    assert pool.args[31] == "case-1"
+    assert pool.args[32] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_update_delivery_outcome_persists_typed_result() -> None:
+    pool = FakePool()
+    request_id = uuid4()
+
+    await update_delivery_outcome(
+        pool,  # type: ignore[arg-type]
+        request_id,
+        status="rate_limited",
+        attempted=True,
+        http_status=429,
+        retry_after_seconds=1200.0,
+        error_code="hde_remote_rate_limit",
+    )
+
+    assert pool.query is not None
+    assert "delivery_status" in pool.query
+    assert pool.args[:6] == (
+        request_id,
+        "rate_limited",
+        True,
+        429,
+        1200.0,
+        "hde_remote_rate_limit",
+    )

@@ -707,6 +707,50 @@ def test_fallback_analysis_escalates_specific_technical_review_request() -> None
     assert analysis.escalation_reason in {"technical_issue", "personal_status"}
 
 
+@pytest.mark.parametrize("cache_spelling", ("кеш", "кэш"))
+def test_fallback_analysis_escalates_failed_second_support_attempt(
+    cache_spelling: str,
+) -> None:
+    session = Session(
+        user_id="ticket-1",
+        channel=Channel.HDE,
+        user_id_hash="hash",
+        last_messages=[
+            {
+                "user": "Не грузится ФГАИС",
+                "bot": (
+                    f"Очисти {cache_spelling} и cookie, открой сайт в другом браузере "
+                    "и повтори попытку."
+                ),
+            }
+        ],
+    )
+
+    analysis = _fallback_analysis(
+        "Не помогло, всё равно не грузится",
+        "Не помогло, всё равно не грузится",
+        {"complexity": "simple"},
+        session,
+    )
+
+    assert analysis is not None
+    assert analysis.should_escalate is True
+    assert analysis.escalation_reason == "repeated_support_failure"
+    assert analysis.category == "техподдержка"
+
+
+def test_fallback_analysis_does_not_escalate_first_short_failure_without_support_history() -> None:
+    analysis = _fallback_analysis(
+        "Не помогло, всё равно не грузится",
+        "Не помогло, всё равно не грузится",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.should_escalate is False
+
+
 def test_fallback_analysis_escalates_operator_only_brandbook_request() -> None:
     analysis = _fallback_analysis(
         "Добрый день, будет ли брендбук Дня молодёжи 2026?",

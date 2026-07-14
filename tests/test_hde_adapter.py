@@ -3,9 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
-from src.channels.hde import HDEAdapter, _build_hde_posts_url
+from src.channels.hde import HDEAdapter, HDEDeliveryStatus, _build_hde_posts_url
 from src.models import Channel
 
 
@@ -15,6 +16,7 @@ def test_hde_adapter_parses_nested_new_ticket_payload_and_strips_trigger_prefix(
         "chat_id": "ticket-123",
         "visitor": {"id": "user-456", "fields": {"name": "Test User"}},
         "message": {
+            "id": "message-789",
             "kind": "visitor",
             "text": "slcb373n93f Как зарегистрироваться на форум?",
         },
@@ -26,6 +28,8 @@ def test_hde_adapter_parses_nested_new_ticket_payload_and_strips_trigger_prefix(
     assert message.channel == Channel.HDE
     assert message.text == "Как зарегистрироваться на форум?"
     assert message.attachments == []
+    assert message.upstream_event_id == "message-789"
+    assert message.upstream_event_id_source == "message.id"
 
 
 def test_hde_adapter_parses_nested_new_reply_payload_without_prefix() -> None:
@@ -71,6 +75,40 @@ def test_hde_adapter_keeps_legacy_flat_payload_support() -> None:
     assert message.channel == Channel.HDE
     assert message.text == "Передайте оператору"
     assert message.attachments == [{"id": "file-1"}]
+    assert message.upstream_event_id == str(message.request_id)
+    assert message.upstream_event_id_source == "request_id_fallback"
+
+
+def test_hde_adapter_rejects_payload_without_ticket_id() -> None:
+    with pytest.raises(ValueError, match="ticket_id_required"):
+        HDEAdapter().parse(
+            {
+                "visitor": {"id": "visitor-must-not-be-used-as-ticket"},
+                "message": {"text": "Где мой билет?"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    (
+        ({"chat_id": "x" * 256, "message": {"text": "Вопрос"}}, "ticket_id_too_long"),
+        (
+            {"chat_id": "ticket-1", "message": {"text": "x" * 4001}},
+            "message_text_too_long",
+        ),
+        (
+            {"chat_id": "ticket-1", "message": {"id": "x" * 256, "text": "Вопрос"}},
+            "upstream_event_id_too_long",
+        ),
+    ),
+)
+def test_hde_adapter_rejects_oversized_identifiers_and_text(
+    payload: dict[str, Any],
+    reason: str,
+) -> None:
+    with pytest.raises(ValueError, match=reason):
+        HDEAdapter().parse(payload)
 
 
 def test_build_hde_posts_url_accepts_domain_or_api_base() -> None:
@@ -124,12 +162,14 @@ async def test_hde_send_posts_public_reply_with_basic_auth(
         ),
     )
 
-    await HDEAdapter().send("123", "Ответ бота")
+    result = await HDEAdapter().send("123", "Ответ бота")
 
     assert captured["url"] == "https://rosmolodezh.helpdeskeddy.com/api/v2/tickets/123/posts/"
     assert captured["data"] == {"text": "Ответ бота", "user_id": "42"}
     assert captured["auth_type"] == "BasicAuth"
     assert captured["timeout"] == 7
+    assert result.status == HDEDeliveryStatus.DELIVERED
+    assert result.status_code == 201
 
 
 @pytest.mark.asyncio
@@ -160,7 +200,11 @@ async def test_hde_send_skips_when_local_rate_limit_is_active(
         ),
     )
 
-    await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "РћС‚РІРµС‚")
+    result = await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "Ответ")
+
+    assert result.status == HDEDeliveryStatus.RATE_LIMITED
+    assert result.attempted is False
+    assert result.retry_after_seconds == 12.5
 
 
 @pytest.mark.asyncio
@@ -224,11 +268,14 @@ async def test_hde_send_handles_hde_ban_without_retrying(
         ),
     )
 
-    await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "РћС‚РІРµС‚")
+    result = await HDEAdapter(rate_limiter=FakeRateLimiter()).send("123", "Ответ")
 
     assert captured["rpm"] == 250
     assert captured["blocked_for"] == 1200
     assert captured["url"] == "https://rosmolodezh.helpdeskeddy.com/api/v2/tickets/123/posts/"
+    assert result.status == HDEDeliveryStatus.RATE_LIMITED
+    assert result.attempted is True
+    assert result.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -305,4 +352,46 @@ async def test_hde_send_skips_when_api_is_not_configured(monkeypatch: pytest.Mon
         ),
     )
 
-    await HDEAdapter().send("123", "Ответ бота")
+    result = await HDEAdapter().send("123", "Ответ бота")
+
+    assert result.status == HDEDeliveryStatus.NOT_CONFIGURED
+    assert result.attempted is False
+
+
+@pytest.mark.asyncio
+async def test_hde_send_returns_timeout_delivery_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: object) -> object:
+            raise httpx.ReadTimeout("timeout", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("src.channels.hde.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "src.channels.hde.get_settings",
+        lambda: SimpleNamespace(
+            hde_base_url="https://rosmolodezh.helpdeskeddy.com",
+            hde_api_email="bot@example.com",
+            hde_api_key="secret",
+            hde_bot_user_id="",
+            hde_request_timeout_seconds=7,
+            hde_rate_limit_rpm=250,
+            hde_rate_limit_remaining_reserve=30,
+            hde_rate_limit_ban_seconds=1200,
+        ),
+    )
+
+    result = await HDEAdapter().send("123", "Ответ")
+
+    assert result.status == HDEDeliveryStatus.TIMEOUT
+    assert result.attempted is True
+    assert result.error_code == "hde_timeout"

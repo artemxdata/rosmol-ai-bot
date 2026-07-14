@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     api_auth_token: str = ""
     webhook_auth_token: str = ""
     admin_auth_token: str = ""
+    user_hash_secret: str = ""
     hde_trigger_prefix: str = ""
     hde_base_url: str = ""
     hde_api_email: str = ""

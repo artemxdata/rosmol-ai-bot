@@ -610,7 +610,7 @@ async def test_respond_preserves_links_email_and_time_spacing() -> None:
     assert result["final_response"] == (
         "Напиши на reportgrant2024@fadm.gov.ru с 09:00 до 18:00. "
         "Профиль: https://myrosmol.ru/profile?section=accounts. "
-        "События: events.myrosmol.ru/forumy/."
+        "События: https://events.myrosmol.ru/forumy/."
     )
 
 
@@ -628,7 +628,27 @@ async def test_respond_repairs_llm_spacing_inside_structured_tokens() -> None:
 
     assert result["final_response"] == (
         "Свяжись с нами: reportgrant2024@fadm.gov.ru, "
-        "пн-пт 09:00-18:00. Кабинет myrosmol.ru/profile?section=accounts."
+        "пн-пт 09:00-18:00. Кабинет https://myrosmol.ru/profile?section=accounts."
+    )
+
+
+@pytest.mark.asyncio
+async def test_respond_makes_bare_source_domains_clickable_without_breaking_urls_or_email() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Сайт деньмолодёжи.рф, события events.myrosmol.ru/forumy/. "
+                "Telegram t.me/rostovforum. Профиль https://myrosmol.ru/profile "
+                "и почта help@example.org. "
+                "[src:contacts]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == (
+        "Сайт https://деньмолодёжи.рф, события https://events.myrosmol.ru/forumy/. "
+        "Telegram https://t.me/rostovforum. Профиль https://myrosmol.ru/profile "
+        "и почта help@example.org."
     )
 
 
@@ -1214,6 +1234,18 @@ def test_fallback_questions_split_event_place_and_dates() -> None:
     assert questions[0].topic == "opisanie"
 
 
+def test_fallback_questions_keep_other_aspects_with_event_place_and_dates() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ростов"),
+        "Где и когда проходит форум Ростов и как зарегистрироваться?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Где и когда проходит мероприятие?",
+        "Как подать заявку или зарегистрироваться?",
+    ]
+
+
 def test_fallback_questions_map_rejected_application() -> None:
     questions = build_effective_questions(
         QueryAnalysis(category="гранты"),
@@ -1380,6 +1412,78 @@ def test_stored_forum_context_wins_over_forum_mentioned_in_old_bot_answer() -> N
     )
 
     assert contextual.forum_normalized == "День молодёжи"
+
+
+def test_session_context_does_not_inherit_forum_from_ambiguous_bot_answer() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        last_messages=[
+            {
+                "user": "Какие форумы сейчас доступны?",
+                "bot": "Можно посмотреть форумы «Амур» и «Ростов».",
+            }
+        ],
+    )
+    analysis = QueryAnalysis(
+        category="форумы",
+        needs_clarification=True,
+        clarification_question=(
+            "Уточни, пожалуйста, о каком форуме или мероприятии речь? "
+            "У разных событий условия могут отличаться."
+        ),
+    )
+
+    contextual = apply_session_context(analysis, "А проезд оплачивается?", session)
+
+    assert contextual.forum_normalized is None
+    assert contextual.needs_clarification is True
+
+
+def test_session_context_does_not_choose_one_of_multiple_user_forums() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+        last_messages=[
+            {
+                "user": "Сравни форумы Амур и Ростов.",
+                "bot": "Условия отличаются.",
+            }
+        ],
+    )
+
+    contextual = apply_session_context(
+        QueryAnalysis(category="форумы"),
+        "А проезд оплачивается?",
+        session,
+    )
+
+    assert contextual.forum_normalized is None
+
+
+def test_session_context_does_not_override_current_multi_forum_with_stored_forum() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="Амур",
+    )
+    analysis = QueryAnalysis(
+        category="форумы",
+        extracted_params={"detected_forums": ["Ростов", "Машук"]},
+    )
+
+    contextual = apply_session_context(
+        analysis,
+        "Ростов и Машук: кто оплачивает проезд?",
+        session,
+    )
+
+    assert contextual.forum_normalized is None
+    assert contextual.extracted_params["detected_forums"] == ["Ростов", "Машук"]
 
 
 def test_explicit_grant_question_does_not_inherit_stale_forum_context() -> None:
@@ -1761,6 +1865,44 @@ def test_apply_deterministic_forum_preserves_multiple_detected_forums() -> None:
         "Машук",
     ]
     assert payload["questions"][0]["forum_normalized"] is None
+
+
+def test_effective_questions_keep_aspects_in_their_forum_clauses() -> None:
+    message = "Амур: кто оплачивает проезд; Ростов: какие условия проживания?"
+    analysis = QueryAnalysis(
+        category="форумы",
+        extracted_params={"detected_forums": ["Амур", "Ростов"]},
+    )
+
+    questions = build_effective_questions(analysis, message)
+
+    pairs = {(question.text, question.forum_normalized) for question in questions}
+    assert ("Амур: Кто оплачивает проезд?", "Амур") in pairs
+    assert ("Ростов: Какие условия проживания?", "Ростов") in pairs
+    assert not any(
+        question.forum_normalized == "Ростов" and "проезд" in question.text.casefold()
+        for question in questions
+    )
+    assert not any(
+        question.forum_normalized == "Амур" and "прожив" in question.text.casefold()
+        for question in questions
+    )
+
+
+def test_effective_questions_keep_clause_scope_when_forum_is_named_by_alias() -> None:
+    message = "Бирюса: кто оплачивает проезд; Ростов: какие условия проживания?"
+    analysis = QueryAnalysis(
+        category="форумы",
+        extracted_params={"detected_forums": ["ТИМ Бирюса", "Ростов"]},
+    )
+
+    questions = build_effective_questions(analysis, message)
+
+    pairs = {(question.text, question.forum_normalized) for question in questions}
+    assert pairs == {
+        ("ТИМ Бирюса: Кто оплачивает проезд?", "ТИМ Бирюса"),
+        ("Ростов: Какие условия проживания?", "Ростов"),
+    }
 
 
 @pytest.mark.asyncio
@@ -2193,6 +2335,14 @@ async def test_retrieve_adds_keyword_recall_candidates_on_broad_attempt() -> Non
             6,
             2048,
             2.0,
+            "yonote",
+        ),
+        (
+            "Can I upload a grant report after correction?",
+            {"category": "grants"},
+            6,
+            2048,
+            2.0,
             "xlsx",
         ),
         (
@@ -2202,6 +2352,14 @@ async def test_retrieve_adds_keyword_recall_candidates_on_broad_attempt() -> Non
             2048,
             2.0,
             "docx",
+        ),
+        (
+            "Can I upload a grant report after correction?",
+            {},
+            6,
+            2048,
+            2.0,
+            "yonote",
         ),
         (
             "Can I upload a grant report after correction?",
@@ -3060,6 +3218,79 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
     chunk_ids = {chunk.chunk_id for chunk in result["reranked_chunks"]}
     assert {"amur_docs", "amur_transfer", "amur_age"} <= chunk_ids
     assert result["max_confidence"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_rerank_does_not_use_forum_fast_path_without_topic_or_lexical_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.rerank.get_settings",
+        lambda: SimpleNamespace(
+            ml_unload_after_use=False,
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+
+    class HousingSemanticReranker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def rerank(self, query: str, chunks: list[Chunk], top_k: int) -> list[ScoredChunk]:
+            self.calls += 1
+            ordered = sorted(chunks, key=lambda chunk: "гостиниц" not in chunk.text.casefold())
+            return [
+                ScoredChunk(
+                    **chunk.model_dump(exclude={"score"}),
+                    score=chunk.score,
+                    reranker_score=0.9 if index == 0 else 0.2,
+                )
+                for index, chunk in enumerate(ordered[:top_k])
+            ]
+
+    semantic_reranker = HousingSemanticReranker()
+    chunks = [
+        Chunk(
+            chunk_id="wrong_docs",
+            text="Возьми паспорт и медицинскую справку.",
+            metadata={
+                "intent_name": "Документы",
+                "category": "форумы",
+                "forum_normalized": "Амур",
+                "source_category": "Амур",
+                "topic": "dokumenty_meropriyatiya",
+            },
+            score=0.99,
+        ),
+        Chunk(
+            chunk_id="right_housing",
+            text="Участников разместят в гостинице.",
+            metadata={
+                "intent_name": "Условия проживания",
+                "category": "форумы",
+                "forum_normalized": "Амур",
+                "source_category": "Амур",
+                "topic": "usloviya_prozhivaniya",
+            },
+            score=0.05,
+        ),
+    ]
+
+    result = await rerank(
+        {
+            "message_masked": "Амур: куда нас заселят?",
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Амур",
+            ),
+            "retrieved_chunks": chunks,
+            "reranker": semantic_reranker,
+        }
+    )
+
+    assert semantic_reranker.calls == 1
+    assert result["reranked_chunks"][0].chunk_id == "right_housing"
 
 
 @pytest.mark.asyncio
@@ -5076,6 +5307,62 @@ async def test_generate_returns_source_chunk_for_simple_high_confidence(
     assert result["generated_response"] == "Проезд на форум оплачивает организатор. [src:ctx_1]"
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["ctx_1"]
+
+
+@pytest.mark.asyncio
+async def test_generate_summarizes_long_single_official_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="long_program",
+        text=(
+            "Программа включает концерты, лекции и спортивные площадки. "
+            + "Подробное описание пространства и активностей. " * 50
+        ),
+        metadata={
+            "chunk_id": "long_program",
+            "source_type": "yonote",
+            "category": "форумы",
+            "forum_normalized": "День молодёжи",
+            "topic": "programma_i_artisty",
+        },
+        score=0.9,
+        reranker_score=0.91,
+    )
+    llm = CapturingLLM(
+        "В программе — концерты, лекции и спортивные площадки. [src:long_program]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Что будет в программе Дня молодёжи?",
+            "analysis": QueryAnalysis(
+                forum_normalized="День молодёжи",
+                category="форумы",
+                questions=[
+                    Question(
+                        text="Что будет в программе?",
+                        topic="programma_i_artisty",
+                        category="форумы",
+                        forum_normalized="День молодёжи",
+                    )
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.91,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["generator_model"] != "source_chunk"
+    assert result["generated_response"] == (
+        "В программе — концерты, лекции и спортивные площадки. [src:long_program]"
+    )
 
 
 @pytest.mark.asyncio

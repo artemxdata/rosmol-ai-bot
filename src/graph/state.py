@@ -25,6 +25,7 @@ class BotState(TypedDict, total=False):
     reranked_chunks: list[ScoredChunk]
     max_confidence: float
     generated_response: str
+    response_guard: str
     final_response: str
     cited_sources: list[str]
     verification: VerificationResult
