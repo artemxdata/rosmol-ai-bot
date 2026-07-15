@@ -3,13 +3,13 @@
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** локальная delivery correction зафиксирована в `8bca860`; на сервере пока развёрнут
-handoff commit `3968cf3` с предыдущим code RC `98de023`.
-**Статус релиза:** `LOCAL DELIVERY GO / SERVER HDE DELIVERY NO GO`. Migration `007`, published-only
-индекс `2152`, readiness, targeted follow-up, smoke и полный server-local suite прошли. Реальный
-HDE/VK smoke дал два корректных grounded-ответа в одном тикете, но выявил падение записи delivery
-telemetry после подтверждённой отправки и отсутствие stable upstream message id. Операторский тест
-не начинать до закрытия оставшихся пунктов текущего раздела 7.
+**Git:** code RC `8bca860`, release handoff `c787c59`; delivery correction развёрнута в тестовом
+HDE-контуре и подтверждена реальным smoke.
+**Статус релиза:** `LIMITED GO / OPERATOR HOLDOUT`. Migration `007`, published-only индекс `2152`,
+readiness, targeted follow-up, smoke и полный server-local suite прошли. Финальный реальный
+HDE/VK smoke подтвердил stable `message.id`, ровно один ответ/trace на inbound и успешную delivery
+telemetry. Код, routing, prompts, thresholds и KB заморожены на время операторского теста; широкий
+трафик не включать до оценки ticket-level конверсии.
 
 ## 1. Цель
 
@@ -29,9 +29,9 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 `docs/conversion_growth_audit_20260715.md`. По прямому решению пользователя freeze был снят для
 одного срочного pre-operator correction cycle. Основной пакет завершён в `6249b08`; серверный gate
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
-потерю telemetry-полей, исправленную в `98de023`. Server-local качество этого кандидата доказано;
-точный следующий шаг — закрыть только HDE delivery/deduplication gate, а не менять качество,
-routing, prompts или KB.
+потерю telemetry-полей, исправленную в `98de023`. Server-local качество и HDE delivery gate этого
+кандидата доказаны. Точный следующий шаг — независимый операторский holdout при полном freeze, а
+не дополнительная подгонка качества, routing, prompts или KB.
 
 ## 2. Что представляет собой проект
 
@@ -169,7 +169,7 @@ routing, prompts или KB.
   — `100%`, стоимость — `7.420207 RUB`.
 - Ручной HDE smoke подтвердил policy, grounded sources, fail-closed routing и multi-turn ticket flow.
 
-## 7. Release gate нового RC — targeted correction ожидает deployment
+## 7. Release gate нового RC — закрыт с решением LIMITED GO
 
 ### Срочный pre-operator correction cycle 15 июля 2026
 
@@ -283,7 +283,7 @@ analyzer/fallback.
   пользовательский ответ полный и grounded, нужные чанки найдены, но cited ID set не содержит
   каждый ожидаемый эквивалентный ID.
 
-### Реальный HDE/VK smoke — quality green, delivery gate blocked
+### Первый реальный HDE/VK smoke — quality green, выявлен delivery defect
 
 15 июля в одном реальном HDE-тикете выполнены два хода:
 
@@ -308,19 +308,31 @@ delivery SQL повторно использовал `$2` как несовме�
 `ruff check .` — успешно, полный `pytest` — `1171 passed`, KB validation неизменна:
 `2186` valid / `2152 published`.
 
-Текущий release decision — `NO GO` только по HDE delivery/deduplication. Точный следующий шаг:
+### Финальное закрытие HDE delivery/deduplication gate
 
-1. отправить handoff с `8bca860`, вручную обновить сервер и пересоздать только `app`/`app-ml`;
-   migration и переиндексация не требуются;
-2. в обоих тестовых HDE dispatcher payload передавать системный тег `{last_post_id}` как
-   `message.id`;
-3. подтвердить оба `/ready`, затем повторить двухходовый HDE smoke; для каждого inbound требуется
-   ровно одна trace-строка с непустым stable upstream id и `delivery_status=delivered`;
-4. только после фиксации этого результата вернуть `LIMITED GO` и заморозить кандидат на время
-   независимого операторского holdout-теста.
+После deployment handoff `c787c59` оба `/ready` вернули `ready`; ML-контур подтвердил
+`ml_prewarm=ok`. В обоих тестовых HDE dispatcher payload системный тег `{last_post_id}` передаётся
+как `message.id`.
 
-До завершения этих пунктов не менять routing, prompts, thresholds или KB и не начинать
-операторский тест.
+15 июля в 11:00 UTC повторён двухходовый smoke в одном HDE-тикете:
+
+1. `День молодёжи: где найти мой билет?` — upstream id `195814`, `answered`, без эскалации,
+   источник `xlsx_category_r0616_poluchenie_i_naznachenie_bileta`;
+2. `И когда всё начинается?` — upstream id `195821`, сохранён контекст Дня молодёжи, `answered`,
+   без эскалации, источник `xlsx_category_r0615_vremya_nachala_i_raspisanie`, в ответе есть
+   `27 июня 2026`.
+
+Обе строки имеют `upstream_event_id_source=message.id`, один `ticket_id_hash`, разные стабильные
+upstream ids и ровно по одной trace-строке на inbound. Для обеих доставок зафиксированы
+`delivery_status=delivered`, `delivery_attempted=true`, HTTP `200` и непустой `delivered_at`.
+В логах ровно два `hde_send_ok`, `hde_delivery_trace_update_failed` отсутствует; в интерфейсе
+видно ровно по одному ответу бота на каждое сообщение. Dedupe regression для повторной доставки
+одного stable id остаётся зелёным.
+
+Решение: `LIMITED GO` для независимого операторского holdout-теста. С этого момента код, routing,
+prompts, thresholds, KB и dispatcher payload заморожены. Широкий трафик остаётся закрыт: текущий
+`BackgroundTasks` не является durable outbox, а реальную ticket-level конверсию ещё предстоит
+измерить на свежих обращениях.
 
 ### История предыдущего gate (архив)
 

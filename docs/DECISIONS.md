@@ -117,22 +117,20 @@ Screenshot-only обращение не должно приводить к вы�
 
 ## D-018. Текущий release candidate
 
-**Статус:** server-local quality gate закрыт, HDE delivery/deduplication gate не закрыт.
-Текущий code release candidate — `8bca860` поверх `98de023`, серверный handoff пока `3968cf3`.
+**Статус:** `LIMITED GO` для независимого операторского holdout-теста.
+Текущий code release candidate — `8bca860` поверх `98de023`, release handoff — `c787c59`.
 Targeted follow-up прошёл `16/16` и `4/4` с заполненными eval identifiers; финальный smoke прошёл
 `16/16`, полный
-server-local suite выполнил все семь секций. Реальный двухходовый HDE/VK smoke подтвердил качество
-и сохранение контекста, но после обоих `hde_send_ok` запись delivery telemetry упала с PostgreSQL
-`42P08`, а dispatcher не передал stable upstream message id. `8bca860` исправляет SQL-типизацию и
-fail-visible проверяет `UPDATE 1`; локальный gate — `1171 passed`. Кандидат допускается к операторам
-только после deployment коррекции, stable `message.id={last_post_id}` в тестовом HDE payload и
-повторного smoke с одной `delivery_status=delivered` trace-строкой на inbound. Широкий трафик
-остаётся закрыт до оценки
-ticket-level конверсии на свежих обращениях.
+server-local suite выполнил все семь секций. После deployment коррекции реальный двухходовый
+HDE/VK smoke подтвердил качество, сохранение контекста, разные stable
+`message.id={last_post_id}`, одну trace/один ответ на inbound и delivery telemetry со статусом
+`delivered`, `attempted=true`, HTTP `200` и непустым `delivered_at`. Ошибки delivery update в логах
+отсутствуют; dedupe regression зелёный. Широкий трафик остаётся закрыт до оценки ticket-level
+конверсии на свежих обращениях.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
-**Статус:** принято; freeze начнётся после нового server gate.
+**Статус:** принято; freeze действует с закрытия HDE gate 15 июля 2026.
 На время независимого теста не меняются код, routing, prompts, thresholds и KB. Главный результат
 считается по полным tickets: direct answer и успешное разрешение после уточнения являются закрытием
 без оператора; одно уточнение само по себе закрытием не считается. Новые обращения не исправляются
