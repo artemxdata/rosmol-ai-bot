@@ -3,7 +3,7 @@
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure `d337898`; delivery
+**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure `6475fd2`; delivery
 correction развёрнута в тестовом HDE-контуре и подтверждена реальным smoke, HTTPS ожидает
 ручного server provisioning по D-015.
 **Статус релиза:** `LIMITED GO / OPERATOR HOLDOUT`. Migration `007`, published-only индекс `2152`,
