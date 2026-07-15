@@ -895,9 +895,12 @@ Redis TTL бот восстанавливает событие, тему, сущ
 
 Текущее состояние: FastAPI-эндпоинты, embedded HTML/CSS/JS UI, versioned JSON seed и точечный
 Qdrant upsert. Авторизация — `X-Admin-Token` с короткой HttpOnly session-cookie после входа.
-До TLS админка доступна команде только через SSH tunnel. PostgreSQL `chunk_versions`, React и
-автоматическая публикация из CI не участвуют в текущем publish flow: таблица `chunk_versions`
-создана начальной миграцией, но админка и индексатор сейчас используют versioned JSON seed.
+Командный доступ работает через постоянный HTTPS URL `https://139.100.225.44/admin/kb` с
+доверенным IP-сертификатом; SSH tunnel сохранён только как аварийный fallback. Во время активного
+операторского holdout админка используется только для просмотра, без Apply/Save/Reindex.
+PostgreSQL `chunk_versions`, React и автоматическая публикация из CI не участвуют в текущем
+publish flow: таблица `chunk_versions` создана начальной миграцией, но админка и индексатор сейчас
+используют versioned JSON seed.
 
 ### Жизненный цикл документа
 

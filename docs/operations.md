@@ -180,6 +180,10 @@ Validate before indexing:
 
 Admin panel flow:
 
+> Active holdout override: while `docs/operator_holdout_runbook.md` says the operator test is
+> active, stop after Preview. Do not use `Apply to KB`, `Save`, `Reindex`, full indexing or cache
+> clearing. The steps below apply only after an explicitly approved batch change.
+
 1. Open `/admin/kb`.
 2. Click `Yonote`.
 3. Review `documents`, `fresh_yonote_records`, `added`, `changed`, `removed`.
@@ -214,7 +218,9 @@ with a trusted Let's Encrypt IP certificate, rejects plaintext admin login/API
 traffic, rate-limits login attempts and forwards the HTTPS scheme so the app
 sets a `Secure`, `HttpOnly`, `SameSite=Lax` session cookie.
 
-Initial one-time provisioning is an infrastructure maintenance action. It
+Initial one-time provisioning was completed on 15 July 2026. Do not rerun it during the active
+holdout unless HTTPS/Nginx incident recovery requires it. Provisioning is an infrastructure
+maintenance action: it
 recreates only Nginx once to mount ACME/TLS files, then activates TLS with a
 graceful reload; it does not rebuild or restart the
 application, change routing, mutate KB or reindex Qdrant:
@@ -224,7 +230,8 @@ cd /opt/rosmol-ai-bot
 bash scripts/provision_admin_https.sh
 ```
 
-The script verifies public HTTP-01, obtains the IP certificate, runs a renewal
+The script verifies the local HTTP-01 webroot, lets Certbot perform the external ACME validation,
+obtains the IP certificate, runs a renewal
 dry-run and `nginx -t` before switching, opens TCP 443 in UFW, installs a
 twice-daily persistent systemd renewal timer, and verifies the final HTTPS URL.
 IP certificates are valid for about six days, so keep this timer enabled:
@@ -252,6 +259,12 @@ ssh -N -L 18088:127.0.0.1:80 root@139.100.225.44
 That fallback exists only while its SSH process is running and is not the team
 URL. The HDE dispatcher may stay on its existing HTTP webhook during the
 controlled operator holdout; move it to HTTPS before broad production traffic.
+
+During the active operator test the shared admin token grants write access but must be used in
+read-only mode: search/view, `Validate`, ops/quality reports and `Yonote Preview` only. Live
+holdout metrics come from `Работа бота`/`/admin/kb/ops-report` and PostgreSQL traces; the embedded
+static `Quality` report can describe an earlier release gate. Follow
+`docs/operator_holdout_runbook.md` for cohort, conversion and stop-criteria.
 
 ## Server Staging Deploy
 
@@ -334,6 +347,7 @@ Open only required ports:
 ```bash
 ufw allow OpenSSH
 ufw allow 80/tcp
+ufw allow 443/tcp
 ufw --force enable
 ufw status
 ```

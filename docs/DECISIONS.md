@@ -124,19 +124,21 @@ Screenshot-only обращение не должно приводить к вы�
 ## D-018. Текущий release candidate
 
 **Статус:** `LIMITED GO` для независимого операторского holdout-теста.
-Текущий code release candidate — `8bca860` поверх `98de023`, release handoff — `c787c59`.
+Текущий code release candidate — `8bca860` поверх `98de023`, финальный operator handoff —
+`850ad46`; последний runtime-affecting HTTPS/retry-safety commit на сервере — `3efc704`.
 Targeted follow-up прошёл `16/16` и `4/4` с заполненными eval identifiers; финальный smoke прошёл
 `16/16`, полный
 server-local suite выполнил все семь секций. После deployment коррекции реальный двухходовый
 HDE/VK smoke подтвердил качество, сохранение контекста, разные stable
 `message.id={last_post_id}`, одну trace/один ответ на inbound и delivery telemetry со статусом
 `delivered`, `attempted=true`, HTTP `200` и непустым `delivered_at`. Ошибки delivery update в логах
-отсутствуют; dedupe regression зелёный. Широкий трафик остаётся закрыт до оценки ticket-level
-конверсии на свежих обращениях.
+отсутствуют; dedupe regression зелёный. В текущем операторском контуре нет искусственного
+ограничения ответов; до оценки ticket-level конверсии на свежих обращениях не расширяется только
+production-аудитория.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
-**Статус:** принято; freeze действует с закрытия HDE gate 15 июля 2026.
+**Статус:** активно; бот передан операторам 15 июля 2026, freeze действует.
 На время независимого теста не меняются код, routing, prompts, thresholds и KB. Главный результат
 считается по полным tickets: direct answer и успешное разрешение после уточнения являются закрытием
 без оператора; одно уточнение само по себе закрытием не считается. Новые обращения не исправляются
@@ -144,13 +146,20 @@ HDE/VK smoke подтвердил качество, сохранение кон�
 Исторические XLSX и regression suite используются как baseline и защита от поломок, но не как
 доказательство обобщающей способности текущего RC.
 
+Предварительная нижняя граница cohort — `2026-07-15 11:54:43+00`; перед финальным расчётом она
+уточняется по первому реальному operator HDE trace. `hde_ticket_resolution_rate` является
+автоматическим containment proxy. Итоговая conversion without operator требует ручного verdict
+оператора по полному тикету; provisioning, smoke и старые `ticket_id` в независимый holdout не
+включаются. Активные инструкции находятся в `docs/operator_holdout_runbook.md`.
+
 ## D-020. В runtime индексируются только published records
 
 **Статус:** принято.
 Seed может содержать archived records для воспроизводимости source corrections, но Qdrant
 `knowledge_base` получает только `status=published`. Полная индексация требует forum registry и
 `--prune-stale`; после любого успешного изменения KB semantic response cache очищается полностью.
-Для RC `6249b08` ожидаемый runtime count — `2152`, а не полный seed count `2186`.
+Для текущего RC `8bca860` и его infrastructure descendants подтверждённый runtime count — `2152`,
+а не полный seed count `2186`.
 
 ## D-021. HDE delivery работает fail-closed и наблюдаемо
 
