@@ -3,14 +3,20 @@
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure `6475fd2`, recovery
-и retry-safety `2eb1763`/`6bad48e`/`3efc704`; delivery correction и постоянный HTTPS развёрнуты на
-сервере и подтверждены внешними проверками.
-**Статус релиза:** `LIMITED GO / OPERATOR HOLDOUT`. Migration `007`, published-only индекс `2152`,
+**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure/recovery
+`6475fd2`/`2eb1763`/`6bad48e`/`3efc704`; operator-holdout documentation `8acf4da`.
+**Server:** работающие `app/app-ml` содержат code RC `8bca860`; Nginx/HTTPS развёрнуты из
+`3efc704`. Более новые docs-only commits не требуют rebuild или restart.
+**Статус релиза:** `OPERATOR HOLDOUT ACTIVE / LIMITED GO`. Бот передан операторам 15 июля 2026
+после завершения HTTPS provisioning; предварительная нижняя граница cohort —
+`2026-07-15 11:54:43+00`, точная граница фиксируется по первому операторскому HDE trace. Migration
+`007`, published-only индекс `2152`,
 readiness, targeted follow-up, smoke и полный server-local suite прошли. Финальный реальный
 HDE/VK smoke подтвердил stable `message.id`, ровно один ответ/trace на inbound и успешную delivery
-telemetry. Код, routing, prompts, thresholds и KB заморожены на время операторского теста; широкий
-трафик не включать до оценки ticket-level конверсии.
+telemetry. Код, routing, prompts, thresholds и KB заморожены на время операторского теста. В
+подключённом операторском контуре бот отвечает на все входящие без искусственного ограничения
+качества или объёма; расширение на дополнительную production-аудиторию отложено до оценки
+ticket-level конверсии.
 
 ## 1. Цель
 
@@ -31,14 +37,15 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 одного срочного pre-operator correction cycle. Основной пакет завершён в `6249b08`; серверный gate
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
 потерю telemetry-полей, исправленную в `98de023`. Server-local качество и HDE delivery gate этого
-кандидата доказаны. Точный следующий шаг — независимый операторский holdout при полном freeze, а
-не дополнительная подгонка качества, routing, prompts или KB.
+кандидата доказаны. Независимый operator holdout уже идёт. Точный следующий шаг — накопить
+оговорённый период свежих полных тикетов и операторский файл с verdicts, затем посчитать
+ticket-level конверсию и выполнить batch triage при полном freeze, а не подгонять единичные ответы.
 
 ## 2. Что представляет собой проект
 
 - FastAPI принимает `/ask` и webhook-и каналов.
-- HDE/VK сейчас является тестовым каналом; широкие production-правила не должны включаться до
-  финального допуска.
+- HDE/VK сейчас является операторским тестовым каналом. Внутри подключённого контура бот не
+  ограничен; до финального допуска не расширяется только production-аудитория.
 - LangGraph управляет цепочкой `analyze -> retrieve -> rerank -> generate -> verify -> respond`.
 - Qdrant хранит опубликованную базу и semantic cache.
 - `bge-m3` выполняет retrieval, `bge-reranker-v2-m3` — rerank в ML-контуре `app-ml`.
@@ -62,6 +69,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - `docs/operations.md` — эксплуатация, Yonote, HDE, безопасность и deployment.
 - `docs/pre_pilot_release_checklist.md` — release gate.
 - `docs/quality_improvement_loop.md` — дальнейшая продуктовая калибровка.
+- `docs/operator_holdout_runbook.md` — активный тест, cohort, мониторинг, stop-criteria и план
+  пакетного разбора.
 - `eval/cases/pre_pilot_*.json` — pre-pilot regression suite.
 - `tests/` — проверяемые контракты реализации.
 
@@ -82,10 +91,10 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Ограничение HDE учитывает общий лимит 300 RPM и резерв для других процессов.
 - Yonote preview/apply, validation и reindex доступны через админ-панель.
 - Операционный отчёт в админке: latency, стоимость, cache, эскалации и проблемные темы.
-- Миграция БД `006_conversation_memory` применена на сервере; новая
-  `007_hde_delivery_telemetry` входит в RC и на сервере ещё не применена.
+- Миграции БД `006_conversation_memory` и `007_hde_delivery_telemetry` применены на сервере;
+  Alembic current — `007_hde_delivery_telemetry (head)`.
 
-## 5. Последняя итерация `fdea1e1`
+## 5. Ранние pre-pilot итерации (архив)
 
 Исправлено перед запуском:
 
@@ -157,18 +166,27 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - validation KB — `2186` валидных опубликованных записей;
 - KB, prompts и reranker thresholds не менялись.
 
-## 6. Что уже выполнено на сервере
+## 6. Текущий server runtime
 
-Этот раздел описывает прежний runtime `e56894e`, а не новый RC `6249b08`.
-
-- На сервер развёрнут `e56894e`, содержащий code RC `eea1972`.
-- Оба внутренних `/ready` вернули HTTP 200; Redis, PostgreSQL, Qdrant и ML prewarm готовы.
-- `knowledge_base = 2186`; перед финальным channel smoke очищена только semantic-коллекция
-  `response_cache`, результат `2 -> 0`.
-- Быстрый server-local smoke прошёл `16/16`, стоимость LLM `0`.
-- Полный suite завершил все секции, `passed=true`, без budget stop; HTTP success и trace coverage
-  — `100%`, стоимость — `7.420207 RUB`.
-- Ручной HDE smoke подтвердил policy, grounded sources, fail-closed routing и multi-turn ticket flow.
+- Работающие `app` и `app-ml` собраны из code RC `8bca860`; оба healthy. Внешний и внутренние
+  `/ready` возвращают HTTP `200`, Redis/PostgreSQL/Qdrant — `ok`, ML prewarm — `ok`.
+- Alembic current — `007_hde_delivery_telemetry (head)`.
+- Qdrant runtime: `knowledge_base=2152` published records; полный seed — `2186` записей
+  (`2152 published`, `34 archived`). Последняя полная индексация завершена, повторять её во время
+  holdout нельзя.
+- Финальный smoke — `16/16`; полный server-local suite выполнил все семь секций. Yonote, safety,
+  off-topic, PII, adversarial и follow-up зелёные; follow-up — `16/16` ходов и `4/4` диалога.
+- Реальный HDE smoke подтвердил stable upstream ids, одну trace/одну delivery на inbound,
+  `delivery_status=delivered`, HTTP `200` и сохранение контекста.
+- Постоянная админка `https://139.100.225.44/admin/kb` и HTTPS `/ready` проверены извне. Certbot
+  renewal dry-run прошёл, systemd timer включён дважды в сутки.
+- Первый Nginx rollout incident полностью закрыт recovery commits; app/app-ml, БД и KB не
+  повреждались. Последний runtime-affecting server checkout при provisioning — `3efc704`.
+- Операторский тест активен. Ограничена аудитория/rollout, а не возможности ответов: текущий
+  каскад, retrieval, rerank, source-only path и Max работают без искусственного quality cap.
+- Перед documentation handoff локально повторены `ruff` (успешно), полный `pytest`
+  (`1181 passed`) и KB validate (`2186 total`, `2152 published`). В этом этапе изменены только
+  документы; code, routing, prompts, thresholds и KB не менялись.
 
 ## 7. Release gate нового RC — закрыт с решением LIMITED GO
 
@@ -721,12 +739,12 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   остаётся только аварийным fallback. HTTP login/admin API запрещены; токен вводится только через
   HTTPS. HDE webhook пока остаётся на существующем HTTP endpoint до отдельного согласованного
   переключения.
-- Список чанков в админке по умолчанию ограничен 50 строками; это не размер KB. Старый runtime
-  пока содержит 2186 точек. После новой published-only индексации ожидается 2152; полный seed
-  содержит 2186 записей (`2152 published`, `34 archived`).
-- Панель `Quality` может показывать старый локальный presentation-report: актуальный server-local
-  итог хранится в `/app/data/private/prelaunch_20260714/full/summary.json` и не подменяется
-  устаревшим UI-отчётом.
+- Список чанков в админке по умолчанию ограничен 50 строками; это не размер KB. Runtime count
+  подтверждён: `2152`; полный seed содержит `2186` записей (`2152 published`, `34 archived`).
+- Панель `Quality` может показывать embedded presentation-report, а не последний private
+  server-local запуск. Актуальный финальный suite хранится в
+  `/app/data/private/prelaunch_20260715/final_full/summary.json`; live holdout-метрики смотреть в
+  `Работа бота`/ops-report и PostgreSQL traces.
 - TLS provisioning проверяет Nginx до переключения; security headers, скрытие версии, HSTS и
   запрет индексации применяются в HTTPS-конфигурации. Из-за шестидневного срока IP-сертификата
   renewal timer и его journal являются обязательной операционной проверкой.
@@ -734,32 +752,39 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   просмотр/поиск, `Validate`, ops/quality reports и `Yonote Preview`. Не использовать `Save`,
   `Reindex` и `Apply to KB` до пакетного разбора операторского теста.
 
-## 9. План после нового допуска к операторскому тесту
+## 9. Активный план операторского теста
 
-1. Заморозить routing и KB на время независимого теста операторов.
+1. Holdout уже начат; сохранять freeze кода, routing, prompts, thresholds, cache policy и KB.
 2. Для каждого полного ticket фиксировать исход: direct answer, resolved after clarification,
    justified escalation или незакрытый/ошибочный ответ. Считать конверсию только по закрытым
    tickets, а не по отдельным сообщениям.
-3. Собирать ошибки пакетно: вопрос, история, ожидаемое поведение, фактический trace и источник.
-4. Не исправлять каждый кейс сразу. Сначала классифицировать: knowledge gap, entity/topic,
+3. Наблюдать readiness, delivery, duplicates, `5xx`, latency и TLS renewal без перезапусков и
+   массовых HDE-прогонов.
+4. Собирать ошибки пакетно: вопрос, история, ожидаемое поведение, фактический trace, operator
+   verdict и источник. Автоматический containment proxy не считать окончательной конверсией.
+5. Не исправлять каждый кейс сразу. Сначала классифицировать: knowledge gap, entity/topic,
    retrieval, rerank, synthesis, verification, channel/infrastructure.
-5. Сохранить часть новых кейсов как holdout и не использовать её для калибровки.
-6. После теста выполнить один контролируемый цикл исправлений с A/B-метриками.
-7. Затем подключать bot-analyzer/gap pipeline и дополнительные read-only источники.
-8. Приоритизированные findings и acceptance следующего RC брать из
+6. После пары дней теста либо согласованного закрытия cohort получить операторский файл, снять
+   ticket-level агрегаты и до исправлений разделить новые кейсы на calibration и sealed holdout.
+7. После теста выполнить один контролируемый цикл исправлений с A/B-метриками.
+8. Затем подключать bot-analyzer/gap pipeline и дополнительные read-only источники.
+9. Приоритизированные findings и acceptance следующего RC брать из
    `docs/conversion_growth_audit_20260715.md`; не смешивать изменения KB, routing, cache и prompts
    в одном эксперименте.
+
+Полная оперативная инструкция: `docs/operator_holdout_runbook.md`.
 
 ## 10. Правило продолжения в новом чате
 
 Первый запрос:
 
 ```text
-Прочитай AGENTS.md, docs/CURRENT_STATE.md, docs/DECISIONS.md,
-docs/operator_response_policy.md и docs/pre_pilot_release_checklist.md.
+Прочитай AGENTS.md, docs/CURRENT_STATE.md, docs/operator_holdout_runbook.md,
+docs/DECISIONS.md, docs/operator_response_policy.md и docs/pre_pilot_release_checklist.md.
 Ничего не меняй. Сначала проверь git status и последний commit, затем кратко перескажи:
-текущую цель, завершённые работы, незакрытый release gate и следующий один шаг.
+текущую цель, server/runtime, статус активного operator holdout, freeze, риски и следующий шаг.
 ```
 
-До получения серверных результатов текущего раздела 7 не вносить новые улучшения в routing,
-prompts, thresholds или KB.
+Пока operator holdout не закрыт и не получены агрегаты плюс операторский файл, не вносить новые
+улучшения в код ответов, routing, prompts, thresholds, cache policy или KB. Следующий шаг нового
+чата — мониторинг либо пакетный анализ уже полученных результатов, а не повтор release gate.
