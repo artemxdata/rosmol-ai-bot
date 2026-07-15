@@ -2,13 +2,13 @@
 
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
-**Текущий release candidate:** `a20ca80 Fix long-context follow-up gate`
-**Git:** targeted correction готов локально; на сервере развёрнут handoff commit `43dbdb2` с
-предыдущим code RC `6249b08`.
+**Текущий release candidate:** `98de023 Preserve trace identifiers through graph`
+**Git:** telemetry correction готова локально; на сервере развёрнут handoff commit `b050226` с
+code RC `a20ca80`.
 **Статус релиза:** `LOCAL GO / SERVER NO GO`. Migration `007`, published-only индекс `2152`,
-readiness и smoke уже проверены на сервере, но полный suite выявил один незакрытый long-context
-диалог. Исправление `a20ca80` ещё не развёрнуто. Операторам новый тест не начинать до закрытия
-текущего раздела 7.
+readiness и smoke уже проверены на сервере; targeted follow-up теперь `16/16` и `4/4`, но server
+trace показал потерю новых eval/HDE identifiers внутри LangGraph state. Исправление `98de023` ещё
+не развёрнуто. Операторам новый тест не начинать до закрытия текущего раздела 7.
 
 ## 1. Цель
 
@@ -27,8 +27,9 @@ readiness и smoke уже проверены на сервере, но полн�
 Read-only аудит кода, всех 2186 seed-записей, БД/trace-схемы и корневых материалов зафиксирован в
 `docs/conversion_growth_audit_20260715.md`. По прямому решению пользователя freeze был снят для
 одного срочного pre-operator correction cycle. Основной пакет завершён в `6249b08`; серверный gate
-нашёл один узкий follow-up defect, исправленный в `a20ca80`. Точный следующий шаг — deployment
-этой коррекции и повтор только предписанных release-проверок, а не новые изменения качества.
+нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
+потерю telemetry-полей, исправленную в `98de023`. Точный следующий шаг — deployment этой коррекции
+и повтор только предписанных release-проверок, а не новые изменения качества.
 
 ## 2. Что представляет собой проект
 
@@ -239,13 +240,38 @@ analyzer/fallback.
 - независимый review не нашёл P0/P1/P2; `ruff check .` — успешно; полный `pytest` —
   `1168 passed`; KB validation неизменна: `2186` valid / `2152 published`.
 
-Текущий release decision — `NO GO` до deployment `a20ca80`. Точный следующий шаг:
+### Targeted server regression `b050226` / code RC `a20ca80`
 
-1. обновить сервер до handoff commit, содержащего `a20ca80`, пересобрать и пересоздать только
+- `app` и `app-ml` пересобраны без migration и переиндексации; оба healthy, оба `/ready` — HTTP
+  200, `ml_prewarm = ok`, Nginx config/reload успешны;
+- follow-up section прошла `16/16` ходов и `4/4` диалога, HTTP/trace/retrieval coverage — `100%`,
+  failures отсутствуют, стоимость `1.518999 RUB`;
+- исправленный t6 теперь отвечает, поэтому runtime follow-up defect закрыт;
+- запрос PostgreSQL по `eval_case_id=followup_youth_day_ticket_family_program_t6` вернул `0 rows`:
+  runner отправлял headers и находил trace по `request_id`, но identifiers в строку не попадали.
+
+Причина воспроизведена через настоящий compiled `StateGraph`: `BotState` не объявлял
+`upstream_event_id`, `upstream_event_id_source`, `eval_run_id`, `eval_case_id`, поэтому LangGraph
+отбрасывал эти ключи из результата до `db_logger`. Это затрагивало observability обычного graph-path,
+но не меняло ответ, lease/deduplication или delivery outcome по `request_id`.
+
+### Telemetry correction `98de023`
+
+- четыре identifiers добавлены в TypedDict `BotState` с теми же именами и типами, что в
+  `IncomingMessage` и `db_logger`;
+- regression прогоняет поля через compiled `StateGraph` и проверяет сохранение всех четырёх;
+- независимый review не нашёл P0/P1/P2; `ruff check .` — успешно; полный `pytest` —
+  `1169 passed`; KB validation неизменна: `2186` valid / `2152 published`;
+- routing, prompts, thresholds, KB, schema БД и Qdrant не менялись; migration и переиндексация не
+  требуются.
+
+Текущий release decision — `NO GO` до deployment `98de023`. Точный следующий шаг:
+
+1. обновить сервер до handoff commit, содержащего `98de023`, пересобрать и пересоздать только
    `app`/`app-ml`; migration и переиндексация не требуются;
 2. подтвердить оба `/ready`, `knowledge_base = 2152`, `response_cache = 0`;
-3. сначала повторить только секцию `followup`; требуется `16/16` ходов, `4/4` диалога, дата
-   `27 июня 2026` в t6 и заполненные eval trace identifiers;
+3. повторить секцию `followup`; требуется `16/16` ходов, `4/4` диалога, дата `27 июня 2026` в t6
+   и непустые `eval_run_id`/`eval_case_id` в его PostgreSQL trace;
 4. после targeted green повторить smoke `16/16` и полный server-local suite на новом commit;
 5. выполнить короткий HDE/VK smoke с одной delivery/trace-строкой на inbound;
 6. только после фиксации результатов здесь вернуть `LIMITED GO` и заморозить кандидат на время

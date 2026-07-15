@@ -117,13 +117,14 @@ Screenshot-only обращение не должно приводить к вы�
 
 ## D-018. Текущий release candidate
 
-**Статус:** targeted correction локально готова, server gate не закрыт.
-Текущий code release candidate — `a20ca80`, узкая коррекция long-context follow-up поверх
-`6249b08`. На сервере развёрнут handoff `43dbdb2` с code RC `6249b08`: migration `007`,
-published-only индекс `2152`, readiness и smoke зелёные, но full suite выявил незакрытый шестой
-ход одного диалога. Новый кандидат допускается к операторам только после deployment `a20ca80`,
-targeted follow-up `16/16` и `4/4`, повторного server-local smoke/full suite и короткого HDE/VK
-smoke. Широкий трафик остаётся закрыт до оценки ticket-level конверсии на свежих обращениях.
+**Статус:** telemetry correction локально готова, server gate не закрыт.
+Текущий code release candidate — `98de023`: он сохраняет HDE/eval identifiers через LangGraph
+поверх runtime follow-up correction `a20ca80`. На сервере развёрнут handoff `b050226` с
+`a20ca80`: targeted follow-up уже `16/16` и `4/4`, но PostgreSQL proof выявил потерю identifiers
+из-за неполной схемы `BotState`. Новый кандидат допускается к операторам только после deployment
+`98de023`, повторного targeted follow-up с заполненными trace identifiers, server-local smoke/full
+suite и короткого HDE/VK smoke. Широкий трафик остаётся закрыт до оценки ticket-level конверсии на
+свежих обращениях.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
