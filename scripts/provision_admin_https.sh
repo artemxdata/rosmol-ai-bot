@@ -82,8 +82,11 @@ main() {
   printf '%s' "$probe_value" > "data/private/acme-webroot/.well-known/acme-challenge/${probe_name}"
 
   local observed_probe
-  observed_probe="$(curl -fsS --max-time 20 "http://${PUBLIC_IP}/.well-known/acme-challenge/${probe_name}")" || {
-    fail "публичный HTTP-01 challenge недоступен"
+  # Some providers do not support connecting from a server to its own public
+  # IP. Validate the mounted Nginx webroot locally; Certbot performs the real
+  # external ACME validation immediately afterwards.
+  observed_probe="$(curl -fsS --max-time 20 "http://127.0.0.1/.well-known/acme-challenge/${probe_name}")" || {
+    fail "локальный HTTP-01 webroot недоступен через Nginx"
     return 1
   }
 

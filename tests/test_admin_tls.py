@@ -119,5 +119,7 @@ def test_provision_script_validates_acme_renewal_and_tls_before_switch() -> None
     assert "systemctl enable --now rosmol-admin-tls-renew.timer" in script
     assert "NGINX_TLS_BIND 0.0.0.0" in script
     assert "NGINX_TLS_HOST_PORT 443" in script
+    assert 'http://127.0.0.1/.well-known/acme-challenge/${probe_name}' in script
+    assert 'http://${PUBLIC_IP}/.well-known/acme-challenge/${probe_name}' not in script
     assert "set -e" not in script
     assert "logout" not in script
