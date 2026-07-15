@@ -2,13 +2,14 @@
 
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
-**Текущий release candidate:** `98de023 Preserve trace identifiers through graph`
-**Git:** telemetry correction готова локально; на сервере развёрнут handoff commit `b050226` с
-code RC `a20ca80`.
-**Статус релиза:** `LOCAL GO / SERVER NO GO`. Migration `007`, published-only индекс `2152`,
-readiness и smoke уже проверены на сервере; targeted follow-up теперь `16/16` и `4/4`, но server
-trace показал потерю новых eval/HDE identifiers внутри LangGraph state. Исправление `98de023` ещё
-не развёрнуто. Операторам новый тест не начинать до закрытия текущего раздела 7.
+**Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
+**Git:** локальная delivery correction зафиксирована в `8bca860`; на сервере пока развёрнут
+handoff commit `3968cf3` с предыдущим code RC `98de023`.
+**Статус релиза:** `LOCAL DELIVERY GO / SERVER HDE DELIVERY NO GO`. Migration `007`, published-only
+индекс `2152`, readiness, targeted follow-up, smoke и полный server-local suite прошли. Реальный
+HDE/VK smoke дал два корректных grounded-ответа в одном тикете, но выявил падение записи delivery
+telemetry после подтверждённой отправки и отсутствие stable upstream message id. Операторский тест
+не начинать до закрытия оставшихся пунктов текущего раздела 7.
 
 ## 1. Цель
 
@@ -28,8 +29,9 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 `docs/conversion_growth_audit_20260715.md`. По прямому решению пользователя freeze был снят для
 одного срочного pre-operator correction cycle. Основной пакет завершён в `6249b08`; серверный gate
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
-потерю telemetry-полей, исправленную в `98de023`. Точный следующий шаг — deployment этой коррекции
-и повтор только предписанных release-проверок, а не новые изменения качества.
+потерю telemetry-полей, исправленную в `98de023`. Server-local качество этого кандидата доказано;
+точный следующий шаг — закрыть только HDE delivery/deduplication gate, а не менять качество,
+routing, prompts или KB.
 
 ## 2. Что представляет собой проект
 
@@ -265,17 +267,57 @@ analyzer/fallback.
 - routing, prompts, thresholds, KB, schema БД и Qdrant не менялись; migration и переиндексация не
   требуются.
 
-Текущий release decision — `NO GO` до deployment `98de023`. Точный следующий шаг:
+### Финальный server-local gate `3968cf3` / code RC `98de023`
 
-1. обновить сервер до handoff commit, содержащего `98de023`, пересобрать и пересоздать только
-   `app`/`app-ml`; migration и переиндексация не требуются;
-2. подтвердить оба `/ready`, `knowledge_base = 2152`, `response_cache = 0`;
-3. повторить секцию `followup`; требуется `16/16` ходов, `4/4` диалога, дата `27 июня 2026` в t6
-   и непустые `eval_run_id`/`eval_case_id` в его PostgreSQL trace;
-4. после targeted green повторить smoke `16/16` и полный server-local suite на новом commit;
-5. выполнить короткий HDE/VK smoke с одной delivery/trace-строкой на inbound;
-6. только после фиксации результатов здесь вернуть `LIMITED GO` и заморозить кандидат на время
-   независимого операторского теста.
+- `app` и `app-ml` пересобраны и пересозданы, оба healthy; Nginx config/reload успешны, оба
+  `/ready` вернули HTTP 200, ML-контур подтвердил `ml_prewarm=ok`;
+- targeted follow-up прошёл `16/16` ходов и `4/4` диалога, HTTP/trace/retrieval coverage — `100%`;
+  t6 ответил датой `27 июня 2026`, сохранил `forum=День молодёжи`, `ticket_outcome=answered`,
+  источник `xlsx_category_r0615_vremya_nachala_i_raspisanie`, а `eval_run_id` и `eval_case_id`
+  появились в PostgreSQL trace;
+- финальный smoke прошёл `16/16`, стоимость `0`;
+- полный suite выполнил все семь секций без budget stop: Yonote `15/15`, safety `16/16`,
+  off-topic `8/8`, PII `4/4`, adversarial `66/66`, follow-up `16/16` и `4/4`; HTTP, trace и
+  retrieval coverage — `100%`, стоимость `0`;
+- forums остался `10/11` только из-за уже известного неблокирующего citation-ID mismatch:
+  пользовательский ответ полный и grounded, нужные чанки найдены, но cited ID set не содержит
+  каждый ожидаемый эквивалентный ID.
+
+### Реальный HDE/VK smoke — quality green, delivery gate blocked
+
+15 июля в одном реальном HDE-тикете выполнены два хода:
+
+1. `День молодёжи: где найти мой билет?` — `answered`, без эскалации, источник
+   `xlsx_category_r0616_poluchenie_i_naznachenie_bileta`;
+2. `И когда всё начинается?` — `answered`, без эскалации, сохранён контекст Дня молодёжи,
+   источник `xlsx_category_r0615_vremya_nachala_i_raspisanie`, в ответе есть `27 июня 2026`.
+
+Обе строки имеют один `ticket_id_hash`, а Nginx подтвердил ровно два `POST /webhook/hde`. HDE API
+для обоих ответов вернул HTTP 200 (`hde_send_ok`), ответы видны пользователю. Сразу после каждой
+отправки упал `_record_hde_delivery` с `hde_delivery_trace_update_failed`, поэтому trace сохранил
+`delivery_status=NULL`, `delivery_attempted=false`. Кроме того, inbound payload не содержит
+стабильный id HDE-поста: обе строки имеют `upstream_event_id_source=request_id_fallback`, и Redis
+deduplication для них намеренно не включается.
+
+Полный traceback подтвердил
+`asyncpg.exceptions.AmbiguousParameterError: inconsistent types deduced for parameter $2`:
+delivery SQL повторно использовал `$2` как несовместимые `varchar` и `text`. Локальная точечная
+коррекция `8bca860` задаёт для `$2` schema-matching cast `varchar(32)` и проверяет результат
+`UPDATE 1`; исправленный запрос успешно подготовлен на PostgreSQL 16, добавлены regression-тесты
+для typed delivery result, UTC timestamp и `UPDATE 0`. Независимый review не нашёл P0/P1;
+`ruff check .` — успешно, полный `pytest` — `1171 passed`, KB validation неизменна:
+`2186` valid / `2152 published`.
+
+Текущий release decision — `NO GO` только по HDE delivery/deduplication. Точный следующий шаг:
+
+1. отправить handoff с `8bca860`, вручную обновить сервер и пересоздать только `app`/`app-ml`;
+   migration и переиндексация не требуются;
+2. в обоих тестовых HDE dispatcher payload передавать системный тег `{last_post_id}` как
+   `message.id`;
+3. подтвердить оба `/ready`, затем повторить двухходовый HDE smoke; для каждого inbound требуется
+   ровно одна trace-строка с непустым stable upstream id и `delivery_status=delivered`;
+4. только после фиксации этого результата вернуть `LIMITED GO` и заморозить кандидат на время
+   независимого операторского holdout-теста.
 
 До завершения этих пунктов не менять routing, prompts, thresholds или KB и не начинать
 операторский тест.

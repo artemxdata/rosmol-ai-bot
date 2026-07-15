@@ -117,14 +117,18 @@ Screenshot-only обращение не должно приводить к вы�
 
 ## D-018. Текущий release candidate
 
-**Статус:** telemetry correction локально готова, server gate не закрыт.
-Текущий code release candidate — `98de023`: он сохраняет HDE/eval identifiers через LangGraph
-поверх runtime follow-up correction `a20ca80`. На сервере развёрнут handoff `b050226` с
-`a20ca80`: targeted follow-up уже `16/16` и `4/4`, но PostgreSQL proof выявил потерю identifiers
-из-за неполной схемы `BotState`. Новый кандидат допускается к операторам только после deployment
-`98de023`, повторного targeted follow-up с заполненными trace identifiers, server-local smoke/full
-suite и короткого HDE/VK smoke. Широкий трафик остаётся закрыт до оценки ticket-level конверсии на
-свежих обращениях.
+**Статус:** server-local quality gate закрыт, HDE delivery/deduplication gate не закрыт.
+Текущий code release candidate — `8bca860` поверх `98de023`, серверный handoff пока `3968cf3`.
+Targeted follow-up прошёл `16/16` и `4/4` с заполненными eval identifiers; финальный smoke прошёл
+`16/16`, полный
+server-local suite выполнил все семь секций. Реальный двухходовый HDE/VK smoke подтвердил качество
+и сохранение контекста, но после обоих `hde_send_ok` запись delivery telemetry упала с PostgreSQL
+`42P08`, а dispatcher не передал stable upstream message id. `8bca860` исправляет SQL-типизацию и
+fail-visible проверяет `UPDATE 1`; локальный gate — `1171 passed`. Кандидат допускается к операторам
+только после deployment коррекции, stable `message.id={last_post_id}` в тестовом HDE payload и
+повторного smoke с одной `delivery_status=delivered` trace-строкой на inbound. Широкий трафик
+остаётся закрыт до оценки
+ticket-level конверсии на свежих обращениях.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
