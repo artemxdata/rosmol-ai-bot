@@ -3,9 +3,9 @@
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure `6475fd2`; delivery
-correction развёрнута в тестовом HDE-контуре и подтверждена реальным smoke, HTTPS ожидает
-ручного server provisioning по D-015.
+**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure `6475fd2`, recovery
+и retry-safety `2eb1763`/`6bad48e`/`3efc704`; delivery correction и постоянный HTTPS развёрнуты на
+сервере и подтверждены внешними проверками.
 **Статус релиза:** `LIMITED GO / OPERATOR HOLDOUT`. Migration `007`, published-only индекс `2152`,
 readiness, targeted follow-up, smoke и полный server-local suite прошли. Финальный реальный
 HDE/VK smoke подтвердил stable `message.id`, ровно один ответ/trace на inbound и успешную delivery
@@ -705,14 +705,19 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   event id, lease lifecycle и fail-closed 503 существенно снижают риск дубля/потери при retry, но
   не дают exactly-once после аварии процесса. Для контролируемого теста это наблюдаемый residual;
   широкий трафик требует durable outbox.
-- Постоянный командный HTTPS для админки подготовлен отдельной infrastructure-only итерацией:
+- Постоянный командный HTTPS для админки развёрнут отдельной infrastructure-only итерацией:
   `https://139.100.225.44/admin/kb`, Let's Encrypt IP certificate, Certbot webroot, login
-  rate-limit и systemd renewal дважды в сутки. На момент этого handoff серверное применение ещё
-  не подтверждено: точный следующий шаг по D-015 — `git pull --ff-only`, затем
-  `bash scripts/provision_admin_https.sh`. Скрипт один раз кратко пересоздаёт только Nginx для
-  новых mounts/порта, затем включает TLS graceful reload; app, routing, prompts, thresholds, KB,
-  PostgreSQL, Redis и Qdrant не меняются.
-- После успешного provisioning закрытие локального терминала не влияет на админку. SSH tunnel
+  rate-limit и systemd renewal дважды в сутки. Сертификат выдан для IP, истекает
+  `2026-07-22 02:55:43 UTC`; `certbot renew --dry-run`, one-off `nginx -t`, graceful reload и
+  немедленный запуск renewal service прошли успешно. Внешняя проверка подтвердила HTTPS `200`,
+  SAN `IP Address:139.100.225.44`, HSTS/security headers и HTTPS `/ready=200`; HTTP-страница даёт
+  `308` на HTTPS, а plaintext login — `426` без redirect.
+- Первый infrastructure rollout выявил только Compose startup defect: custom Nginx entrypoint
+  был без явного `command`, поэтому контейнер завершился после старта. App/app-ml и данные не
+  затрагивались; Nginx восстановлен, дефект закрыт в `2eb1763`. Ложная проверка подключения
+  сервера к собственному public IP заменена на local webroot check в `6bad48e`, повторный запуск
+  сделан idempotent в `3efc704`. После recovery внешний ACME sentinel и `/ready` вернули `200`.
+- Закрытие локального терминала теперь не влияет на админку. SSH tunnel
   остаётся только аварийным fallback. HTTP login/admin API запрещены; токен вводится только через
   HTTPS. HDE webhook пока остаётся на существующем HTTP endpoint до отдельного согласованного
   переключения.
