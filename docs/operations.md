@@ -203,23 +203,55 @@ release. Then run smoke checks against `http://127.0.0.1:8001/ask` with `X-Bypas
 
 ## Secure Admin Access
 
-Do not enter `ADMIN_AUTH_TOKEN` through the public `http://<server-ip>/admin/kb`
-address. Plain HTTP does not protect the login request or session cookie in
-transit. Until a domain and HTTPS certificate are configured, open the admin
-panel through an SSH tunnel from the operator workstation:
+The shared team URL is:
 
-```bash
-ssh -N -L 18088:127.0.0.1:80 root@<server-ip>
+```text
+https://139.100.225.44/admin/kb
 ```
 
-Keep that SSH session open and use `http://127.0.0.1:18088/admin/kb` in the
-browser. Port `18088` is the team standard because local Docker Compose uses
-`8080` by default; using `8080` can silently open a developer's local admin
-instead of the server. Every team member must open their own SSH tunnel: the
-`127.0.0.1` URL is local to that workstation and is not a shared public link.
-Public production use requires DNS, TLS termination, and an HTTPS-only admin
-session. The HDE webhook should also be moved to HTTPS before leaving the
-controlled test channel.
+It stays available when an operator closes their terminal. Nginx terminates TLS
+with a trusted Let's Encrypt IP certificate, rejects plaintext admin login/API
+traffic, rate-limits login attempts and forwards the HTTPS scheme so the app
+sets a `Secure`, `HttpOnly`, `SameSite=Lax` session cookie.
+
+Initial one-time provisioning is an infrastructure maintenance action. It
+recreates only Nginx once to mount ACME/TLS files, then activates TLS with a
+graceful reload; it does not rebuild or restart the
+application, change routing, mutate KB or reindex Qdrant:
+
+```bash
+cd /opt/rosmol-ai-bot
+bash scripts/provision_admin_https.sh
+```
+
+The script verifies public HTTP-01, obtains the IP certificate, runs a renewal
+dry-run and `nginx -t` before switching, opens TCP 443 in UFW, installs a
+twice-daily persistent systemd renewal timer, and verifies the final HTTPS URL.
+IP certificates are valid for about six days, so keep this timer enabled:
+
+```bash
+systemctl status --no-pager rosmol-admin-tls-renew.timer
+systemctl list-timers --all rosmol-admin-tls-renew.timer
+journalctl -u rosmol-admin-tls-renew.service --since "7 days ago" --no-pager
+```
+
+After provisioning, ordinary `docker compose -f docker-compose.yml -f
+docker-compose.ml.yml --profile ml ...` commands retain HTTPS because the base
+Nginx service mounts both configs and selects TLS whenever the certificate is
+present. The server `.env` keeps `NGINX_TLS_BIND=0.0.0.0` and
+`NGINX_TLS_HOST_PORT=443`; do not remove those two non-secret values.
+
+Do not use `http://139.100.225.44/admin/kb` for login. It only redirects the
+page to HTTPS; admin API endpoints refuse plaintext requests. If HTTPS is under
+diagnosis, the emergency fallback remains an SSH tunnel:
+
+```bash
+ssh -N -L 18088:127.0.0.1:80 root@139.100.225.44
+```
+
+That fallback exists only while its SSH process is running and is not the team
+URL. The HDE dispatcher may stay on its existing HTTP webhook during the
+controlled operator holdout; move it to HTTPS before broad production traffic.
 
 ## Server Staging Deploy
 
@@ -279,6 +311,8 @@ Fill `.env` manually on the server. Minimum staging overrides:
 APP_ENV=staging
 NGINX_BIND=0.0.0.0
 NGINX_HOST_PORT=80
+NGINX_TLS_BIND=0.0.0.0
+NGINX_TLS_HOST_PORT=443
 INSTALL_ML=false
 ```
 

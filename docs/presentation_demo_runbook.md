@@ -4,7 +4,7 @@
 
 ## Что открыть перед встречей
 
-1. Админ-панель знаний: `http://139.100.225.44/admin/kb`.
+1. Админ-панель знаний: `https://139.100.225.44/admin/kb`.
 2. Пакет для руководства: `docs/leadership_demo_pack.md`.
 3. Отчёт готовности: `reports/presentation_readiness/summary.md`.
 4. Большой отчёт качества: `reports/presentation_quality/presentation_quality_report.md`.
@@ -21,7 +21,7 @@
 
 ## Что показать в админке
 
-1. Открой `http://139.100.225.44/admin/kb`.
+1. Открой `https://139.100.225.44/admin/kb`.
 2. В поиске введи `Амур проезд`.
 3. Покажи, что админка находит чанки по форуму и теме.
 4. Открой `xlsx_category_r0209_oplata_proezda`.

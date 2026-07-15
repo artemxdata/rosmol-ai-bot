@@ -3,8 +3,9 @@
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** code RC `8bca860`, release handoff `c787c59`; delivery correction развёрнута в тестовом
-HDE-контуре и подтверждена реальным smoke.
+**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure `d337898`; delivery
+correction развёрнута в тестовом HDE-контуре и подтверждена реальным smoke, HTTPS ожидает
+ручного server provisioning по D-015.
 **Статус релиза:** `LIMITED GO / OPERATOR HOLDOUT`. Migration `007`, published-only индекс `2152`,
 readiness, targeted follow-up, smoke и полный server-local suite прошли. Финальный реальный
 HDE/VK smoke подтвердил stable `message.id`, ровно один ответ/trace на inbound и успешную delivery
@@ -704,21 +705,26 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   event id, lease lifecycle и fail-closed 503 существенно снижают риск дубля/потери при retry, но
   не дают exactly-once после аварии процесса. Для контролируемого теста это наблюдаемый residual;
   широкий трафик требует durable outbox.
-- Публичные admin/HDE endpoints пока без TLS; админка используется через SSH tunnel.
-- Админка отвечает HTTP 200 на `/admin/kb`; безопасный доступ до TLS:
-  `ssh -N -L 18088:127.0.0.1:80 root@139.100.225.44`, затем
-  `http://127.0.0.1:18088/admin/kb`. Это стандарт команды: каждый сотрудник открывает свой
-  tunnel. Порт `8080` не использовать, потому что его по умолчанию занимает локальный Compose.
-  Не вводить admin token через публичный HTTP.
+- Постоянный командный HTTPS для админки подготовлен отдельной infrastructure-only итерацией:
+  `https://139.100.225.44/admin/kb`, Let's Encrypt IP certificate, Certbot webroot, login
+  rate-limit и systemd renewal дважды в сутки. На момент этого handoff серверное применение ещё
+  не подтверждено: точный следующий шаг по D-015 — `git pull --ff-only`, затем
+  `bash scripts/provision_admin_https.sh`. Скрипт один раз кратко пересоздаёт только Nginx для
+  новых mounts/порта, затем включает TLS graceful reload; app, routing, prompts, thresholds, KB,
+  PostgreSQL, Redis и Qdrant не меняются.
+- После успешного provisioning закрытие локального терминала не влияет на админку. SSH tunnel
+  остаётся только аварийным fallback. HTTP login/admin API запрещены; токен вводится только через
+  HTTPS. HDE webhook пока остаётся на существующем HTTP endpoint до отдельного согласованного
+  переключения.
 - Список чанков в админке по умолчанию ограничен 50 строками; это не размер KB. Старый runtime
   пока содержит 2186 точек. После новой published-only индексации ожидается 2152; полный seed
   содержит 2186 записей (`2152 published`, `34 archived`).
 - Панель `Quality` может показывать старый локальный presentation-report: актуальный server-local
   итог хранится в `/app/data/private/prelaunch_20260714/full/summary.json` и не подменяется
   устаревшим UI-отчётом.
-- Активный Nginx пока не отдаёт настроенные security headers и скрытие версии. Перед работой с
-  авторизованной админкой проверить `nginx -t` и выполнить штатный `nginx -s reload`; это
-  операционная правка конфигурации, не изменение кода или KB.
+- TLS provisioning проверяет Nginx до переключения; security headers, скрытие версии, HSTS и
+  запрет индексации применяются в HTTPS-конфигурации. Из-за шестидневного срока IP-сертификата
+  renewal timer и его journal являются обязательной операционной проверкой.
 - После закрытия нового gate на время freeze в админке разрешены только read-only действия:
   просмотр/поиск, `Validate`, ops/quality reports и `Yonote Preview`. Не использовать `Save`,
   `Reindex` и `Apply to KB` до пакетного разбора операторского теста.

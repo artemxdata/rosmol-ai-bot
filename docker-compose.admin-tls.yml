@@ -1,0 +1,9 @@
+name: rosmol-ai-bot
+
+services:
+  certbot:
+    profiles: ["tls"]
+    image: certbot/certbot:v5.4.0
+    volumes:
+      - ./data/private/letsencrypt:/etc/letsencrypt
+      - ./data/private/acme-webroot:/var/www/certbot

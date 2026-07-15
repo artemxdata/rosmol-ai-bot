@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew Rosmol admin IP TLS certificate twice daily
+
+[Timer]
+OnBootSec=10min
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=rosmol-admin-tls-renew.service
+
+[Install]
+WantedBy=timers.target

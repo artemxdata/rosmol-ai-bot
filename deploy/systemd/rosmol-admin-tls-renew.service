@@ -1,0 +1,13 @@
+[Unit]
+Description=Renew Rosmol admin IP TLS certificate
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/rosmol-ai-bot
+TimeoutStartSec=10min
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.admin-tls.yml --profile ml --profile tls run --rm --no-deps certbot renew --quiet --no-random-sleep-on-renew
+ExecStartPost=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml exec -T nginx nginx -t
+ExecStartPost=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml exec -T nginx nginx -s reload

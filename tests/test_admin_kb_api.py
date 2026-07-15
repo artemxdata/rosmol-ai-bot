@@ -390,6 +390,35 @@ async def test_admin_kb_login_sets_session_cookie(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_login_marks_session_cookie_secure_behind_https_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        login = await client.post(
+            "/admin/kb/login",
+            json={"token": "admin-secret"},
+            headers={"X-Forwarded-Proto": "https"},
+        )
+
+    cookie = login.headers["set-cookie"]
+    assert login.status_code == 200
+    assert "rosmol_admin_session=" in cookie
+    assert "HttpOnly" in cookie
+    assert "Secure" in cookie
+    assert "SameSite=lax" in cookie
+    assert "Path=/admin/kb" in cookie
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_login_rejects_invalid_token(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

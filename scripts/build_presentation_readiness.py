@@ -125,7 +125,7 @@ def build_readiness_report(
             "pre_demo_smoke": _smoke_metrics(smoke_data),
         },
         "demo_links": {
-            "admin_panel": "http://139.100.225.44/admin/kb",
+            "admin_panel": "https://139.100.225.44/admin/kb",
             "local_admin_panel": "http://127.0.0.1/admin/kb",
             "quality_report": str(quality_report.with_suffix(".md")).replace("\\", "/"),
             "demo_pack": "reports/presentation_quality/demo_pack.md",
