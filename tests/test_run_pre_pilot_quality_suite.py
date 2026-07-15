@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from eval import run_pre_pilot_quality_suite as suite
@@ -99,3 +100,48 @@ async def test_run_pre_pilot_quality_suite_stops_on_budget(
     assert summary["passed"] is False
     assert summary["completed_sections"] == ["forums"]
     assert summary["llm_budget_stopped"] is True
+
+
+def test_followup_section_requires_conversation_pass_rate() -> None:
+    assert suite._section_passed(
+        {"turn_pass_rate": 0.9375, "conversation_pass_rate": 0.75}
+    ) is False
+    assert suite._section_passed(
+        {"turn_pass_rate": 0.9, "conversation_pass_rate": 0.9}
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_followup_turn_sends_eval_trace_headers() -> None:
+    captured_headers: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_headers.update(request.headers)
+        return httpx.Response(
+            200,
+            json={"request_id": "request-1", "response": "Тестовый ответ"},
+        )
+
+    case = suite._normalize_case(
+        {
+            "id": "followup-turn-1",
+            "query": "Когда начинается мероприятие?",
+            "user_id": "eval-user",
+            "channel": "api",
+            "expected_behavior": "answer",
+            "expected_escalated": False,
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await suite._run_followup_turn(
+            client=client,
+            target="http://test/ask",
+            headers={"X-Eval-Run-Id": "followup-eval-test"},
+            case=case,
+            trace_pool=None,
+            conversation_id="conversation-1",
+        )
+
+    assert captured_headers["x-eval-run-id"] == "followup-eval-test"
+    assert captured_headers["x-eval-case-id"] == "followup-turn-1"
+    assert result["conversation_id"] == "conversation-1"

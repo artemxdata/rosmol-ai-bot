@@ -156,6 +156,8 @@ async def run_followup_eval(
     conversations = _load_followup_cases(cases_path)
     trace_pool = await _open_trace_pool(trace_dsn) if trace_lookup else None
     headers = _auth_headers("API_AUTH_TOKEN")
+    eval_run_id = f"followup-eval-{uuid4()}"
+    headers["X-Eval-Run-Id"] = eval_run_id
     if bypass_cache:
         headers["X-Bypass-Cache"] = "1"
 
@@ -193,6 +195,7 @@ async def run_followup_eval(
         conversations_total=len(conversations),
         budget_stopped=budget_stopped,
         max_llm_cost_rub=max_llm_cost_rub,
+        eval_run_id=eval_run_id,
     )
     await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(
@@ -219,7 +222,7 @@ async def _run_followup_turn(
     try:
         response = await client.post(
             target,
-            headers=headers,
+            headers={**headers, "X-Eval-Case-Id": str(case["id"])},
             json={
                 "user_id": case["user_id"],
                 "channel": case["channel"],
@@ -281,6 +284,7 @@ def _summarize_followup_results(
     conversations_total: int,
     budget_stopped: bool,
     max_llm_cost_rub: float | None,
+    eval_run_id: str,
 ) -> dict[str, Any]:
     conversations: dict[str, list[dict[str, Any]]] = {}
     for result in results:
@@ -291,6 +295,7 @@ def _summarize_followup_results(
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "target": target,
+        "eval_run_id": eval_run_id,
         "cases_path": str(cases_path),
         "conversations_total": conversations_total,
         "conversations_executed": len(conversations),
@@ -380,7 +385,9 @@ def _compact_section_report(name: str, report: dict[str, Any]) -> dict[str, Any]
 def _section_passed(report: dict[str, Any]) -> bool:
     if "pass_rate" in report:
         return float(report.get("pass_rate") or 0.0) >= 0.9
-    return float(report.get("turn_pass_rate") or 0.0) >= 0.9
+    turn_passed = float(report.get("turn_pass_rate") or 0.0) >= 0.9
+    conversation_passed = float(report.get("conversation_pass_rate") or 0.0) >= 0.9
+    return turn_passed and conversation_passed
 
 
 def _section_cost(report: dict[str, Any]) -> float:

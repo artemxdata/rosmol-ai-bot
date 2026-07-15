@@ -1391,6 +1391,55 @@ def test_session_context_keeps_known_forum_for_topic_followups(message: str) -> 
     assert contextual.clarification_question is None
 
 
+@pytest.mark.asyncio
+async def test_analyze_keeps_forum_for_and_when_followup_without_llm() -> None:
+    session = Session(
+        user_id="u1",
+        channel=Channel.API,
+        user_id_hash="hash",
+        forum_context="День молодёжи",
+        last_messages=[
+            {
+                "user": "Где мой билет?",
+                "bot": "Уточни, пожалуйста, о каком мероприятии речь?",
+            },
+            {
+                "user": "На День молодёжи.",
+                "bot": "Билет появится в чат-боте MAX.",
+            },
+            {
+                "user": "Мужу нужен отдельный билет?",
+                "bot": "Каждому взрослому нужен отдельный билет.",
+            },
+            {
+                "user": "А ребёнку 10 лет?",
+                "bot": "Ребёнку до 13 лет отдельный билет не нужен.",
+            },
+            {
+                "user": "Где потом посмотреть программу?",
+                "bot": "Программа появится в билете в чат-боте MAX.",
+            },
+        ],
+    )
+
+    result = await analyze_query(
+        {
+            "message": "И когда всё начинается?",
+            "message_masked": "И когда всё начинается?",
+            "routing_hint": {"complexity": "simple"},
+            "session": session,
+            "llm_client": FailingLLM(),
+        }
+    )
+
+    analysis = result["analysis"]
+    assert result["analyzer_mode"] == "deterministic"
+    assert analysis.category == "форумы"
+    assert analysis.forum_normalized == "День молодёжи"
+    assert analysis.needs_clarification is False
+    assert result["contextual_message"] == "День молодёжи: И когда всё начинается?"
+
+
 def test_stored_forum_context_wins_over_forum_mentioned_in_old_bot_answer() -> None:
     session = Session(
         user_id="u1",
