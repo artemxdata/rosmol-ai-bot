@@ -2,13 +2,13 @@
 
 **Обновлено:** 15 июля 2026
 **Ветка:** `master`  
-**Текущий release candidate:** `6249b08 Harden pre-operator quality and delivery`
-**Git:** новый code RC подготовлен локально; на сервере пока остаётся handoff commit `e56894e`
-с прежним code RC `eea1972`.
-**Статус релиза:** `LOCAL GO / SERVER NO GO`. Локальный gate нового RC зелёный, но migration `007`,
-полная published-only переиндексация и server-local/channel gate ещё не выполнены. Прежний
-`LIMITED GO` отменён изменением кода и KB. Операторам новый тест не начинать до закрытия текущего
-раздела 7.
+**Текущий release candidate:** `a20ca80 Fix long-context follow-up gate`
+**Git:** targeted correction готов локально; на сервере развёрнут handoff commit `43dbdb2` с
+предыдущим code RC `6249b08`.
+**Статус релиза:** `LOCAL GO / SERVER NO GO`. Migration `007`, published-only индекс `2152`,
+readiness и smoke уже проверены на сервере, но полный suite выявил один незакрытый long-context
+диалог. Исправление `a20ca80` ещё не развёрнуто. Операторам новый тест не начинать до закрытия
+текущего раздела 7.
 
 ## 1. Цель
 
@@ -26,8 +26,9 @@
 
 Read-only аудит кода, всех 2186 seed-записей, БД/trace-схемы и корневых материалов зафиксирован в
 `docs/conversion_growth_audit_20260715.md`. По прямому решению пользователя freeze был снят для
-одного срочного pre-operator correction cycle. Он завершён в code RC `6249b08`; точный следующий
-шаг — ручной deployment и новый release gate, а не дополнительные изменения качества.
+одного срочного pre-operator correction cycle. Основной пакет завершён в `6249b08`; серверный gate
+нашёл один узкий follow-up defect, исправленный в `a20ca80`. Точный следующий шаг — deployment
+этой коррекции и повтор только предписанных release-проверок, а не новые изменения качества.
 
 ## 2. Что представляет собой проект
 
@@ -165,7 +166,7 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
   — `100%`, стоимость — `7.420207 RUB`.
 - Ручной HDE smoke подтвердил policy, grounded sources, fail-closed routing и multi-turn ticket flow.
 
-## 7. Release gate нового RC — ожидает deployment и server-local проверку
+## 7. Release gate нового RC — targeted correction ожидает deployment
 
 ### Срочный pre-operator correction cycle 15 июля 2026
 
@@ -200,21 +201,57 @@ RC — `6249b08`. В нём закрыты подтверждённые дефе
 - offline lexical retrieval — Recall@5 `90.91%`, Recall@10 `100%`, regression threshold `85%`
   пройден.
 
-Текущий release decision — `NO GO` до серверных результатов. На сервере всё ещё прежний runtime:
-Qdrant содержит 2186 точек, migration `007` не применена, новый cache/lease/delivery contract не
-проверен. Единственный следующий шаг:
+### Server gate `43dbdb2` / code RC `6249b08`
 
-1. вручную выполнить раздел 2 `docs/pre_pilot_release_checklist.md` в maintenance window;
-2. до остановки runtime проверить/создать без вывода значения стабильный `USER_HASH_SECRET`,
-   сделать backup PostgreSQL и snapshot Qdrant;
-3. применить migration `007`, выполнить полную индексацию с registry и `--prune-stale`, затем
-   ожидать `knowledge_base = 2152` и `response_cache = 0`;
-4. проверить оба `/ready`, smoke `16/16`, полный server-local suite и короткий HDE/VK smoke с
-   одной delivery/trace-строкой на inbound;
-5. только после фиксации результатов здесь вернуть `LIMITED GO` и заморозить кандидат на время
+15 июля основной RC был вручную развёрнут в `/opt/rosmol-ai-bot`:
+
+- до maintenance window подтверждён `USER_HASH_SECRET` без вывода значения; созданы PostgreSQL
+  dump `/root/rosmol_ai_bot_pre_007.dump` и Qdrant snapshot
+  `knowledge_base-8349643294336535-2026-07-15-03-39-52.snapshot`;
+- образы `app` и `app-ml` собраны, migration `007_hde_delivery_telemetry` применена;
+- полная индексация завершена: `knowledge_base = 2152`, `response_cache = 0`;
+- оба `/ready` вернули HTTP 200, `ml_prewarm = ok`; быстрый smoke прошёл `16/16`, стоимость `0`;
+- полный suite выполнил все 7 секций, HTTP success, trace coverage и retrieval coverage — `100%`,
+  budget stop отсутствовал, стоимость `1.290124 RUB`;
+- прежний неблокирующий forums citation miss остался тем же: ответ по регистрации, дате, программе
+  и ребёнку полный и grounded, но cited source set не совпадает со всеми четырьмя ожидаемыми ID;
+- follow-up прошёл только `15/16` ходов и `3/4` полных диалога: на шестом ходу сценария Дня
+  молодёжи запрос `И когда всё начинается?` потерял event scope и выдал общее уточнение.
+
+`passed=true` в том отчёте не является основанием для GO: старый runner проверял только
+`turn_pass_rate >= 90%` и не учитывал `conversation_pass_rate = 75%`, что противоречило D-010.
+
+### Targeted correction `a20ca80`
+
+Подтверждённая причина не в Redis, PostgreSQL, TTL или KB. Сессия хранит 20 ходов и сохраняла
+`День молодёжи`; в `FOLLOWUP_FORUM_MARKERS` была форма `а когда`, но отсутствовала равнозначная
+`и когда`. Из-за этого deterministic analyzer возвращал `None`, а ответ зависел от внешнего
+analyzer/fallback.
+
+В correction RC:
+
+- добавлен один точный context marker `и когда`, поэтому запрос наследует форум и проходит
+  deterministic analyze path без LLM;
+- regression-тест воспроизводит предыдущие пять ходов и запрещает вызов LLM;
+- follow-up gate теперь требует одновременно `turn_pass_rate >= 90%` и
+  `conversation_pass_rate >= 90%`;
+- follow-up runner передаёт `X-Eval-Run-Id` и `X-Eval-Case-Id` для привязки каждого trace;
+- независимый review не нашёл P0/P1/P2; `ruff check .` — успешно; полный `pytest` —
+  `1168 passed`; KB validation неизменна: `2186` valid / `2152 published`.
+
+Текущий release decision — `NO GO` до deployment `a20ca80`. Точный следующий шаг:
+
+1. обновить сервер до handoff commit, содержащего `a20ca80`, пересобрать и пересоздать только
+   `app`/`app-ml`; migration и переиндексация не требуются;
+2. подтвердить оба `/ready`, `knowledge_base = 2152`, `response_cache = 0`;
+3. сначала повторить только секцию `followup`; требуется `16/16` ходов, `4/4` диалога, дата
+   `27 июня 2026` в t6 и заполненные eval trace identifiers;
+4. после targeted green повторить smoke `16/16` и полный server-local suite на новом commit;
+5. выполнить короткий HDE/VK smoke с одной delivery/trace-строкой на inbound;
+6. только после фиксации результатов здесь вернуть `LIMITED GO` и заморозить кандидат на время
    независимого операторского теста.
 
-До завершения этих пяти пунктов не менять код, routing, prompts, thresholds или KB и не начинать
+До завершения этих пунктов не менять routing, prompts, thresholds или KB и не начинать
 операторский тест.
 
 ### История предыдущего gate (архив)

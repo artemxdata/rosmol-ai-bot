@@ -117,12 +117,13 @@ Screenshot-only обращение не должно приводить к вы�
 
 ## D-018. Текущий release candidate
 
-**Статус:** локально готов, server gate не закрыт.
-Текущий code release candidate — `6249b08`. На сервере пока развёрнут прежний handoff `e56894e`
-с code RC `eea1972`. Из-за изменения кода, KB, cache contract и схемы trace прежний `LIMITED GO`
-аннулирован. Новый кандидат допускается к операторам только после migration `007`, published-only
-индексации, server-local smoke/full suite и короткого HDE/VK smoke. Широкий трафик остаётся закрыт
-до оценки ticket-level конверсии на свежих обращениях.
+**Статус:** targeted correction локально готова, server gate не закрыт.
+Текущий code release candidate — `a20ca80`, узкая коррекция long-context follow-up поверх
+`6249b08`. На сервере развёрнут handoff `43dbdb2` с code RC `6249b08`: migration `007`,
+published-only индекс `2152`, readiness и smoke зелёные, но full suite выявил незакрытый шестой
+ход одного диалога. Новый кандидат допускается к операторам только после deployment `a20ca80`,
+targeted follow-up `16/16` и `4/4`, повторного server-local smoke/full suite и короткого HDE/VK
+smoke. Широкий трафик остаётся закрыт до оценки ticket-level конверсии на свежих обращениях.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
