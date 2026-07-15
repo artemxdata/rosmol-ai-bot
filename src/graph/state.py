@@ -12,6 +12,10 @@ class BotState(TypedDict, total=False):
     channel: str
     user_id: str
     user_id_hash: str
+    upstream_event_id: str | None
+    upstream_event_id_source: str | None
+    eval_run_id: str | None
+    eval_case_id: str | None
     message: str
     message_masked: str
     contextual_message: str
