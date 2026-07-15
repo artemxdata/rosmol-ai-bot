@@ -75,7 +75,9 @@ main() {
   set_env_value NGINX_TLS_HOST_PORT 443 || return 1
 
   log "Включаю ACME webroot; приложение, routing и KB не перезапускаются"
-  "${BASE_COMPOSE[@]}" --profile ml up -d --force-recreate nginx || return 1
+  # Compose recreates nginx only when its service definition actually changed.
+  # A safe rerun after recovery therefore has no unnecessary interruption.
+  "${BASE_COMPOSE[@]}" --profile ml up -d nginx || return 1
 
   local probe_name="rosmol-admin-acme-probe"
   local probe_value="rosmol-admin-acme-ok"
