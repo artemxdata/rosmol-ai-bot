@@ -169,6 +169,7 @@ services:
     container_name: rosmol-nginx
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/etc/nginx/rosmol/select-config.sh"]
+    command: ["nginx", "-g", "daemon off;"]
     ports:
       - "${NGINX_BIND:-127.0.0.1}:${NGINX_HOST_PORT:-8080}:80"
       - "${NGINX_TLS_BIND:-127.0.0.1}:${NGINX_TLS_HOST_PORT:-8443}:443"

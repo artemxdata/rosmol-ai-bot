@@ -21,6 +21,7 @@ def test_base_compose_keeps_tls_after_future_routine_deploys() -> None:
     compose = _read("docker-compose.yml")
 
     assert '${NGINX_TLS_BIND:-127.0.0.1}:${NGINX_TLS_HOST_PORT:-8443}:443' in compose
+    assert 'command: ["nginx", "-g", "daemon off;"]' in compose
     assert "./nginx/select-config.sh:/etc/nginx/rosmol/select-config.sh:ro" in compose
     assert "./nginx/admin-tls.conf:/etc/nginx/rosmol/admin-tls.conf:ro" in compose
     assert "./data/private/letsencrypt:/etc/letsencrypt:ro" in compose
