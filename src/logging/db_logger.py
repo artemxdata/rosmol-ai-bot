@@ -93,10 +93,10 @@ async def update_delivery_outcome(
     retry_after_seconds: float | None = None,
     error_code: str | None = None,
 ) -> None:
-    await pg_pool.execute(
+    result = await pg_pool.execute(
         """
         UPDATE request_traces
-        SET delivery_status = $2,
+        SET delivery_status = $2::varchar(32),
             delivery_attempted = $3,
             delivery_http_status = $4,
             delivery_retry_after_seconds = $5,
@@ -112,6 +112,8 @@ async def update_delivery_outcome(
         error_code,
         datetime.now(UTC),
     )
+    if result != "UPDATE 1":
+        raise RuntimeError(f"Delivery trace update affected unexpected row count: {result}")
 
 
 def _ticket_outcome_from_state(state: dict[str, Any]) -> str:

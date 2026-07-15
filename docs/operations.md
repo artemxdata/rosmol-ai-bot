@@ -325,7 +325,7 @@ For the HDE dispatcher rule that starts bot processing for a new ticket:
     }
   },
   "message": {
-    "id": "{stable_hde_post_id}",
+    "id": "{last_post_id}",
     "kind": "visitor",
     "text": "{HDE_TRIGGER_PREFIX} {answer_last_without_html}"
   }
@@ -345,7 +345,7 @@ For the HDE dispatcher rule that sends a user's next reply to the bot:
     }
   },
   "message": {
-    "id": "{stable_hde_post_id}",
+    "id": "{last_post_id}",
     "kind": "visitor",
     "text": "{answer_last_without_html}"
   }
@@ -356,8 +356,10 @@ The HDE adapter uses `chat_id` as the bot conversation id because replies must
 be bound to the ticket. The trigger prefix is stripped before the message reaches
 PII masking, RAG, or LLM.
 
-`message.id` must be mapped to the stable identifier of the source HDE post, not to the
-ticket id or a generated timestamp. The adapter also accepts `message.message_id`,
+`message.id` must be mapped to HDE dispatcher tag `{last_post_id}`, the stable identifier of the
+source HDE post, not to the ticket id or a generated timestamp. The tag is documented in the
+[official HDE system tag list](https://support.helpdeskeddy.com/ru/knowledge_base/article/372/category/56/)
+as the ID of the last answer. The adapter also accepts `message.message_id`,
 `message.post_id`, `data.message.id`, `event.id`, root `event_id`, `message_id` and `post_id`.
 Repeated delivery of the same stable id for one ticket is acknowledged with HTTP 200 but does
 not generate or send a second answer. Payloads without a stable id remain accepted for backward

@@ -12,13 +12,15 @@ from src.logging.tracer import Tracer
 
 
 class FakePool:
-    def __init__(self) -> None:
+    def __init__(self, execute_result: str = "UPDATE 1") -> None:
         self.query: str | None = None
         self.args: tuple[Any, ...] = ()
+        self.execute_result = execute_result
 
-    async def execute(self, query: str, *args: Any) -> None:
+    async def execute(self, query: str, *args: Any) -> str:
         self.query = query
         self.args = args
+        return self.execute_result
 
 
 @pytest.mark.asyncio
@@ -98,6 +100,7 @@ async def test_update_delivery_outcome_persists_typed_result() -> None:
 
     assert pool.query is not None
     assert "delivery_status" in pool.query
+    assert "delivery_status = $2::varchar(32)" in pool.query
     assert pool.args[:6] == (
         request_id,
         "rate_limited",
@@ -106,3 +109,37 @@ async def test_update_delivery_outcome_persists_typed_result() -> None:
         1200.0,
         "hde_remote_rate_limit",
     )
+    delivered_at = pool.args[6]
+    assert delivered_at.tzinfo is not None
+    assert delivered_at.utcoffset() is not None
+
+
+@pytest.mark.asyncio
+async def test_update_delivery_outcome_sets_delivered_timestamp() -> None:
+    pool = FakePool()
+
+    await update_delivery_outcome(
+        pool,  # type: ignore[arg-type]
+        uuid4(),
+        status="delivered",
+        attempted=True,
+        http_status=200,
+    )
+
+    delivered_at = pool.args[6]
+    assert delivered_at.tzinfo is not None
+    assert delivered_at.utcoffset() is not None
+
+
+@pytest.mark.asyncio
+async def test_update_delivery_outcome_rejects_missing_trace_row() -> None:
+    pool = FakePool(execute_result="UPDATE 0")
+
+    with pytest.raises(RuntimeError, match="unexpected row count: UPDATE 0"):
+        await update_delivery_outcome(
+            pool,  # type: ignore[arg-type]
+            uuid4(),
+            status="delivered",
+            attempted=True,
+            http_status=200,
+        )
