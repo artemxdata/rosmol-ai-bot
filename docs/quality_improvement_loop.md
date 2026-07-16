@@ -4,16 +4,20 @@
 
 Качество бота повышается не бесконечной настройкой модели, а управляемым циклом: реальные вопросы пользователей превращаются в пробелы базы знаний, пробелы закрываются в Yonote/KB, затем RAG переиндексируется и проверяется eval-набором.
 
-## Текущий режим: holdout до улучшений
+## Текущий режим: security recovery до улучшений
 
-С 15 июля 2026 идёт независимый операторский тест зафиксированного RC. До закрытия cohort и
-получения операторского файла действует полный freeze кода ответов, routing, prompts, thresholds,
-cache policy и KB. Ошибки не исправляются по одной. Активные границы, мониторинг и stop-criteria
-описаны в `docs/operator_holdout_runbook.md`.
+Операторский тест, начатый 15 июля 2026, прерван P0-компрометацией старого сервера. Текущий
+статус — `NO GO / SECURITY HOLD`; runtime отсутствует. Сначала выполняются отдельная ротация всех
+ключей/секретов, clean rebuild без переноса старых server artifacts и новый release gate. Детали:
+`docs/security_incident_20260715.md` и `docs/operator_holdout_runbook.md`.
 
-Автоматический ops-report показывает containment proxy по trace, но окончательный verdict о
-полном закрытии тикета даёт оператор. До любых исправлений новые обращения делятся на calibration
-и sealed holdout; holdout не открывается при настройке.
+До нового handoff действует freeze кода ответов, routing, prompts, thresholds, cache policy и KB.
+Последние тесты Наты зафиксированы в `docs/operator_feedback_20260715.md` как будущий
+calibration/regression backlog; они не исправляются по одному и не являются финальной оценкой
+конверсии. После preliminary acceptance чистого runtime feedback Наты закрывается одним
+regression-first calibration cycle; только затем выполняются финальный gate/HDE smoke и новый
+cohort с новой границей. Автоматический ops-report остаётся containment proxy, а окончательный
+verdict даёт оператор по полному тикету.
 
 ## Источники данных
 

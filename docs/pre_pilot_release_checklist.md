@@ -2,12 +2,11 @@
 
 Этот чеклист нужен перед демонстрацией и тестовым подключением HDE/VK. Массовые проверки выполняются локально через `/ask`; HDE трогаем только тестовым каналом и короткими smoke-сценариями.
 
-> **Текущий статус 15 июля 2026:** gate RC `8bca860` закрыт решением `LIMITED GO`, операторский
-> holdout активен. Не выполнять во время теста server update, migration, full reindex, cache clear
-> или повтор полного suite без нового дефекта и явного решения. Текущая инструкция —
-> `docs/operator_holdout_runbook.md`. Этот checklist снова применяется для следующего RC либо
-> следующего полного release gate; при rollback/recovery выполнять только релевантные явно
-> одобренные шаги, а не весь migration/reindex сценарий.
+> **Текущий статус 16 июля 2026:** `NO GO / SECURITY HOLD`. Старая VM скомпрометирована и
+> выключена; любые старые IP, webhook, SSH/admin URL и server artifacts запрещены. Этот checklist
+> применяется только к новой VM после отдельного перевыпуска всех ключей/секретов. Ничего со
+> старого сервера не переносить и не восстанавливать. Полная инструкция:
+> `docs/security_incident_20260715.md` и `docs/operator_holdout_runbook.md`.
 
 ## 1. Локально перед push
 
@@ -59,68 +58,37 @@ Quality suite:
 `reports/presentation_quality/presentation_quality_report.json`. Если нужен другой файл,
 задай `ADMIN_QUALITY_REPORT_PATH=<path>` в `.env` и пересоздай `app/app-ml`.
 
-## 2. Серверное обновление
+## 2. Чистое развёртывание на новом сервере
 
-Выполняется вручную на сервере. Этот RC меняет схему PostgreSQL и опубликованный состав KB,
-поэтому нужен короткий maintenance window: операторы не должны тестировать во время migration и
-полной индексации. Migration `007` backfill-ит старые trace и создаёт индексы; сначала сделать
-backup. `--prune-stale` удалит из Qdrant архивные/stale-точки; сначала создать Qdrant snapshot.
+Это не update и не rollback старого сервера. До начала должны быть отдельно завершены secret
+rotation и базовое hardening новой VM. Сервер создаётся из чистого vendor image; repository
+получается новым checkout из Git. Не копировать старый `/opt`, `.env`, certificates, SSH keys,
+Docker images/volumes/cache, Redis, PostgreSQL/Qdrant backup или другие файлы старой VM.
 
-```bash
-ssh root@139.100.225.44
-cd /opt/rosmol-ai-bot
-git fetch origin
-git status --short --branch
-git pull --ff-only
-git log -1 --oneline
+На новой VM:
+
+1. с доверенного устройства проверить GitHub deploy keys/tokens, audit history, commits/tags и
+   Actions, отозвать старые server credentials и зафиксировать trusted commit;
+2. сверить `origin/master` и ожидаемый trusted commit;
+3. создать новый `.env` только из перевыпущенных секретов, не печатая значения;
+4. собрать images с нуля;
+5. создать PostgreSQL/Redis/Qdrant с нуля;
+6. применить migration и полную published-only индексацию из trusted Git seed;
+7. выпустить новый TLS certificate;
+8. только затем поднимать ingress и выполнять preliminary acceptance.
+
+До любого provisioning active infrastructure не должна содержать старый IP. Локальный blocker:
+
+```powershell
+rg -n "139\.100\.225\.44" nginx scripts tests
 ```
 
-Новый runtime fail-closed требует отдельный стабильный `USER_HASH_SECRET` при `APP_ENV=staging`
-или `production`. Команда ниже сохраняет уже заданное значение, а если переменная отсутствует или
-пуста — генерирует её без вывода секрета в терминал. Не ротировать существующее значение: ротация
-намеренно создаёт новое пространство pseudonym ID и разрывает связь с прежними сессиями.
+Пока команда находит active Nginx/ACME/report-builder/test значения, deployment запрещён. Сначала
+нужен отдельный reviewed infrastructure parameterization commit и зелёные tests. Упоминания IP в
+incident documentation могут оставаться как evidence.
 
-```bash
-python3 - <<'PY'
-import os
-from pathlib import Path
-from secrets import token_urlsafe
-
-path = Path('.env')
-lines = path.read_text(encoding='utf-8').splitlines()
-result = []
-seen = False
-for line in lines:
-    if line.startswith('USER_HASH_SECRET='):
-        seen = True
-        if line.split('=', 1)[1].strip():
-            result.append(line)
-        else:
-            result.append('USER_HASH_SECRET=' + token_urlsafe(48))
-    else:
-        result.append(line)
-if not seen:
-    result.append('USER_HASH_SECRET=' + token_urlsafe(48))
-path.write_text('\n'.join(result) + '\n', encoding='utf-8')
-os.chmod(path, 0o600)
-print('USER_HASH_SECRET is configured; value was not printed')
-PY
-```
-
-Backup и snapshot до остановки runtime:
-
-```bash
-umask 077
-docker compose exec -T postgres pg_dump -U rosmol -d rosmol_ai_bot -Fc \
-  > /root/rosmol_ai_bot_pre_007.dump
-test -s /root/rosmol_ai_bot_pre_007.dump
-curl -fsS -X POST \
-  http://127.0.0.1:6333/collections/knowledge_base/snapshots
-```
-
-Сначала собрать новые images, затем остановить ingress/runtime, применить migration, обновить
-payload indexes и выполнить полную индексацию. Indexer берёт только `published` records,
-удаляет stale-точки и после успешного изменения автоматически очищает semantic cache.
+Indexer берёт только `published` records, удаляет stale points и очищает semantic cache после
+успешной KB mutation. Команды выполняются из clean checkout:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
@@ -154,8 +122,9 @@ for collection in (s.qdrant_knowledge_collection, 'response_cache'):
 PY
 ```
 
-Для этого RC ожидается: Alembic head `007_hde_delivery_telemetry`, `knowledge_base = 2152`,
-`response_cache = 0`. Если migration, index или count не совпали, runtime не отдавать операторам.
+Для code RC `8bca860` историческая baseline: Alembic head `007_hde_delivery_telemetry`,
+`knowledge_base = 2152`, `response_cache = 0`. Новый count сверяется также с текущим trusted seed;
+если migration, validation, index или count не совпали, runtime не отдавать операторам.
 
 ## 3. Серверные smoke-проверки
 
@@ -214,7 +183,7 @@ PY
 
 Перед тестами проверить:
 
-- webhook URL указывает на `http://139.100.225.44/webhook/hde`;
+- webhook URL указывает на новый согласованный HTTPS endpoint, а не на старый IP;
 - заголовок `X-Webhook-Secret` совпадает с серверным `WEBHOOK_AUTH_TOKEN`;
 - правила включены только для тестового департамента/канала;
 - старый Chatme-ответчик не отвечает параллельно в том же тестовом канале;
@@ -226,17 +195,19 @@ HDE имеет общий лимит 300 RPM на систему. Массовы
 2. `Позови оператора` → controlled escalation.
 3. `Какая погода завтра в Москве?` → scope-note по зоне ответственности.
 
-## 5. Rollback
+## 5. Failure recovery нового контура
 
-Без крайней необходимости rollback не делать. Если после обновления сервер не отвечает:
+Старая VM не является rollback target. Старые image, disk, container volumes и backups не
+восстанавливаются. Если новый чистый runtime не отвечает:
 
-1. Сначала проверить логи:
+1. Остановить выдачу нового webhook и проверить логи:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml logs --tail=160 app app-ml nginx
 ```
 
-2. Если нужно временно вернуться на предыдущий коммит, зафиксировать текущий `git log -2 --oneline`, затем вручную переключиться на предыдущий commit в detached mode и пересобрать:
+2. Если дефект только в коде и инфраструктура остаётся чистой, зафиксировать `git log -2
+   --oneline`, вручную выбрать проверенный trusted commit и пересобрать **на новой VM**:
 
 ```bash
 git switch --detach <previous_commit>
@@ -250,7 +221,8 @@ git switch master
 git pull --ff-only
 ```
 
-Важно: rollback не должен менять `.env`, секреты, Docker volumes Postgres/Qdrant/Redis и production-данные.
+Важно: никакой failure recovery не возвращает старые secrets или artifacts. При подозрении на
+новый security incident снова остановить VM и начать отдельный triage, а не выполнять rollback.
 
 ## 6. One-command final acceptance
 

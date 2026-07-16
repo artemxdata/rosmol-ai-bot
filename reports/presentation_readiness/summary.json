@@ -1,7 +1,10 @@
 {
   "generated_at": "2026-07-07T08:27:50.442288+00:00",
-  "ready_for_leadership_demo": true,
-  "decision": "ready",
+  "security_status_updated_at": "2026-07-16",
+  "historical_quality_artifact": true,
+  "stale_reason": "Previous VM and admin endpoint were retired after a P0 security incident; regenerate only after clean rebuild and a new final gate.",
+  "ready_for_leadership_demo": false,
+  "decision": "security_hold",
   "gates": [
     {
       "name": "final_acceptance_passed",
@@ -77,8 +80,8 @@
     }
   },
   "demo_links": {
-    "admin_panel": "http://139.100.225.44/admin/kb",
-    "local_admin_panel": "http://127.0.0.1/admin/kb",
+    "admin_panel": null,
+    "local_admin_panel": null,
     "quality_report": "reports/presentation_quality/presentation_quality_report.md",
     "demo_pack": "reports/presentation_quality/demo_pack.md",
     "pre_demo_smoke": "reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.md",

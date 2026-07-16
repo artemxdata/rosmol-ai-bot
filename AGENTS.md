@@ -12,32 +12,48 @@
 Перед анализом или изменением кода обязательно прочитай:
 
 1. `docs/CURRENT_STATE.md` — текущее состояние, незакрытые действия и следующий шаг.
-2. `docs/operator_holdout_runbook.md` — активный операторский тест, freeze, метрики и stop-criteria.
-3. `docs/DECISIONS.md` — действующие архитектурные и продуктовые решения.
-4. `docs/architecture.md` — исходная и целевая архитектура. При расхождении приоритет имеют
+2. `docs/security_incident_20260715.md` — активный P0 security hold, граница доверия и clean
+   rebuild.
+3. `docs/operator_feedback_20260715.md` — последние тесты Наты и подтверждённый backlog качества.
+4. `docs/operator_holdout_runbook.md` — прерванный cohort, freeze, метрики и stop-criteria.
+5. `docs/DECISIONS.md` — действующие архитектурные и продуктовые решения.
+6. `docs/architecture.md` — исходная и целевая архитектура. При расхождении приоритет имеют
    `CURRENT_STATE.md`, `DECISIONS.md`, тесты и фактический код.
-5. `docs/operator_response_policy.md` — правила ответов, уточнений и эскалации.
-6. `docs/pre_pilot_release_checklist.md` и `docs/operations.md` — проверки и эксплуатация.
-7. `docs/quality_improvement_loop.md` — процесс улучшения на реальных обращениях.
+7. `docs/operator_response_policy.md` — правила ответов, уточнений и эскалации.
+8. `docs/pre_pilot_release_checklist.md` и `docs/operations.md` — проверки и эксплуатация.
+9. `docs/quality_improvement_loop.md` — процесс улучшения на реальных обращениях.
 
 В начале каждой новой задачи выполни `git status --short --branch` и `git log -5 --oneline`.
 Не полагайся только на историю чата или память модели.
 
-## Активный режим: независимый операторский holdout
+## Активный режим: SECURITY INCIDENT / RECOVERY FREEZE
 
-С 15 июля 2026 бот передан операторам. Пока `CURRENT_STATE.md` не фиксирует завершение теста:
+15 июля 2026 старый сервер был скомпрометирован и выключен. Операторский holdout прерван,
+production runtime отсутствует, release status — `NO GO / SECURITY HOLD`.
 
+До нового clean rebuild, перевыпуска секретов и предварительной security/runtime acceptance:
+
+- не включать и не использовать старую VM, её IP, webhook или админку;
+- ничего со старого сервера не переносить и не загружать в новый runtime: ни ОС/диски, ни Docker
+  images/volumes/cache, ни `.env`, certificates, Redis, PostgreSQL/Qdrant backup, runtime-файлы
+  или исполняемые артефакты; допускается только изолированное provider-side forensic preservation
+  без использования evidence в рабочем контуре;
+- новый контур строить только из чистого vendor image, проверенного Git commit и новых секретов;
+  baseline Qdrant индексировать с нуля строго из versioned published seed frozen RC, без свежего
+  Yonote Apply;
+- перевыпуск всех потенциально раскрытых ключей и секретов вести отдельной обязательной задачей;
 - не менять код ответов, routing, prompts, thresholds, KB и dispatcher payload;
-- не очищать response cache, не переиндексировать KB и не сбрасывать Redis/session history;
-- в админке использовать только просмотр/поиск, `Validate`, ops/quality reports и
-  `Yonote Preview`; не использовать `Save`, `Reindex` и `Apply to KB`;
-- ошибки собирать пакетно вместе с полным ticket context, ожидаемым исходом и trace, а не
-  исправлять по одной;
-- разрешены только минимальные infrastructure/runtime P0/P1 corrections при недоступности,
-  потерях/дублях доставки, safety-ошибке или утечке данных; каждое такое изменение требует
-  regression-теста и нового handoff;
-- автоматический `hde_ticket_resolution_rate` считать техническим containment proxy, а не
-  окончательной конверсией, пока нет операторского verdict по полному тикету.
+- не исправлять по одному замечания Наты или старого cohort: они уже зафиксированы как будущий
+  calibration/regression backlog;
+- до clean deploy разрешён только отдельно согласованный минимальный infrastructure/security
+  patch для нового endpoint/hardening с тестами; он не должен менять behavior/routing/KB;
+- старый и новый operator cohort не объединять; новая граница начинается с первого реального
+  HDE trace после чистого release handoff.
+
+После предварительной acceptance чистого runtime, но до финального release handoff, отдельно
+воспроизвести feedback Наты, получить content verdict по «Машуку» и выполнить один явно
+согласованный regression-first correction cycle. Затем пройти полный gate и HDE smoke. Новый
+sealed operator cohort начинается только после этих исправлений и финального handoff.
 
 ## Архитектурные инварианты
 
@@ -122,12 +138,15 @@ HDE имеет общий лимит 300 RPM и бан на 20 минут; бо�
 
 - Основная ветка: `master`.
 - GitHub: `artemxdata/rosmol-ai-bot`.
-- Сервер обновляет пользователь вручную в `/opt/rosmol-ai-bot`; Codex готовит commit, push и
-  точные безопасные команды.
+- Старый сервер выведен из эксплуатации. Новый сервер пользователь разворачивает вручную только
+  после согласованного clean-rebuild и secret-rotation плана; Codex готовит commit, push и точные
+  безопасные команды.
 - Не предполагай, что push автоматически применился на сервере.
 - После deployment сверяй commit, `/ready`, Qdrant count, trace и результат smoke.
-- Общая админка работает только через `https://139.100.225.44/admin/kb`; SSH tunnel — аварийный
-  fallback. Не вводить admin token через HTTP и не выводить его в команды, логи или документы.
+- Прежний адрес `https://139.100.225.44/admin/kb` относился к скомпрометированному хосту и
+  выведен из эксплуатации; не открывать его и не использовать TLS/admin credentials старого
+  контура. Новый постоянный HTTPS URL фиксируется только после clean rebuild. Не выводить admin
+  token в команды, логи или документы.
 
 ## Handoff
 
@@ -140,8 +159,8 @@ HDE имеет общий лимит 300 RPM и бан на 20 минут; бо�
 - результаты тестов;
 - риски и запреты.
 
-Для активного operator holdout также зафиксируй cohort boundary, количество завершённых тикетов,
-автоматический containment proxy, наличие/отсутствие ручной разметки и точный следующий шаг без
-подгонки по holdout.
+Для recovery handoff зафиксируй статус Selectel ticket, факт `SHUTOFF`, прогресс ротации
+секретов, новый trusted commit/host, результаты нового security/release gate и новую cohort
+boundary. Прерванный cohort не выдавать за финальную конверсию.
 
 Новый чат должен сначала пересказать состояние проекта по этим файлам и только затем менять код.

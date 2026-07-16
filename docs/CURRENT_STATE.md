@@ -1,22 +1,17 @@
 # Текущее состояние проекта
 
-**Обновлено:** 15 июля 2026
+**Обновлено:** 16 июля 2026
 **Ветка:** `master`  
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** code RC `8bca860`, operator handoff `850ad46`, HTTPS infrastructure/recovery
-`6475fd2`/`2eb1763`/`6bad48e`/`3efc704`; operator-holdout documentation `8acf4da`.
-**Server:** работающие `app/app-ml` содержат code RC `8bca860`; Nginx/HTTPS развёрнуты из
-`3efc704`. Более новые docs-only commits не требуют rebuild или restart.
-**Статус релиза:** `OPERATOR HOLDOUT ACTIVE / LIMITED GO`. Бот передан операторам 15 июля 2026
-после завершения HTTPS provisioning; предварительная нижняя граница cohort —
-`2026-07-15 11:54:43+00`, точная граница фиксируется по первому операторскому HDE trace. Migration
-`007`, published-only индекс `2152`,
-readiness, targeted follow-up, smoke и полный server-local suite прошли. Финальный реальный
-HDE/VK smoke подтвердил stable `message.id`, ровно один ответ/trace на inbound и успешную delivery
-telemetry. Код, routing, prompts, thresholds и KB заморожены на время операторского теста. В
-подключённом операторском контуре бот отвечает на все входящие без искусственного ограничения
-качества или объёма; расширение на дополнительную production-аудиторию отложено до оценки
-ticket-level конверсии.
+**Git:** code RC `8bca860`, последний pre-incident operator-holdout state `6acf6fb`; hash этого
+docs-only recovery handoff смотреть в последнем commit `origin/master`.
+**Server:** доверенного работающего runtime сейчас нет. Старая VM `rag_llmchatme` выключена
+(`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
+**Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
+является итоговой оценкой конверсии. Код, routing, prompts, thresholds и KB в Git не менялись;
+до clean rebuild действует recovery freeze. Полные факты инцидента и граница доверия:
+`docs/security_incident_20260715.md`. Последняя обратная связь Наты и quality backlog:
+`docs/operator_feedback_20260715.md`.
 
 ## 1. Цель
 
@@ -37,15 +32,17 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 одного срочного pre-operator correction cycle. Основной пакет завершён в `6249b08`; серверный gate
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
 потерю telemetry-полей, исправленную в `98de023`. Server-local качество и HDE delivery gate этого
-кандидата доказаны. Независимый operator holdout уже идёт. Точный следующий шаг — накопить
-оговорённый период свежих полных тикетов и операторский файл с verdicts, затем посчитать
-ticket-level конверсию и выполнить batch triage при полном freeze, а не подгонять единичные ответы.
+кандидата были доказаны до инцидента. Независимый operator holdout был начат, но прерван P0.
+Точный следующий шаг — отдельно перевыпустить все ключи/секреты, построить чистый сервер без
+переноса каких-либо артефактов старого хоста, повторить security/release gate и только затем
+начать новый operator cohort. После восстановления — пакетно обработать feedback Наты, а не
+исправлять единичные ответы сейчас.
 
 ## 2. Что представляет собой проект
 
 - FastAPI принимает `/ask` и webhook-и каналов.
-- HDE/VK сейчас является операторским тестовым каналом. Внутри подключённого контура бот не
-  ограничен; до финального допуска не расширяется только production-аудитория.
+- HDE/VK был операторским тестовым каналом до остановки старой VM. Сейчас webhook/runtime
+  недоступны; новый тест начнётся только после clean rebuild и нового handoff.
 - LangGraph управляет цепочкой `analyze -> retrieve -> rerank -> generate -> verify -> respond`.
 - Qdrant хранит опубликованную базу и semantic cache.
 - `bge-m3` выполняет retrieval, `bge-reranker-v2-m3` — rerank в ML-контуре `app-ml`.
@@ -53,8 +50,9 @@ ticket-level конверсию и выполнить batch triage при пол
 - Redis хранит оперативную сессию, структурированный контекст и кэш.
 - Cloud.ru предоставляет GigaChat 10B и Max. Max используется для сложного grounded-синтеза,
   а не как источник фактов.
-- Админ-панель `/admin/kb` позволяет искать и редактировать чанки, точечно переиндексировать их,
-  запускать проверки и выполнять preview/apply синхронизации Yonote.
+- Админ-панель `/admin/kb` функционально позволяет искать/редактировать чанки, запускать проверки
+  и preview/apply Yonote, но сейчас offline вместе со старой VM. Старый URL и credentials не
+  использовать.
 - Yonote подключён read-only. Используются коллекции «Росмолодёжь: общее, структура,
   направления» и «Росмолодёжь: мероприятия».
 
@@ -69,8 +67,9 @@ ticket-level конверсию и выполнить batch triage при пол
 - `docs/operations.md` — эксплуатация, Yonote, HDE, безопасность и deployment.
 - `docs/pre_pilot_release_checklist.md` — release gate.
 - `docs/quality_improvement_loop.md` — дальнейшая продуктовая калибровка.
-- `docs/operator_holdout_runbook.md` — активный тест, cohort, мониторинг, stop-criteria и план
-  пакетного разбора.
+- `docs/security_incident_20260715.md` — текущий P0, contamination boundary и clean recovery.
+- `docs/operator_feedback_20260715.md` — тесты Наты, evidence и будущий quality backlog.
+- `docs/operator_holdout_runbook.md` — прерванный cohort, stop-criteria и правила нового старта.
 - `eval/cases/pre_pilot_*.json` — pre-pilot regression suite.
 - `tests/` — проверяемые контракты реализации.
 
@@ -114,7 +113,7 @@ ticket-level конверсию и выполнить batch triage при пол
 
 - `ruff` — успешно;
 - `pytest` — `997 passed`;
-- validation KB — `2186` валидных опубликованных записей;
+- validation KB — `2186` валидных seed-записей (historical lifecycle split не фиксировался);
 - рабочая ветка — чистая;
 - commit отправлен в GitHub.
 
@@ -137,7 +136,7 @@ ticket-level конверсию и выполнить batch triage при пол
 - targeted analyzer/graph/process/smoke tests — `424 passed`;
 - `ruff check .` — успешно;
 - полный `pytest` — `1001 passed`;
-- validation KB — `2186` валидных опубликованных записей;
+- validation KB — `2186` валидных seed-записей (historical lifecycle split не фиксировался);
 - KB, prompts и reranker thresholds не менялись.
 
 ### Gate-итерация `a49a6c9`
@@ -163,32 +162,56 @@ ticket-level конверсию и выполнить batch triage при пол
 - targeted tests — `462 passed`;
 - `ruff check .` — успешно;
 - полный `pytest` — `1013 passed`;
-- validation KB — `2186` валидных опубликованных записей;
+- validation KB — `2186` валидных seed-записей (historical lifecycle split не фиксировался);
 - KB, prompts и reranker thresholds не менялись.
 
-## 6. Текущий server runtime
+## 6. Текущий runtime и последняя доверенная quality baseline
 
-- Работающие `app` и `app-ml` собраны из code RC `8bca860`; оба healthy. Внешний и внутренние
-  `/ready` возвращают HTTP `200`, Redis/PostgreSQL/Qdrant — `ok`, ML prewarm — `ok`.
-- Alembic current — `007_hde_delivery_telemetry (head)`.
-- Qdrant runtime: `knowledge_base=2152` published records; полный seed — `2186` записей
-  (`2152 published`, `34 archived`). Последняя полная индексация завершена, повторять её во время
-  holdout нельзя.
-- Финальный smoke — `16/16`; полный server-local suite выполнил все семь секций. Yonote, safety,
-  off-topic, PII, adversarial и follow-up зелёные; follow-up — `16/16` ходов и `4/4` диалога.
+### Сейчас
+
+- Работающего доверенного server runtime нет. Старая VM `rag_llmchatme`, UUID
+  `8847c56f-9191-46fc-8a12-2075e28ab888`, IP `139.100.225.44`, находится в `SHUTOFF`.
+- Старые бот, HDE webhook и админка offline. Старую VM не включать и не использовать.
+- Selectel ticket `3986352` открыт; на 16 июля ответ поддержки не получен. Ситуация временно
+  локализована выключением, но не расследована и не закрыта.
+- Ничего со старого сервера не переносится в новый runtime. Отдельная следующая задача —
+  перевыпуск всех потенциально раскрытых ключей/секретов; после неё — clean rebuild.
+
+### Проверка текущего docs-only handoff 16 июля
+
+- Перед работой локальный `master` был чист и совпадал с `origin/master` на `6acf6fb`.
+- Изменены только AGENTS/docs и stale presentation-readiness metadata; код, routing, prompts,
+  thresholds, dispatcher payload и KB не менялись.
+- `ruff check .` — успешно; полный `pytest` — `1181 passed`; KB validate — `2186 valid seed
+  records`, из них `2152 published` и `34 archived`.
+- `reports/presentation_readiness/summary.json` проходит JSON validation и помечен
+  `security_hold`, чтобы старый URL/готовность не использовались.
+- Приватный XLSX с приветствием и текущий seed проверялись только read-only; временные файлы
+  инспекции удалены и в Git не попадают.
+
+### Последнее подтверждённое состояние до инцидента — только историческая baseline
+
+- `app` и `app-ml` были собраны из code RC `8bca860`; `/ready` возвращал HTTP `200`,
+  Redis/PostgreSQL/Qdrant — `ok`, ML prewarm — `ok`.
+- Alembic current был `007_hde_delivery_telemetry (head)`.
+- Последний известный Qdrant count: `knowledge_base=2152` published records; versioned seed —
+  `2186` записей (`2152 published`, `34 archived`). Это не текущий runtime count.
+- Финальный smoke прошёл `16/16`; полный server-local suite выполнил все семь секций. Yonote,
+  safety, off-topic, PII, adversarial и follow-up были зелёными; follow-up — `16/16` ходов и
+  `4/4` диалога.
 - Реальный HDE smoke подтвердил stable upstream ids, одну trace/одну delivery на inbound,
   `delivery_status=delivered`, HTTP `200` и сохранение контекста.
-- Постоянная админка `https://139.100.225.44/admin/kb` и HTTPS `/ready` проверены извне. Certbot
-  renewal dry-run прошёл, systemd timer включён дважды в сутки.
-- Первый Nginx rollout incident полностью закрыт recovery commits; app/app-ml, БД и KB не
-  повреждались. Последний runtime-affecting server checkout при provisioning — `3efc704`.
-- Операторский тест активен. Ограничена аудитория/rollout, а не возможности ответов: текущий
-  каскад, retrieval, rerank, source-only path и Max работают без искусственного quality cap.
-- Перед documentation handoff локально повторены `ruff` (успешно), полный `pytest`
-  (`1181 passed`) и KB validate (`2186 total`, `2152 published`). В этом этапе изменены только
-  документы; code, routing, prompts, thresholds и KB не менялись.
+- Локальный handoff перед operator cohort: `ruff` успешно, `pytest` — `1181 passed`, KB validate —
+  `2186 total`, `2152 published`.
 
-## 7. Release gate нового RC — закрыт с решением LIMITED GO
+Эти результаты доказывают regression-поведение кода до инцидента, но не безопасность и не
+доступность нового контура. Все проверки повторяются с нуля после clean rebuild.
+
+## 7. Исторический release gate нового RC — LIMITED GO отозван
+
+Решение `LIMITED GO` было корректным для проверенного runtime до обнаружения P0. После
+компрометации оно отозвано; текущий статус — `NO GO / SECURITY HOLD`. Вся история ниже сохранена
+как regression evidence и не является инструкцией по запуску старой VM.
 
 ### Срочный pre-operator correction cycle 15 июля 2026
 
@@ -348,10 +371,8 @@ upstream ids и ровно по одной trace-строке на inbound. Дл
 видно ровно по одному ответу бота на каждое сообщение. Dedupe regression для повторной доставки
 одного stable id остаётся зелёным.
 
-Решение: `LIMITED GO` для независимого операторского holdout-теста. С этого момента код, routing,
-prompts, thresholds, KB и dispatcher payload заморожены. Широкий трафик остаётся закрыт: текущий
-`BackgroundTasks` не является durable outbox, а реальную ticket-level конверсию ещё предстоит
-измерить на свежих обращениях.
+Историческое решение на тот момент: `LIMITED GO` для независимого операторского holdout-теста.
+Оно отозвано после P0-инцидента 15 июля; см. текущий статус в начале документа.
 
 ### История предыдущего gate (архив)
 
@@ -502,7 +523,7 @@ profanity с вопросом про «Ростов», safety и вопрос п
 - независимый review — блокеров нет;
 - `ruff check .` — успешно;
 - полный `pytest` — `1029 passed`;
-- KB validation — `2186` валидных опубликованных записей;
+- KB validation — `2186` валидных seed-записей (historical lifecycle split не фиксировался);
 - KB, prompts, reranker thresholds, API, БД и webhook adapter не менялись.
 
 ### Server-local gate после deployment `e56894e`
@@ -568,9 +589,8 @@ UTC сценарии 1–4 повторены в HDE и создали ровн�
 четыре разных hash из одного и того же ticket признано искусственным и не блокирует контролируемый
 операторский тест.
 
-Решение: `LIMITED GO` для операторов. Код, routing, prompts, thresholds и KB на время теста
-заморожены. Широкий трафик не включать до измерения полной ticket-level конверсии и разбора
-свежего holdout.
+Историческое решение на тот момент: `LIMITED GO` для операторов. Оно не действует после
+P0-инцидента; старый runtime не запускать.
 
 ### Архивная процедура gate для `eea1972` — не применять к `6249b08`
 
@@ -709,82 +729,94 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 
 ## 8. Известные ограничения и остаточные риски
 
+### Блокирующие сейчас
+
+- Старый сервер скомпрометирован и выключен. Причина проникновения, destinations/protocols и
+  полный scope неизвестны; Selectel ticket `3986352` ожидает ответа.
+- Старые IP, webhook, админка, TLS state, credentials, Docker/runtime data и backups недоверенны.
+  Ничего со старого сервера не переносить в новый контур.
+- Перевыпуск всех ключей и секретов ещё не выполнен и является отдельной обязательной задачей.
+- Доверенного runtime нет; release gate и операторский тест не активны.
+- Начатый 15 июля cohort прерван. Независимой финальной оценки полной multi-turn конверсии нет;
+  старые и новые тикеты нельзя объединять в одну метрику.
+
+### Качество, зафиксированное до остановки
+
+- Последний тест Наты выявил два локально воспроизводимых дефекта (`Начать` не маршрутизируется в
+  greeting; `Даты` после общего уточнения ошибочно трактуется как неизвестное название) и один
+  наблюдаемый Mashuk-дефект с подтверждёнными source/ranking evidence: длинный ответ пропускает
+  точные даты/смены/статус регистрации. Trace Наты отсутствует. Детали:
+  `docs/operator_feedback_20260715.md`.
+- Для «Машука» точные даты есть в Yonote, но topic-equivalence/source precedence не гарантируют
+  их выбор. `registration_deadline` не извлекается из фразы `дедлайн по регистрации`; разные
+  записи содержат 17 и 31 мая, а агрегированные чанки требуют content verdict. Yonote `s0009`
+  также содержит оспариваемые сведения о месячном сроке контакта, кураторах/чате и Положении,
+  поэтому backlog включает reconciliation источника, а не только routing/extraction.
 - Изображения и screenshot-only обращения не распознаются; применяется controlled escalation.
 - Не подключены как версионируемые источники сайт ФГАИС, официальные соцсети, ответы второй
   линии и внутренний новостной чат операторов.
-- Бот-анализатор HDE и автоматическая еженедельная генерация gap-ТЗ пока не подключены.
-- Нет независимой финальной оценки полной multi-turn конверсии на свежем holdout операторов.
-- Semantic audit не имеет ошибок. Остались четыре не блокирующих класса warnings: grant taxonomy
-  (`236` записей), normalized duplicate text (`234` группы/совпадения), одно registry-событие без
-  published chunks (`Время молодых`) и `79` Yonote/event labels вне pilot registry. Их нельзя
-  массово исправлять перед операторами без отдельной разметки: это риск taxonomy/dedup, а не
-  подтверждённая потеря ответа.
-- HDE всё ещё исполняет отправку через FastAPI `BackgroundTasks`, а не durable outbox. Stable
-  event id, lease lifecycle и fail-closed 503 существенно снижают риск дубля/потери при retry, но
-  не дают exactly-once после аварии процесса. Для контролируемого теста это наблюдаемый residual;
-  широкий трафик требует durable outbox.
-- Постоянный командный HTTPS для админки развёрнут отдельной infrastructure-only итерацией:
-  `https://139.100.225.44/admin/kb`, Let's Encrypt IP certificate, Certbot webroot, login
-  rate-limit и systemd renewal дважды в сутки. Сертификат выдан для IP, истекает
-  `2026-07-22 02:55:43 UTC`; `certbot renew --dry-run`, one-off `nginx -t`, graceful reload и
-  немедленный запуск renewal service прошли успешно. Внешняя проверка подтвердила HTTPS `200`,
-  SAN `IP Address:139.100.225.44`, HSTS/security headers и HTTPS `/ready=200`; HTTP-страница даёт
-  `308` на HTTPS, а plaintext login — `426` без redirect.
-- Первый infrastructure rollout выявил только Compose startup defect: custom Nginx entrypoint
-  был без явного `command`, поэтому контейнер завершился после старта. App/app-ml и данные не
-  затрагивались; Nginx восстановлен, дефект закрыт в `2eb1763`. Ложная проверка подключения
-  сервера к собственному public IP заменена на local webroot check в `6bad48e`, повторный запуск
-  сделан idempotent в `3efc704`. После recovery внешний ACME sentinel и `/ready` вернули `200`.
-- Закрытие локального терминала теперь не влияет на админку. SSH tunnel
-  остаётся только аварийным fallback. HTTP login/admin API запрещены; токен вводится только через
-  HTTPS. HDE webhook пока остаётся на существующем HTTP endpoint до отдельного согласованного
-  переключения.
-- Список чанков в админке по умолчанию ограничен 50 строками; это не размер KB. Runtime count
-  подтверждён: `2152`; полный seed содержит `2186` записей (`2152 published`, `34 archived`).
-- Панель `Quality` может показывать embedded presentation-report, а не последний private
-  server-local запуск. Актуальный финальный suite хранится в
-  `/app/data/private/prelaunch_20260715/final_full/summary.json`; live holdout-метрики смотреть в
-  `Работа бота`/ops-report и PostgreSQL traces.
-- TLS provisioning проверяет Nginx до переключения; security headers, скрытие версии, HSTS и
-  запрет индексации применяются в HTTPS-конфигурации. Из-за шестидневного срока IP-сертификата
-  renewal timer и его journal являются обязательной операционной проверкой.
-- После закрытия нового gate на время freeze в админке разрешены только read-only действия:
-  просмотр/поиск, `Validate`, ops/quality reports и `Yonote Preview`. Не использовать `Save`,
-  `Reindex` и `Apply to KB` до пакетного разбора операторского теста.
+- Semantic audit не имеет ошибок, но остаются warnings по grant taxonomy (`236` записей),
+  normalized duplicate text (`234` группы), событию `Время молодых` без published chunks и `79`
+  Yonote/event labels вне pilot registry. Массово исправлять без разметки нельзя.
+- HDE delivery использует FastAPI `BackgroundTasks`, а не durable outbox. Stable event id, lease
+  и fail-closed 503 снижают риск, но не обеспечивают exactly-once после аварии процесса.
+- Список админки по умолчанию показывает 50 строк, а не весь размер KB. Последний известный
+  pre-incident count — `2152` published из `2186` seed records; его нужно подтвердить заново.
+- Панель `Quality` может показывать embedded presentation-report, а не последний private suite.
+  После rebuild источником release-решения должен быть новый server-local artifact и trace.
 
-## 9. Активный план операторского теста
+## 9. Активный план восстановления и продолжения качества
 
-1. Holdout уже начат; сохранять freeze кода, routing, prompts, thresholds, cache policy и KB.
-2. Для каждого полного ticket фиксировать исход: direct answer, resolved after clarification,
-   justified escalation или незакрытый/ошибочный ответ. Считать конверсию только по закрытым
-   tickets, а не по отдельным сообщениям.
-3. Наблюдать readiness, delivery, duplicates, `5xx`, latency и TLS renewal без перезапусков и
-   массовых HDE-прогонов.
-4. Собирать ошибки пакетно: вопрос, история, ожидаемое поведение, фактический trace, operator
-   verdict и источник. Автоматический containment proxy не считать окончательной конверсией.
-5. Не исправлять каждый кейс сразу. Сначала классифицировать: knowledge gap, entity/topic,
-   retrieval, rerank, synthesis, verification, channel/infrastructure.
-6. После пары дней теста либо согласованного закрытия cohort получить операторский файл, снять
-   ticket-level агрегаты и до исправлений разделить новые кейсы на calibration и sealed holdout.
-7. После теста выполнить один контролируемый цикл исправлений с A/B-метриками.
-8. Затем подключать bot-analyzer/gap pipeline и дополнительные read-only источники.
-9. Приоритизированные findings и acceptance следующего RC брать из
-   `docs/conversion_growth_audit_20260715.md`; не смешивать изменения KB, routing, cache и prompts
-   в одном эксперименте.
-
-Полная оперативная инструкция: `docs/operator_holdout_runbook.md`.
+1. Сохранять старую VM в `SHUTOFF`; не выполнять на ней deploy, backup restore или запуск бота.
+   Не удалять VM/диск до согласования provider-side forensic image/evidence preservation;
+   наличие такого image пока не подтверждено.
+2. Параллельно вести Selectel ticket `3986352`: остановка трафика/тарификации, flow telemetry,
+   forensic options и рекомендации по удалению VM. Ответ не блокирует ротацию/clean host, но
+   требуется перед удалением старого evidence.
+3. Уведомить операторов/владельца HDE о паузе и отключить/заморозить старое webhook rule, чтобы
+   обращения не терялись и не считались новым тестом. Выполнение пока не подтверждено.
+4. Отдельной задачей перевыпустить все потенциально раскрытые ключи и секреты. Значения не
+   выводить и не коммитить.
+5. С доверенного локального устройства проверить GitHub account/audit history, deploy
+   keys/tokens, commits/tags/Actions; отозвать server deploy credentials и зафиксировать trusted
+   commit hash.
+6. Создать новую VM только из чистого vendor image. Не использовать старый image/snapshot/disk,
+   Docker images/volumes, `.env`, certificates, Redis, PostgreSQL/Qdrant artifacts или файлы хоста.
+7. Настроить SSH key-only и allowlist для 22/tcp; публично оставить 80/443; включить egress/flow
+   monitoring и traffic/CPU alerts.
+8. Выполнить clean Git checkout только после GitHub audit и сверить trusted commit с
+   `origin/master`. До provisioning отдельным
+   infrastructure change заменить hardcoded старый IP в Nginx/ACME scripts/tests/report builder на
+   новый endpoint; старые значения не применять.
+9. Собрать containers с нуля, создать новый `.env` только из новых секретов и выпустить новый TLS
+   certificate.
+10. Создать БД/Redis/Qdrant с нуля, применить migrations и заново индексировать только versioned
+    published seed frozen RC. Не выполнять свежий Yonote Apply и не загружать старые runtime
+    dump/snapshot.
+11. Выполнить preliminary security/runtime acceptance: local checks, migration head, `/ready`,
+    Qdrant count и короткий server-local smoke. HDE endpoint и operator cohort пока не включать.
+12. На чистом runtime воспроизвести feedback Наты, получить content verdict по «Машуку» и
+    выполнить один явно согласованный минимальный regression-first correction cycle. Если verdict
+    требует KB/Yonote change, оформить его отдельно, versioned и с validation/reindex.
+13. После исправлений пройти финальный полный server-local suite и короткий реальный HDE
+    delivery/dedupe smoke.
+14. Зафиксировать финальный handoff, включить новый HDE endpoint и начать новый cohort по
+    timestamp первого реального HDE trace.
+15. Считать ticket-level conversion на новом независимом cohort; старый interrupted cohort
+    использовать только как предварительный qualitative input.
 
 ## 10. Правило продолжения в новом чате
 
 Первый запрос:
 
 ```text
-Прочитай AGENTS.md, docs/CURRENT_STATE.md, docs/operator_holdout_runbook.md,
-docs/DECISIONS.md, docs/operator_response_policy.md и docs/pre_pilot_release_checklist.md.
-Ничего не меняй. Сначала проверь git status и последний commit, затем кратко перескажи:
-текущую цель, server/runtime, статус активного operator holdout, freeze, риски и следующий шаг.
+Прочитай AGENTS.md, docs/CURRENT_STATE.md, docs/security_incident_20260715.md,
+docs/operator_feedback_20260715.md, docs/operator_holdout_runbook.md и docs/DECISIONS.md.
+Ничего не меняй и ничего не переноси со старого сервера. Сначала проверь git status,
+git log -5 и origin/master, затем кратко перескажи: цель проекта, последнюю quality baseline,
+feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze и точный следующий шаг.
 ```
 
-Пока operator holdout не закрыт и не получены агрегаты плюс операторский файл, не вносить новые
-улучшения в код ответов, routing, prompts, thresholds, cache policy или KB. Следующий шаг нового
-чата — мониторинг либо пакетный анализ уже полученных результатов, а не повтор release gate.
+Ближайшая отдельная задача — безопасный перевыпуск всех ключей/секретов. После неё — clean
+rebuild без единого артефакта старого сервера. Улучшения greeting, clarification и «Машука»
+выполнять на чистом runtime после preliminary acceptance, но до финального gate и нового cohort.

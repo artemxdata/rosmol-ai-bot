@@ -1,167 +1,161 @@
-# Активный операторский holdout
+# Операторский holdout — прерван и ожидает чистого перезапуска
 
-**Статус:** запущен 15 июля 2026 после решения `LIMITED GO` и передачи бота операторам.
-**Главная цель:** измерить долю полных HDE-тикетов, закрытых ботом без оператора, на новых
-обращениях, которые не использовались для настройки текущего кандидата.
+**Статус на 16 июля 2026:** `PAUSED / INTERRUPTED BY P0 SECURITY INCIDENT`.
+**Release status:** `NO GO / SECURITY HOLD`.
+**Runtime:** старая VM выключена (`SHUTOFF`), бот/webhook/админка offline.
+**Причина:** подтверждённые признаки root-компрометации и аномальный исходящий трафик; см.
+`docs/security_incident_20260715.md`.
 
-Этот документ — оперативная инструкция на время теста. История исправлений и server evidence
-находятся в `docs/CURRENT_STATE.md`, действующие ограничения — в `docs/DECISIONS.md`.
+Этот документ сохраняет методику измерения, но **не разрешает** запускать команды, подключаться к
+старому IP или продолжать старый cohort. Сначала выполняются отдельная ротация секретов, clean
+rebuild и полный security/release gate.
 
-## Зафиксированный кандидат
+## Последний зафиксированный кандидат — историческая baseline
 
-- Код ответов в работающих `app/app-ml`: RC `8bca860`.
+- Код ответов: RC `8bca860`.
 - Migration: `007_hde_delivery_telemetry` (`head`).
-- Qdrant: `knowledge_base=2152` published records; полный seed содержит `2186`, из них `34`
-  archived.
-- Финальный server-local gate: smoke `16/16`; Yonote `15/15`; safety `16/16`; off-topic `8/8`;
-  PII `4/4`; adversarial `66/66`; follow-up `16/16` ходов и `4/4` диалога.
-- Forums `10/11` только из-за известного citation-ID mismatch при полном grounded-ответе; это
-  принято как неблокирующий regression artifact.
-- Реальный HDE gate: stable `message.id`, одна trace/одна отправка на inbound,
-  `delivery_status=delivered`, HTTP `200`, сохранение multi-turn контекста.
-- Общая админка: `https://139.100.225.44/admin/kb`; HTTPS и `/ready` проверены извне.
-- Сертификат IP действует до `2026-07-22 02:55:43 UTC`; Certbot dry-run успешен, systemd renewal
-  запускается дважды в сутки.
+- Последний известный Qdrant count: `2152` published из `2186` seed records, `34 archived`.
+- Server-local gate: smoke `16/16`; Yonote `15/15`; safety `16/16`; off-topic `8/8`; PII `4/4`;
+  adversarial `66/66`; follow-up `16/16` ходов и `4/4` диалога.
+- Forums `10/11` из-за известного citation-ID/coverage mismatch при фактически полном grounded
+  ответе.
+- Реальный HDE gate: stable `message.id`, одна trace/одна delivery на inbound,
+  `delivery_status=delivered`, HTTP `200`, multi-turn context сохранён.
 
-## Граница cohort
+Эти данные доказывают только pre-incident regression behavior. Они не являются current runtime
+health и должны быть повторены на новой инфраструктуре.
 
-Предварительная нижняя граница — `2026-07-15 11:54:43+00`, момент завершения HTTPS provisioning
-перед подтверждением передачи теста. Перед финальным расчётом нужно заменить её на timestamp
-первого фактического операторского HDE-тикета, если он начался позднее. В cohort включаются только
-новые HDE tickets; повторное использование старого `chat_id/ticket_id` помечается отдельно.
+## Прерванный cohort
 
-Не считать calibration/regression запросы, ручные smoke и обращения разработчика независимым
-holdout. Не публиковать сырые тексты или идентификаторы.
+Предварительная нижняя граница старого cohort была `2026-07-15 11:54:43+00`. До P0 были получены
+первые ручные наблюдения Наты, описанные в `docs/operator_feedback_20260715.md`.
 
-## Freeze на время теста
+Правила использования:
 
-До пакетного разбора результатов запрещено:
+- старый cohort не считается завершённым и не даёт финальную conversion estimate;
+- его нельзя объединять с новым cohort;
+- старые traces могут использоваться только как предварительный qualitative/calibration input
+  после проверки целостности;
+- provisioning, smoke, обращения разработчика и regression cases никогда не являются
+  независимым holdout;
+- сырые тексты/идентификаторы остаются только в `data/private/` и не коммитятся.
 
-- менять код ответов, routing, prompts, thresholds, cache policy и KB;
-- выполнять `Save`, `Reindex`, `Apply to KB` в админке;
-- запускать полную индексацию, очищать `response_cache`, Redis или историю диалогов;
-- менять HDE dispatcher payload и stable `message.id={last_post_id}`;
-- исправлять единичный неудачный вопрос сразу после его обнаружения;
-- открывать sealed holdout при последующей калибровке.
+## Recovery freeze
 
-Разрешены просмотр/поиск, `Validate`, ops/quality reports и `Yonote Preview`. Infrastructure P0/P1
-исправляется немедленно только при недоступности сервиса, потерях/дублях доставки, safety-дефекте
-или риске утечки данных. Ответы операторов не становятся KB-фактами автоматически.
+До preliminary security/runtime acceptance чистого контура запрещено:
 
-## Что мониторить без изменения поведения
+- включать старую VM или обращаться к старому IP, webhook, админке и SSH tunnel;
+- переносить что-либо со старого сервера в новый runtime;
+- менять код ответов, routing, prompts, thresholds, cache policy, dispatcher payload или KB;
+- исправлять по одному кейсы Наты;
+- запускать `Save`, `Reindex`, `Apply to KB`, полную индексацию или очистку cache/session;
+- считать автоматический containment proxy окончательной конверсией.
 
-В админке открыть `Работа бота` и смотреть ticket outcomes, delivery, latency, стоимость, cache,
-эскалации и проблемные темы. Серверный агрегированный отчёт за сутки:
+Разрешены read-only работа с локальным доверенным Git, документирование, анализ обезличенных
+материалов и планирование recovery. До clean deploy также разрешён отдельно согласованный
+минимальный infrastructure/security patch для нового endpoint/hardening с обязательными тестами;
+он не должен менять response behavior, routing, prompts, thresholds или KB. Все секреты
+перевыпускаются отдельной задачей и не попадают в документы/логи.
 
-```bash
-cd /opt/rosmol-ai-bot
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.ml.yml \
-  --profile ml \
-  exec -T app-ml python scripts/report_traces.py --days 1
-```
+После preliminary acceptance допускается второе явное исключение: один отдельно согласованный
+batch calibration correction по feedback Наты с regression-тестами и content verdict. Только в
+этой фазе можно менять необходимые response/routing/KB слои; после неё обязательны финальный
+полный gate, HDE smoke и новый handoff. До этой фазовой границы полный quality freeze сохраняется.
 
-Минимальная ежедневная проверка эксплуатации:
+## Уже сработавший stop-criterion
 
-```bash
-curl -fsS -w '\n' https://139.100.225.44/ready
-systemctl status --no-pager rosmol-admin-tls-renew.timer
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.ml.yml \
-  --profile ml \
-  logs --since 24h app-ml nginx
-```
+Первоначальный holdout должен был останавливаться при утечке секрета, недоступности runtime или
+другом P0 security issue. Этот критерий сработал. Обычные дефекты качества Наты сами по себе не
+остановили бы тест; причиной остановки является компрометация хоста.
 
-Искать `hde_send_`, `hde_delivery_trace_update_failed`, `request_trace_log_failed`, HTTP `5xx`,
-OOM/restart и повторные ответы. Логи не копировать в Git, если в них есть пользовательские данные.
+## Условия нового старта
 
-## Как считать технический containment proxy
+Новый operator cohort разрешён только когда выполнены все пункты:
 
-`ops-report` группирует HDE turns по `ticket_id_hash` и отдаёт:
+1. Новая VM создана из чистого vendor image; ничего со старого хоста не перенесено.
+2. Все потенциально раскрытые ключи и секреты перевыпущены отдельной задачей.
+3. SSH/Firewall/egress/monitoring настроены по `docs/security_incident_20260715.md`.
+4. С доверенного устройства проверены GitHub deploy keys/tokens, audit history, commits/tags и
+   Actions; server deploy credentials отозваны, trusted commit hash зафиксирован.
+5. Код получен clean checkout проверенного trusted commit из `origin/master`; hardcoded старый IP
+   удалён/параметризован в отдельном infrastructure patch и защищён тестами.
+6. PostgreSQL, Redis и Qdrant созданы с нуля; KB индексирована только из versioned published seed
+   frozen RC, без свежего Yonote Apply и без старого snapshot.
+7. Preliminary migration head, `/ready`, Qdrant count и server-local smoke зелёные.
+8. На чистом runtime воспроизведены кейсы Наты; согласован content verdict и закрыт один
+   regression-first correction cycle до открытия нового cohort.
+9. После fixes полный server-local suite зелёный, а короткий реальный HDE smoke подтверждает
+   stable event id, dedupe, одну доставку и telemetry.
+10. В `CURRENT_STATE.md` записаны новый host/commit без секретов и release decision.
 
-- `bot_resolved_first_turn`;
-- `bot_resolved_multi_turn`;
-- `operator_required`;
-- `unresolved_clarification`;
-- `not_delivered`, `delivery_unknown`, `error`, `unresolved`.
+Новая cohort boundary — timestamp первого реального операторского HDE trace **после** этого
+handoff. Она не переносится из старого теста.
 
-Технический proxy:
+## Freeze во время будущего нового holdout
 
-```text
-(bot_resolved_first_turn + bot_resolved_multi_turn) / traced HDE tickets cohort
-```
+После нового handoff снова запрещено менять code/routing/prompts/thresholds/cache/KB, исправлять
+единичные вопросы и открывать sealed holdout. Разрешены read-only мониторинг и сбор полного ticket
+context. Infrastructure P0/P1 корректируется только с regression и новым handoff.
 
-Уточнение считается успешным только после последующего delivered answer. Любая эскалация внутри
-тикета делает автоматический исход `operator_required`. Этот показатель не доказывает качество:
-система пока не знает, признал ли оператор ответ полным и правильным. Он также не видит входящий
-ticket, если webhook вообще не дошёл до приложения, поэтому не является финальной конверсией.
+## Что собирать от операторов
 
-Финальная conversion without operator считается по операторскому реестру:
+Для каждого спорного полного тикета нужны:
 
-```text
-полностью закрытые ботом tickets / все in-scope tickets операторского cohort
-```
-
-Реестр нужно сверить с traces. Любой in-scope ticket без trace нельзя исключать из знаменателя:
-он размечается как `delivery_or_channel_error` либо `unresolved` после проверки причины.
-
-Для точного cohort вместо rolling `--days` новый чат должен использовать ту же CASE-логику из
-`src/ops/reports.py::_fetch_ticket_outcomes`, заменив lookback на зафиксированный
-`TIMESTAMPTZ` старта. До подтверждения первого operator timestamp не зашивать новую дату в код.
-
-## Что получить от операторов
-
-Для каждого спорного тикета нужен файл или таблица со следующими полями:
-
-- ticket id или безопасный псевдоним, дата и весь порядок реплик;
-- вердикт: `correct`, `partial`, `wrong`, `unnecessary_escalation`, `missing_escalation`,
+- безопасный ticket pseudonym, дата и порядок реплик;
+- verdict: `correct`, `partial`, `wrong`, `unnecessary_escalation`, `missing_escalation` или
   `delivery_or_channel_error`;
-- смог ли бот полностью закрыть тикет без оператора;
-- ожидаемое поведение и, если известно, правильный ответ;
-- официальный источник/владелец факта либо отметка `source missing`;
-- комментарий, что именно было неясно, устарело или неполно.
+- полностью ли бот закрыл тикет без оператора;
+- ожидаемое поведение и правильный ответ, если он известен;
+- официальный источник/владелец факта либо `source missing`;
+- краткое описание неполноты, устаревания или неясности.
 
-Сырые файлы сохраняются только в `data/private/`. Перед Git допускаются только обезличенные
-regression cases и агрегаты.
+Сырые файлы хранятся только в `data/private/`. Ответ оператора не становится KB-фактом без
+контентной проверки.
 
-## Stop-criteria
+## Как считать метрику после нового старта
 
-Тест приостанавливается и начинается infrastructure/safety triage, если наблюдается хотя бы одно:
+Главная метрика:
 
-- safety-запрос получил обычный предметный ответ вместо немедленной эскалации;
-- подтверждённый unsupported/hallucinated факт с риском для пользователя;
+```text
+полностью закрытые ботом tickets / все in-scope tickets нового operator cohort
+```
+
+Отдельно публикуются first-turn closure, multi-turn resolution, justified escalation, delivery
+success, unsupported claims, latency p50/p95 и LLM cost. Уточнение становится успехом только если
+следом получен grounded delivered answer. Ticket без trace остаётся в знаменателе как
+`delivery_or_channel_error` или `unresolved` после проверки.
+
+`hde_ticket_resolution_rate`/ops-report — только технический containment proxy. Финальный verdict
+требует ручной оценки полного тикета.
+
+## Stop-criteria нового holdout
+
+Тест немедленно приостанавливается, если наблюдается хотя бы одно:
+
+- safety-запрос получил обычный ответ;
+- подтверждён unsupported/hallucinated факт с риском;
 - дубли публичного ответа, потеря accepted inbound или повторяемые delivery failures;
-- публичный webhook/ML runtime недоступен либо растёт HTTP `5xx`;
-- утечка секрета или немаскированных персональных данных.
+- публичный webhook/ML runtime недоступен или растёт `5xx`;
+- утечка секрета/ПДн или иной security indicator;
+- аномальный исходящий трафик, CPU или процесс вне ожидаемого Compose runtime.
 
-Обычный неправильный, неполный или избыточно уточняющий ответ фиксируется в batch и не снимает
-freeze сам по себе.
+## План качества после нового cohort
 
-## План после получения результатов
+1. Совместить trace outcomes с operator verdicts по полному ticket.
+2. Разделить новые failures на calibration и sealed holdout до исправлений.
+3. Классифицировать: knowledge, entity/topic, retrieval, rerank, synthesis, verification,
+   session/context, policy или channel/infrastructure.
+4. Начать с уже зафиксированных кейсов Наты, но не считать их sealed holdout после исправления.
+5. Выбрать минимальный пакет с максимальным влиянием на конверсию; не смешивать слои без
+   доказанной необходимости.
+6. Добавить regression, пройти calibration и один новый sealed holdout.
 
-1. Зафиксировать конец cohort и выгрузить агрегаты/trace evidence без секретов.
-2. Совместить технические outcomes с ручными operator verdicts по полному ticket.
-3. Посчитать first-turn closure, multi-turn resolution, итоговую conversion without operator,
-   justified escalation, unsupported claims, delivery success, latency p50/p95 и стоимость.
-4. До исправлений разделить новые кейсы на calibration и sealed holdout.
-5. Классифицировать failures: knowledge gap, entity/topic, retrieval, rerank, synthesis,
-   verification, session/context, policy либо channel/infrastructure.
-6. Выбрать минимальный пакет с наибольшим влиянием на конверсию; не смешивать KB, routing,
-   thresholds и prompts без доказанной необходимости.
-7. Добавить regression-тесты, выполнить calibration один раз и затем один sealed holdout.
-8. Только после нового server-local gate и короткого HDE smoke принимать следующий release
-   decision.
+## Остаточные продуктовые риски
 
-## Остаточные риски
-
-- `BackgroundTasks` не является durable outbox; широкий трафик требует persistent worker/outbox.
-- Shared `ADMIN_AUTH_TOKEN` даёт write-права; операторам разрешён только read-only режим.
-- Screenshot-only запросы требуют controlled escalation, OCR/vision нет.
-- Автоматический containment proxy требует ручного operator verdict для итоговой конверсии.
-- После тестового окна нужно планово ротировать Cloud.ru и Yonote API tokens, которые ранее
-  раскрылись в локальном служебном выводе Compose. Значения не находятся в Git; ротацию выполнять
-  согласованно, чтобы не прервать генерацию и Yonote read-only sync.
-- `USER_HASH_SECRET` при этой ротации не менять: согласно D-022 это разорвёт pseudonym, session и
-  ticket-level continuity.
+- `BackgroundTasks` не является durable outbox.
+- Shared admin token предоставляет write-права; полноценная ролевая read-only модель не сделана.
+- Screenshot-only запросы требуют controlled escalation; OCR/vision нет.
+- Feedback Наты показал greeting, clarification, source/topic/deadline extraction и answer
+  composition gaps.
+- Сайт ФГАИС, официальные соцсети и ответы второй линии ещё не подключены как versioned read-only
+  источники.

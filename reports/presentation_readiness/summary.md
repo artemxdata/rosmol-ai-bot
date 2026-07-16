@@ -1,6 +1,11 @@
 # Готовность к презентации
 
-Статус: **Готово к презентации**.
+Статус: **STALE / NO GO / SECURITY HOLD**.
+
+> Отчёт сгенерирован 7 июля и сохраняется только как исторический quality artifact. Старая VM и
+> админка выключены после P0-инцидента 15 июля. Не открывать старый URL, не проводить live demo и
+> не регенерировать этот отчёт до infrastructure parameterization, clean rebuild, correction cycle
+> по feedback Наты и нового финального gate.
 
 Это короткий контрольный лист перед демонстрацией руководству. Он не заменяет большой отчёт качества, а собирает главный вердикт из уже прогнанных gate-ов.
 
@@ -21,7 +26,7 @@
 
 ## Что показывать
 
-- Админ-панель: `http://139.100.225.44/admin/kb`.
+- Админ-панель: недоступна; новый HTTPS URL появится в `docs/CURRENT_STATE.md` после handoff.
 - Runbook показа: `docs/presentation_demo_runbook.md`.
 - Пакет для руководства: `docs/leadership_demo_pack.md`.
 - Большой отчёт качества: `reports/presentation_quality/presentation_quality_report.md`.

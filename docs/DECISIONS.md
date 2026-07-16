@@ -88,26 +88,20 @@ holdout.
 Сырые выгрузки хранятся в `data/private/`, не коммитятся, не копируются на сервер и не входят в
 Docker. В Git попадают только проверенные обезличенные кейсы и агрегаты.
 
-## D-014. Админка работает через постоянный HTTPS; SSH tunnel — аварийный fallback
+## D-014. Админка должна работать через постоянный HTTPS
 
-**Статус:** принято и развёрнуто 15 июля 2026.
-Общий адрес команды — `https://139.100.225.44/admin/kb`. Используется доверенный короткоживущий
-IP-сертификат Let's Encrypt, HTTP-01 webroot и автоматическое продление Certbot дважды в сутки.
-Обычный server Compose сохраняет TLS после последующих deployment: Nginx выбирает HTTPS-конфиг,
-когда на диске есть сертификат, а bind `443` хранится в server `.env`.
-
-HTTP перенаправляет только страницу `/admin/kb`; plaintext login и admin API отвечают `426`, чтобы
-не повторять POST с токеном через `307/308`. Login ограничен по частоте. Общий
-`ADMIN_AUTH_TOKEN` всё ещё даёт права изменения KB, поэтому на время operator holdout команда
-использует админку только read-only. Tunnel
-`ssh -N -L 18088:127.0.0.1:80 root@139.100.225.44` остаётся аварийным способом диагностики, а не
-штатным командным доступом.
+**Статус:** принцип принят; прежняя реализация выведена из эксплуатации 15 июля 2026.
+Старая админка `https://139.100.225.44/admin/kb`, её TLS state, admin credentials и SSH tunnel
+относятся к скомпрометированной VM и больше не используются. Новый общий HTTPS URL создаётся
+только на чистой VM с новым сертификатом и перевыпущенным admin token. Plaintext login/admin API
+по-прежнему запрещены; до нового security/release handoff админки нет.
 
 ## D-015. Deployment выполняется вручную пользователем
 
 **Статус:** принято.  
 Codex делает изменения, тесты, commit/push и предоставляет команды. Пользователь выполняет
-pull/rebuild/reindex на `/opt/rosmol-ai-bot`. Push не означает автоматический deployment.
+clean deployment на новом сервере вручную. Старый `/opt/rosmol-ai-bot` недоверен и не копируется;
+push не означает автоматический deployment.
 
 ## D-016. Изображения пока не распознаются
 
@@ -123,34 +117,32 @@ Screenshot-only обращение не должно приводить к вы�
 
 ## D-018. Текущий release candidate
 
-**Статус:** `LIMITED GO` для независимого операторского holdout-теста.
-Текущий code release candidate — `8bca860` поверх `98de023`, финальный operator handoff —
-`850ad46`; последний runtime-affecting HTTPS/retry-safety commit на сервере — `3efc704`.
+**Статус:** `NO GO / SECURITY HOLD`; прежний `LIMITED GO` отозван 15 июля 2026.
+Последний проверенный code release candidate — `8bca860` поверх `98de023`, operator handoff —
+`850ad46`; последний pre-incident holdout state — `6acf6fb`.
 Targeted follow-up прошёл `16/16` и `4/4` с заполненными eval identifiers; финальный smoke прошёл
 `16/16`, полный
 server-local suite выполнил все семь секций. После deployment коррекции реальный двухходовый
 HDE/VK smoke подтвердил качество, сохранение контекста, разные stable
 `message.id={last_post_id}`, одну trace/один ответ на inbound и delivery telemetry со статусом
 `delivered`, `attempted=true`, HTTP `200` и непустым `delivered_at`. Ошибки delivery update в логах
-отсутствуют; dedupe regression зелёный. В текущем операторском контуре нет искусственного
-ограничения ответов; до оценки ticket-level конверсии на свежих обращениях не расширяется только
-production-аудитория.
+отсутствовали; dedupe regression был зелёным. Это историческая quality baseline, а не работающий
+runtime: старая VM скомпрометирована и выключена, новый gate ещё не выполнен.
 
 ## D-019. Операторский тест измеряет конверсию при замороженном кандидате
 
-**Статус:** активно; бот передан операторам 15 июля 2026, freeze действует.
-На время независимого теста не меняются код, routing, prompts, thresholds и KB. Главный результат
+**Статус:** прерван P0-инцидентом 15 июля 2026; recovery freeze действует.
+На время восстановления не меняются код, routing, prompts, thresholds и KB. Главный результат
 считается по полным tickets: direct answer и успешное разрешение после уточнения являются закрытием
 без оператора; одно уточнение само по себе закрытием не считается. Новые обращения не исправляются
 по одному: часть сохраняется как holdout, остальные после теста разбираются одним пакетным циклом.
 Исторические XLSX и regression suite используются как baseline и защита от поломок, но не как
 доказательство обобщающей способности текущего RC.
 
-Предварительная нижняя граница cohort — `2026-07-15 11:54:43+00`; перед финальным расчётом она
-уточняется по первому реальному operator HDE trace. `hde_ticket_resolution_rate` является
-автоматическим containment proxy. Итоговая conversion without operator требует ручного verdict
-оператора по полному тикету; provisioning, smoke и старые `ticket_id` в независимый holdout не
-включаются. Активные инструкции находятся в `docs/operator_holdout_runbook.md`.
+Предварительная нижняя граница прерванного cohort была `2026-07-15 11:54:43+00`. Этот cohort не
+используется как финальная conversion estimate и не объединяется с будущим. Новая граница будет
+первым реальным HDE trace после clean rebuild и нового handoff. Feedback Наты сохраняется как
+предварительный calibration input в `docs/operator_feedback_20260715.md`.
 
 ## D-020. В runtime индексируются только published records
 
@@ -158,21 +150,42 @@ production-аудитория.
 Seed может содержать archived records для воспроизводимости source corrections, но Qdrant
 `knowledge_base` получает только `status=published`. Полная индексация требует forum registry и
 `--prune-stale`; после любого успешного изменения KB semantic response cache очищается полностью.
-Для текущего RC `8bca860` и его infrastructure descendants подтверждённый runtime count — `2152`,
-а не полный seed count `2186`.
+Для pre-incident RC `8bca860` последний подтверждённый runtime count был `2152`, а не полный seed
+count `2186`. Это историческое значение; новый Qdrant создаётся и проверяется с нуля.
 
 ## D-021. HDE delivery работает fail-closed и наблюдаемо
 
-**Статус:** принято для контролируемого теста.
+**Статус:** контракт принят; runtime сейчас отсутствует.
 Webhook обязан иметь стабильный event/ticket identity. Redis lease не позволяет параллельно
 обработать один event; Redis failure или collision возвращает retryable 503, успешная отправка
 фиксируется как delivered, ошибка освобождает lease. Migration `007` добавляет delivery telemetry.
-FastAPI BackgroundTasks не является durable outbox и остаётся блокером широкого трафика, но не
-короткого наблюдаемого операторского теста.
+FastAPI BackgroundTasks не является durable outbox и остаётся residual risk нового
+контролируемого теста после восстановления.
 
 ## D-022. Pseudonymization использует отдельный секрет
 
 **Статус:** принято.
 В staging/production `USER_HASH_SECRET` обязателен и не может подменяться API, webhook или admin
-token. Секрет создаётся один раз без вывода в терминал и не ротируется в обычном deployment:
-ротация намеренно разрывает pseudonym ID, session continuity и ticket-level аналитику.
+token. В обычном deployment он не ротируется, потому что ротация разрывает pseudonym ID, session
+continuity и ticket-level аналитику. Root-компрометация — обязательное исключение: старое значение
+считается раскрытым и перевыпускается отдельной задачей; потеря continuity принимается, будущий
+cohort начинается заново.
+
+## D-023. После компрометации допускается только clean rebuild
+
+**Статус:** принято 16 июля 2026.
+Старая VM остаётся выключенной и не используется как источник рабочего окружения. В новый runtime
+не переносятся старые OS images/disks, Docker images/volumes/cache, `.env`, certificates, SSH
+keys, Redis, PostgreSQL/Qdrant backup, runtime-файлы или binaries. Новый сервер строится из
+чистого vendor image, проверенного Git commit, новых секретов и заново полученных доверенных
+источников; Qdrant индексируется с нуля. Созданные на старом хосте dump/snapshot можно хранить
+только изолированно как недоверенные evidence, но не загружать в новый runtime.
+
+## D-024. Feedback Наты — backlog, а не опубликованный факт
+
+**Статус:** принято 16 июля 2026.
+Три первых замечания (`Начать`, последовательность `Даты`, длинный ответ про «Машук»)
+зафиксированы в `docs/operator_feedback_20260715.md` как воспроизводимые defects и будущие
+regression-кейсы. Формулировки оператора про сроки, контакты и Положение требуют verdict владельца
+контента; они не индексируются автоматически. Исправления начинаются только после clean rebuild и
+нового release handoff.

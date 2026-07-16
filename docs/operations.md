@@ -1,5 +1,11 @@
 # Operations Runbook
 
+> **P0 recovery status, 16 July 2026:** the previous VM, IP, webhook, admin URL and all server
+> artifacts are untrusted and offline. Do not run this runbook against the old host. A new runtime
+> must be built from a clean vendor image and trusted Git checkout after a separate complete secret
+> rotation. Do not copy old disks, images, volumes, `.env`, certificates, databases, backups or
+> runtime files. See `docs/security_incident_20260715.md`.
+
 ## Local Safety Rules
 
 - Do not commit `.env`, raw HDE/ticket exports, API keys, tokens, passwords, or server dumps.
@@ -180,9 +186,9 @@ Validate before indexing:
 
 Admin panel flow:
 
-> Active holdout override: while `docs/operator_holdout_runbook.md` says the operator test is
-> active, stop after Preview. Do not use `Apply to KB`, `Save`, `Reindex`, full indexing or cache
-> clearing. The steps below apply only after an explicitly approved batch change.
+> Recovery freeze override: no trusted admin panel currently exists. Do not open the old URL or
+> use old credentials. The steps below become available only after clean rebuild, a new HTTPS
+> handoff and an explicitly approved batch quality change; until then stop before any mutation.
 
 1. Open `/admin/kb`.
 2. Click `Yonote`.
@@ -207,70 +213,33 @@ release. Then run smoke checks against `http://127.0.0.1:8001/ask` with `X-Bypas
 
 ## Secure Admin Access
 
-The shared team URL is:
+There is currently no trusted shared admin URL. The former address
+`https://139.100.225.44/admin/kb`, its certificate, SSH tunnel and admin token belong to the
+compromised host and must not be used.
 
-```text
-https://139.100.225.44/admin/kb
-```
+On the new clean VM:
 
-It stays available when an operator closes their terminal. Nginx terminates TLS
-with a trusted Let's Encrypt IP certificate, rejects plaintext admin login/API
-traffic, rate-limits login attempts and forwards the HTTPS scheme so the app
-sets a `Secure`, `HttpOnly`, `SameSite=Lax` session cookie.
+1. provision a new HTTPS endpoint with a new certificate and new admin token;
+2. keep plaintext admin login/API disabled and rate-limit login attempts;
+3. verify `Secure`, `HttpOnly`, `SameSite=Lax` session cookies and security headers;
+4. store certificate state only on the new host and verify automatic renewal;
+5. publish the new team URL in `CURRENT_STATE.md` only after external HTTPS and `/ready` checks;
+6. use the admin in read-only mode during a new holdout: search/view, `Validate`, ops/quality
+   reports and `Yonote Preview`; do not use `Save`, `Reindex` or `Apply to KB`.
 
-Initial one-time provisioning was completed on 15 July 2026. Do not rerun it during the active
-holdout unless HTTPS/Nginx incident recovery requires it. Provisioning is an infrastructure
-maintenance action: it
-recreates only Nginx once to mount ACME/TLS files, then activates TLS with a
-graceful reload; it does not rebuild or restart the
-application, change routing, mutate KB or reindex Qdrant:
-
-```bash
-cd /opt/rosmol-ai-bot
-bash scripts/provision_admin_https.sh
-```
-
-The script verifies the local HTTP-01 webroot, lets Certbot perform the external ACME validation,
-obtains the IP certificate, runs a renewal
-dry-run and `nginx -t` before switching, opens TCP 443 in UFW, installs a
-twice-daily persistent systemd renewal timer, and verifies the final HTTPS URL.
-IP certificates are valid for about six days, so keep this timer enabled:
-
-```bash
-systemctl status --no-pager rosmol-admin-tls-renew.timer
-systemctl list-timers --all rosmol-admin-tls-renew.timer
-journalctl -u rosmol-admin-tls-renew.service --since "7 days ago" --no-pager
-```
-
-After provisioning, ordinary `docker compose -f docker-compose.yml -f
-docker-compose.ml.yml --profile ml ...` commands retain HTTPS because the base
-Nginx service mounts both configs and selects TLS whenever the certificate is
-present. The server `.env` keeps `NGINX_TLS_BIND=0.0.0.0` and
-`NGINX_TLS_HOST_PORT=443`; do not remove those two non-secret values.
-
-Do not use `http://139.100.225.44/admin/kb` for login. It only redirects the
-page to HTTPS; admin API endpoints refuse plaintext requests. If HTTPS is under
-diagnosis, the emergency fallback remains an SSH tunnel:
-
-```bash
-ssh -N -L 18088:127.0.0.1:80 root@139.100.225.44
-```
-
-That fallback exists only while its SSH process is running and is not the team
-URL. The HDE dispatcher may stay on its existing HTTP webhook during the
-controlled operator holdout; move it to HTTPS before broad production traffic.
-
-During the active operator test the shared admin token grants write access but must be used in
-read-only mode: search/view, `Validate`, ops/quality reports and `Yonote Preview` only. Live
-holdout metrics come from `Работа бота`/`/admin/kb/ops-report` and PostgreSQL traces; the embedded
-static `Quality` report can describe an earlier release gate. Follow
-`docs/operator_holdout_runbook.md` for cohort, conversion and stop-criteria.
+Do not reuse any ACME directory, TLS private key, `.env` or tunnel command from the old host.
 
 ## Server Staging Deploy
 
-Current staging target: Ubuntu 24.04 host with Docker already installed.
-The application container is bound to localhost only; public traffic must go
-through nginx.
+Current staging target does not yet exist. Create a new Ubuntu 24.04 VM from the provider's clean
+image; never clone or attach the old VM/disk. The application container is bound to localhost
+only; public traffic must go through Nginx.
+
+Before application bootstrap, configure the provider security group: allow 22/tcp only from a
+trusted admin IP/VPN and expose only 80/443 publicly. Install and verify Docker Engine plus the
+Compose plugin from the trusted official repository; a clean vendor image must not be assumed to
+contain Docker. Then apply the same restrictions in UFW. Exact bootstrap commands belong to the
+separate reviewed infrastructure task for the selected provider/image.
 
 Install missing base tools:
 
@@ -295,7 +264,7 @@ Clone the private repository with a read-only GitHub deploy key. Do not paste
 private keys or `.env` contents into chats:
 
 ```bash
-ssh-keygen -t ed25519 -C "rosmol-ai-bot-deploy@rag-llmchatme" -f /root/.ssh/rosmol_ai_bot_deploy -N ""
+ssh-keygen -t ed25519 -C "rosmol-ai-bot-clean-deploy" -f /root/.ssh/rosmol_ai_bot_deploy -N ""
 cat /root/.ssh/rosmol_ai_bot_deploy.pub
 ```
 
@@ -318,7 +287,8 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Fill `.env` manually on the server. Minimum staging overrides:
+Fill a brand-new `.env` manually on the new server. Do not copy the old file. Minimum staging
+overrides:
 
 ```dotenv
 APP_ENV=staging
@@ -331,8 +301,9 @@ INSTALL_ML=false
 
 Also set real secrets and strong database credentials in `.env`: Cloud.ru API
 key, API/webhook/admin tokens, `POSTGRES_PASSWORD`, and matching
-`POSTGRES_DSN`. `USER_HASH_SECRET` is mandatory outside local/test and must be a separate stable
-random value; do not copy one of the operational tokens into it and do not print it in logs.
+`POSTGRES_DSN`. Every value potentially present on the old host must have been rotated first.
+`USER_HASH_SECRET` is mandatory outside local/test and must be a new separate random value; do
+not reuse the old value or an operational token and do not print it in logs.
 
 Start and verify:
 
@@ -345,7 +316,7 @@ curl -fsS http://127.0.0.1/ready
 Open only required ports:
 
 ```bash
-ufw allow OpenSSH
+ufw allow from <TRUSTED_ADMIN_IP_OR_VPN_CIDR> to any port 22 proto tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
@@ -497,6 +468,9 @@ locally through `/ask`; do not use HDE/VK as a load-test transport.
 
 ## PostgreSQL Backup
 
+These commands are for future backups created on a verified clean runtime. The dump made on the
+old compromised VM is untrusted and must not be restored into the new runtime.
+
 Create a local dump from Docker:
 
 ```powershell
@@ -504,14 +478,15 @@ docker compose exec postgres pg_dump -U rosmol -d rosmol_ai_bot -Fc -f /tmp/rosm
 docker compose cp postgres:/tmp/rosmol_ai_bot.dump .\backups\rosmol_ai_bot.dump
 ```
 
-Restore into an empty database:
-
-```powershell
-docker compose cp .\backups\rosmol_ai_bot.dump postgres:/tmp/rosmol_ai_bot.dump
-docker compose exec postgres pg_restore -U rosmol -d rosmol_ai_bot --clean --if-exists /tmp/rosmol_ai_bot.dump
-```
+Restore is intentionally omitted from the active recovery runbook. A future verified backup may
+be restored only into a newly created empty/disposable target after checking the absolute project
+path, database name, checksum and maintenance window. Never run `--clean` against an unidentified
+or active production database.
 
 ## Qdrant Backup
+
+These commands are for future snapshots of a verified clean runtime. Do not restore the old
+Qdrant snapshot; rebuild the frozen baseline collection from the trusted versioned Git seed.
 
 For local Docker volumes, prefer filesystem-level snapshots while Qdrant is stopped:
 
@@ -521,13 +496,9 @@ docker run --rm -v rosmol-ai-bot_qdrant_storage:/qdrant/storage -v ${PWD}\backup
 docker compose start qdrant
 ```
 
-Restore a Qdrant volume snapshot only into a stopped Qdrant service:
-
-```powershell
-docker compose stop qdrant
-docker run --rm -v rosmol-ai-bot_qdrant_storage:/qdrant/storage -v ${PWD}\backups:/backup alpine sh -c "rm -rf /qdrant/storage/* && tar xzf /backup/qdrant_storage.tgz -C /qdrant/storage"
-docker compose start qdrant
-```
+Restore is intentionally omitted from the active recovery runbook. A future trusted snapshot must
+be restored into a new named volume/collection and validated before traffic is switched. Never
+delete or overwrite the active Qdrant volume as part of an ad-hoc rollback.
 
 ## Runtime Checks
 
