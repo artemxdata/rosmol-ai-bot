@@ -208,9 +208,12 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Проверки patch: Git Bash `bash -n` — успешно; Compose `config --quiet` с ML profile — успешно;
   targeted tests — `16 passed`; `ruff check .` — успешно; полный `pytest` — `1182 passed`; KB
   validate — `2186 valid`, из них `2152 published`.
-- Это ещё не разрешение создавать новый server: сначала patch должен быть опубликован в GitHub,
-  live `origin/master` повторно проверен и новый trusted commit SHA зафиксирован. Secret rotation
-  и GitHub Settings audit остаются отдельными обязательными gates до provisioning.
+- Infrastructure/security patch опубликован в GitHub commit
+  `7fb844b936263818bd3aff6d826a8da3627e690f`; live `origin/master` повторно проверен, локальный
+  `master` совпадает с remote и working tree был чистым после push.
+- Это ещё не разрешение создавать новый server: live GitHub Settings/account audit, оставшийся
+  revoke-only этап и provider account/control-plane audit остаются обязательными gates до
+  provisioning. Финальный trusted SHA фиксируется только после этих проверок.
 
 ### Последнее подтверждённое состояние до инцидента — только историческая baseline
 
