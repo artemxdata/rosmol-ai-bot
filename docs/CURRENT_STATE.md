@@ -743,6 +743,9 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   только к старому host, удалён вместе с public part/config/known_hosts entries. Отдельный
   `id_ed25519` другого проекта сохранён и не изменялся. Остальные credential classes ещё не
   закрыты.
+- Глобальный HDE API key пока не инвалидирован: он может использоваться другими интеграциями.
+  Изменение остановлено до dependency inventory и подтверждения Лёши. Два dispatcher rule нашего
+  старого webhook можно удалить независимо; выполнение ещё не подтверждено.
 - 16 июля выполнен read-only инвентарь credential classes без чтения `.env` и без вывода
   значений. Для Cloud.ru, GitHub deploy access и Yonote provider-side отзыв подтверждён
   владельцем; для остальных external classes он ещё не закрыт. Полный журнал и порядок находятся
@@ -789,8 +792,8 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
    обращения не терялись и не считались новым тестом. Выполнение пока не подтверждено.
 4. Выполнять revoke-only этап строго по `docs/secret_rotation_20260716.md`. Значения не выводить
    и не коммитить. Cloud.ru API keys, GitHub server deploy key и Yonote tokens уже удалены
-   владельцем. Текущий точный шаг — в HDE выключить оба старых dispatcher rule и удалить
-   `HDE_API_KEY`; новые credentials сейчас не создавать.
+   владельцем. Текущий точный шаг — удалить только два старых HDE dispatcher rule. Глобальный
+   `HDE_API_KEY` не менять до ответа Лёши; новые credentials сейчас не создавать.
 5. С доверенного локального устройства проверить GitHub account/audit history, deploy
    keys/tokens, commits/tags/Actions; отозвать server deploy credentials и зафиксировать trusted
    commit hash.
@@ -833,6 +836,7 @@ feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze и то
 
 Ближайшая отдельная задача уже начата: revoke-only этап ведётся по
 `docs/secret_rotation_20260716.md`; Cloud.ru API keys, GitHub server deploy key и Yonote tokens
-удалены, HDE и Selectel остаются следующими. Новые credentials будут созданы в отдельном чате.
+удалены, HDE dispatcher/глобальный API key и Selectel остаются следующими. Глобальный HDE key
+заблокирован на согласовании с Лёшей. Новые credentials будут созданы в отдельном чате.
 После неё — clean rebuild без единого артефакта старого сервера. Улучшения greeting, clarification и «Машука»
 выполнять на чистом runtime после preliminary acceptance, но до финального gate и нового cohort.

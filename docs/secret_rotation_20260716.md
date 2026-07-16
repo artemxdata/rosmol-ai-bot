@@ -50,7 +50,8 @@ Private evidence хранится вне Git; в журнале допустим
 | 1 | Cloud.ru `CLOUD_RU_API_KEY` | `old_revoked` | `not_started` | Владелец удалил все Cloud.ru API keys 16 июля; audit/usage ещё проверить; новый least-privilege key — только в будущей задаче |
 | 2 | GitHub server deploy key | `old_revoked` | `not_started` | Владелец удалил старый deploy key 16 июля; новый отдельный Ed25519 deploy key создать только на новой VM, read-only |
 | 2a | GitHub PAT / account SSH keys / OAuth Apps / webhooks / sessions | `not_started` | `not_started` | Проверить security log и account/repository settings; удалить всё серверное, неизвестное или недоверенное |
-| 3 | HDE `HDE_API_KEY` и API-user access | `not_started` | `not_started` | Dispatcher сначала должен быть disabled; новый service-user/key проверить read-only API-вызовом до включения доставки |
+| 3a | HDE dispatcher rules старого webhook | `not_started` | `not_started` | Удалить только два правила бота со старым endpoint; это не требует изменения глобального API key |
+| 3b | HDE global `HDE_API_KEY` и API-user access | `blocked` | `not_started` | Ключ глобальный и может использоваться другими интеграциями; не инвалидировать до dependency inventory и подтверждения Лёши |
 | 4 | Yonote `YONOTE_API_TOKEN` | `old_revoked` | `not_started` | Владелец удалил все Yonote tokens 16 июля; новый token позже строго read-only, без `Apply to KB` |
 | 5 | Selectel account password, MFA, sessions | `not_started` | `not_started` | Сменить пароль/MFA recovery, завершить старые/неизвестные sessions; старая VM остаётся `SHUTOFF` |
 | 6 | Selectel API/application/service credentials | `not_started` | `not_started` | Отозвать все credentials, которые могли быть на VM или имеют неизвестное происхождение; новые — только least privilege |
@@ -93,7 +94,8 @@ developers.sber.ru OAuth, VK Bot API token, MAX Bot API token или Hugging Fac
 Порядок минимизирует финансовый и supply-chain риск. Выполнено: Cloud.ru API key, GitHub server
 deploy key и Yonote token. Остаётся:
 
-1. HDE dispatcher rules и `HDE_API_KEY`;
+1. удалить HDE dispatcher rules старого webhook; глобальный `HDE_API_KEY` отдельно ожидает
+   подтверждения владельца зависимостей;
 2. Selectel API/application credentials, project SSH keys и control-plane sessions;
 3. GitHub PAT/account SSH/OAuth/webhooks/sessions, если они существуют;
 4. registry, DNS, n8n и остальные найденные интеграции.
@@ -139,6 +141,7 @@ read-only deploy key и новый TLS/ACME state. Новый `.env` набир�
 | 2026-07-16T05:04:44Z | Yonote | Все старые API tokens удалены владельцем | Yonote API access | Подтверждение владельца | incident chat |
 | 2026-07-16T05:04:44Z | Local workspace | Старый ignored `.env` удалён без чтения содержимого | local secret file | Exact path verified inside workspace; `.env.example` сохранён | local command result |
 | 2026-07-16T05:04:44Z | Local SSH | Dedicated keypair старой VM, её SSH config и host-key записи удалены | public fingerprint `SHA256:trScMDf+4p3DC/9LYfnYeaVrFrGOaUmdZ8yLpZGyKz4` | Конфиг однозначно указывал на старый host; key другого проекта `id_ed25519` сохранён | local command result |
+| 2026-07-16T05:21:10Z | HDE | Ротация глобального API key остановлена до согласования | Global HDE API access | Ключ может обслуживать чужие интеграции; ожидается подтверждение Лёши | incident chat |
 
 Допустимы provider status `revoked/deleted`, label, role/scope, HTTP status безопасного теста,
 public SSH fingerprint, TLS serial/fingerprint, trusted Git SHA, новый VM UUID и агрегированные
@@ -150,6 +153,6 @@ cookie, Authorization header, `.env` и HDE payload с персональным�
 
 ## Следующий точный шаг
 
-В HDE выключить оба dispatcher rule старого webhook и удалить старый `HDE_API_KEY`; проверить
-API users/sessions/automations и зафиксировать только status/UTC/нечувствительный object label.
-Новый HDE key, webhook token и trigger prefix сейчас не создавать.
+В HDE удалить только два dispatcher rule старого webhook. Глобальный `HDE_API_KEY` не менять до
+ответа Лёши о зависимых интеграциях. Параллельно перейти к read-only inventory Selectel API keys,
+service users и profile SSH keys; ничего неизвестного не удалять без идентификации.
