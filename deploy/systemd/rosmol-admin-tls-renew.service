@@ -1,5 +1,5 @@
 [Unit]
-Description=Renew Rosmol admin IP TLS certificate
+Description=Renew Rosmol admin TLS certificate
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target

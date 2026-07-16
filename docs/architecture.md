@@ -895,8 +895,8 @@ Redis TTL бот восстанавливает событие, тему, сущ
 
 Реализованное состояние: FastAPI-эндпоинты, embedded HTML/CSS/JS UI, versioned JSON seed и
 точечный Qdrant upsert. Авторизация — `X-Admin-Token` с короткой HttpOnly session-cookie после
-входа. На 16 июля 2026 доверенного runtime/URL нет: прежняя VM и
-`https://139.100.225.44/admin/kb` выведены из эксплуатации после P0-компрометации. Новый
+входа. На 16 июля 2026 доверенного runtime/URL нет: прежняя VM и её публичная админка
+выведены из эксплуатации после P0-компрометации. Новый
 командный HTTPS URL и credentials создаются только при clean rebuild; во время recovery freeze и
 будущего holdout админка не используется для Apply/Save/Reindex.
 PostgreSQL `chunk_versions`, React и автоматическая публикация из CI не участвуют в текущем

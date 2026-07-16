@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-PUBLIC_IP="139.100.225.44"
+PUBLIC_HOST="${ADMIN_PUBLIC_HOST:-}"
+CERT_NAME="rosmol-admin"
 PROJECT_DIR="/opt/rosmol-ai-bot"
-CERTIFICATE="data/private/letsencrypt/live/${PUBLIC_IP}/fullchain.pem"
-PRIVATE_KEY="data/private/letsencrypt/live/${PUBLIC_IP}/privkey.pem"
+CERTIFICATE="data/private/letsencrypt/live/${CERT_NAME}/fullchain.pem"
+PRIVATE_KEY="data/private/letsencrypt/live/${CERT_NAME}/privkey.pem"
 
 BASE_COMPOSE=(
   docker compose
@@ -57,6 +58,18 @@ main() {
     return 1
   fi
 
+  if [ -z "$PUBLIC_HOST" ]; then
+    fail "задай ADMIN_PUBLIC_HOST с новым DNS-именем или публичным IPv4-адресом"
+    return 1
+  fi
+
+  case "$PUBLIC_HOST" in
+    *[!A-Za-z0-9.-]*)
+      fail "ADMIN_PUBLIC_HOST должен содержать только DNS-имя или IPv4-адрес без схемы и пути"
+      return 1
+      ;;
+  esac
+
   cd "$PROJECT_DIR" || {
     fail "не найден каталог ${PROJECT_DIR}"
     return 1
@@ -99,16 +112,22 @@ main() {
 
   rm -f "data/private/acme-webroot/.well-known/acme-challenge/${probe_name}"
 
-  log "Получаю доверенный короткоживущий сертификат Let's Encrypt для IP"
+  local -a certbot_target_args
+  if [[ "$PUBLIC_HOST" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    certbot_target_args=(--preferred-profile shortlived --ip-address "$PUBLIC_HOST")
+  else
+    certbot_target_args=(--domains "$PUBLIC_HOST")
+  fi
+
+  log "Получаю новый сертификат Let's Encrypt для явно заданного endpoint"
   "${TLS_COMPOSE[@]}" --profile ml --profile tls run --rm --no-deps certbot certonly \
     --non-interactive \
     --agree-tos \
     --register-unsafely-without-email \
-    --preferred-profile shortlived \
     --webroot \
     --webroot-path /var/www/certbot \
-    --cert-name "$PUBLIC_IP" \
-    --ip-address "$PUBLIC_IP" || return 1
+    --cert-name "$CERT_NAME" \
+    "${certbot_target_args[@]}" || return 1
 
   if [ ! -s "$CERTIFICATE" ] || [ ! -s "$PRIVATE_KEY" ]; then
     fail "Certbot не создал ожидаемые файлы сертификата"
@@ -153,9 +172,9 @@ main() {
 
   log "Проверяю renewal и безопасный HTTPS-доступ"
   systemctl start rosmol-admin-tls-renew.service || return 1
-  curl -fsS --max-time 20 -o /dev/null "https://${PUBLIC_IP}/admin/kb" || return 1
+  curl -fsS --max-time 20 -o /dev/null "https://${PUBLIC_HOST}/admin/kb" || return 1
 
-  log "Готово: https://${PUBLIC_IP}/admin/kb работает без SSH-туннеля"
+  log "Готово: новый HTTPS endpoint админ-панели работает без SSH-туннеля"
 }
 
 main "$@"

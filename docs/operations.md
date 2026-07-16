@@ -213,9 +213,8 @@ release. Then run smoke checks against `http://127.0.0.1:8001/ask` with `X-Bypas
 
 ## Secure Admin Access
 
-There is currently no trusted shared admin URL. The former address
-`https://139.100.225.44/admin/kb`, its certificate, SSH tunnel and admin token belong to the
-compromised host and must not be used.
+There is currently no trusted shared admin URL. The former public address, its certificate,
+SSH tunnel and admin token belong to the compromised host and must not be used.
 
 On the new clean VM:
 
@@ -228,6 +227,13 @@ On the new clean VM:
    reports and `Yonote Preview`; do not use `Save`, `Reindex` or `Apply to KB`.
 
 Do not reuse any ACME directory, TLS private key, `.env` or tunnel command from the old host.
+
+The provisioning script has no endpoint fallback and fails closed unless the new host is passed
+explicitly. Run it only on the clean VM after the new DNS name or IPv4 address is approved:
+
+```bash
+ADMIN_PUBLIC_HOST=<NEW_DNS_NAME_OR_IPV4> bash scripts/provision_admin_https.sh
+```
 
 ## Server Staging Deploy
 

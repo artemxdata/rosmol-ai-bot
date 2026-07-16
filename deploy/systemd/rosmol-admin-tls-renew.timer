@@ -1,5 +1,5 @@
 [Unit]
-Description=Renew Rosmol admin IP TLS certificate twice daily
+Description=Renew Rosmol admin TLS certificate twice daily
 
 [Timer]
 OnBootSec=10min

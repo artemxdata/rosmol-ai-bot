@@ -4,7 +4,7 @@
 
 Инцидент **временно локализован**, но не расследован и не закрыт:
 
-- виртуальная машина `rag_llmchatme` выключена (`SHUTOFF`);
+- скомпрометированная виртуальная машина выключена (`SHUTOFF`);
 - старые бот, webhook и админка недоступны;
 - обращение Selectel `3986352` зарегистрировано, ответ поддержки пока не получен;
 - подтверждение прекращения тарифицируемого трафика со стороны провайдера пока отсутствует;
@@ -22,13 +22,12 @@ pending-вопросы Selectel ticket `3986352`.
 
 ## Затронутый контур
 
-- имя VM: `rag_llmchatme`;
-- UUID: `8847c56f-9191-46fc-8a12-2075e28ab888`;
-- прежний публичный IP: `139.100.225.44`;
-- регион провайдера: `ru-3` (зона из интерфейса — `ru-3b`);
-- проект провайдера: `e770209df58e409988138d1c895b9fdb`.
-
-Эти идентификаторы не являются секретами и записаны только для связи с обращением провайдера.
+Точные имя VM, UUID, прежний публичный IP, регион/зона и provider project ID удалены из текущего
+tracked tree. Они остаются в предшествующей Git history; её destructive rewrite не требуется для
+clean rebuild и выполняется только как отдельное явно согласованное решение. Актуальные
+provider-side identifiers хранятся в private incident evidence и обращении провайдера. Для
+recovery достаточно границы доверия: весь прежний host и связанные с ним endpoint/TLS/runtime
+artifacts недоверенны.
 
 ## Подтверждённые наблюдения
 
@@ -180,10 +179,9 @@ Redis в legacy-конфигурации не имел password, а Qdrant — A
 9. Включить доступные у провайдера egress-ограничения, flow logging и алерты по трафику/CPU.
 10. Получить код новым clean checkout только после GitHub audit и сверить trusted commit с
    `origin/master`.
-11. До provisioning заменить IP-specific infrastructure configuration старого хоста на новый
-   endpoint. Сейчас прежний IP ожидаемо остаётся в `nginx/admin-tls.conf`,
-   `nginx/select-config.sh`, `scripts/provision_admin_https.sh`, `tests/test_admin_tls.py` и
-   `scripts/build_presentation_readiness.py`; эти значения нельзя применять на новой VM.
+11. Использовать только параметризованный infrastructure flow: новый endpoint передаётся явно
+   через `ADMIN_PUBLIC_HOST`, plaintext admin остаётся fail-closed до появления нового
+   сертификата, а readiness report не публикует URL до clean-rebuild handoff.
 12. Создать новый `.env` только из перевыпущенных секретов; выпустить новый TLS certificate.
 13. Пересоздать PostgreSQL/Redis/Qdrant и KB с нуля. Старые runtime backup/snapshot не
    восстанавливать.

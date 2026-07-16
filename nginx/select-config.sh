@@ -1,7 +1,7 @@
 #!/bin/sh
 
-certificate="/etc/letsencrypt/live/139.100.225.44/fullchain.pem"
-private_key="/etc/letsencrypt/live/139.100.225.44/privkey.pem"
+certificate="/etc/letsencrypt/live/rosmol-admin/fullchain.pem"
+private_key="/etc/letsencrypt/live/rosmol-admin/privkey.pem"
 force_http="/etc/letsencrypt/.force-http"
 
 if [ ! -e "$force_http" ] && [ -s "$certificate" ] && [ -s "$private_key" ]; then

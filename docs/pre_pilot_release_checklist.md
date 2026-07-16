@@ -77,15 +77,11 @@ Docker images/volumes/cache, Redis, PostgreSQL/Qdrant backup или другие
 7. выпустить новый TLS certificate;
 8. только затем поднимать ingress и выполнять preliminary acceptance.
 
-До любого provisioning active infrastructure не должна содержать старый IP. Локальный blocker:
-
-```powershell
-rg -n "139\.100\.225\.44" nginx scripts tests
-```
-
-Пока команда находит active Nginx/ACME/report-builder/test значения, deployment запрещён. Сначала
-нужен отдельный reviewed infrastructure parameterization commit и зелёные tests. Упоминания IP в
-incident documentation могут оставаться как evidence.
+До любого provisioning active infrastructure не должна содержать retired endpoint. Reviewed
+parameterization patch должен быть частью trusted commit: `ADMIN_PUBLIC_HOST` обязателен, HTTP
+admin закрыт до выпуска сертификата, cert path нейтрален, а readiness report не публикует URL до
+handoff. Точные provider identifiers проверяются по private incident evidence, а не хранятся в
+актуальном tracked tree.
 
 Indexer берёт только `published` records, удаляет stale points и очищает semantic cache после
 успешной KB mutation. Команды выполняются из clean checkout:

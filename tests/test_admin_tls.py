@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-PUBLIC_IP = "139.100.225.44"
+CERT_NAME = "rosmol-admin"
 
 
 def _read(path: str) -> str:
@@ -15,6 +15,15 @@ def test_default_nginx_serves_acme_webroot_without_stopping_http() -> None:
     assert "location ^~ /.well-known/acme-challenge/" in config
     assert "root /var/www/certbot;" in config
     assert "try_files $uri =404;" in config
+
+
+def test_default_nginx_refuses_plaintext_admin_during_tls_bootstrap() -> None:
+    config = _read("nginx/default.conf")
+
+    assert "location = /admin/kb {" in config
+    assert "location ^~ /admin/kb/ {" in config
+    assert config.count("return 426;") == 2
+    assert "set $admin_backend" not in config
 
 
 def test_base_compose_keeps_tls_after_future_routine_deploys() -> None:
@@ -41,8 +50,8 @@ def test_certbot_compose_uses_ip_capable_version_and_private_rw_mounts() -> None
 def test_nginx_selects_tls_only_when_certificate_and_key_exist() -> None:
     selector = _read("nginx/select-config.sh")
 
-    assert f"live/{PUBLIC_IP}/fullchain.pem" in selector
-    assert f"live/{PUBLIC_IP}/privkey.pem" in selector
+    assert f"live/{CERT_NAME}/fullchain.pem" in selector
+    assert f"live/{CERT_NAME}/privkey.pem" in selector
     assert "[ -s \"$certificate\" ]" in selector
     assert "[ -s \"$private_key\" ]" in selector
     assert "admin-tls.conf" in selector
@@ -50,12 +59,13 @@ def test_nginx_selects_tls_only_when_certificate_and_key_exist() -> None:
     assert 'exec /docker-entrypoint.sh "$@"' in selector
 
 
-def test_plain_http_redirects_only_admin_page_and_refuses_login_api() -> None:
+def test_plain_http_refuses_all_admin_page_and_login_api_traffic() -> None:
     config = _read("nginx/admin-tls.conf")
     http_server = config.split("server {\n    listen 443 ssl;", maxsplit=1)[0]
 
     assert "location = /admin/kb {" in http_server
-    assert f"return 308 https://{PUBLIC_IP}$request_uri;" in http_server
+    assert "return 308 https://" not in http_server
+    assert http_server.count("return 426;") == 3
     assert "location ^~ /admin/kb/ {" in http_server
     assert "return 426;" in http_server
     assert "location /admin/kb {" not in http_server
@@ -67,9 +77,9 @@ def test_https_admin_uses_ml_runtime_tls_headers_and_login_rate_limit() -> None:
         "server {\n    listen 443 ssl;", maxsplit=1
     )[1]
 
-    assert f"server_name {PUBLIC_IP};" in https_server
-    assert f"live/{PUBLIC_IP}/fullchain.pem" in https_server
-    assert f"live/{PUBLIC_IP}/privkey.pem" in https_server
+    assert "server_name _;" in https_server
+    assert f"live/{CERT_NAME}/fullchain.pem" in https_server
+    assert f"live/{CERT_NAME}/privkey.pem" in https_server
     assert "ssl_protocols TLSv1.2 TLSv1.3;" in https_server
     assert 'add_header Strict-Transport-Security "max-age=86400" always;' in https_server
     assert "location = /admin/kb/login {" in https_server
@@ -102,15 +112,19 @@ def test_renewal_timer_is_persistent_and_tests_nginx_before_reload() -> None:
     assert "OnCalendar=*-*-* 00,12:00:00" in timer
     assert "RandomizedDelaySec=30min" in timer
     assert "Persistent=true" in timer
+    assert "IP TLS certificate" not in service
+    assert "IP TLS certificate" not in timer
 
 
 def test_provision_script_validates_acme_renewal_and_tls_before_switch() -> None:
     script = _read("scripts/provision_admin_https.sh")
 
-    assert f'PUBLIC_IP="{PUBLIC_IP}"' in script
-    assert "--preferred-profile shortlived" in script
-    assert '--cert-name "$PUBLIC_IP"' in script
-    assert '--ip-address "$PUBLIC_IP"' in script
+    assert 'PUBLIC_HOST="${ADMIN_PUBLIC_HOST:-}"' in script
+    assert 'CERT_NAME="rosmol-admin"' in script
+    assert 'if [ -z "$PUBLIC_HOST" ]; then' in script
+    assert '--preferred-profile shortlived --ip-address "$PUBLIC_HOST"' in script
+    assert '--domains "$PUBLIC_HOST"' in script
+    assert '--cert-name "$CERT_NAME"' in script
     assert "renew \\\n    --dry-run" in script
     assert "nginx nginx -t" in script
     tls_check = script.index('log "Проверяю TLS-конфигурацию')
@@ -121,6 +135,6 @@ def test_provision_script_validates_acme_renewal_and_tls_before_switch() -> None
     assert "NGINX_TLS_HOST_PORT 443" in script
     assert '"${BASE_COMPOSE[@]}" --profile ml up -d nginx' in script
     assert 'http://127.0.0.1/.well-known/acme-challenge/${probe_name}' in script
-    assert 'http://${PUBLIC_IP}/.well-known/acme-challenge/${probe_name}' not in script
+    assert 'http://${PUBLIC_HOST}/.well-known/acme-challenge/${probe_name}' not in script
     assert "set -e" not in script
     assert "logout" not in script

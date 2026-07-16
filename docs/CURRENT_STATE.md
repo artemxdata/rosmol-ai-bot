@@ -5,7 +5,7 @@
 **Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
 **Git:** code RC `8bca860`, последний pre-incident operator-holdout state `6acf6fb`; hash этого
 docs-only recovery handoff смотреть в последнем commit `origin/master`.
-**Server:** доверенного работающего runtime сейчас нет. Старая VM `rag_llmchatme` выключена
+**Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
 (`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
 **Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
 является итоговой оценкой конверсии. Код, routing, prompts, thresholds и KB в Git не менялись;
@@ -170,8 +170,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 
 ### Сейчас
 
-- Работающего доверенного server runtime нет. Старая VM `rag_llmchatme`, UUID
-  `8847c56f-9191-46fc-8a12-2075e28ab888`, IP `139.100.225.44`, находится в `SHUTOFF`.
+- Работающего доверенного server runtime нет. Старая VM находится в `SHUTOFF`; её точные
+  provider-side identifiers хранятся вне Git вместе с private incident evidence.
 - Старые бот, HDE webhook и админка offline. Старую VM не включать и не использовать.
 - Selectel ticket `3986352` открыт; на 16 июля ответ поддержки не получен. Ситуация временно
   локализована выключением, но не расследована и не закрыта.
@@ -189,6 +189,28 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
   `security_hold`, чтобы старый URL/готовность не использовались.
 - Приватный XLSX с приветствием и текущий seed проверялись только read-only; временные файлы
   инспекции удалены и в Git не попадают.
+
+### Infrastructure/security cleanup для нового endpoint 16 июля
+
+- Из текущего tracked tree удалены точные identifiers прежнего host: публичный IP/URL, VM name,
+  UUID, provider project ID и старый Let's Encrypt certificate path. Исторические факты P0,
+  `SHUTOFF`, Selectel ticket и contamination boundary сохранены без operational endpoint.
+- Оба Nginx-конфига, включая bootstrap без сертификата, fail-closed возвращают `426` на любые
+  plaintext admin-запросы и не редиректят их на зафиксированный/полученный из Host endpoint; TLS
+  использует нейтральный cert name `rosmol-admin`.
+- `scripts/provision_admin_https.sh` требует явно передать новый `ADMIN_PUBLIC_HOST`, различает
+  DNS и IPv4 certificate flow и не содержит fallback на прежний endpoint.
+- Readiness builder больше не публикует admin URL до нового clean-rebuild handoff.
+- Локальный Docker project `rosmol-ai-bot` полностью удалён: containers, project images,
+  PostgreSQL/Redis/Qdrant/model-cache volumes и network. Общий stale BuildKit cache очищен с
+  `74.82 GB` до `0 B`. Другие Docker projects не удалялись. Локальный runtime теперь отсутствует
+  и должен пересобираться только с нуля.
+- Проверки patch: Git Bash `bash -n` — успешно; Compose `config --quiet` с ML profile — успешно;
+  targeted tests — `16 passed`; `ruff check .` — успешно; полный `pytest` — `1182 passed`; KB
+  validate — `2186 valid`, из них `2152 published`.
+- Это ещё не разрешение создавать новый server: сначала patch должен быть опубликован в GitHub,
+  live `origin/master` повторно проверен и новый trusted commit SHA зафиксирован. Secret rotation
+  и GitHub Settings audit остаются отдельными обязательными gates до provisioning.
 
 ### Последнее подтверждённое состояние до инцидента — только историческая baseline
 
@@ -802,9 +824,8 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 7. Настроить SSH key-only и allowlist для 22/tcp; публично оставить 80/443; включить egress/flow
    monitoring и traffic/CPU alerts.
 8. Выполнить clean Git checkout только после GitHub audit и сверить trusted commit с
-   `origin/master`. До provisioning отдельным
-   infrastructure change заменить hardcoded старый IP в Nginx/ACME scripts/tests/report builder на
-   новый endpoint; старые значения не применять.
+   `origin/master`. Использовать проверенный параметризованный Nginx/ACME flow: новый endpoint
+   задаётся только через `ADMIN_PUBLIC_HOST`, а plaintext admin во время bootstrap закрыт.
 9. Собрать containers с нуля, создать новый `.env` только из новых секретов и выпустить новый TLS
    certificate.
 10. Создать БД/Redis/Qdrant с нуля, применить migrations и заново индексировать только versioned

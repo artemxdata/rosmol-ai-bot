@@ -125,8 +125,8 @@ def build_readiness_report(
             "pre_demo_smoke": _smoke_metrics(smoke_data),
         },
         "demo_links": {
-            "admin_panel": "https://139.100.225.44/admin/kb",
-            "local_admin_panel": "http://127.0.0.1/admin/kb",
+            "admin_panel": None,
+            "local_admin_panel": None,
             "quality_report": str(quality_report.with_suffix(".md")).replace("\\", "/"),
             "demo_pack": "reports/presentation_quality/demo_pack.md",
             "pre_demo_smoke": str(pre_demo_smoke.with_suffix(".md")).replace("\\", "/"),
@@ -289,6 +289,12 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     quality = report["metrics"]["presentation_quality"]
     smoke = report["metrics"]["pre_demo_smoke"]
     acceptance = report["metrics"]["final_acceptance"]
+    admin_panel = report["demo_links"].get("admin_panel")
+    admin_panel_line = (
+        f"`{admin_panel}`"
+        if admin_panel
+        else "недоступна; новый HTTPS URL публикуется только после clean-rebuild handoff"
+    )
 
     lines = [
         "# Готовность к презентации",
@@ -336,7 +342,7 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "",
             "## Что показывать",
             "",
-            f"- Админ-панель: `{report['demo_links']['admin_panel']}`.",
+            f"- Админ-панель: {admin_panel_line}.",
             f"- Runbook показа: `{report['demo_links']['demo_runbook']}`.",
             f"- Пакет для руководства: `{report['demo_links']['leadership_pack']}`.",
             f"- Большой отчёт качества: `{report['demo_links']['quality_report']}`.",
