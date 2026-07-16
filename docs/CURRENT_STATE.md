@@ -11,7 +11,8 @@ docs-only recovery handoff смотреть в последнем commit `origin
 является итоговой оценкой конверсии. Код, routing, prompts, thresholds и KB в Git не менялись;
 до clean rebuild действует recovery freeze. Полные факты инцидента и граница доверия:
 `docs/security_incident_20260715.md`. Последняя обратная связь Наты и quality backlog:
-`docs/operator_feedback_20260715.md`.
+`docs/operator_feedback_20260715.md`. Активный полный реестр секретов и статусы ротации:
+`docs/secret_rotation_20260716.md`.
 
 ## 1. Цель
 
@@ -735,7 +736,18 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   полный scope неизвестны; Selectel ticket `3986352` ожидает ответа.
 - Старые IP, webhook, админка, TLS state, credentials, Docker/runtime data и backups недоверенны.
   Ничего со старого сервера не переносить в новый контур.
-- Перевыпуск всех ключей и секретов ещё не выполнен и является отдельной обязательной задачей.
+- Revoke-only этап ротации начат. По подтверждению владельца 16 июля удалены все Cloud.ru API
+  keys, старый GitHub server deploy key и все Yonote tokens. Новые credentials намеренно не
+  создаются до отдельной clean-rebuild задачи. Старый локальный ignored `.env` удалён без чтения
+  содержимого; `.env.example` сохранён. Точно идентифицированный `id_ed25519_server`, привязанный
+  только к старому host, удалён вместе с public part/config/known_hosts entries. Отдельный
+  `id_ed25519` другого проекта сохранён и не изменялся. Остальные credential classes ещё не
+  закрыты.
+- 16 июля выполнен read-only инвентарь credential classes без чтения `.env` и без вывода
+  значений. Для Cloud.ru, GitHub deploy access и Yonote provider-side отзыв подтверждён
+  владельцем; для остальных external classes он ещё не закрыт. Полный журнал и порядок находятся
+  в `docs/secret_rotation_20260716.md`. Redis legacy работал без password, Qdrant — без API key,
+  поэтому они отмечены `legacy_not_configured`, а не ложно `rotated`.
 - Доверенного runtime нет; release gate и операторский тест не активны.
 - Начатый 15 июля cohort прерван. Независимой финальной оценки полной multi-turn конверсии нет;
   старые и новые тикеты нельзя объединять в одну метрику.
@@ -775,8 +787,10 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
    требуется перед удалением старого evidence.
 3. Уведомить операторов/владельца HDE о паузе и отключить/заморозить старое webhook rule, чтобы
    обращения не терялись и не считались новым тестом. Выполнение пока не подтверждено.
-4. Отдельной задачей перевыпустить все потенциально раскрытые ключи и секреты. Значения не
-   выводить и не коммитить.
+4. Выполнять revoke-only этап строго по `docs/secret_rotation_20260716.md`. Значения не выводить
+   и не коммитить. Cloud.ru API keys, GitHub server deploy key и Yonote tokens уже удалены
+   владельцем. Текущий точный шаг — в HDE выключить оба старых dispatcher rule и удалить
+   `HDE_API_KEY`; новые credentials сейчас не создавать.
 5. С доверенного локального устройства проверить GitHub account/audit history, deploy
    keys/tokens, commits/tags/Actions; отозвать server deploy credentials и зафиксировать trusted
    commit hash.
@@ -817,6 +831,8 @@ git log -5 и origin/master, затем кратко перескажи: цел�
 feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze и точный следующий шаг.
 ```
 
-Ближайшая отдельная задача — безопасный перевыпуск всех ключей/секретов. После неё — clean
-rebuild без единого артефакта старого сервера. Улучшения greeting, clarification и «Машука»
+Ближайшая отдельная задача уже начата: revoke-only этап ведётся по
+`docs/secret_rotation_20260716.md`; Cloud.ru API keys, GitHub server deploy key и Yonote tokens
+удалены, HDE и Selectel остаются следующими. Новые credentials будут созданы в отдельном чате.
+После неё — clean rebuild без единого артефакта старого сервера. Улучшения greeting, clarification и «Машука»
 выполнять на чистом runtime после preliminary acceptance, но до финального gate и нового cohort.

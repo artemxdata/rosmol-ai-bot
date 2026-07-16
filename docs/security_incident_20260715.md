@@ -130,7 +130,11 @@ validation, regression и новым handoff.
 
 ## Отдельная обязательная задача: перевыпуск секретов
 
-Ротация ещё не отмечена выполненной. Перед созданием нового runtime необходимо считать
+Ротация начата 16 июля 2026 с read-only инвентаря. По подтверждению владельца удалены все
+Cloud.ru API keys, старый GitHub server deploy key и все Yonote tokens; новые credentials пока
+не создаются. HDE, Selectel и условные внешние интеграции ещё не закрыты.
+Полный реестр, статусы и evidence policy ведутся в `docs/secret_rotation_20260716.md`. Перед
+созданием нового runtime необходимо считать
 раскрытыми и отдельно перевыпустить все секреты, которые могли находиться на старой VM:
 
 - Cloud.ru / GigaChat;
@@ -146,6 +150,10 @@ validation, regression и новым handoff.
 Значения секретов не помещаются в Git, команды, тикеты или документы. Ротация
 `USER_HASH_SECRET` намеренно создаст новое пространство pseudonym/hash и разорвёт continuity
 старых сессий и cohort; при root-компрометации это обязательная мера.
+
+Redis в legacy-конфигурации не имел password, а Qdrant — API key. Их нельзя отмечать как
+`rotated`: на clean host создаются новые пустые instances без старых volumes и публичных ports;
+добавление auth оформляется отдельным проверяемым infrastructure/security patch.
 
 ## План чистого восстановления
 

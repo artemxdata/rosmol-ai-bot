@@ -189,3 +189,17 @@ keys, Redis, PostgreSQL/Qdrant backup, runtime-файлы или binaries. Но�
 regression-кейсы. Формулировки оператора про сроки, контакты и Положение требуют verdict владельца
 контента; они не индексируются автоматически. Исправления начинаются только после clean rebuild и
 нового release handoff.
+
+## D-025. Ротация секретов ведётся по provider-side evidence, без значений в Git
+
+**Статус:** принято 16 июля 2026.
+Любой credential, который мог находиться на скомпрометированной VM, считается раскрытым. Сначала
+старый credential отзывается у провайдера, затем новый создаётся непосредственно перед установкой
+на clean host. Completion требует `old_revoked`, `new_created`, `installed_on_clean_host` и
+`verified`; один выпуск нового ключа не считается ротацией. В Git фиксируются только UTC, label,
+scope, provider status, безопасный test result и private evidence reference. Значения, suffix,
+password/DSN, private keys, recovery codes, cookies, `.env` и auth headers запрещены.
+
+Полный реестр ведётся в `docs/secret_rotation_20260716.md`. Redis legacy не имел password, Qdrant
+не имел API key; для них допустим только честный статус `legacy_not_configured` до отдельного
+security patch либо подтверждённой изоляции новых пустых instances.

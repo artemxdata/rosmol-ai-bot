@@ -14,14 +14,15 @@
 1. `docs/CURRENT_STATE.md` — текущее состояние, незакрытые действия и следующий шаг.
 2. `docs/security_incident_20260715.md` — активный P0 security hold, граница доверия и clean
    rebuild.
-3. `docs/operator_feedback_20260715.md` — последние тесты Наты и подтверждённый backlog качества.
-4. `docs/operator_holdout_runbook.md` — прерванный cohort, freeze, метрики и stop-criteria.
-5. `docs/DECISIONS.md` — действующие архитектурные и продуктовые решения.
-6. `docs/architecture.md` — исходная и целевая архитектура. При расхождении приоритет имеют
+3. `docs/secret_rotation_20260716.md` — активный реестр и порядок перевыпуска всех credentials.
+4. `docs/operator_feedback_20260715.md` — последние тесты Наты и подтверждённый backlog качества.
+5. `docs/operator_holdout_runbook.md` — прерванный cohort, freeze, метрики и stop-criteria.
+6. `docs/DECISIONS.md` — действующие архитектурные и продуктовые решения.
+7. `docs/architecture.md` — исходная и целевая архитектура. При расхождении приоритет имеют
    `CURRENT_STATE.md`, `DECISIONS.md`, тесты и фактический код.
-7. `docs/operator_response_policy.md` — правила ответов, уточнений и эскалации.
-8. `docs/pre_pilot_release_checklist.md` и `docs/operations.md` — проверки и эксплуатация.
-9. `docs/quality_improvement_loop.md` — процесс улучшения на реальных обращениях.
+8. `docs/operator_response_policy.md` — правила ответов, уточнений и эскалации.
+9. `docs/pre_pilot_release_checklist.md` и `docs/operations.md` — проверки и эксплуатация.
+10. `docs/quality_improvement_loop.md` — процесс улучшения на реальных обращениях.
 
 В начале каждой новой задачи выполни `git status --short --branch` и `git log -5 --oneline`.
 Не полагайся только на историю чата или память модели.
