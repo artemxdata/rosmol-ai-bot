@@ -319,6 +319,21 @@ linux/amd64 manifest digest; менять version/digest без отдельно
 SBOM, Critical-CVE и image-secret reports в private каталог. Provider credentials на этом этапе
 ещё отсутствуют:
 
+GitHub dependency graph 20 июля открыл восемь alerts для `torch==2.6.0+cpu`: три moderate и пять
+low. Для трёх alerts patched version не опубликована; закрытие всего набора требует крупного
+ML-upgrade до `2.13.0`. До выпуска provider credentials в private evidence должен быть один из
+двух verdict:
+
+1. `upgraded_and_regressed` — PyTorch/ML lock обновлены отдельным commit, заново выполнены clean
+   image build, offline model load, scanner gate и полный retrieval/quality regression;
+2. `time_bounded_test_risk_accepted` — владелец явно принимает residual только для ограниченного
+   test-production окна; `app-ml` не имеет host port, получает только текстовые bot-запросы, не
+   загружает недоверенные models/tensors/files, работает non-root с resource limits и egress
+   allowlist. У verdict есть owner, UTC expiry и rollback/kill switch.
+
+Отсутствие одного из этих verdict означает `STOP`. Автоматический Dependabot PR или обновление
+PyTorch без полного ML regression запрещены recovery freeze.
+
 ```bash
 set -Eeuo pipefail
 GITLEAKS_IMAGE='zricethezav/gitleaks:v8.28.0@sha256:bf00b5e039f0fad4b32935dc5ec1e358f227ccd097bcb64b971f0331072fe2ae'
@@ -401,10 +416,11 @@ unset CERTBOT_IMAGE RUNTIME_EGRESS_PROXY_IMAGE EDGE_RELAY_IMAGE APP_IMAGE ML_IMA
 unset SCAN_DIR VEX_REVIEW_DEADLINE safe_name image vex_args production_images pull_images
 ```
 
-Любая Gitleaks/image-secret finding, активная Critical CVE, истёкший scoped VEX или отсутствующий
-vulnerability DB timestamp блокирует выпуск provider credentials. VEX применяется только к exact
-PURL соответствующего app/PostgreSQL/Qdrant image; Redis/Nginx/Certbot/Squid/HAProxy сканируются
-без VEX. Основание и срок обязательного re-review зафиксированы в
+Любая Gitleaks/image-secret finding, активная Critical CVE, истёкший scoped VEX, отсутствующий
+vulnerability DB timestamp или отсутствующий PyTorch verdict блокирует выпуск provider
+credentials. VEX применяется только к exact PURL соответствующего app/PostgreSQL/Qdrant image;
+Redis/Nginx/Certbot/Squid/HAProxy сканируются без VEX. Основание и срок обязательного re-review
+зафиксированы в
 `docs/security_scan_verdict_20260720.md`. Scanner JSON и SBOM не публикуются автоматически: они
 могут содержать package paths и остаются private evidence.
 

@@ -58,7 +58,7 @@ Private evidence хранится вне Git; в журнале допустим
 |---:|---|---|---|---|
 | 1 | Cloud.ru `CLOUD_RU_API_KEY` | `old_revoked` | `not_started` | Владелец удалил все Cloud.ru API keys 16 июля; audit/usage ещё проверить; новый least-privilege key — только в будущей задаче |
 | 2 | GitHub server deploy key | `old_revoked` | `not_started` | Владелец удалил старый deploy key 16 июля; новый отдельный Ed25519 deploy key создать только на новой VM, read-only |
-| 2a | GitHub PAT / account SSH keys / OAuth Apps / webhooks / sessions | `not_started` | `not_started` | Проверить security log и account/repository settings; удалить всё серверное, неизвестное или недоверенное |
+| 2a | GitHub PAT / account SSH keys / OAuth Apps / webhooks / sessions | `not_started` | `not_started` | Repository audit 20 июля: Actions secrets/variables, environments, deploy keys и webhooks отсутствуют; Actions hardened. Account security log/PAT/SSH/OAuth/sessions ещё проверить и удалить всё серверное, неизвестное или недоверенное |
 | 3a | HDE старые тестовые каналы, связанные keys и dispatcher rules | `old_revoked` | `not_started` | По подтверждению владельца 20 июля два старых тестовых канала отключены и связанные keys удалены; перед новым live smoke в HDE UI отдельно подтвердить, что старый endpoint/rules остаются inactive |
 | 3b | HDE global `HDE_API_KEY` и API-user access | `retained_exception` | `not_applicable` | По явному решению владельца shared key не меняется из-за зависимых интеграций. Считать потенциально раскрытым: проверить usage/audit, минимальный scope, egress allowlist, rate/cost alerts, один test dispatcher и kill switch; позднее перейти на dedicated bot API user/key |
 | 4 | Yonote `YONOTE_API_TOKEN` | `old_revoked` | `not_started` | Владелец удалил все Yonote tokens 16 июля; новый token позже строго read-only, без `Apply to KB` |
@@ -167,6 +167,7 @@ dead-letter должны быть пусты; encryption key нельзя мен
 | 2026-07-16T05:21:10Z | HDE | Ротация глобального API key остановлена до согласования | Global HDE API access | Ключ может обслуживать чужие интеграции; ожидается подтверждение Лёши | incident chat |
 | 2026-07-20 | HDE | Два старых тестовых канала отключены, связанные keys удалены | Old test HDE bot channels | Подтверждение владельца; inactive old endpoint повторно проверить перед live smoke | current task |
 | 2026-07-20 | HDE | Shared global API key сохранён как явное исключение | Global HDE API access | Решение владельца из-за зависимых интеграций; rotation не считается complete | current task |
+| 2026-07-20 | GitHub | Repository settings и deploy boundary проверены | Actions/deploy repository scope | Secrets/variables/environments/deploy keys/webhooks отсутствуют; token read-only, fork workflows off, full Action SHA required; account-wide audit pending | GitHub UI |
 
 Допустимы provider status `revoked/deleted`, label, role/scope, HTTP status безопасного теста,
 public SSH fingerprint, TLS serial/fingerprint, trusted Git SHA, новый VM UUID и агрегированные
@@ -178,9 +179,10 @@ cookie, Authorization header, `.env` и HDE payload с персональным�
 
 ## Следующий точный шаг
 
-До выпуска новых credentials завершить secretless GitHub/local build gate и зафиксировать trusted
-commit. Закрыть read-only inventory Selectel API keys, service users, sessions и profile SSH keys,
-а также GitHub account/repository access; неизвестные объекты сначала идентифицировать. Перед
+Secretless GitHub/local gate для `38525de30ad808ce34e41c2ad1addda23abde29c` зелёный. До выпуска
+новых credentials закрыть read-only inventory Selectel API keys, service users, sessions и profile
+SSH keys, а также GitHub account-wide access; repository-level audit завершён. Неизвестные объекты
+сначала идентифицировать. Перед
 первым live HDE smoke подтвердить inactive старый endpoint, проверить usage/audit shared HDE key и
 включить его компенсирующие controls. Новый read-only GitHub deploy key создаётся только на новом
 clean host.

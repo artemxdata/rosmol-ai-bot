@@ -72,6 +72,12 @@ CD через Actions рассматривается только отдельн
 - dependency graph, Dependabot vulnerability alerts и malware alerts включены;
 - автоматические dependency submission, security/version updates и Dependabot PR выключены.
 
+Первый dependency graph открыл восемь alerts для `torch==2.6.0+cpu` (`3 moderate`, `5 low`). Они
+не исправляются автоматическим PR: крупный ML-upgrade требует нового hash lock, clean image build,
+offline model check и полного regression gate. До provider credentials применяется обязательный
+verdict из recovery runbook: проверенный upgrade либо ограниченное по времени принятие residual
+только для изолированного test-production.
+
 Если тариф/тип репозитория поддерживает ruleset без конфликта с текущим solo workflow, после
 первого зелёного run для `master` можно потребовать check `Secretless release gate`. До перехода
 на обязательный PR-flow сервер всё равно принимает только вручную объявленный зелёный SHA.
