@@ -64,6 +64,21 @@ jobs:
       - name: Verify installed dependency graph
         run: python -m pip check
 
+      - name: Smoke-test reproducible lock generation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m venv --clear "$RUNNER_TEMP/rosmol-lock-smoke"
+          "$RUNNER_TEMP/rosmol-lock-smoke/bin/python" -m pip install \
+            --require-hashes --only-binary=:all: -r requirements/lock-tools.lock
+          "$RUNNER_TEMP/rosmol-lock-smoke/bin/python" -c \
+            "from importlib.metadata import version; assert version('pip') == '26.1.2'; assert version('pip-tools') == '7.6.0'"
+          printf 'packaging==26.2\n' > "$RUNNER_TEMP/rosmol-lock-smoke.in"
+          "$RUNNER_TEMP/rosmol-lock-smoke/bin/pip-compile" \
+            --dry-run --generate-hashes --resolver=backtracking --strip-extras --allow-unsafe \
+            --output-file="$RUNNER_TEMP/rosmol-lock-smoke.lock" \
+            "$RUNNER_TEMP/rosmol-lock-smoke.in"
+
       - name: Ruff
         run: python -m ruff check .
 

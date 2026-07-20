@@ -1,4 +1,4 @@
-# Scoped, time-limited exceptions for the two Python application images only.
+# Scoped, time-limited Trivy ignore policy for the two Python application images only.
 # Infrastructure images MUST be scanned without this file. Exact PURLs make a
 # base-image/package change fail closed instead of inheriting an old verdict.
 vulnerabilities:

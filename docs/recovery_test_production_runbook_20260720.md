@@ -319,20 +319,12 @@ linux/amd64 manifest digest; менять version/digest без отдельно
 SBOM, Critical-CVE и image-secret reports в private каталог. Provider credentials на этом этапе
 ещё отсутствуют:
 
-GitHub dependency graph 20 июля открыл восемь alerts для `torch==2.6.0+cpu`: три moderate и пять
-low. Для трёх alerts patched version не опубликована; закрытие всего набора требует крупного
-ML-upgrade до `2.13.0`. До выпуска provider credentials в private evidence должен быть один из
-двух verdict:
-
-1. `upgraded_and_regressed` — PyTorch/ML lock обновлены отдельным commit, заново выполнены clean
-   image build, offline model load, scanner gate и полный retrieval/quality regression;
-2. `time_bounded_test_risk_accepted` — владелец явно принимает residual только для ограниченного
-   test-production окна; `app-ml` не имеет host port, получает только текстовые bot-запросы, не
-   загружает недоверенные models/tensors/files, работает non-root с resource limits и egress
-   allowlist. У verdict есть owner, UTC expiry и rollback/kill switch.
-
-Отсутствие одного из этих verdict означает `STOP`. Автоматический Dependabot PR или обновление
-PyTorch без полного ML regression запрещены recovery freeze.
+GitHub dependency graph 20 июля открыл восемь alerts для прежнего `torch==2.6.0+cpu`: три moderate
+и пять low. Recovery candidate обновлён до hash-locked `torch==2.13.0+cpu`; локально уже пройдены
+image build, verified offline BGE-M3/BGE-reranker load, scanner gate и полный regression. На чистом
+сервере до provider credentials этот verdict должен быть воспроизведён и сохранён в private
+evidence как `upgraded_and_regressed`. Возврат к 2.6.0 или подмена этого доказательства простым
+risk acceptance для текущего candidate запрещены и означают `STOP`.
 
 ```bash
 set -Eeuo pipefail
@@ -348,9 +340,9 @@ EDGE_RELAY_IMAGE='haproxy:3.4.2-alpine@sha256:0878b11eb64c433be1b0f578a584b8aca1
 APP_IMAGE="rosmol-ai-bot-app:${TRUSTED_GIT_SHA}"
 ML_IMAGE="rosmol-ai-bot-ml:${TRUSTED_GIT_SHA}"
 SCAN_DIR="/var/lib/rosmol/security-scan/${TRUSTED_GIT_SHA}"
-VEX_REVIEW_DEADLINE='2026-07-27'
-[[ "$(date -u +%F)" < "$VEX_REVIEW_DEADLINE" ]] || {
-  echo 'STOP: scoped VEX verdict expired; re-review before continuing'
+TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-07-27'
+[[ "$(date -u +%F)" < "$TRIVY_EXCEPTION_REVIEW_DEADLINE" ]] || {
+  echo 'STOP: scoped Trivy exception expired; re-review before continuing'
   exit 1
 }
 sudo install -d -m 0700 "$SCAN_DIR"
@@ -384,11 +376,11 @@ sudo jq -e '.Version == "0.64.1" and .VulnerabilityDB.UpdatedAt != null' \
 
 for image in "${production_images[@]}"; do
   safe_name="$(printf '%s' "$image" | sed 's/[^A-Za-z0-9._-]/_/g')"
-  vex_args=()
+  ignore_args=()
   case "$image" in
-    "$APP_IMAGE"|"$ML_IMAGE") vex_args=(--vex /repo/security/trivy-app-vex.yaml --show-suppressed) ;;
-    "$POSTGRES_IMAGE") vex_args=(--vex /repo/security/trivy-postgres-vex.yaml --show-suppressed) ;;
-    "$QDRANT_IMAGE") vex_args=(--vex /repo/security/trivy-qdrant-vex.yaml --show-suppressed) ;;
+    "$APP_IMAGE"|"$ML_IMAGE") ignore_args=(--ignorefile /repo/security/trivy-app-ignore.yaml --show-suppressed) ;;
+    "$POSTGRES_IMAGE") ignore_args=(--ignorefile /repo/security/trivy-postgres-ignore.yaml --show-suppressed) ;;
+    "$QDRANT_IMAGE") ignore_args=(--ignorefile /repo/security/trivy-qdrant-ignore.yaml --show-suppressed) ;;
   esac
   sudo docker run --rm --network none --platform linux/amd64 \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -400,7 +392,7 @@ for image in "${production_images[@]}"; do
     -v "$PWD:/repo:ro" -v rosmol_trivy_cache:/root/.cache/ \
     -v "$SCAN_DIR:/reports" "$TRIVY_IMAGE" \
     image --skip-db-update --scanners vuln --severity CRITICAL --exit-code 1 \
-    --format json "${vex_args[@]}" \
+    --format json "${ignore_args[@]}" \
     --output "/reports/${safe_name}.critical.json" "$image"
   sudo docker run --rm --network none --platform linux/amd64 \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -413,13 +405,13 @@ sudo find "$SCAN_DIR" -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
   | sort -z | sudo xargs -0 sha256sum | sudo tee "$SCAN_DIR/SHA256SUMS" >/dev/null
 unset GITLEAKS_IMAGE TRIVY_IMAGE POSTGRES_IMAGE REDIS_IMAGE QDRANT_IMAGE NGINX_IMAGE
 unset CERTBOT_IMAGE RUNTIME_EGRESS_PROXY_IMAGE EDGE_RELAY_IMAGE APP_IMAGE ML_IMAGE
-unset SCAN_DIR VEX_REVIEW_DEADLINE safe_name image vex_args production_images pull_images
+unset SCAN_DIR TRIVY_EXCEPTION_REVIEW_DEADLINE safe_name image ignore_args production_images pull_images
 ```
 
-Любая Gitleaks/image-secret finding, активная Critical CVE, истёкший scoped VEX, отсутствующий
+Любая Gitleaks/image-secret finding, активная Critical CVE, истёкшее scoped Trivy-исключение, отсутствующий
 vulnerability DB timestamp или отсутствующий PyTorch verdict блокирует выпуск provider
-credentials. VEX применяется только к exact PURL соответствующего app/PostgreSQL/Qdrant image;
-Redis/Nginx/Certbot/Squid/HAProxy сканируются без VEX. Основание и срок обязательного re-review
+credentials. Ignore policy применяется только к exact PURL соответствующего app/PostgreSQL/Qdrant image;
+Redis/Nginx/Certbot/Squid/HAProxy сканируются без исключений. Основание и срок обязательного re-review
 зафиксированы в
 `docs/security_scan_verdict_20260720.md`. Scanner JSON и SBOM не публикуются автоматически: они
 могут содержать package paths и остаются private evidence.
@@ -909,9 +901,9 @@ cd "$CLEAN_RELEASE_SOURCE"
 GITLEAKS_IMAGE='zricethezav/gitleaks:v8.28.0@sha256:bf00b5e039f0fad4b32935dc5ec1e358f227ccd097bcb64b971f0331072fe2ae'
 TRIVY_IMAGE='aquasec/trivy:0.64.1@sha256:de90a656e79b175a294abe85cb8b99670fab83ebf339cccd163e6f584846809a'
 RESCAN_DIR="/var/lib/rosmol/security-scan/${CORRECTION_GIT_SHA}"
-VEX_REVIEW_DEADLINE='2026-07-27'
-[[ "$(date -u +%F)" < "$VEX_REVIEW_DEADLINE" ]] || {
-  echo 'STOP: scoped application VEX verdict expired; re-review before continuing'
+TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-07-27'
+[[ "$(date -u +%F)" < "$TRIVY_EXCEPTION_REVIEW_DEADLINE" ]] || {
+  echo 'STOP: scoped application Trivy exception expired; re-review before continuing'
   exit 1
 }
 test ! -e "$RESCAN_DIR"
@@ -941,7 +933,7 @@ for image in \
     -v "$CLEAN_RELEASE_SOURCE:/repo:ro" -v rosmol_trivy_cache:/root/.cache/ \
     -v "$RESCAN_DIR:/reports" "$TRIVY_IMAGE" \
     image --skip-db-update --scanners vuln --severity CRITICAL --exit-code 1 \
-    --format json --vex /repo/security/trivy-app-vex.yaml --show-suppressed \
+    --format json --ignorefile /repo/security/trivy-app-ignore.yaml --show-suppressed \
     --output "/reports/${safe_name}.critical.json" "$image"
   sudo docker run --rm --network none --platform linux/amd64 \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -952,7 +944,7 @@ done
 sudo find "$RESCAN_DIR" -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
   | sort -z | sudo xargs -0 sha256sum | sudo tee "$RESCAN_DIR/SHA256SUMS" >/dev/null
 test -s "$RESCAN_DIR/SHA256SUMS"
-unset GITLEAKS_IMAGE TRIVY_IMAGE RESCAN_DIR VEX_REVIEW_DEADLINE safe_name image
+unset GITLEAKS_IMAGE TRIVY_IMAGE RESCAN_DIR TRIVY_EXCEPTION_REVIEW_DEADLINE safe_name image
 ```
 
 Только после зелёного rescan production env атомарно получает новый SHA; остальные secrets

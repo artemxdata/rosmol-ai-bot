@@ -35,7 +35,9 @@ services:
     network_mode: none
     read_only: true
     cap_drop: ["ALL"]
-    cap_add: ["CHOWN"]
+    # CHOWN alone cannot traverse useradd's 0700 /home/app after cap_drop=ALL.
+    # DAC_OVERRIDE is limited to this one-shot, networkless cache initializer.
+    cap_add: ["CHOWN", "DAC_OVERRIDE"]
     security_opt: ["no-new-privileges:true"]
     volumes:
       - hf_cache:/home/app/.cache/huggingface

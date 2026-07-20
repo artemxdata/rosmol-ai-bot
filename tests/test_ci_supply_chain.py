@@ -76,6 +76,14 @@ def test_ci_is_secretless_and_runs_the_release_gate() -> None:
     assert "python -m pytest -p no:cacheprovider -q" in workflow
     assert "python scripts/index_kb.py --validate-only" in workflow
     assert "requirements/dev.lock" in workflow
+    assert 'python -m venv --clear "$RUNNER_TEMP/rosmol-lock-smoke"' in workflow
+    assert "--require-hashes --only-binary=:all: -r requirements/lock-tools.lock" in (
+        _normalized_shell(workflow)
+    )
+    assert "version('pip-tools') == '7.6.0'" in workflow
+    assert "--dry-run --generate-hashes --resolver=backtracking" in (
+        _normalized_shell(workflow)
+    )
     assert "docker-compose.prod.yml" in workflow
 
 

@@ -1,2 +1,2 @@
 # The resolver itself is part of the reproducible supply chain.
-pip-tools==7.5.2
+pip-tools==7.6.0

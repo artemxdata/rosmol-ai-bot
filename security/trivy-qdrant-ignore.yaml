@@ -1,4 +1,4 @@
-# Applied only while scanning the exact Qdrant 1.18.3 release image.
+# Scoped Trivy ignore policy for the exact Qdrant 1.18.3 release image only.
 vulnerabilities:
   - id: CVE-2026-8376
     purls:

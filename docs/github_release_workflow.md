@@ -72,11 +72,11 @@ CD через Actions рассматривается только отдельн
 - dependency graph, Dependabot vulnerability alerts и malware alerts включены;
 - автоматические dependency submission, security/version updates и Dependabot PR выключены.
 
-Первый dependency graph открыл восемь alerts для `torch==2.6.0+cpu` (`3 moderate`, `5 low`). Они
-не исправляются автоматическим PR: крупный ML-upgrade требует нового hash lock, clean image build,
-offline model check и полного regression gate. До provider credentials применяется обязательный
-verdict из recovery runbook: проверенный upgrade либо ограниченное по времени принятие residual
-только для изолированного test-production.
+Первый dependency graph открыл восемь alerts для прежнего `torch==2.6.0+cpu` (`3 moderate`,
+`5 low`). Recovery candidate обновлён до hash-locked `torch==2.13.0+cpu`: локально пройдены Docker
+build, verified offline BGE-M3/BGE-reranker smoke, `pip check`, полный regression и scanner gate.
+После публикации GitHub должен пересчитать alerts; закрытие считается подтверждённым только по
+provider status и повторному clean server scan, а не по одному локальному результату.
 
 Если тариф/тип репозитория поддерживает ruleset без конфликта с текущим solo workflow, после
 первого зелёного run для `master` можно потребовать check `Secretless release gate`. До перехода

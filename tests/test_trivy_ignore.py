@@ -32,8 +32,8 @@ def _assert_short_lived(entries: list[dict[str, object]]) -> None:
         assert date.today() <= expiry <= date.today() + timedelta(days=14)
 
 
-def test_perl_vex_files_are_exact_scoped_and_short_lived() -> None:
-    for filename in ("trivy-app-vex.yaml", "trivy-qdrant-vex.yaml"):
+def test_perl_ignore_policies_are_exact_scoped_and_short_lived() -> None:
+    for filename in ("trivy-app-ignore.yaml", "trivy-qdrant-ignore.yaml"):
         entries = _load_entries(filename)
 
         assert {entry["id"] for entry in entries} == APP_AND_QDRANT_IDS
@@ -42,8 +42,8 @@ def test_perl_vex_files_are_exact_scoped_and_short_lived() -> None:
         _assert_short_lived(entries)
 
 
-def test_postgres_vex_is_exact_scoped_and_short_lived() -> None:
-    entries = _load_entries("trivy-postgres-vex.yaml")
+def test_postgres_ignore_policy_is_exact_scoped_and_short_lived() -> None:
+    entries = _load_entries("trivy-postgres-ignore.yaml")
 
     assert entries == [
         {

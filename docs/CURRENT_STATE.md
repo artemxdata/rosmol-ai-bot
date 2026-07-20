@@ -197,10 +197,11 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Все production images закреплены tag+digest или release SHA и после сканирования имеют
   `pull_policy: never`. Локально доказаны Compose merge, фактический host -> relay -> Nginx flow,
   отсутствие прямого Nginx egress, Squid config/CONNECT allow/deny и Qdrant client/server smoke.
-- Clean `--pull --no-cache` build app/app-ml, offline model imports, `pip check`, image hygiene,
-  SBOM/image-secret и Critical gate пройдены локально. Trivy DB имела `UpdatedAt`
-  `2026-07-20T07:44:03Z`; scoped exact-PURL VEX только для app, PostgreSQL и Qdrant истекают
-  `2026-07-27` и требуют повторного review. Redis/Nginx/Certbot/Squid/HAProxy прошли без VEX.
+- Прежняя формулировка о зелёном Critical gate уточнена: YAML policy ошибочно передавалась как
+  `--vex`, хотя это формат Trivy `--ignorefile`. Контракт исправлен и повторно доказан для нового
+  ML image: Trivy `0.64.1`, DB `UpdatedAt=2026-07-20T07:44:03Z`, Critical `0`, image-secret `0`,
+  Gitleaks `0`, SBOM `244` components. Scoped exact-PURL ignore policies app/PostgreSQL/Qdrant
+  истекают `2026-07-27`; все девять exact production images всё равно сканируются заново на VM.
 - Финальный локальный gate 20 июля: `ruff check .` — успешно; `pytest` — `1313 passed`; KB
   validate — `2186 valid`, из них `2152 published`; KB audit — `0 errors`, `4` известных warning;
   production Compose merge/no-pull assertions и Git Bash syntax — успешно.
@@ -830,14 +831,12 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   поэтому они отмечены `legacy_not_configured`, а не ложно `rotated`.
 - Recovery code commit опубликован, но доверенного runtime нет; server release gate и операторский
   тест не активны. Новые ключи и `.env.production` не создавались.
-- После включения GitHub dependency graph открыто `8` alerts для direct dependency
-  `torch==2.6.0+cpu`: `3 moderate`, `5 low`; семь имеют local vector, один low alert — network с
-  high complexity. Для трёх alerts patched version не опубликована, а закрытие полного набора
-  требует ML-upgrade до `2.13.0`.
-  Автоматически обновлять PyTorch в recovery freeze запрещено: до provider credentials нужен либо
-  отдельный hash-lock/build/model/full-regression upgrade, либо явное ограниченное по времени
-  принятие residual для test-production с internal-only `app-ml`, без недоверенных models/tensors,
-  без host port и с resource/egress controls. Отсутствие решения означает `STOP`.
+- Для прежнего `torch==2.6.0+cpu` GitHub открыл `8` alerts (`3 moderate`, `5 low`). Локально
+  подготовлен recovery upgrade до `torch==2.13.0+cpu`: hash-lock, Docker build, CPU-only invariant,
+  verified offline BGE-M3/BGE-reranker encode/rerank, `pip check`, Ruff, `1313` tests, KB validate,
+  Gitleaks, SBOM, image-secret и Critical scan зелёные; Trivy не нашёл findings для `torch`.
+  Provider-side закрытие Dependabot alerts проверяется после push. До server-side повторения этого
+  gate provider credentials по-прежнему не выпускаются.
 - Начатый 15 июля cohort прерван. Независимой финальной оценки полной multi-turn конверсии нет;
   старые и новые тикеты нельзя объединять в одну метрику.
 
@@ -875,15 +874,16 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 
 1. Закрыть provider Gate 0 до новых ключей и VM runtime: сохранить старую VM в `SHUTOFF`, получить
    evidence inactive старого HDE endpoint/rules и usage/audit retained global HDE key, закончить
-   GitHub account-wide session/PAT/SSH/OAuth inventory, зафиксировать Selectel status и решение по
-   восьми PyTorch alerts. Значения secrets и private provider identifiers в Git/чат не переносить.
+   GitHub account-wide session/PAT/SSH/OAuth inventory, зафиксировать Selectel status и provider
+   status восьми прежних PyTorch alerts после push. Значения secrets и private provider identifiers
+   в Git/чат не переносить.
 2. Зафиксировать trusted runtime SHA
    `38525de30ad808ce34e41c2ad1addda23abde29c` и создать новую VM только из clean vendor image.
    Старые snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup не применять.
 3. Настроить SSH key-only, trusted CIDR для `22`, firewall `80/443`, time sync, provider flow/DNS
    logs и alerts. Выполнить clean detached checkout точного SHA.
 4. **До provider credentials** выполнить secretless build, model prefetch/receipt, offline load,
-   Gitleaks, SBOM, image-secret и Critical scan всех девяти production images. Истёкший VEX,
+   Gitleaks, SBOM, image-secret и Critical scan всех девяти production images. Истёкшее исключение,
    изменившийся PURL/digest или finding означает `STOP`.
 5. Только после зелёного Gate 3 сгенерировать локальные PostgreSQL/Redis/Qdrant/API/HMAC/encryption
    secrets, создать новый минимальный Cloud.ru credential и перенести retained HDE credential из

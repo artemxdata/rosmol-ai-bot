@@ -4,7 +4,7 @@ The first part of this verdict is deliberately narrow. It applies only to the
 `app` and `app-ml` images built for `linux/amd64` from
 `python:3.11.15-slim-trixie@sha256:00af38ae2ed311628970782e8a2d7f014d8909dbc63cb97bc0a158187f4db045`,
 with Debian package `perl-base=5.40.1-6`. Separate, equally narrow verdicts for
-the pinned PostgreSQL and Qdrant images are recorded below. No VEX verdict
+the pinned PostgreSQL and Qdrant images are recorded below. No scoped exception
 applies to Nginx, Redis, Squid, Certbot, HAProxy, scanner images, another
 architecture, or a different package PURL.
 
@@ -46,7 +46,7 @@ Authoritative references:
 
 ## Fail-closed boundary
 
-`security/trivy-app-vex.yaml` scopes every application exception to the exact
+`security/trivy-app-ignore.yaml` scopes every application exception to the exact
 package PURL and expires it on **2026-07-27**. Trivy receives this file only for
 `app` and `app-ml`. An expired entry, changed architecture, Debian release,
 `perl-base` version, or changed PURL becomes an unsuppressed blocker
@@ -69,11 +69,11 @@ replaced only after scanning the current official candidates:
   `sha256:0878b11eb64c433be1b0f578a584b8aca12f6caaa64c8f239b8b556c0dd5eeeb`.
 
 Nginx, Certbot, Redis, Squid and HAProxy have zero active Critical findings and
-no VEX.
+without an exception policy.
 The refreshed Qdrant image removed seven actionable Critical findings; its only
 remaining findings are the same three `perl-base` records. The image is amd64,
 has no `Archive::Tar` and no Perl entrypoints, and starts the Rust binary
-directly. `security/trivy-qdrant-vex.yaml` records that exact-PURL verdict until
+directly. `security/trivy-qdrant-ignore.yaml` records that exact-PURL verdict until
 27 July. A real isolated smoke proved qdrant-client `1.11.3` can create, upsert
 and search against Qdrant `1.18.3`.
 
@@ -81,10 +81,10 @@ The refreshed PostgreSQL image has one scanner finding in the Go standard
 library embedded in `gosu`: `CVE-2025-68121`. The authoritative Go advisory
 limits the affected symbols to `crypto/tls` session resumption, while gosu's
 reviewed source is a local uid/gid switch-and-exec program with no network/TLS
-path. `security/trivy-postgres-vex.yaml` scopes this exact PURL until 27 July.
+path. `security/trivy-postgres-ignore.yaml` scopes this exact PURL until 27 July.
 Reference: <https://pkg.go.dev/vuln/GO-2026-4337>.
 
-The Qdrant/PostgreSQL VEX files are passed only to their corresponding image
+The Qdrant/PostgreSQL scoped ignore policies are passed only to their corresponding image
 scan. They are never used for other infrastructure images.
 
 This verdict does not make the overall recovery release `GO`. Provider-side

@@ -50,7 +50,7 @@ def test_requirement_inputs_are_kept_in_sync_with_pyproject() -> None:
     assert _input_requirements("requirements/runtime.in") == _project_requirements()
     assert _input_requirements("requirements/dev.in") == _project_requirements("dev")
     assert _input_requirements("requirements/ml.in") == _project_requirements("ml") | {
-        "torch==2.6.0+cpu"
+        "torch==2.13.0+cpu"
     }
     assert _input_requirements("requirements/sdist-build-tools.in") == {
         "pip==26.1.2",
@@ -68,7 +68,7 @@ def test_all_dependency_locks_are_complete_and_hash_pinned() -> None:
     ):
         _assert_hashed_lock(path)
 
-    assert "torch==2.6.0+cpu" in _read("requirements/ml.lock")
+    assert "torch==2.13.0+cpu" in _read("requirements/ml.lock")
     assert "https://download.pytorch.org/whl/cpu" in _read("requirements/ml.lock")
 
 
@@ -154,7 +154,7 @@ def test_lock_generator_is_pinned_and_isolated() -> None:
     tool_input = _read("requirements/lock-tools.in")
 
     assert "python:3.11.15-slim-trixie@sha256:" in compose
-    assert tool_input.strip().endswith("pip-tools==7.5.2")
+    assert tool_input.strip().endswith("pip-tools==7.6.0")
     assert "requirements/lock-tools.lock" in compose
     assert "requirements/sdist-build-tools.lock" in compose
     assert "--require-hashes --only-binary=:all:" in compose
@@ -234,10 +234,10 @@ def test_recovery_runbook_pins_history_secret_sbom_and_cve_scanners() -> None:
     assert "VulnerabilityDB.UpdatedAt" in runbook
     assert "image --skip-db-update --scanners vuln --severity CRITICAL --exit-code 1" in runbook
     assert "image --skip-db-update --scanners secret --exit-code 1" in runbook
-    assert "--vex /repo/security/trivy-app-vex.yaml --show-suppressed" in runbook
-    assert "--vex /repo/security/trivy-postgres-vex.yaml --show-suppressed" in runbook
-    assert "--vex /repo/security/trivy-qdrant-vex.yaml --show-suppressed" in runbook
-    assert "VEX_REVIEW_DEADLINE='2026-07-27'" in runbook
+    assert "--ignorefile /repo/security/trivy-app-ignore.yaml --show-suppressed" in runbook
+    assert "--ignorefile /repo/security/trivy-postgres-ignore.yaml --show-suppressed" in runbook
+    assert "--ignorefile /repo/security/trivy-qdrant-ignore.yaml --show-suppressed" in runbook
+    assert "TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-07-27'" in runbook
     assert "render-egress-proxy --env-file .env.production" in runbook
     assert '"$RUNTIME_EGRESS_PROXY_IMAGE" -k parse' in runbook
     assert '"$EDGE_RELAY_IMAGE" -c -f' in runbook

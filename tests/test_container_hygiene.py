@@ -72,7 +72,7 @@ def test_ml_cache_volumes_are_initialized_then_used_by_non_root_services() -> No
     assert "/home/app/.cache/torch" in dockerfile
     assert "ml-cache-init:" in compose
     assert "network_mode: none" in compose
-    assert 'cap_add: ["CHOWN"]' in compose
+    assert 'cap_add: ["CHOWN", "DAC_OVERRIDE"]' in compose
     assert 'entrypoint: ["chown"]' in compose
     assert compose.count("condition: service_completed_successfully") >= 5
     assert compose.count("user: app") >= 4
