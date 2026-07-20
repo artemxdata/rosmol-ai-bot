@@ -1,0 +1,10 @@
+# Applied only while scanning the exact PostgreSQL 16.14 Alpine release image.
+vulnerabilities:
+  - id: CVE-2025-68121
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    expired_at: 2026-07-27
+    statement: >-
+      Not affected: the advisory applies only to crypto/tls session resumption.
+      gosu is a local uid/gid switch-and-exec utility whose reviewed source has
+      no network or TLS path. Re-review on any PostgreSQL image or gosu change.

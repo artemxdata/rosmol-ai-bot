@@ -46,7 +46,7 @@ def build_quality_gate_report(
         checks.append(
             _min_check(
                 "retrieval_recall_at_5",
-                retrieval_metrics.get("recall_at_5") or retrieval_metrics.get("recall_at_k"),
+                _preferred_rate(retrieval_metrics, "recall_at_5", "recall_at_k"),
                 config.min_recall_at_5,
             )
         )

@@ -155,12 +155,33 @@ count `2186`. Это историческое значение; новый Qdran
 
 ## D-021. HDE delivery работает fail-closed и наблюдаемо
 
-**Статус:** контракт принят; runtime сейчас отсутствует.
-Webhook обязан иметь стабильный event/ticket identity. Redis lease не позволяет параллельно
-обработать один event; Redis failure или collision возвращает retryable 503, успешная отправка
-фиксируется как delivered, ошибка освобождает lease. Migration `007` добавляет delivery telemetry.
-FastAPI BackgroundTasks не является durable outbox и остаётся residual risk нового
-контролируемого теста после восстановления.
+**Статус:** durable-контракт принят 20 июля 2026; runtime сейчас отсутствует.
+Webhook принимает только аутентифицированное событие со стабильными provider event/ticket
+identity. PII masking работает fail-closed: если Natasha не загрузилась или не прошла startup
+probe на удаление имени, webhook возвращает `503` до записи. Ответ `200` отдаётся только после
+commit в PostgreSQL inbox из migration `008_hde_durable_transport`; Redis lease и FastAPI
+`BackgroundTasks` из delivery path удалены.
+
+Inbox/outbox используют HMAC-псевдонимы event/ticket, pgcrypto envelope для обратимого ticket
+reference и текста ответа, lease с recovery и строгий порядок сообщений одного ticket. Новый
+outbox создаётся только из уже сохранённого trace response. Подтверждённая HDE-доставка одним SQL
+statement атомарно фиксирует `outbox=delivered`, delivery telemetry в `request_traces` и очистку
+шифротекста/маскированного payload. Отсутствующий trace или потеря lease блокируют commit.
+PostgreSQL constraint принимает только точный versioned masked payload либо точный purged marker;
+неизвестный JSON key или неверный тип блокирует запись до worker processing.
+
+Автоматически повторяются только заведомо не начатые отправки и `429`; timeout, иной attempted
+error и истёкший outbox lease попадают в dead letter для ручной сверки с HDE. Provider не даёт
+подтверждённого idempotency key, поэтому crash после принятия ответа HDE, но до локального commit,
+остаётся неустранимой ambiguous boundary: оператор сначала сверяет posts в ticket и только затем
+явно reconciles как delivered либо requeues. Неверный requeue без сверки может создать дубль.
+Recovery доступен только через server-local CLI без public/admin endpoint: обязательны operator,
+фиксированный reason, SHA-256 private evidence и повтор job id; изменение queue и append-only
+`hde_transport_audit` атомарны. Audit сохраняет диагностику dead-letter до её очистки и защищён
+DB trigger от `UPDATE`/`DELETE`; routine retention его не затрагивает. Terminal delivered/processed
+queue rows удаляются только по отдельно одобренному TTL и в FK-safe порядке. Retention не удаляет
+trace незавершённого HDE job. Readiness не
+допускает handoff при dead letter, stale lease или просроченной очереди.
 
 ## D-022. Pseudonymization использует отдельный секрет
 
@@ -203,3 +224,41 @@ password/DSN, private keys, recovery codes, cookies, `.env` и auth headers за
 Полный реестр ведётся в `docs/secret_rotation_20260716.md`. Redis legacy не имел password, Qdrant
 не имел API key; для них допустим только честный статус `legacy_not_configured` до отдельного
 security patch либо подтверждённой изоляции новых пустых instances.
+
+## D-026. Provider-bearing runtime HTTPS/TCP egress проходит только через проверяемый proxy
+
+**Статус:** принято для ограниченного recovery test-production 20 июля 2026.
+`app-ml` не подключается к внешней Docker network. Единственный bridge между его internal
+`runtime_egress` и внешней `egress` — закреплённый digest Canonical Squid без provider secrets и
+без host port. Generated config разрешает только `CONNECT:443` к точному Cloud.ru endpoint и
+точному HDE tenant `rosmolodezh.helpdeskeddy.com`; неизвестный destination и plaintext HTTP
+запрещены. Cross-provider URL substitution блокируется до запуска. `app` остаётся без provider
+credentials и без egress.
+
+Networked model prefetch выполняется только в secretless bootstrap до создания production env,
+после hash/revision verification ML load проверяется offline. В production overlay
+`model-prefetch` имеет `network_mode: none`, поэтому missing artifact приводит к fail-closed.
+Proxy image входит в SBOM/Critical-CVE/image-secret gate; acceptance включает config parse,
+allow/deny CONNECT, невозможность direct public/metadata TCP и фактическую проверку memberships.
+
+Squid не контролирует host-mediated Docker DNS. Для узкого test-production это явный residual с
+обязательными provider flow/DNS logs и stop-criteria. До широкого production traffic требуется
+отдельная reviewed DNS deny/allow policy; называть текущий контроль полным egress allowlist нельзя.
+
+## D-027. Публичный ingress отделён secretless L4 relay от TLS/webhook runtime
+
+**Статус:** принято для ограниченного recovery test-production 20 июля 2026.
+Docker network с `internal: true` не может одновременно надёжно обслуживать опубликованные host
+ports, а отключение masquerade не блокирует исходящий трафик контейнера. Поэтому публичные
+`80/443` принадлежат только закреплённому digest HAProxy `edge-relay`: он работает в TCP mode,
+не завершает TLS, не видит HTTP payload, не получает provider credentials, certificates или
+production env и соединяет внешнюю `ingress` с internal `edge`.
+
+Nginx подключён только к `edge`, не публикует host ports и не имеет внешнего маршрута. HTTP `80`
+на Nginx допускает только ACME challenge, `/health` и контролируемый `426`; TLS ciphertext на
+`443` relay передаёт без расшифровки. Acceptance обязана проверить фактические memberships,
+владение ports, прохождение host -> relay -> Nginx и невозможность прямого egress из Nginx.
+
+У relay остаётся внешний маршрут, необходимый для приёма публичных соединений. Это отдельный
+residual: в контейнере нет секретов и прикладного кода, image входит в Critical-CVE/secret/SBOM
+gate, а любой необъяснимый relay-initiated egress в provider flow logs является stop-criterion.

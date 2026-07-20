@@ -5,6 +5,12 @@
 > must be built from a clean vendor image and trusted Git checkout after a separate complete secret
 > rotation. Do not copy old disks, images, volumes, `.env`, certificates, databases, backups or
 > runtime files. See `docs/security_incident_20260715.md`.
+>
+> **Canonical recovery procedure, 20 July 2026:** use
+> `docs/recovery_test_production_runbook_20260720.md` for the new HDE/VK test-production launch.
+> It supersedes every legacy staging/bootstrap command in this document whenever the two differ.
+> In particular, do not create a generic `.env`, do not use `:latest` application images and do
+> not build after provider credentials have been placed on the host.
 
 ## Local Safety Rules
 
@@ -91,7 +97,9 @@ systemd timer is installed by this repository.
 The retention command is read-only by default. It applies `MEMORY_TTL_DAYS` to
 both conversation tables so the long-term summary and its stored turns expire
 together. `request_traces` are excluded unless a separately approved TTL is
-passed explicitly.
+passed explicitly. Terminal HDE rows are also excluded by default. They may be removed only with
+an independently approved `--hde-terminal-ttl-days`: the command deletes `delivered` outbox first
+and then its `processed` inbox, while unresolved/dead-letter rows never qualify.
 
 Preview the eligible row counts without exposing stored text:
 
@@ -118,6 +126,25 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   exec -T app-ml python scripts/purge_old_memory.py \
   --request-trace-ttl-days <approved-days>
 ```
+
+Terminal HDE queue retention is a separate dry-run-first decision. It never deletes the recovery
+audit and preserves every unresolved job:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml python scripts/purge_old_memory.py \
+  --hde-terminal-ttl-days <approved-days>
+# Only after data-owner approval and backup:
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
+  exec -T app-ml python scripts/purge_old_memory.py \
+  --hde-terminal-ttl-days <approved-days> --apply
+```
+
+`hde_transport_audit` is immutable at database level: revision `008` rejects `UPDATE` and
+`DELETE`. It retains only pseudonymous job linkage, corporate operator id, fixed reason, evidence
+digest and the pre-recovery error/attempt/dead-letter metadata. During incident recovery it is
+held as security evidence; an audit-retention/deletion mechanism requires a separate data-owner
+and security decision and is intentionally not part of the routine purge command.
 
 The JSON result must show `mode=dry-run` during preview, the expected TTLs, and
 only aggregate counts. Do not add a production scheduler during deployment;
@@ -228,14 +255,21 @@ On the new clean VM:
 
 Do not reuse any ACME directory, TLS private key, `.env` or tunnel command from the old host.
 
-The provisioning script has no endpoint fallback and fails closed unless the new host is passed
-explicitly. Run it only on the clean VM after the new DNS name or IPv4 address is approved:
+The provisioning script runs only as root, validates the new endpoint and reads its values from
+the protected `.env.production` when no shell override is supplied. Run it only on the clean VM
+after the new DNS name or IPv4 address is approved; do not place real values in shell history:
 
 ```bash
-ADMIN_PUBLIC_HOST=<NEW_DNS_NAME_OR_IPV4> bash scripts/provision_admin_https.sh
+sudo env -u ADMIN_PUBLIC_HOST -u CERTBOT_EMAIL bash scripts/provision_admin_https.sh
 ```
 
 ## Server Staging Deploy
+
+> **Superseded for incident recovery.** Do not execute the legacy commands in this section for the
+> 20 July clean rebuild. They are retained only as historical operational context. The approved,
+> fail-closed sequence (secretless pinned build first, then `.env.production`, production Compose,
+> TLS, acceptance and limited HDE smoke) is in
+> `docs/recovery_test_production_runbook_20260720.md`.
 
 Current staging target does not yet exist. Create a new Ubuntu 24.04 VM from the provider's clean
 image; never clone or attach the old VM/disk. The application container is bound to localhost
@@ -387,19 +421,68 @@ source HDE post, not to the ticket id or a generated timestamp. The tag is docum
 as the ID of the last answer. The adapter also accepts `message.message_id`,
 `message.post_id`, `data.message.id`, `event.id`, root `event_id`, `message_id` and `post_id`.
 Repeated delivery of the same stable id for one ticket is acknowledged with HTTP 200 but does
-not generate or send a second answer. Payloads without a stable id remain accepted for backward
-compatibility, but use a per-request fallback and therefore cannot be deduplicated reliably.
+not generate or send a second answer. A stable id is mandatory: payloads without it receive 422
+and must not be enabled in the dispatcher. Before handoff, replay one identical test payload and
+prove that the PostgreSQL inbox contains one event and HDE contains one bot answer.
 
-HDE turns are protected by distributed Redis locks: one ticket is processed and delivered in
-sequence, while different tickets may run concurrently. Redis inbox keys are retained for seven
-days. A stable event first receives a short `processing` lease; only confirmed HDE delivery turns
-it into `done`. A known non-delivery releases the lease so upstream retry can try again. Redis
-failure or a still-active processing collision returns HTTP 503, so the dispatcher must retry;
-an already completed duplicate returns HTTP 200 without a second answer. This avoids concurrent
-or duplicate public replies, but the current in-process `BackgroundTasks` implementation is not
-a durable outbox: a process restart after HTTP acknowledgement can still lose an accepted turn
-until the processing lease expires and upstream retries. Do not describe this residual risk as
-closed until a persistent worker/outbox with retry is deployed.
+Migration `008_hde_durable_transport` adds a PostgreSQL inbox/outbox. The webhook masks message
+text immediately, encrypts the reversible ticket reference with pgcrypto and returns HTTP 200
+only after the inbox transaction commits. A worker runs only in the `ml` runtime, processes one
+event per ticket in order, verifies the persisted `request_traces.response_text`, then creates the
+encrypted outbox atomically. Confirmed delivery purges both reversible envelopes and the masked
+inbox payload and atomically updates `request_traces.delivery_status`. Raw HDE identifiers, raw
+message text and response text are not stored in queue columns as plaintext.
+
+HDE does not provide a confirmed idempotency key for the public-post request. Therefore an
+attempted timeout, network error, unexpected exception or non-429 HTTP error is ambiguous and is
+quarantined as `dead_letter`; it is never sent automatically a second time. Automatic retry is
+allowed only when no provider call was attempted or HDE explicitly returned 429. `/ready` fails
+on a dead-letter, stopped worker or stale queue. Disable the dispatcher, reconcile the ticket in
+the HDE UI, then explicitly mark the outbox delivered or requeue it. This is an honest at-least-once
+boundary: an incorrect manual requeue after HDE accepted an unconfirmed request can duplicate a
+public answer.
+
+Dead-letter recovery is available only through the server-local audited CLI; there is no public
+or admin recovery endpoint. First disable the dispatcher and inspect privacy-safe metadata:
+
+```bash
+dc=(sudo docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml)
+"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py list
+```
+
+The operator reviews the corresponding HDE ticket/posts without copying them to Git or chat,
+stores evidence under `data/private/runtime/`, and calculates its SHA-256. The mutation requires
+an operator id, one fixed reason code, evidence digest and a repeated job id. Choose exactly one:
+
+```bash
+# HDE confirms that the public post exists:
+"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py \
+  reconcile-delivered --job-id <ID> --confirm-job-id <ID> \
+  --operator <CORPORATE_LOGIN> --reason provider_confirmed_delivered \
+  --evidence-sha256 <64_HEX_DIGEST> --http-status 200
+
+# HDE confirms that no public post was accepted:
+"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py \
+  requeue-outbox --job-id <ID> --confirm-job-id <ID> \
+  --operator <CORPORATE_LOGIN> --reason provider_confirmed_not_delivered \
+  --evidence-sha256 <64_HEX_DIGEST>
+
+# Inbox processing side effects were reviewed and safe resume is proven:
+"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py \
+  requeue-inbox --job-id <ID> --confirm-job-id <ID> \
+  --operator <CORPORATE_LOGIN> --reason side_effects_reviewed_safe_to_resume \
+  --evidence-sha256 <64_HEX_DIGEST>
+
+"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py audit --job-id <ID>
+```
+
+Every mutation and its reason/evidence digest are committed atomically to
+`hde_transport_audit`; the row also preserves the original attempt count, error code,
+dead-letter timestamp and previous delivery HTTP status before recovery clears queue diagnostics.
+The database rejects audit `UPDATE`/`DELETE`. Trace retention excludes unresolved HDE inbox/outbox rows, so the trace
+needed for safe reconciliation cannot be removed by `purge_old_memory.py`. Re-enable the
+dispatcher only after the affected queue is empty, `/ready` is green and the audit row is present.
 
 If an HDE rule is dedicated to one known event, it may pass an explicit optional
 context at the root of either payload:
@@ -452,6 +535,13 @@ HDE_BASE_URL=https://rosmolodezh.helpdeskeddy.com
 HDE_API_EMAIL=<api-user-email>
 HDE_API_KEY=<api-key>
 HDE_BOT_USER_ID=
+HDE_TRANSPORT_ENABLED=true
+HDE_TRANSPORT_EVENT_KEY_SECRET=<independent-random-secret>
+HDE_TRANSPORT_ENCRYPTION_KEY=<different-independent-random-secret>
+HDE_TRANSPORT_LEASE_TIMEOUT_SECONDS=420
+HDE_TRANSPORT_RECOVERY_INTERVAL_SECONDS=30
+HDE_TRANSPORT_SHUTDOWN_TIMEOUT_SECONDS=420
+HDE_TRANSPORT_QUEUE_STALE_AFTER_SECONDS=900
 HDE_REQUEST_TIMEOUT_SECONDS=20
 HDE_RATE_LIMIT_RPM=250
 HDE_RATE_LIMIT_REMAINING_RESERVE=30
@@ -461,9 +551,10 @@ HDE_RATE_LIMIT_BAN_SECONDS=1200
 Use `/posts/` for a public answer visible to the client. `/comments/` is for
 internal staff comments and must not be used for normal bot replies.
 
-The HDE webhook endpoint returns `{"ok": true}` immediately and processes the
-RAG/LLM answer in the FastAPI background task. This prevents HDE/nginx timeouts
-on slow CPU inference or Max-generation requests.
+The HDE webhook endpoint returns `{"ok": true}` only after durable inbox commit. RAG/LLM and
+delivery run asynchronously in the persistent worker; a process restart cannot erase an
+acknowledged inbox row. Before rotating either transport secret, the inbox/outbox and dead-letter
+counts must be zero. Never change the encryption key while an encrypted row remains.
 
 HelpDeskEddy applies a shared system-wide API limit. The standard HDE limit is
 300 RPM for the whole account, including exports and unrelated scripts, not only

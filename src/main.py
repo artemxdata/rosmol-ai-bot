@@ -5,16 +5,16 @@ import hashlib
 import hmac
 import re
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from hmac import compare_digest
 from ipaddress import ip_address
-from math import ceil
 from pathlib import Path
 from time import perf_counter, time
 from typing import Any
+from urllib.parse import urlsplit
+from uuid import uuid4
 
 import asyncpg
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
@@ -32,12 +32,13 @@ from src.admin.yonote_sync import (
 from src.admin.yonote_sync import (
     preview_sync as preview_yonote_sync,
 )
-from src.channels.hde import (
-    HDEAdapter,
-    HDEDeliveryResult,
-    HDEDeliveryStatus,
-    HDEPayloadError,
+from src.channels.hde import HDEAdapter, HDEPayloadError
+from src.channels.hde_transport import (
+    HDEStableEventRequired,
+    HDETransportRepository,
+    HDETransportValidationError,
 )
+from src.channels.hde_worker import HDETransportWorker
 from src.channels.max import MaxAdapter
 from src.channels.vk import VKAdapter
 from src.config import get_settings
@@ -53,7 +54,7 @@ from src.llm.usage import (
     start_llm_usage_collection,
     summarize_llm_usage,
 )
-from src.logging.db_logger import log_request, update_delivery_outcome
+from src.logging.db_logger import log_request
 from src.logging.tracer import Tracer
 from src.models import Channel, Chunk, IncomingMessage, QueryAnalysis, Session
 from src.ops.reports import build_trace_report
@@ -64,7 +65,7 @@ from src.rag.reranker import Reranker
 from src.rag.retriever import Retriever
 from src.security import profanity, safety
 from src.security.operator_request import is_operator_request
-from src.security.pii_masker import PIIMasker
+from src.security.pii_masker import PIIMasker, PIIMaskingUnavailable
 from src.security.rate_limiter import RateLimiter
 from src.session.manager import SessionManager
 from src.session.memory import UserMemory, hash_user_id
@@ -88,9 +89,26 @@ _MEANINGFUL_WORD_RE = re.compile(r"[а-яa-z0-9]{3,}", flags=re.IGNORECASE)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     _validate_runtime_security(settings)
+    kb_manifest = await asyncio.to_thread(kb_store.validate_seed, Path(settings.kb_seed_path))
+    published_records = int(kb_manifest.get("status_counts", {}).get("published", 0))
+    if published_records <= 0:
+        raise RuntimeError("KB_SEED_PATH contains no published records")
+    app.state.runtime_settings = settings
+    app.state.runtime_config = {
+        "status": "ok",
+        "runtime_role": settings.runtime_role,
+        "release_git_sha": settings.release_git_sha,
+    }
+    app.state.kb_manifest = {
+        "status": "ok",
+        "published_records": published_records,
+    }
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.pg_pool = await asyncpg.create_pool(settings.postgres_dsn, min_size=1, max_size=5)
-    app.state.qdrant = AsyncQdrantClient(url=settings.qdrant_url)
+    app.state.qdrant = AsyncQdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key or None,
+    )
     app.state.memory = UserMemory(app.state.pg_pool)
     app.state.sessions = SessionManager(app.state.redis, app.state.memory)
     app.state.rate_limiter = RateLimiter(app.state.redis)
@@ -111,11 +129,39 @@ async def lifespan(app: FastAPI):
     }
     if settings.ml_prewarm_on_startup:
         await _prewarm_ml_runtime(app, settings)
-    yield
-    await app.state.llm_client.aclose()
-    await app.state.redis.aclose()
-    await app.state.pg_pool.close()
-    await app.state.qdrant.close()
+    app.state.hde_transport_repository = None
+    app.state.hde_transport_worker = None
+    if settings.runtime_role == "ml" and settings.hde_transport_enabled:
+        repository = HDETransportRepository(
+            app.state.pg_pool,
+            event_key_secret=settings.hde_transport_event_key_secret,
+            encryption_key=settings.hde_transport_encryption_key,
+        )
+        worker = HDETransportWorker(
+            repository=repository,
+            pg_pool=app.state.pg_pool,
+            app=app,
+            process_message=process_message,
+            send_message=hde_adapter.send,
+            worker_id=f"hde-ml-{uuid4().hex[:12]}",
+            lease_timeout_seconds=settings.hde_transport_lease_timeout_seconds,
+            poll_interval_seconds=settings.hde_transport_poll_interval_seconds,
+            recovery_interval_seconds=settings.hde_transport_recovery_interval_seconds,
+            shutdown_timeout_seconds=settings.hde_transport_shutdown_timeout_seconds,
+        )
+        await worker.start()
+        app.state.hde_transport_repository = repository
+        app.state.hde_transport_worker = worker
+    try:
+        yield
+    finally:
+        worker = getattr(app.state, "hde_transport_worker", None)
+        if worker is not None:
+            await worker.stop()
+        await app.state.llm_client.aclose()
+        await app.state.redis.aclose()
+        await app.state.pg_pool.close()
+        await app.state.qdrant.close()
 
 
 app = FastAPI(title="Rosmol AI Bot", version="0.1.0", lifespan=lifespan)
@@ -126,36 +172,306 @@ hde_adapter = HDEAdapter()
 
 ADMIN_SESSION_COOKIE = "rosmol_admin_session"
 ADMIN_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
-HDE_EVENT_DEDUP_TTL_SECONDS = 7 * 24 * 60 * 60
-HDE_EVENT_PROCESSING_MIN_TTL_SECONDS = 5 * 60
-HDE_EVENT_PROCESSING_MARGIN_SECONDS = 60
-_HDE_EVENT_MARK_DONE_SCRIPT = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-    return redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
-end
-return false
-"""
-_HDE_EVENT_RELEASE_SCRIPT = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-    return redis.call('DEL', KEYS[1])
-end
-return 0
-"""
-
-
-@dataclass(frozen=True, slots=True)
-class _HDEEventReservation:
-    key: str | None = None
-    token: str | None = None
 
 
 def _validate_runtime_security(settings: Any) -> None:
     app_env = str(getattr(settings, "app_env", "local") or "local").strip().casefold()
-    user_hash_secret = str(getattr(settings, "user_hash_secret", "") or "").strip()
+    runtime_role = _setting_text(settings, "runtime_role") or "api"
+    transport_enabled = bool(getattr(settings, "hde_transport_enabled", False))
+    if app_env not in {"local", "test", "staging", "production"}:
+        raise RuntimeError("APP_ENV must be one of: local, test, staging, production")
+
+    errors: list[str] = []
+    user_hash_secret = _setting_text(settings, "user_hash_secret")
     if app_env not in {"local", "test"} and not user_hash_secret:
-        raise RuntimeError(
-            "USER_HASH_SECRET is required outside local/test environments"
+        errors.append("USER_HASH_SECRET is required outside local/test environments")
+
+    if app_env == "production":
+        if not bool(getattr(settings, "admin_read_only", False)):
+            errors.append("ADMIN_READ_ONLY must be enabled in production")
+        required_settings = [
+            ("RELEASE_GIT_SHA", "release_git_sha"),
+            ("API_AUTH_TOKEN", "api_auth_token"),
+            ("WEBHOOK_AUTH_TOKEN", "webhook_auth_token"),
+            ("ADMIN_AUTH_TOKEN", "admin_auth_token"),
+            ("USER_HASH_SECRET", "user_hash_secret"),
+            ("QDRANT_API_KEY", "qdrant_api_key"),
+        ]
+        if runtime_role == "ml":
+            required_settings.extend(
+                [
+                    ("CLOUD_RU_API_KEY", "cloud_ru_api_key"),
+                    ("HDE_TRIGGER_PREFIX", "hde_trigger_prefix"),
+                    ("HDE_BASE_URL", "hde_base_url"),
+                    ("HDE_API_EMAIL", "hde_api_email"),
+                    ("HDE_API_KEY", "hde_api_key"),
+                    (
+                        "HDE_TRANSPORT_EVENT_KEY_SECRET",
+                        "hde_transport_event_key_secret",
+                    ),
+                    (
+                        "HDE_TRANSPORT_ENCRYPTION_KEY",
+                        "hde_transport_encryption_key",
+                    ),
+                ]
+            )
+        for env_name, attribute in required_settings:
+            value = _setting_text(settings, attribute)
+            if not value:
+                errors.append(f"{env_name} is required in production")
+            elif _looks_like_placeholder(value):
+                errors.append(f"{env_name} still contains a placeholder value")
+
+        release_git_sha = _setting_text(settings, "release_git_sha")
+        if not re.fullmatch(r"[0-9a-f]{40}", release_git_sha) or release_git_sha == "0" * 40:
+            errors.append("RELEASE_GIT_SHA must be a non-zero full lowercase Git SHA")
+
+        length_checked_secrets = [
+            ("API_AUTH_TOKEN", "api_auth_token"),
+            ("WEBHOOK_AUTH_TOKEN", "webhook_auth_token"),
+            ("ADMIN_AUTH_TOKEN", "admin_auth_token"),
+            ("USER_HASH_SECRET", "user_hash_secret"),
+            ("QDRANT_API_KEY", "qdrant_api_key"),
+        ]
+        if runtime_role == "ml":
+            length_checked_secrets.extend(
+                [
+                    (
+                        "HDE_TRANSPORT_EVENT_KEY_SECRET",
+                        "hde_transport_event_key_secret",
+                    ),
+                    (
+                        "HDE_TRANSPORT_ENCRYPTION_KEY",
+                        "hde_transport_encryption_key",
+                    ),
+                ]
+            )
+        for env_name, attribute in length_checked_secrets:
+            value = _setting_text(settings, attribute)
+            if value and len(value) < 32:
+                errors.append(f"{env_name} must contain at least 32 characters in production")
+
+        trigger_prefix = (
+            _setting_text(settings, "hde_trigger_prefix") if runtime_role == "ml" else ""
         )
+        if trigger_prefix and len(trigger_prefix) < 16:
+            errors.append("HDE_TRIGGER_PREFIX must contain at least 16 characters in production")
+
+        independent_secret_attributes = [
+            "api_auth_token",
+            "webhook_auth_token",
+            "admin_auth_token",
+            "user_hash_secret",
+            "qdrant_api_key",
+        ]
+        if runtime_role == "ml":
+            independent_secret_attributes.extend(
+                [
+                    "hde_trigger_prefix",
+                    "hde_transport_event_key_secret",
+                    "hde_transport_encryption_key",
+                ]
+            )
+        independent_secrets = [
+            _setting_text(settings, attribute)
+            for attribute in independent_secret_attributes
+        ]
+        if all(independent_secrets) and len(set(independent_secrets)) != len(
+            independent_secrets
+        ):
+            errors.append(
+                "runtime authentication and HDE transport secrets must be independent values"
+            )
+
+        postgres_dsn = _setting_text(settings, "postgres_dsn")
+        if not postgres_dsn:
+            errors.append("POSTGRES_DSN is required in production")
+        elif _looks_like_placeholder(postgres_dsn):
+            errors.append("POSTGRES_DSN still contains a placeholder value")
+        elif "rosmol:rosmol@" in postgres_dsn.casefold():
+            errors.append("POSTGRES_DSN must not use the development default credentials")
+
+        redis_url = _setting_text(settings, "redis_url")
+        redis_parsed = urlsplit(redis_url)
+        if (
+            redis_parsed.scheme not in {"redis", "rediss"}
+            or redis_parsed.hostname != "redis"
+            or redis_parsed.port != 6379
+            or redis_parsed.username not in {None, ""}
+            or not redis_parsed.password
+            or len(redis_parsed.password) < 32
+            or redis_parsed.path != "/0"
+            or redis_parsed.query
+            or redis_parsed.fragment
+        ):
+            errors.append(
+                "REDIS_URL must use a strong password and the internal redis:6379/0 endpoint"
+            )
+        elif redis_parsed.password in independent_secrets:
+            errors.append("Redis and runtime authentication secrets must be independent values")
+
+        if runtime_role == "ml" and not bool(
+            getattr(settings, "ml_prewarm_on_startup", False)
+        ):
+            errors.append("ML_PREWARM_ON_STARTUP must be enabled for the production ML runtime")
+        if runtime_role == "ml" and not transport_enabled:
+            errors.append("HDE_TRANSPORT_ENABLED must be enabled for the production ML runtime")
+        if runtime_role == "ml":
+            https_proxy = _setting_text(settings, "https_proxy")
+            if https_proxy != "http://runtime-egress-proxy:3128":
+                errors.append(
+                    "HTTPS_PROXY must use the isolated runtime-egress-proxy in production"
+                )
+            cloud_endpoint = urlsplit(
+                _setting_text(settings, "cloud_ru_chat_completions_url")
+            )
+            if (
+                (cloud_endpoint.hostname or "").casefold()
+                != "foundation-models.api.cloud.ru"
+                or cloud_endpoint.path != "/v1/chat/completions"
+            ):
+                errors.append(
+                    "CLOUD_RU_CHAT_COMPLETIONS_URL must match the reviewed Cloud.ru endpoint"
+                )
+            hde_endpoint = urlsplit(_setting_text(settings, "hde_base_url"))
+            hde_host = (hde_endpoint.hostname or "").casefold()
+            if (
+                hde_host != "rosmolodezh.helpdeskeddy.com"
+                or hde_endpoint.path not in {"", "/"}
+            ):
+                errors.append("HDE_BASE_URL must match the reviewed HDE tenant endpoint")
+        if runtime_role == "api":
+            forbidden_provider_settings = (
+                "cloud_ru_api_key",
+                "hde_trigger_prefix",
+                "hde_base_url",
+                "hde_api_email",
+                "hde_api_key",
+                "hde_bot_user_id",
+                "hde_transport_event_key_secret",
+                "hde_transport_encryption_key",
+            )
+            if any(_setting_text(settings, name) for name in forbidden_provider_settings):
+                errors.append(
+                    "provider and HDE transport secrets must not be configured in the API runtime"
+                )
+
+    if transport_enabled:
+        if runtime_role != "ml":
+            errors.append("HDE transport may run only in the ML runtime")
+        event_secret = _setting_text(settings, "hde_transport_event_key_secret")
+        encryption_key = _setting_text(settings, "hde_transport_encryption_key")
+        if len(event_secret) < 32:
+            errors.append("HDE_TRANSPORT_EVENT_KEY_SECRET must contain at least 32 characters")
+        if len(encryption_key) < 32:
+            errors.append("HDE_TRANSPORT_ENCRYPTION_KEY must contain at least 32 characters")
+        if event_secret and event_secret == encryption_key:
+            errors.append("HDE transport event and encryption secrets must be independent")
+        request_timeout = float(getattr(settings, "request_timeout_seconds", 45.0) or 45.0)
+        session_wait = max(90.0, request_timeout + 30.0)
+        inbox_window = session_wait + request_timeout + 30.0
+        hde_timeout = float(
+            getattr(settings, "hde_request_timeout_seconds", 20.0) or 20.0
+        )
+        minimum_lease = max(inbox_window, hde_timeout + 30.0)
+        lease_timeout = float(
+            getattr(settings, "hde_transport_lease_timeout_seconds", 420.0) or 0.0
+        )
+        recovery_interval = float(
+            getattr(settings, "hde_transport_recovery_interval_seconds", 30.0) or 0.0
+        )
+        shutdown_timeout = float(
+            getattr(settings, "hde_transport_shutdown_timeout_seconds", 420.0) or 0.0
+        )
+        if lease_timeout <= minimum_lease:
+            errors.append(
+                "HDE_TRANSPORT_LEASE_TIMEOUT_SECONDS must exceed session wait plus "
+                "REQUEST_TIMEOUT_SECONDS and safety margin"
+            )
+        if recovery_interval * 3 > lease_timeout:
+            errors.append(
+                "HDE_TRANSPORT_RECOVERY_INTERVAL_SECONDS must not exceed one third of lease"
+            )
+        if shutdown_timeout <= minimum_lease:
+            errors.append(
+                "HDE_TRANSPORT_SHUTDOWN_TIMEOUT_SECONDS must exceed the maximum inbox turn window"
+            )
+
+    if app_env not in {"local", "test"}:
+        _append_https_url_error(
+            errors,
+            "CLOUD_RU_CHAT_COMPLETIONS_URL",
+            _setting_text(settings, "cloud_ru_chat_completions_url"),
+            active=bool(_setting_text(settings, "cloud_ru_api_key"))
+            or (app_env == "production" and runtime_role == "ml"),
+        )
+        hde_active = (app_env == "production" and runtime_role == "ml") or any(
+            _setting_text(settings, attribute)
+            for attribute in ("hde_base_url", "hde_api_email", "hde_api_key")
+        )
+        _append_https_url_error(
+            errors,
+            "HDE_BASE_URL",
+            _setting_text(settings, "hde_base_url"),
+            active=hde_active,
+        )
+        yonote_active = bool(getattr(settings, "yonote_sync_enabled", False)) or bool(
+            _setting_text(settings, "yonote_api_token")
+        )
+        _append_https_url_error(
+            errors,
+            "YONOTE_BASE_URL",
+            _setting_text(settings, "yonote_base_url"),
+            active=yonote_active,
+        )
+
+    if errors:
+        raise RuntimeError("Invalid runtime security configuration: " + "; ".join(errors))
+
+
+def _setting_text(settings: Any, attribute: str) -> str:
+    return str(getattr(settings, attribute, "") or "").strip()
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    normalized = value.strip().casefold()
+    return any(
+        marker in normalized
+        for marker in ("replace-with", "example.test", "your-", "change-me", "changeme")
+    )
+
+
+def _append_https_url_error(
+    errors: list[str],
+    env_name: str,
+    value: str,
+    *,
+    active: bool,
+) -> None:
+    if not active:
+        return
+    if not value:
+        errors.append(f"{env_name} is required when its integration is active")
+        return
+    if _looks_like_placeholder(value):
+        errors.append(f"{env_name} still contains a placeholder value")
+        return
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        errors.append(f"{env_name} must use an absolute https:// URL")
+        return
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or port not in {None, 443}
+        or parsed.query
+        or parsed.fragment
+    ):
+        errors.append(f"{env_name} must use an absolute https:// URL")
+    elif parsed.username is not None or parsed.password is not None:
+        errors.append(f"{env_name} must not contain embedded credentials")
 
 
 class AskPayload(BaseModel):
@@ -200,6 +516,17 @@ async def health() -> dict[str, str]:
 @app.get("/ready")
 async def ready(request: Request) -> dict[str, Any]:
     checks: dict[str, str] = {}
+    hde_transport_counts: dict[str, int] | None = None
+    runtime_settings = getattr(request.app.state, "runtime_settings", None) or get_settings()
+
+    try:
+        _validate_runtime_security(runtime_settings)
+        runtime_config = getattr(request.app.state, "runtime_config", None)
+        if runtime_config is not None and runtime_config.get("status") != "ok":
+            raise RuntimeError("runtime configuration was not accepted at startup")
+        checks["config"] = "ok"
+    except Exception as exc:
+        checks["config"] = f"error: {type(exc).__name__}"
 
     try:
         await request.app.state.redis.ping()
@@ -214,22 +541,123 @@ async def ready(request: Request) -> dict[str, Any]:
         checks["postgres"] = f"error: {type(exc).__name__}"
 
     try:
-        await request.app.state.qdrant.get_collections()
-        checks["qdrant"] = "ok"
+        collection_name = str(
+            getattr(runtime_settings, "qdrant_knowledge_collection", "knowledge_base")
+        )
+        count_result = await request.app.state.qdrant.count(
+            collection_name=collection_name,
+            exact=True,
+        )
+        actual_count = int(count_result.count)
+        kb_manifest = getattr(request.app.state, "kb_manifest", None) or {}
+        expected_count = int(kb_manifest.get("published_records", 0) or 0)
+        if actual_count <= 0:
+            checks["knowledge_base"] = "error: collection is empty"
+        elif expected_count and actual_count != expected_count:
+            checks["knowledge_base"] = (
+                f"error: indexed={actual_count}, expected={expected_count}"
+            )
+        else:
+            checks["knowledge_base"] = "ok"
     except Exception as exc:
-        checks["qdrant"] = f"error: {type(exc).__name__}"
+        checks["knowledge_base"] = f"error: {type(exc).__name__}"
 
     ml_prewarm = getattr(request.app.state, "ml_prewarm", None)
-    if ml_prewarm and ml_prewarm.get("enabled"):
+    runtime_role = str(getattr(runtime_settings, "runtime_role", "api") or "api")
+    if runtime_role == "ml" and not (ml_prewarm and ml_prewarm.get("enabled")):
+        checks["ml_prewarm"] = "error: disabled for ML runtime"
+    elif ml_prewarm and ml_prewarm.get("enabled"):
         if ml_prewarm.get("status") == "ok":
             checks["ml_prewarm"] = "ok"
         else:
             error = ml_prewarm.get("error") or ml_prewarm.get("status") or "unknown"
             checks["ml_prewarm"] = f"error: {error}"
 
+    transport_enabled = bool(getattr(runtime_settings, "hde_transport_enabled", False))
+    if runtime_role == "ml" and transport_enabled:
+        worker = getattr(request.app.state, "hde_transport_worker", None)
+        repository = getattr(request.app.state, "hde_transport_repository", None)
+        if worker is None or not worker.is_running:
+            checks["hde_transport"] = "error: workers not running"
+        elif repository is None:
+            checks["hde_transport"] = "error: repository unavailable"
+        else:
+            try:
+                queue_counts = await repository.get_queue_counts()
+                hde_transport_counts = queue_counts.as_dict()
+                dead_letters = (
+                    queue_counts.inbox_dead_letter + queue_counts.outbox_dead_letter
+                )
+                queue_stale_after = float(
+                    getattr(
+                        runtime_settings,
+                        "hde_transport_queue_stale_after_seconds",
+                        900.0,
+                    )
+                    or 900.0
+                )
+                lease_timeout = float(
+                    getattr(
+                        runtime_settings,
+                        "hde_transport_lease_timeout_seconds",
+                        420.0,
+                    )
+                    or 420.0
+                )
+                stale_queue_names = [
+                    name
+                    for name, age, limit in (
+                        (
+                            "inbox_ready",
+                            queue_counts.inbox_oldest_ready_age_seconds,
+                            queue_stale_after,
+                        ),
+                        (
+                            "inbox_processing",
+                            queue_counts.inbox_oldest_processing_age_seconds,
+                            lease_timeout,
+                        ),
+                        (
+                            "outbox_ready",
+                            queue_counts.outbox_oldest_ready_age_seconds,
+                            queue_stale_after,
+                        ),
+                        (
+                            "outbox_sending",
+                            queue_counts.outbox_oldest_sending_age_seconds,
+                            lease_timeout,
+                        ),
+                    )
+                    if age is not None and age > limit
+                ]
+                if dead_letters:
+                    checks["hde_transport"] = (
+                        "error: dead_letter/HOL "
+                        f"inbox={queue_counts.inbox_dead_letter}, "
+                        f"outbox={queue_counts.outbox_dead_letter}"
+                    )
+                elif stale_queue_names:
+                    checks["hde_transport"] = (
+                        "error: stale queue/HOL " + ",".join(stale_queue_names)
+                    )
+                else:
+                    checks["hde_transport"] = "ok"
+            except Exception as exc:
+                checks["hde_transport"] = f"error: {type(exc).__name__}"
+
     if any(status != "ok" for status in checks.values()):
-        raise HTTPException(status_code=503, detail={"status": "degraded", "checks": checks})
-    return {"status": "ready", "checks": checks}
+        detail: dict[str, Any] = {"status": "degraded", "checks": checks}
+        if hde_transport_counts is not None:
+            detail["hde_transport_counts"] = hde_transport_counts
+        raise HTTPException(status_code=503, detail=detail)
+    response: dict[str, Any] = {
+        "status": "ready",
+        "release_git_sha": _setting_text(runtime_settings, "release_git_sha") or None,
+        "checks": checks,
+    }
+    if hde_transport_counts is not None:
+        response["hde_transport_counts"] = hde_transport_counts
+    return response
 
 
 @app.post("/ask")
@@ -398,6 +826,7 @@ async def admin_apply_yonote_sync(
     request: Request,
 ) -> dict[str, Any]:
     _require_admin_secret(request)
+    _require_admin_writable()
     try:
         return await asyncio.to_thread(
             apply_yonote_sync,
@@ -429,6 +858,7 @@ async def admin_update_kb_chunk(
     request: Request,
 ) -> dict[str, Any]:
     _require_admin_secret(request)
+    _require_admin_writable()
     try:
         updated = await asyncio.to_thread(
             kb_store.update_chunk,
@@ -455,6 +885,7 @@ async def admin_update_kb_chunk(
 @app.post("/admin/kb/chunks/{chunk_id}/reindex")
 async def admin_reindex_kb_chunk(chunk_id: str, request: Request) -> dict[str, Any]:
     _require_admin_secret(request)
+    _require_admin_writable()
     record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Chunk not found")
@@ -480,6 +911,7 @@ async def admin_get_kb_chunk_eval_cases(
 
 @app.post("/webhook/vk")
 async def vk_webhook(request: Request) -> dict[str, bool]:
+    _require_direct_channel_webhook_enabled()
     _require_optional_secret(
         request,
         getattr(get_settings(), "webhook_auth_token", ""),
@@ -493,6 +925,7 @@ async def vk_webhook(request: Request) -> dict[str, bool]:
 
 @app.post("/webhook/max")
 async def max_webhook(request: Request) -> dict[str, bool]:
+    _require_direct_channel_webhook_enabled()
     _require_optional_secret(
         request,
         getattr(get_settings(), "webhook_auth_token", ""),
@@ -505,7 +938,7 @@ async def max_webhook(request: Request) -> dict[str, bool]:
 
 
 @app.post("/webhook/hde")
-async def hde_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, bool]:
+async def hde_webhook(request: Request) -> dict[str, bool]:
     _require_optional_secret(
         request,
         getattr(get_settings(), "webhook_auth_token", ""),
@@ -523,251 +956,52 @@ async def hde_webhook(request: Request, background_tasks: BackgroundTasks) -> di
         logger.warning("hde_payload_rejected", reason=str(exc))
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    reservation = await _reserve_hde_event(message, request.app)
-    if reservation is None:
-        return {"ok": True}
-    background_tasks.add_task(_process_hde_message, message, request.app, reservation)
-    return {"ok": True}
-
-
-async def _process_hde_message(
-    message: IncomingMessage,
-    fastapi_app: FastAPI,
-    reservation: _HDEEventReservation | None = None,
-) -> None:
-    sessions = getattr(fastapi_app.state, "sessions", None)
-    serializer = getattr(sessions, "serialized_hde_turn", None)
-    delivery: HDEDeliveryResult | None = None
+    repository = getattr(request.app.state, "hde_transport_repository", None)
+    if repository is None:
+        logger.error("hde_transport_unavailable", reason="repository_not_started")
+        raise HTTPException(status_code=503, detail="HDE transport unavailable")
     try:
-        if serializer is None:
-            delivery = await _process_hde_message_ordered(message, fastapi_app)
-        else:
-            async with serializer(message.user_id):
-                delivery = await _process_hde_message_ordered(message, fastapi_app)
-    except Exception as exc:
-        logger.exception(
-            "hde_turn_lock_failed",
-            request_id=str(message.request_id),
-            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
-            error_type=type(exc).__name__,
-        )
-        await _safe_log(
-            fastapi_app,
-            {
-                "request_id": message.request_id,
-                "channel": message.channel.value,
-                "user_id_hash": hash_user_id(message.channel.value, message.user_id),
-                "message_masked": "[hde_ordering_failed]",
-                "final_response": None,
-                "should_escalate": True,
-                "escalation_reason": "hde_ordering_failed",
-                "error": type(exc).__name__,
-                "upstream_event_id": message.upstream_event_id,
-                "upstream_event_id_source": message.upstream_event_id_source,
-                "eval_run_id": message.eval_run_id,
-                "eval_case_id": message.eval_case_id,
-            },
-        )
-        delivery = HDEDeliveryResult(
-            HDEDeliveryStatus.ORDERING_FAILED,
-            attempted=False,
-            error_code=type(exc).__name__,
-        )
-        await _record_hde_delivery(fastapi_app, message, delivery)
-    finally:
-        if reservation is not None:
-            await _finalize_hde_event(fastapi_app, message, reservation, delivery)
-
-
-async def _process_hde_message_ordered(
-    message: IncomingMessage,
-    fastapi_app: FastAPI,
-) -> HDEDeliveryResult:
-    try:
-        response = await process_message(message, fastapi_app)
-    except Exception as exc:
-        logger.exception(
-            "hde_background_processing_failed",
-            request_id=str(message.request_id),
-            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
-            error=str(exc),
-        )
-        response = "Передаю обращение специалисту."
-        await _safe_log(
-            fastapi_app,
-            {
-                "request_id": message.request_id,
-                "channel": message.channel.value,
-                "user_id_hash": hash_user_id(message.channel.value, message.user_id),
-                "message_masked": "[hde_processing_failed]",
-                "final_response": response,
-                "should_escalate": True,
-                "escalation_reason": "hde_processing_failed",
-                "error": type(exc).__name__,
-                "upstream_event_id": message.upstream_event_id,
-                "upstream_event_id_source": message.upstream_event_id_source,
-                "eval_run_id": message.eval_run_id,
-                "eval_case_id": message.eval_case_id,
-            },
-        )
-
-    try:
-        delivery = await hde_adapter.send(message.user_id, response)
-    except Exception as exc:
-        logger.exception(
-            "hde_background_send_failed",
-            request_id=str(message.request_id),
-            ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
-            error=str(exc),
-        )
-        delivery = HDEDeliveryResult(
-            HDEDeliveryStatus.NETWORK_ERROR,
-            attempted=True,
-            error_code=type(exc).__name__,
-        )
-    await _record_hde_delivery(fastapi_app, message, delivery)
-    return delivery
-
-
-async def _reserve_hde_event(
-    message: IncomingMessage,
-    fastapi_app: FastAPI,
-) -> _HDEEventReservation | None:
-    if message.upstream_event_id_source in {None, "request_id_fallback"}:
-        return _HDEEventReservation()
-    fingerprint = hash_user_id(
-        "hde-inbox",
-        f"{message.user_id}\0{message.upstream_event_id}",
-    )
-    key = f"hde-inbox:v2:{fingerprint}"
-    token = f"processing:{message.request_id}"
-    redis = getattr(fastapi_app.state, "redis", None)
-    if redis is None:
-        logger.error(
-            "hde_inbox_unavailable",
-            request_id=str(message.request_id),
-            reason="redis_not_initialized",
-        )
-        raise HTTPException(status_code=503, detail="HDE inbox unavailable")
-    try:
-        reserved = await redis.set(
-            key,
-            token,
-            nx=True,
-            ex=_hde_event_processing_ttl_seconds(),
-        )
-        if not reserved:
-            current = await redis.get(key)
-            if current is None:
-                reserved = await redis.set(
-                    key,
-                    token,
-                    nx=True,
-                    ex=_hde_event_processing_ttl_seconds(),
-                )
-            if not reserved and str(current or "").startswith("done:"):
-                logger.info(
-                    "hde_duplicate_event_skipped",
-                    request_id=str(message.request_id),
-                    ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
-                    upstream_event_id_source=message.upstream_event_id_source,
-                )
-                return None
-            if not reserved:
-                raise HTTPException(status_code=503, detail="HDE event is still processing")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception(
-            "hde_inbox_reservation_failed",
-            request_id=str(message.request_id),
-            error_type=type(exc).__name__,
-        )
-        raise HTTPException(status_code=503, detail="HDE inbox unavailable") from exc
-    return _HDEEventReservation(key=key, token=token)
-
-
-def _hde_event_processing_ttl_seconds() -> int:
-    settings = get_settings()
-    configured_window = ceil(
-        max(0.0, float(getattr(settings, "request_timeout_seconds", 45.0) or 0.0))
-        + max(0.0, float(getattr(settings, "hde_request_timeout_seconds", 20.0) or 0.0))
-        + HDE_EVENT_PROCESSING_MARGIN_SECONDS
-    )
-    return max(HDE_EVENT_PROCESSING_MIN_TTL_SECONDS, configured_window)
-
-
-async def _finalize_hde_event(
-    fastapi_app: FastAPI,
-    message: IncomingMessage,
-    reservation: _HDEEventReservation,
-    delivery: HDEDeliveryResult | None,
-) -> None:
-    if not reservation.key or not reservation.token:
-        return
-    redis = getattr(fastapi_app.state, "redis", None)
-    if redis is None:
-        logger.error(
-            "hde_inbox_finalize_failed",
-            request_id=str(message.request_id),
-            reason="redis_not_initialized",
-        )
-        return
-    try:
-        if delivery is not None and delivery.delivered:
-            updated = await redis.eval(
-                _HDE_EVENT_MARK_DONE_SCRIPT,
-                1,
-                reservation.key,
-                reservation.token,
-                f"done:{message.request_id}",
-                HDE_EVENT_DEDUP_TTL_SECONDS,
+        masked_text, _ = request.app.state.pii_masker.mask(message.text)
+        masked_forum_context: str | None = None
+        if message.forum_context:
+            masked_forum_context, _ = request.app.state.pii_masker.mask(
+                message.forum_context
             )
-            if not updated:
-                logger.warning(
-                    "hde_inbox_done_ownership_lost",
-                    request_id=str(message.request_id),
-                    ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
-                )
-            return
-        await redis.eval(
-            _HDE_EVENT_RELEASE_SCRIPT,
-            1,
-            reservation.key,
-            reservation.token,
+    except PIIMaskingUnavailable as exc:
+        logger.error(
+            "hde_pii_masking_unavailable",
+            request_id=str(message.request_id),
+            error_type=type(exc).__name__,
         )
+        raise HTTPException(status_code=503, detail="PII masking unavailable") from exc
+    try:
+        receipt = await repository.enqueue_inbox(
+            message,
+            masked_text=masked_text,
+            masked_forum_context=masked_forum_context,
+        )
+    except (HDEStableEventRequired, HDETransportValidationError) as exc:
+        logger.warning(
+            "hde_durable_payload_rejected",
+            request_id=str(message.request_id),
+            reason=str(exc),
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception(
-            "hde_inbox_finalize_failed",
+            "hde_durable_enqueue_failed",
             request_id=str(message.request_id),
             ticket_id_hash=hash_user_id(message.channel.value, message.user_id),
-            delivery_status=delivery.status.value if delivery is not None else "cancelled",
             error_type=type(exc).__name__,
         )
-
-
-async def _record_hde_delivery(
-    fastapi_app: FastAPI,
-    message: IncomingMessage,
-    delivery: HDEDeliveryResult,
-) -> None:
-    try:
-        await update_delivery_outcome(
-            fastapi_app.state.pg_pool,
-            message.request_id,
-            status=delivery.status.value,
-            attempted=delivery.attempted,
-            http_status=delivery.status_code,
-            retry_after_seconds=delivery.retry_after_seconds,
-            error_code=delivery.error_code,
-        )
-    except Exception as exc:
-        logger.exception(
-            "hde_delivery_trace_update_failed",
-            request_id=str(message.request_id),
-            delivery_status=delivery.status.value,
-            error_type=type(exc).__name__,
-        )
+        raise HTTPException(status_code=503, detail="HDE transport unavailable") from exc
+    logger.info(
+        "hde_durable_event_committed",
+        request_id=str(receipt.request_id),
+        event_key=receipt.event_key,
+        duplicate=not receipt.created,
+    )
+    return {"ok": True}
 
 
 async def _prewarm_ml_runtime(fastapi_app: FastAPI, settings: Any) -> None:
@@ -803,10 +1037,12 @@ async def _prewarm_ml_runtime(fastapi_app: FastAPI, settings: Any) -> None:
 
 async def _run_ml_prewarm(fastapi_app: FastAPI) -> None:
     query = "регистрация на форум"
-    await asyncio.to_thread(
+    masked_probe, pii_mapping = await asyncio.to_thread(
         fastapi_app.state.pii_masker.mask,
         "Иван Иванов спрашивает о регистрации на форум.",
     )
+    if not pii_mapping.get("name") or "Иван Иванов" in masked_probe:
+        raise PIIMaskingUnavailable("pii_ner_prewarm_probe_failed")
     await asyncio.to_thread(fastapi_app.state.embedder.encode, query)
     warm_chunk = Chunk(
         chunk_id="ml_prewarm",
@@ -918,6 +1154,12 @@ def _require_optional_secret(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _require_direct_channel_webhook_enabled() -> None:
+    app_env = str(getattr(get_settings(), "app_env", "local") or "local").strip().casefold()
+    if app_env not in {"local", "test"}:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
 def _require_admin_secret(request: Request) -> None:
     expected = _require_admin_enabled()
     if _has_valid_admin_session(request, expected):
@@ -930,6 +1172,14 @@ def _require_admin_enabled() -> str:
     if not expected:
         raise HTTPException(status_code=503, detail="Admin API is disabled")
     return expected
+
+
+def _require_admin_writable() -> None:
+    if bool(getattr(get_settings(), "admin_read_only", False)):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin mutations are disabled in this runtime",
+        )
 
 
 def _make_admin_session_cookie(secret: str) -> str:

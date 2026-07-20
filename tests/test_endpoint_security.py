@@ -64,6 +64,28 @@ async def test_webhook_requires_token_before_parsing(monkeypatch: pytest.MonkeyP
     assert response.status_code == 401
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/webhook/vk", "/webhook/max"])
+async def test_direct_stub_webhooks_are_disabled_outside_local_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(app_env="production", webhook_auth_token="secret"),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.post(
+            path,
+            json={"object": {"message": {"text": "x"}}},
+            headers={"X-Webhook-Secret": "secret"},
+        )
+
+    assert response.status_code == 404
+
+
 def test_bypass_cache_header_allowed_for_loopback_server_tests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

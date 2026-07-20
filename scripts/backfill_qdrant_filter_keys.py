@@ -21,7 +21,10 @@ async def backfill_filter_keys(
     batch_size: int = 64,
 ) -> None:
     settings = get_settings()
-    client = AsyncQdrantClient(url=settings.qdrant_url)
+    client = AsyncQdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key or None,
+    )
     try:
         raw_items = await asyncio.to_thread(_read_json, path)
         records = validate_seed_items(raw_items)

@@ -9,50 +9,88 @@ from typing import Any
 import httpx
 import pytest
 
-from src.channels.hde import HDEDeliveryResult, HDEDeliveryStatus
+from src.channels.hde_transport import HDEInboxReceipt, HDEStableEventRequired, InboxStatus
 from src.main import app as fastapi_app
 from src.main import process_message
 from src.models import Channel, IncomingMessage
+from src.security.pii_masker import PIIMaskingUnavailable
+
+
+class FakePIIMasker:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def mask(self, text: str) -> tuple[str, dict[str, list[str]]]:
+        self.calls.append(text)
+        return f"[MASKED:{len(self.calls)}]", {"masked": [text]}
+
+
+class FakeRepository:
+    def __init__(self, *, created: bool = True, error: Exception | None = None) -> None:
+        self.created = created
+        self.error = error
+        self.calls: list[tuple[IncomingMessage, dict[str, Any]]] = []
+
+    async def enqueue_inbox(
+        self,
+        message: IncomingMessage,
+        **kwargs: Any,
+    ) -> HDEInboxReceipt:
+        self.calls.append((message, kwargs))
+        if self.error is not None:
+            raise self.error
+        return HDEInboxReceipt(
+            id=17,
+            event_key="e" * 64,
+            request_id=message.request_id,
+            status=InboxStatus.PENDING,
+            created=self.created,
+        )
+
+
+def _settings() -> SimpleNamespace:
+    return SimpleNamespace(webhook_auth_token="secret")
+
+
+def _stable_message() -> IncomingMessage:
+    return IncomingMessage(
+        user_id="raw-ticket-123",
+        channel=Channel.HDE,
+        text="Write to ivan@example.test",
+        forum_context="Ivan Petrov forum",
+        attachments=[{"id": "raw-attachment"}],
+        upstream_event_id="raw-message-456",
+        upstream_event_id_source="message.id",
+    )
 
 
 @pytest.mark.asyncio
-async def test_hde_webhook_processes_message_in_background(
+async def test_hde_webhook_masks_then_awaits_durable_enqueue_before_200(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: dict[str, Any] = {}
+    repository = FakeRepository()
+    masker = FakePIIMasker()
 
-    class FakeHDEAdapter:
-        def parse(self, payload: dict[str, Any]) -> IncomingMessage:
-            calls["payload"] = payload
-            return IncomingMessage(
-                user_id="ticket-123",
-                channel=Channel.HDE,
-                text="Как зарегистрироваться на форум?",
-            )
+    class FakeAdapter:
+        def parse(self, _payload: dict[str, Any]) -> IncomingMessage:
+            return _stable_message()
 
-        async def send(self, user_id: str, text: str) -> HDEDeliveryResult:
-            calls["sent"] = {"user_id": user_id, "text": text}
-            return HDEDeliveryResult(HDEDeliveryStatus.DELIVERED, attempted=True)
+        async def send(self, *_args: Any) -> None:
+            raise AssertionError("webhook must not send inline")
 
-    async def fake_process_message(message: IncomingMessage, fastapi_app_arg: Any) -> str:
-        calls["processed"] = {
-            "user_id": message.user_id,
-            "channel": message.channel.value,
-            "text": message.text,
-            "app": fastapi_app_arg,
-        }
-        return "Ответ бота"
+    async def forbidden_process(*_args: Any) -> str:
+        raise AssertionError("webhook must not process inline")
 
-    async def _noop_delivery_update(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
+    monkeypatch.setattr("src.main.get_settings", _settings)
+    monkeypatch.setattr("src.main.hde_adapter", FakeAdapter())
+    monkeypatch.setattr("src.main.process_message", forbidden_process)
     monkeypatch.setattr(
-        "src.main.get_settings",
-        lambda: SimpleNamespace(webhook_auth_token="secret"),
+        fastapi_app.state,
+        "hde_transport_repository",
+        repository,
+        raising=False,
     )
-    monkeypatch.setattr("src.main.hde_adapter", FakeHDEAdapter())
-    monkeypatch.setattr("src.main.process_message", fake_process_message)
-    monkeypatch.setattr("src.main.update_delivery_outcome", _noop_delivery_update)
+    monkeypatch.setattr(fastapi_app.state, "pii_masker", masker, raising=False)
 
     transport = httpx.ASGITransport(app=fastapi_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -64,225 +102,168 @@ async def test_hde_webhook_processes_message_in_background(
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert calls["payload"] == {"event": "new_message"}
-    assert calls["processed"]["user_id"] == "ticket-123"
-    assert calls["processed"]["channel"] == "hde"
-    assert calls["sent"] == {"user_id": "ticket-123", "text": "Ответ бота"}
+    assert len(repository.calls) == 1
+    message, kwargs = repository.calls[0]
+    assert message.user_id == "raw-ticket-123"
+    assert kwargs == {
+        "masked_text": "[MASKED:1]",
+        "masked_forum_context": "[MASKED:2]",
+    }
+    safe_arguments = repr(kwargs)
+    assert "ivan@example.test" not in safe_arguments
+    assert "raw-message-456" not in safe_arguments
+    assert "raw-attachment" not in safe_arguments
+    assert masker.calls == ["Write to ivan@example.test", "Ivan Petrov forum"]
 
 
 @pytest.mark.asyncio
-async def test_hde_webhook_deduplicates_stable_upstream_message_id(
+async def test_hde_duplicate_receipt_is_acknowledged_without_inline_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = {"processed": 0, "sent": 0}
+    repository = FakeRepository(created=False)
+    monkeypatch.setattr("src.main.get_settings", _settings)
+    monkeypatch.setattr(fastapi_app.state, "hde_transport_repository", repository, raising=False)
+    monkeypatch.setattr(fastapi_app.state, "pii_masker", FakePIIMasker(), raising=False)
 
-    class FakeRedis:
-        def __init__(self) -> None:
-            self.values: dict[str, str] = {}
-
-        async def set(self, key: str, value: str, **kwargs: Any) -> bool:
-            assert kwargs == {"nx": True, "ex": 5 * 60}
-            if key in self.values:
-                return False
-            self.values[key] = value
-            return True
-
-        async def get(self, key: str) -> str | None:
-            return self.values.get(key)
-
-        async def eval(self, script: str, _key_count: int, key: str, *args: Any) -> Any:
-            if self.values.get(key) != args[0]:
-                return 0
-            if "SET" in script:
-                self.values[key] = str(args[1])
-                return "OK"
-            del self.values[key]
-            return 1
-
-    class FakeHDEAdapter:
+    class FakeAdapter:
         def parse(self, _payload: dict[str, Any]) -> IncomingMessage:
-            return IncomingMessage(
-                user_id="ticket-123",
-                channel=Channel.HDE,
-                text="Где мой билет?",
-                upstream_event_id="message-456",
-                upstream_event_id_source="message.id",
-            )
+            return _stable_message()
 
-        async def send(self, _user_id: str, _text: str) -> HDEDeliveryResult:
-            calls["sent"] += 1
-            return HDEDeliveryResult(HDEDeliveryStatus.DELIVERED, attempted=True)
-
-    async def fake_process_message(_message: IncomingMessage, _app: Any) -> str:
-        calls["processed"] += 1
-        return "Ответ"
-
-    async def fake_delivery_update(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    monkeypatch.setattr(
-        "src.main.get_settings",
-        lambda: SimpleNamespace(webhook_auth_token="secret"),
-    )
-    monkeypatch.setattr("src.main.hde_adapter", FakeHDEAdapter())
-    monkeypatch.setattr("src.main.process_message", fake_process_message)
-    monkeypatch.setattr("src.main.update_delivery_outcome", fake_delivery_update)
-    monkeypatch.setattr(fastapi_app.state, "redis", FakeRedis(), raising=False)
-
-    transport = httpx.ASGITransport(app=fastapi_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        first = await client.post(
-            "/webhook/hde",
-            json={"message": {"id": "message-456"}},
-            headers={"X-Webhook-Secret": "secret"},
-        )
-        duplicate = await client.post(
-            "/webhook/hde",
-            json={"message": {"id": "message-456"}},
-            headers={"X-Webhook-Secret": "secret"},
-        )
-
-    assert first.status_code == 200
-    assert duplicate.status_code == 200
-    assert calls == {"processed": 1, "sent": 1}
-    redis = fastapi_app.state.redis
-    assert len(redis.values) == 1
-    key, value = next(iter(redis.values.items()))
-    assert key.startswith("hde-inbox:v2:")
-    assert "ticket-123" not in key
-    assert "message-456" not in key
-    assert value.startswith("done:")
-
-
-@pytest.mark.asyncio
-async def test_hde_webhook_rejects_missing_or_oversized_ticket_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "src.main.get_settings",
-        lambda: SimpleNamespace(webhook_auth_token="secret"),
-    )
-    transport = httpx.ASGITransport(app=fastapi_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        missing = await client.post(
-            "/webhook/hde",
-            json={"visitor": {"id": "visitor-1"}, "message": {"text": "Вопрос"}},
-            headers={"X-Webhook-Secret": "secret"},
-        )
-        oversized = await client.post(
-            "/webhook/hde",
-            json={"chat_id": "x" * 256, "message": {"text": "Вопрос"}},
-            headers={"X-Webhook-Secret": "secret"},
-        )
-
-    assert missing.status_code == 422
-    assert missing.json()["detail"] == "ticket_id_required"
-    assert oversized.status_code == 422
-    assert oversized.json()["detail"] == "ticket_id_too_long"
-
-
-@pytest.mark.asyncio
-async def test_hde_webhook_returns_503_when_inbox_redis_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FailingRedis:
-        async def set(self, *_args: Any, **_kwargs: Any) -> bool:
-            raise ConnectionError("redis unavailable")
-
-    monkeypatch.setattr(
-        "src.main.get_settings",
-        lambda: SimpleNamespace(webhook_auth_token="secret"),
-    )
-    monkeypatch.setattr(fastapi_app.state, "redis", FailingRedis(), raising=False)
+    monkeypatch.setattr("src.main.hde_adapter", FakeAdapter())
     transport = httpx.ASGITransport(app=fastapi_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/webhook/hde",
-            json={
-                "chat_id": "ticket-123",
-                "message": {"id": "message-456", "text": "Где мой билет?"},
-            },
+            json={"message": {"id": "raw-message-456"}},
+            headers={"X-Webhook-Secret": "secret"},
+        )
+
+    assert response.status_code == 200
+    assert len(repository.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_hde_webhook_requires_provider_stable_event_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeRepository(error=HDEStableEventRequired("stable_upstream_event_id_required"))
+    monkeypatch.setattr("src.main.get_settings", _settings)
+    monkeypatch.setattr(fastapi_app.state, "hde_transport_repository", repository, raising=False)
+    monkeypatch.setattr(fastapi_app.state, "pii_masker", FakePIIMasker(), raising=False)
+
+    class FallbackAdapter:
+        def parse(self, _payload: dict[str, Any]) -> IncomingMessage:
+            message = _stable_message()
+            message.upstream_event_id = str(message.request_id)
+            message.upstream_event_id_source = "request_id_fallback"
+            return message
+
+    monkeypatch.setattr("src.main.hde_adapter", FallbackAdapter())
+    transport = httpx.ASGITransport(app=fastapi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook/hde",
+            json={"chat_id": "ticket-123", "message": {"text": "Question"}},
+            headers={"X-Webhook-Secret": "secret"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "stable_upstream_event_id_required"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repository", [None, FakeRepository(error=ConnectionError("db down"))])
+async def test_hde_webhook_returns_503_without_durable_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    repository: FakeRepository | None,
+) -> None:
+    monkeypatch.setattr("src.main.get_settings", _settings)
+    monkeypatch.setattr(fastapi_app.state, "hde_transport_repository", repository, raising=False)
+    monkeypatch.setattr(fastapi_app.state, "pii_masker", FakePIIMasker(), raising=False)
+
+    class FakeAdapter:
+        def parse(self, _payload: dict[str, Any]) -> IncomingMessage:
+            return _stable_message()
+
+    monkeypatch.setattr("src.main.hde_adapter", FakeAdapter())
+    transport = httpx.ASGITransport(app=fastapi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook/hde",
+            json={"message": {"id": "message-456"}},
             headers={"X-Webhook-Secret": "secret"},
         )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "HDE inbox unavailable"
+    assert response.json()["detail"] == "HDE transport unavailable"
 
 
 @pytest.mark.asyncio
-async def test_hde_webhook_releases_processing_lease_after_known_non_delivery(
+async def test_hde_webhook_fails_closed_when_name_masking_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = {"processed": 0, "sent": 0}
+    repository = FakeRepository()
 
-    class FakeRedis:
-        def __init__(self) -> None:
-            self.values: dict[str, str] = {}
+    class FailingPIIMasker:
+        def mask(self, _text: str) -> tuple[str, dict[str, list[str]]]:
+            raise PIIMaskingUnavailable("pii_ner_unavailable")
 
-        async def set(self, key: str, value: str, **_kwargs: Any) -> bool:
-            if key in self.values:
-                return False
-            self.values[key] = value
-            return True
-
-        async def get(self, key: str) -> str | None:
-            return self.values.get(key)
-
-        async def eval(self, script: str, _key_count: int, key: str, *args: Any) -> int:
-            if self.values.get(key) != args[0]:
-                return 0
-            assert "DEL" in script
-            del self.values[key]
-            return 1
-
-    class FakeHDEAdapter:
+    class FakeAdapter:
         def parse(self, _payload: dict[str, Any]) -> IncomingMessage:
-            return IncomingMessage(
-                user_id="ticket-123",
-                channel=Channel.HDE,
-                text="Где мой билет?",
-                upstream_event_id="message-456",
-                upstream_event_id_source="message.id",
-            )
+            return _stable_message()
 
-        async def send(self, _user_id: str, _text: str) -> HDEDeliveryResult:
-            calls["sent"] += 1
-            return HDEDeliveryResult(HDEDeliveryStatus.NETWORK_ERROR, attempted=True)
-
-    async def fake_process_message(_message: IncomingMessage, _app: Any) -> str:
-        calls["processed"] += 1
-        return "Ответ"
-
-    async def fake_delivery_update(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    redis = FakeRedis()
+    monkeypatch.setattr("src.main.get_settings", _settings)
+    monkeypatch.setattr("src.main.hde_adapter", FakeAdapter())
     monkeypatch.setattr(
-        "src.main.get_settings",
-        lambda: SimpleNamespace(webhook_auth_token="secret"),
+        fastapi_app.state,
+        "hde_transport_repository",
+        repository,
+        raising=False,
     )
-    monkeypatch.setattr("src.main.hde_adapter", FakeHDEAdapter())
-    monkeypatch.setattr("src.main.process_message", fake_process_message)
-    monkeypatch.setattr("src.main.update_delivery_outcome", fake_delivery_update)
-    monkeypatch.setattr(fastapi_app.state, "redis", redis, raising=False)
+    monkeypatch.setattr(
+        fastapi_app.state,
+        "pii_masker",
+        FailingPIIMasker(),
+        raising=False,
+    )
 
     transport = httpx.ASGITransport(app=fastapi_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        first = await client.post(
-            "/webhook/hde",
-            json={"message": {"id": "message-456"}},
-            headers={"X-Webhook-Secret": "secret"},
-        )
-        second = await client.post(
+        response = await client.post(
             "/webhook/hde",
             json={"message": {"id": "message-456"}},
             headers={"X-Webhook-Secret": "secret"},
         )
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert calls == {"processed": 2, "sent": 2}
-    assert redis.values == {}
+    assert response.status_code == 503
+    assert response.json()["detail"] == "PII masking unavailable"
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hde_webhook_auth_and_payload_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("src.main.get_settings", _settings)
+    transport = httpx.ASGITransport(app=fastapi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        unauthorized = await client.post("/webhook/hde", json={})
+        missing_ticket = await client.post(
+            "/webhook/hde",
+            json={"message": {"id": "message-1", "text": "Question"}},
+            headers={"X-Webhook-Secret": "secret"},
+        )
+        oversized = await client.post(
+            "/webhook/hde",
+            json={"chat_id": "x" * 256, "message": {"id": "message-1"}},
+            headers={"X-Webhook-Secret": "secret"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert missing_ticket.status_code == 422
+    assert missing_ticket.json()["detail"] == "ticket_id_required"
+    assert oversized.status_code == 422
+    assert oversized.json()["detail"] == "ticket_id_too_long"
 
 
 @pytest.mark.asyncio

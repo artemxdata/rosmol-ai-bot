@@ -65,6 +65,7 @@ def test_build_readiness_report_marks_demo_ready(tmp_path: Path) -> None:
 
     assert report["ready_for_leadership_demo"] is True
     assert all(gate["ok"] for gate in report["gates"])
+    assert "--expected-git-sha" in report["commands"]["full_acceptance"]
     assert (output_dir / "summary.json").exists()
     markdown = (output_dir / "summary.md").read_text(encoding="utf-8")
     assert "Готово к презентации" in markdown

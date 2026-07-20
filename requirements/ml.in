@@ -1,0 +1,5 @@
+# Runtime + [project.optional-dependencies].ml + the reviewed CPU-only torch build.
+-r runtime.in
+FlagEmbedding>=1.2.10,<1.5
+transformers>=4.44,<5
+torch==2.6.0+cpu

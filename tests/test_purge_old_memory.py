@@ -6,6 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.purge_old_memory import (
+    HDE_TERMINAL_COUNT_QUERIES,
+    HDE_TERMINAL_DELETE_QUERIES,
+    TRACE_COUNT_QUERY,
+    TRACE_DELETE_QUERY,
     apply_retention,
     command_count,
     positive_days,
@@ -30,12 +34,24 @@ class _Connection:
     async def fetchval(self, query: str, days: int) -> int:
         table = _table_name(query)
         self.calls.append(("count", table, days))
-        return {"conversation_turns": 7, "user_memory": 3, "request_traces": 11}[table]
+        return {
+            "conversation_turns": 7,
+            "user_memory": 3,
+            "request_traces": 11,
+            "hde_outbox_delivered": 5,
+            "hde_inbox_processed": 4,
+        }[table]
 
     async def execute(self, query: str, days: int) -> str:
         table = _table_name(query)
         self.calls.append(("delete", table, days))
-        count = {"conversation_turns": 7, "user_memory": 3, "request_traces": 11}[table]
+        count = {
+            "conversation_turns": 7,
+            "user_memory": 3,
+            "request_traces": 11,
+            "hde_outbox_delivered": 5,
+            "hde_inbox_processed": 4,
+        }[table]
         return f"DELETE {count}"
 
     def transaction(self) -> _Transaction:
@@ -43,9 +59,19 @@ class _Connection:
 
 
 def _table_name(query: str) -> str:
+    if "FROM request_traces" in query or "DELETE FROM request_traces" in query:
+        return "request_traces"
+    if "FROM hde_inbox AS inbox" in query or "DELETE FROM hde_inbox AS inbox" in query:
+        return "hde_inbox_processed"
+    if "FROM hde_outbox" in query or "DELETE FROM hde_outbox" in query:
+        return "hde_outbox_delivered"
     return next(
         table
-        for table in ("conversation_turns", "user_memory", "request_traces")
+        for table in (
+            "conversation_turns",
+            "user_memory",
+            "request_traces",
+        )
         if table in query
     )
 
@@ -81,6 +107,45 @@ async def test_apply_retention_includes_traces_only_with_explicit_ttl() -> None:
     assert connection.calls[-1] == ("delete", "request_traces", 90)
 
 
+@pytest.mark.asyncio
+async def test_hde_terminal_retention_is_explicit_and_fk_ordered() -> None:
+    connection = _Connection()
+
+    preview = await preview_retention(
+        connection,
+        memory_ttl_days=30,
+        request_trace_ttl_days=None,
+        hde_terminal_ttl_days=30,
+    )
+    deleted = await apply_retention(
+        connection,
+        memory_ttl_days=30,
+        request_trace_ttl_days=None,
+        hde_terminal_ttl_days=30,
+    )
+
+    assert preview["hde_outbox_delivered"] == 5
+    assert preview["hde_inbox_processed"] == 4
+    assert deleted["hde_outbox_delivered"] == 5
+    assert deleted["hde_inbox_processed"] == 4
+    hde_deletes = [call for call in connection.calls if call[0] == "delete" and "hde_" in call[1]]
+    assert hde_deletes == [
+        ("delete", "hde_outbox_delivered", 30),
+        ("delete", "hde_inbox_processed", 30),
+    ]
+
+
+def test_hde_terminal_retention_never_matches_unresolved_or_audit_rows() -> None:
+    combined = "\n".join(
+        [*HDE_TERMINAL_COUNT_QUERIES.values(), *HDE_TERMINAL_DELETE_QUERIES.values()]
+    )
+
+    assert "status = 'delivered'" in combined
+    assert "status = 'processed'" in combined
+    assert "hde_transport_audit" not in combined
+    assert "dead_letter" not in combined
+
+
 def test_retention_argument_and_command_status_validation() -> None:
     assert positive_days("30") == 30
     assert validate_retention_days("30", field_name="memory_ttl_days") == 30
@@ -89,6 +154,14 @@ def test_retention_argument_and_command_status_validation() -> None:
         positive_days("0")
     with pytest.raises(RuntimeError, match="unexpected PostgreSQL"):
         command_count("unexpected")
+
+
+def test_trace_retention_preserves_unresolved_hde_jobs() -> None:
+    for query in (TRACE_COUNT_QUERY, TRACE_DELETE_QUERY):
+        assert "FROM hde_inbox AS inbox" in query
+        assert "inbox.status <> 'processed'" in query
+        assert "FROM hde_outbox AS outbox" in query
+        assert "outbox.status <> 'delivered'" in query
 
 
 @pytest.mark.asyncio

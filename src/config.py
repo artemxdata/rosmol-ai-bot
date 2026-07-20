@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,10 +11,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: str = "local"
+    runtime_role: Literal["api", "ml"] = "api"
+    release_git_sha: str = ""
     log_level: str = "INFO"
     api_auth_token: str = ""
     webhook_auth_token: str = ""
     admin_auth_token: str = ""
+    admin_read_only: bool = False
     user_hash_secret: str = ""
     hde_trigger_prefix: str = ""
     hde_base_url: str = ""
@@ -24,6 +28,18 @@ class Settings(BaseSettings):
     hde_rate_limit_rpm: int = Field(default=250, ge=1, le=300)
     hde_rate_limit_remaining_reserve: int = Field(default=30, ge=0, le=300)
     hde_rate_limit_ban_seconds: int = Field(default=1200, ge=60)
+    hde_transport_enabled: bool = False
+    hde_transport_event_key_secret: str = ""
+    hde_transport_encryption_key: str = ""
+    hde_transport_lease_timeout_seconds: float = Field(default=420.0, ge=60)
+    hde_transport_poll_interval_seconds: float = Field(default=0.25, gt=0, le=10)
+    hde_transport_recovery_interval_seconds: float = Field(default=30.0, ge=5, le=300)
+    hde_transport_shutdown_timeout_seconds: float = Field(default=420.0, ge=1, le=600)
+    hde_transport_queue_stale_after_seconds: float = Field(
+        default=900.0,
+        ge=60,
+        le=86400,
+    )
     kb_seed_path: str = "data/knowledge_base_seed.json"
     admin_quality_report_path: str = "reports/presentation_quality/presentation_quality_report.json"
     yonote_api_token: str = ""
@@ -56,7 +72,9 @@ class Settings(BaseSettings):
     postgres_dsn: str = "postgresql://rosmol:rosmol@localhost:5432/rosmol_ai_bot"
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
     qdrant_knowledge_collection: str = "knowledge_base"
+    https_proxy: str = ""
 
     reranker_threshold_low: float = Field(default=0.4, ge=0, le=1)
     reranker_threshold_high: float = Field(default=0.7, ge=0, le=1)

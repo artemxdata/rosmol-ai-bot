@@ -42,6 +42,10 @@ DOMAIN_NON_PERSON_MARKERS = (
 )
 
 
+class PIIMaskingUnavailable(RuntimeError):
+    """PII masking cannot prove that person names were removed."""
+
+
 @dataclass
 class PIIMasker:
     _natasha_ready: bool = False
@@ -91,31 +95,34 @@ class PIIMasker:
 
         return regex.sub(replace, text), found
 
-    def _ensure_natasha(self) -> bool:
+    def _ensure_natasha(self) -> None:
         if self._natasha_ready:
-            return True
+            return
         if self._load_error:
-            return False
+            raise PIIMaskingUnavailable("pii_ner_unavailable") from self._load_error
         try:
             from natasha import NewsEmbedding, NewsNERTagger, Segmenter
 
             self._segmenter = Segmenter()
             self._ner_tagger = NewsNERTagger(NewsEmbedding())
             self._natasha_ready = True
-            return True
         except Exception as exc:
             self._load_error = exc
-            return False
+            raise PIIMaskingUnavailable("pii_ner_unavailable") from exc
 
     def _mask_names(self, text: str) -> tuple[str, list[str]]:
-        if not self._ensure_natasha():
-            return text, []
+        self._ensure_natasha()
 
         from natasha import Doc
 
-        doc = Doc(text)
-        doc.segment(self._segmenter)
-        doc.tag_ner(self._ner_tagger)
+        try:
+            doc = Doc(text)
+            doc.segment(self._segmenter)
+            doc.tag_ner(self._ner_tagger)
+        except Exception as exc:
+            self._natasha_ready = False
+            self._load_error = exc
+            raise PIIMaskingUnavailable("pii_ner_unavailable") from exc
 
         names = [
             span.text

@@ -149,7 +149,10 @@ async def index_kb(
         raise ValueError("--embedding-batch-size must be positive")
 
     settings = get_settings()
-    client = AsyncQdrantClient(url=settings.qdrant_url)
+    client = AsyncQdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key or None,
+    )
     try:
         if not await client.collection_exists(collection):
             raise RuntimeError(

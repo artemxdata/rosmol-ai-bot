@@ -74,6 +74,24 @@ def test_quality_gate_fails_missing_or_bad_core_metrics() -> None:
     assert "ask_low_confidence_expected_chunk_hit_rate" in failed
 
 
+def test_quality_gate_does_not_replace_zero_recall_at_5_with_fallback() -> None:
+    report = build_quality_gate_report(
+        retrieval_metrics={"recall_at_5": 0.0, "recall_at_k": 1.0, "cases_scored": 10},
+        ask_metrics={
+            "pass_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "http_success_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+            "low_confidence_expected_chunk_hit_rate": 0.0,
+        },
+    )
+
+    check = next(item for item in report["checks"] if item["name"] == "retrieval_recall_at_5")
+    assert report["passed"] is False
+    assert check["actual"] == 0.0
+    assert check["status"] == "fail"
+
+
 def test_quality_gate_checks_forum_smoke_summary_when_provided() -> None:
     report = build_quality_gate_report(
         retrieval_metrics={"recall_at_5": 1.0, "cases_scored": 1},

@@ -1,0 +1,43 @@
+name: rosmol-ai-bot-lock
+
+services:
+  lock:
+    image: python:3.11.15-slim-trixie@sha256:00af38ae2ed311628970782e8a2d7f014d8909dbc63cb97bc0a158187f4db045
+    platform: linux/amd64
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        python -m venv --clear /tmp/lock-venv
+        /tmp/lock-venv/bin/pip install \
+          --require-hashes --only-binary=:all: \
+          -r requirements/lock-tools.lock
+        /tmp/lock-venv/bin/pip-compile \
+          --generate-hashes --resolver=backtracking --strip-extras --allow-unsafe \
+          --output-file=requirements/sdist-build-tools.lock requirements/sdist-build-tools.in
+        /tmp/lock-venv/bin/pip-compile \
+          --generate-hashes --resolver=backtracking --strip-extras --allow-unsafe \
+          --output-file=requirements/runtime.lock requirements/runtime.in
+        /tmp/lock-venv/bin/pip-compile \
+          --generate-hashes --resolver=backtracking --strip-extras --allow-unsafe \
+          --output-file=requirements/dev.lock requirements/dev.in
+        /tmp/lock-venv/bin/pip-compile \
+          --generate-hashes --resolver=backtracking --strip-extras --allow-unsafe \
+          --extra-index-url=https://download.pytorch.org/whl/cpu \
+          --output-file=requirements/ml.lock requirements/ml.in
+    environment:
+      HOME: /tmp/home
+      XDG_CACHE_HOME: /tmp/cache
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_CACHE_DIR: "1"
+    volumes:
+      - .:/workspace
+      # Generation-only disk space for large torch wheel metadata.
+      - lock_work:/tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: bridge
+
+volumes:
+  lock_work:

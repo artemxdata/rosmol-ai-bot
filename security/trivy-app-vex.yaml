@@ -1,0 +1,28 @@
+# Scoped, time-limited exceptions for the two Python application images only.
+# Infrastructure images MUST be scanned without this file. Exact PURLs make a
+# base-image/package change fail closed instead of inheriting an old verdict.
+vulnerabilities:
+  - id: CVE-2026-8376
+    purls:
+      - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
+    expired_at: 2026-07-27
+    statement: >-
+      Not affected: the upstream flaw requires a 32-bit Perl build, while the
+      release platform and package PURL are amd64. Re-review on any platform or
+      base-image change.
+  - id: CVE-2026-42496
+    purls:
+      - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
+    expired_at: 2026-07-27
+    statement: >-
+      Not affected in this image: Archive::Tar is absent, application and venv
+      contain no Perl entrypoints, and runtime never extracts archives through
+      Perl. Re-review on any base-image or runtime-content change.
+  - id: CVE-2026-13221
+    purls:
+      - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
+    expired_at: 2026-07-27
+    statement: >-
+      Not reachable: the Python service never invokes Perl or compiles
+      user-controlled Perl regular expressions; application and venv contain no
+      Perl entrypoints. Re-review on any base-image or execution-path change.

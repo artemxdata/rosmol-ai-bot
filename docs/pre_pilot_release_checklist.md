@@ -2,11 +2,12 @@
 
 Этот чеклист нужен перед демонстрацией и тестовым подключением HDE/VK. Массовые проверки выполняются локально через `/ask`; HDE трогаем только тестовым каналом и короткими smoke-сценариями.
 
-> **Текущий статус 16 июля 2026:** `NO GO / SECURITY HOLD`. Старая VM скомпрометирована и
-> выключена; любые старые IP, webhook, SSH/admin URL и server artifacts запрещены. Этот checklist
-> применяется только к новой VM после отдельного перевыпуска всех ключей/секретов. Ничего со
-> старого сервера не переносить и не восстанавливать. Полная инструкция:
-> `docs/security_incident_20260715.md` и `docs/operator_holdout_runbook.md`.
+> **Текущий статус 20 июля 2026:** `NO GO / SECURITY HOLD` до завершения clean-runtime
+> acceptance. Серверные команды в разделах 2–5 ниже сохранены только как исторический pre-incident
+> checklist и **не должны выполняться**: они используют старый порядок, старый Compose stack и
+> migration baseline. Единственная актуальная инструкция для нового HDE/VK test-production:
+> `docs/recovery_test_production_runbook_20260720.md`. Старая VM, IP, webhook, admin URL и любые
+> её artifacts запрещены.
 
 ## 1. Локально перед push
 
@@ -226,9 +227,14 @@ git pull --ff-only
 
 ```powershell
 .venv\Scripts\python.exe scripts\run_acceptance.py `
+  --expected-git-sha <40_LOWERCASE_HEX_TRUSTED_SHA> `
   --target http://localhost:8001/ask `
   --max-llm-cost-rub 80
 ```
+
+`--expected-git-sha` обязателен: это заранее зафиксированный trusted commit, а не значение,
+которое acceptance должен молча принять из текущего checkout. Dirty worktree, другой SHA и
+пропущенный шаг дают только `passed=false`.
 
 Команда проверяет:
 

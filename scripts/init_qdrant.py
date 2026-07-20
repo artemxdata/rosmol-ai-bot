@@ -18,7 +18,10 @@ async def ensure_collections(
 ) -> None:
     settings = get_settings()
     knowledge_collection = knowledge_collection or settings.qdrant_knowledge_collection
-    client = AsyncQdrantClient(url=settings.qdrant_url)
+    client = AsyncQdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key or None,
+    )
 
     if recreate and await client.collection_exists(knowledge_collection):
         await client.delete_collection(knowledge_collection)

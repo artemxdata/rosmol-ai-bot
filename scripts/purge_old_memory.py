@@ -39,14 +39,74 @@ MEMORY_DELETE_QUERIES = {
 
 TRACE_COUNT_QUERY = """
     SELECT COUNT(*)
-    FROM request_traces
-    WHERE timestamp < NOW() - ($1::int * INTERVAL '1 day')
+    FROM request_traces AS trace
+    WHERE trace.timestamp < NOW() - ($1::int * INTERVAL '1 day')
+      AND NOT EXISTS (
+          SELECT 1 FROM hde_inbox AS inbox
+          WHERE inbox.request_id = trace.request_id
+            AND inbox.status <> 'processed'
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM hde_outbox AS outbox
+          WHERE outbox.request_id = trace.request_id
+            AND outbox.status <> 'delivered'
+      )
 """
 
 TRACE_DELETE_QUERY = """
-    DELETE FROM request_traces
-    WHERE timestamp < NOW() - ($1::int * INTERVAL '1 day')
+    DELETE FROM request_traces AS trace
+    WHERE trace.timestamp < NOW() - ($1::int * INTERVAL '1 day')
+      AND NOT EXISTS (
+          SELECT 1 FROM hde_inbox AS inbox
+          WHERE inbox.request_id = trace.request_id
+            AND inbox.status <> 'processed'
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM hde_outbox AS outbox
+          WHERE outbox.request_id = trace.request_id
+            AND outbox.status <> 'delivered'
+      )
 """
+
+HDE_TERMINAL_COUNT_QUERIES = {
+    "hde_outbox_delivered": """
+        SELECT COUNT(*)
+        FROM hde_outbox
+        WHERE status = 'delivered'
+          AND delivered_at < NOW() - ($1::int * INTERVAL '1 day')
+    """,
+    "hde_inbox_processed": """
+        SELECT COUNT(*)
+        FROM hde_inbox AS inbox
+        WHERE inbox.status = 'processed'
+          AND inbox.processed_at < NOW() - ($1::int * INTERVAL '1 day')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hde_outbox AS outbox
+              WHERE outbox.inbox_id = inbox.id
+                AND (
+                    outbox.status <> 'delivered'
+                    OR outbox.delivered_at >= NOW() - ($1::int * INTERVAL '1 day')
+                )
+          )
+    """,
+}
+
+HDE_TERMINAL_DELETE_QUERIES = {
+    "hde_outbox_delivered": """
+        DELETE FROM hde_outbox
+        WHERE status = 'delivered'
+          AND delivered_at < NOW() - ($1::int * INTERVAL '1 day')
+    """,
+    "hde_inbox_processed": """
+        DELETE FROM hde_inbox AS inbox
+        WHERE inbox.status = 'processed'
+          AND inbox.processed_at < NOW() - ($1::int * INTERVAL '1 day')
+          AND NOT EXISTS (
+              SELECT 1 FROM hde_outbox AS outbox WHERE outbox.inbox_id = inbox.id
+          )
+    """,
+}
 
 
 def positive_days(value: str) -> int:
@@ -81,6 +141,7 @@ async def preview_retention(
     *,
     memory_ttl_days: int,
     request_trace_ttl_days: int | None,
+    hde_terminal_ttl_days: int | None = None,
 ) -> dict[str, int]:
     counts = {
         table: int(await connection.fetchval(query, memory_ttl_days) or 0)
@@ -90,6 +151,11 @@ async def preview_retention(
         counts["request_traces"] = int(
             await connection.fetchval(TRACE_COUNT_QUERY, request_trace_ttl_days) or 0
         )
+    if hde_terminal_ttl_days is not None:
+        for table, query in HDE_TERMINAL_COUNT_QUERIES.items():
+            counts[table] = int(
+                await connection.fetchval(query, hde_terminal_ttl_days) or 0
+            )
     return counts
 
 
@@ -98,6 +164,7 @@ async def apply_retention(
     *,
     memory_ttl_days: int,
     request_trace_ttl_days: int | None,
+    hde_terminal_ttl_days: int | None = None,
 ) -> dict[str, int]:
     deleted: dict[str, int] = {}
     async with connection.transaction():
@@ -107,6 +174,13 @@ async def apply_retention(
             deleted["request_traces"] = command_count(
                 await connection.execute(TRACE_DELETE_QUERY, request_trace_ttl_days)
             )
+        if hde_terminal_ttl_days is not None:
+            # FK order is deliberate: delete the delivered outbox before its
+            # processed inbox. Unresolved and dead-letter rows never qualify.
+            for table, query in HDE_TERMINAL_DELETE_QUERIES.items():
+                deleted[table] = command_count(
+                    await connection.execute(query, hde_terminal_ttl_days)
+                )
     return deleted
 
 
@@ -129,6 +203,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         if args.request_trace_ttl_days is not None
         else None
     )
+    raw_hde_terminal_ttl = getattr(args, "hde_terminal_ttl_days", None)
+    hde_terminal_ttl_days = (
+        validate_retention_days(
+            raw_hde_terminal_ttl,
+            field_name="hde_terminal_ttl_days",
+        )
+        if raw_hde_terminal_ttl is not None
+        else None
+    )
     pool = await asyncpg.create_pool(settings.postgres_dsn, min_size=1, max_size=1)
     try:
         async with pool.acquire() as connection:
@@ -136,12 +219,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 connection,
                 memory_ttl_days=memory_ttl_days,
                 request_trace_ttl_days=request_trace_ttl_days,
+                hde_terminal_ttl_days=hde_terminal_ttl_days,
             )
             deleted = (
                 await apply_retention(
                     connection,
                     memory_ttl_days=memory_ttl_days,
                     request_trace_ttl_days=request_trace_ttl_days,
+                    hde_terminal_ttl_days=hde_terminal_ttl_days,
                 )
                 if args.apply
                 else {}
@@ -153,6 +238,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "mode": "apply" if args.apply else "dry-run",
         "memory_ttl_days": memory_ttl_days,
         "request_trace_ttl_days": request_trace_ttl_days,
+        "hde_terminal_ttl_days": hde_terminal_ttl_days,
         "eligible_rows": eligible,
         "deleted_rows": deleted,
         "scheduler_configured": False,
@@ -179,6 +265,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Include request_traces with this separately approved retention. "
             "Without this option request_traces are never touched."
+        ),
+    )
+    parser.add_argument(
+        "--hde-terminal-ttl-days",
+        type=positive_days,
+        default=None,
+        help=(
+            "Delete only delivered outbox and processed inbox rows older than this "
+            "separately approved TTL. Audit and unresolved rows are never touched."
         ),
     )
     parser.add_argument(

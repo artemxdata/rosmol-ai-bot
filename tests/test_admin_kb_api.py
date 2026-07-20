@@ -364,6 +364,45 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_mutations_are_explicitly_forbidden_in_read_only_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            admin_read_only=True,
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+    headers = {"X-Admin-Token": "admin-secret"}
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        apply_response = await client.post(
+            "/admin/kb/yonote/apply",
+            json={},
+            headers=headers,
+        )
+        patch_response = await client.patch(
+            "/admin/kb/chunks/travel",
+            json={"text_clean": "updated"},
+            headers=headers,
+        )
+        reindex_response = await client.post(
+            "/admin/kb/chunks/travel/reindex",
+            headers=headers,
+        )
+
+    for response in (apply_response, patch_response, reindex_response):
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Admin mutations are disabled in this runtime"
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_login_sets_session_cookie(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

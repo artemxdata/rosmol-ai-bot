@@ -5,8 +5,9 @@
 **Начато:** 16 июля 2026  
 **Режим:** `SECURITY HOLD`; production runtime отсутствует  
 **Источник доверия:** локальный clean checkout и `origin/master`; старая VM остаётся `SHUTOFF`  
-**Текущий этап:** revoke-only; Cloud.ru API key, GitHub server deploy key и Yonote token отозваны
-владельцем; новые credentials намеренно не создаются до отдельной clean-rebuild задачи
+**Текущий этап:** recovery preparation; Cloud.ru API key, GitHub server deploy key и Yonote token
+отозваны владельцем. Provider-side inventory ещё не закрыт, поэтому новые credentials не
+создаются до прохождения secretless build/supply-chain gate и фиксации trusted commit.
 
 Этот документ — журнал статусов, а не хранилище секретов. Значения, части значений, длины,
 пароли, DSN, private keys, recovery codes, cookies и заголовки авторизации сюда не записываются.
@@ -20,7 +21,7 @@ Private evidence хранится вне Git; в журнале допустим
 3. Ничего со старой VM не переносится: `.env`, SSH/TLS/ACME keys, Docker state, volumes,
    PostgreSQL, Redis, Qdrant, backup и runtime-файлы запрещены.
 4. Новые значения создаются на доверенном устройстве либо в UI провайдера и хранятся только в
-   password manager и новом `.env` с mode `0600`.
+   password manager и новом `.env.production` с mode `0600`.
 5. Нельзя вставлять секреты в чат, shell history, Git, issue, support ticket, screenshot или
    опубликованный лог. В UI секрет копируется непосредственно в password manager.
 6. Каждый новый прикладной secret независим и имеет не менее 256 бит случайной энтропии.
@@ -64,6 +65,8 @@ Private evidence хранится вне Git; в журнале допустим
 | 13 | `ADMIN_AUTH_TOKEN` | `not_started` | `not_started` | Новый token инвалидирует старые cookies; проверить только HTTPS, Secure/HttpOnly/SameSite cookie |
 | 14 | `USER_HASH_SECRET` | `not_started` | `not_started` | Новый независимый secret; намеренно создаёт новую pseudonym/cohort epoch и разрывает старые sessions |
 | 15 | `HDE_TRIGGER_PREFIX` | `not_started` | `not_started` | Новый случайный marker, но не считать его аутентификацией; основной контроль — webhook token |
+| 15a | `HDE_TRANSPORT_EVENT_KEY_SECRET` | `legacy_not_configured` | `not_started` | Новый независимый HMAC secret для псевдонимных inbox/ticket keys; не совпадает ни с одним другим secret |
+| 15b | `HDE_TRANSPORT_ENCRYPTION_KEY` | `legacy_not_configured` | `not_started` | Новый независимый ключ для pgcrypto envelope; после confirmed delivery обратимые поля очищаются |
 | 16 | PostgreSQL `POSTGRES_PASSWORD` / `POSTGRES_DSN` / eval DSN override | `not_started` | `not_started` | Новый пустой cluster и уникальный пароль; DSN меняется атомарно; migration head, loopback/internal only |
 | 17 | Redis credential | `legacy_not_configured` | `not_started` | Старого пароля не было. Обязателен новый пустой instance без старого volume и без public `6379`; auth — отдельный security patch |
 | 18 | Qdrant credential | `legacy_not_configured` | `not_started` | Старого API key не было. Новый пустой instance, без public `6333/6334`, reindex только из trusted published seed; auth — отдельный patch |
@@ -100,25 +103,33 @@ deploy key и Yonote token. Остаётся:
 3. GitHub PAT/account SSH/OAuth/webhooks/sessions, если они существуют;
 4. registry, DNS, n8n и остальные найденные интеграции.
 
-На этом этапе новые ключи вообще не выпускаются. Их создание и установка — отдельная будущая
-задача после фиксации полного provider-side отзыва.
+На этом этапе новые ключи не выпускаются. Сначала из clean checkout проходят secret scan,
+hash-locked dependency build, digest-pinned image build, exact-revision model preparation,
+offline smoke, SBOM/Critical-CVE gate и фиксируется единый trusted commit. Это не требует
+provider credentials и исключает их попадание в build context/layers.
 
 ### 2. Новые локальные и datastore credentials
 
 На доверенном endpoint создать независимые `API_AUTH_TOKEN`, `WEBHOOK_AUTH_TOKEN`,
-`ADMIN_AUTH_TOKEN`, `USER_HASH_SECRET`, `HDE_TRIGGER_PREFIX` и новый PostgreSQL password/DSN.
-Значения сохраняются в password manager; в журнале меняется только статус.
+`ADMIN_AUTH_TOKEN`, `USER_HASH_SECRET`, `HDE_TRIGGER_PREFIX`,
+`HDE_TRANSPORT_EVENT_KEY_SECRET`, `HDE_TRANSPORT_ENCRYPTION_KEY` и новый PostgreSQL
+password/DSN, отдельные `REDIS_PASSWORD` и `QDRANT_API_KEY`. Redis URL генерируется с новым
+паролем; Qdrant API key обязателен даже во внутренней Docker network. Значения сохраняются в
+password manager; в журнале меняется только статус.
 
 ### 3. Clean host credentials
 
 На новой VM из vendor image создать SSH host keys, отдельный admin key access, отдельный GitHub
-read-only deploy key и новый TLS/ACME state. Новый `.env` набирается заново; старый не читается и
-не копируется.
+read-only deploy key и новый TLS/ACME state. Новый `.env.production` создаётся из versioned
+`.env.production.example`; старый `.env` не читается и не копируется.
 
 ### 4. Provider credentials для runtime
 
-Только после подготовки clean host выпустить новые Cloud.ru, HDE и Yonote credentials и
-установить их в новый `.env`. HDE dispatcher остаётся выключенным до полного release gate.
+Только после подготовки clean host выпустить новые Cloud.ru и HDE credentials и установить их в
+новый `.env.production`. Yonote credential для recovery launch не выпускается: sync/Apply
+выключены. HDE dispatcher остаётся выключенным до полного release gate. Перед любой последующей
+ротацией `HDE_TRANSPORT_EVENT_KEY_SECRET` или `HDE_TRANSPORT_ENCRYPTION_KEY` inbox, outbox и
+dead-letter должны быть пусты; encryption key нельзя менять при наличии ciphertext.
 
 ### 5. Проверка и handoff
 
@@ -153,6 +164,8 @@ cookie, Authorization header, `.env` и HDE payload с персональным�
 
 ## Следующий точный шаг
 
-В HDE удалить только два dispatcher rule старого webhook. Глобальный `HDE_API_KEY` не менять до
-ответа Лёши о зависимых интеграциях. Параллельно перейти к read-only inventory Selectel API keys,
-service users и profile SSH keys; ничего неизвестного не удалять без идентификации.
+До выпуска новых credentials завершить secretless build/supply-chain gate и зафиксировать trusted
+commit. Параллельно в HDE удалить только два dispatcher rule старого webhook; глобальный
+`HDE_API_KEY` не менять до ответа Лёши о зависимых интеграциях. Закрыть read-only inventory
+Selectel API keys, service users, sessions и profile SSH keys, а также GitHub account/repository
+access; неизвестные объекты сначала идентифицировать.

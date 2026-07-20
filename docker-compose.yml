@@ -2,7 +2,8 @@ name: rosmol-ai-bot
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    platform: linux/amd64
     container_name: rosmol-postgres
     restart: unless-stopped
     environment:
@@ -20,7 +21,8 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.9-alpine@sha256:b1addbe72465a718643cff9e60a58e6df1841e29d6d7d60c9a85d8d72f08d1a7
+    platform: linux/amd64
     container_name: rosmol-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
@@ -35,7 +37,8 @@ services:
       retries: 5
 
   qdrant:
-    image: qdrant/qdrant:v1.10.1
+    image: qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286
+    platform: linux/amd64
     container_name: rosmol-qdrant
     restart: unless-stopped
     ports:
@@ -50,12 +53,13 @@ services:
       retries: 5
 
   migrate:
-    image: rosmol-ai-bot-app:latest
+    image: rosmol-ai-bot-app:dev
     build:
       context: .
       target: runtime
       args:
         INSTALL_ML: ${INSTALL_ML:-false}
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
     container_name: rosmol-migrate
     restart: "no"
     command: ["alembic", "upgrade", "head"]
@@ -66,12 +70,13 @@ services:
         condition: service_healthy
 
   init-qdrant:
-    image: rosmol-ai-bot-app:latest
+    image: rosmol-ai-bot-app:dev
     build:
       context: .
       target: runtime
       args:
         INSTALL_ML: ${INSTALL_ML:-false}
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
     container_name: rosmol-init-qdrant
     restart: "no"
     command: ["python", "scripts/init_qdrant.py"]
@@ -83,12 +88,13 @@ services:
         condition: service_healthy
 
   app:
-    image: rosmol-ai-bot-app:latest
+    image: rosmol-ai-bot-app:dev
     build:
       context: .
       target: runtime
       args:
         INSTALL_ML: ${INSTALL_ML:-false}
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
     container_name: rosmol-app
     restart: unless-stopped
     environment:
@@ -159,13 +165,20 @@ services:
       init-qdrant:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).read()",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.30.4-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+    platform: linux/amd64
     container_name: rosmol-nginx
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/etc/nginx/rosmol/select-config.sh"]

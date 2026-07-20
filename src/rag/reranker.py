@@ -5,8 +5,11 @@ from typing import Any
 
 from src.models import Chunk, ScoredChunk
 from src.rag.errors import MLDependencyError
+from src.rag.model_location import resolve_model_location
 
 RerankGroup = tuple[str, list[Chunk], int]
+BGE_RERANKER_REPOSITORY = "BAAI/bge-reranker-v2-m3"
+BGE_RERANKER_REVISION = "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
 
 
 class Reranker:
@@ -25,7 +28,13 @@ class Reranker:
                         "Docker with INSTALL_ML=true to enable bge-reranker-v2-m3."
                     ) from exc
 
-                self._model = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False)
+                model_location = resolve_model_location(
+                    environment_name="BGE_RERANKER_MODEL_PATH",
+                    default_repo_id=BGE_RERANKER_REPOSITORY,
+                    expected_revision=BGE_RERANKER_REVISION,
+                    expected_target="bge-reranker-v2-m3",
+                )
+                self._model = FlagReranker(model_location, use_fp16=False)
         return self._model
 
     def rerank(self, query: str, chunks: list[Chunk], top_k: int = 4) -> list[ScoredChunk]:

@@ -6,6 +6,10 @@ from typing import Any
 import numpy as np
 
 from src.rag.errors import MLDependencyError
+from src.rag.model_location import resolve_model_location
+
+BGE_M3_REPOSITORY = "BAAI/bge-m3"
+BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 
 
 class Embedder:
@@ -31,7 +35,13 @@ class Embedder:
                         "Docker with INSTALL_ML=true to enable bge-m3 embeddings."
                     ) from exc
 
-                self._model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=False)
+                model_location = resolve_model_location(
+                    environment_name="BGE_M3_MODEL_PATH",
+                    default_repo_id=BGE_M3_REPOSITORY,
+                    expected_revision=BGE_M3_REVISION,
+                    expected_target="bge-m3",
+                )
+                self._model = BGEM3FlagModel(model_location, use_fp16=False)
         return self._model
 
     def encode(self, text: str) -> tuple[np.ndarray, dict[str, float]]:

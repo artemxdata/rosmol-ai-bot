@@ -1,0 +1,3 @@
+# Exact build frontend/backend used for the sole approved source distribution.
+pip==26.1.2
+setuptools==83.0.0

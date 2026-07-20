@@ -163,6 +163,7 @@ def build_readiness_report(
             ),
             "full_acceptance": (
                 ".venv\\Scripts\\python.exe scripts\\run_acceptance.py "
+                "--expected-git-sha <40_LOWERCASE_HEX_TRUSTED_SHA> "
                 "--target http://localhost:8001/ask "
                 "--max-llm-cost-rub 80"
             ),

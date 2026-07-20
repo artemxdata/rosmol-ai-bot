@@ -185,8 +185,10 @@ def build_answer_bank(
 
 
 class RegexOnlyPIIMasker(PIIMasker):
-    def _ensure_natasha(self) -> bool:
-        return False
+    """Private offline batch mode; never use this class in webhook/runtime paths."""
+
+    def _mask_names(self, text: str) -> tuple[str, list[str]]:
+        return text, []
 
 
 def build_candidate(

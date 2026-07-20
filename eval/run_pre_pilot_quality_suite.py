@@ -23,6 +23,7 @@ from eval.pre_pilot_cases import (
     FOLLOWUP_FILE,
     build_pre_pilot_case_sets,
 )
+from eval.release_provenance import build_release_provenance
 from eval.run_ask import (
     _auth_headers,
     _fetch_trace,
@@ -45,6 +46,9 @@ DEFAULT_SECTIONS = (
     "adversarial",
     "followup",
 )
+DEFAULT_MIN_SECTION_PASS_RATE = 0.9
+SAFETY_MIN_PASS_RATE = 1.0
+RELEASE_MIN_TRACE_COVERAGE_RATE = 1.0
 
 
 async def run_pre_pilot_quality_suite(
@@ -63,8 +67,11 @@ async def run_pre_pilot_quality_suite(
     bypass_cache: bool = True,
     max_llm_cost_rub: float | None = 200.0,
     allow_unbounded_llm_cost: bool = False,
+    release_run_id: str | None = None,
+    expected_git_sha: str | None = None,
 ) -> dict[str, Any]:
     _validate_sections(sections)
+    release_run_id = release_run_id or f"pre-pilot-{uuid4()}"
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(cases_dir.mkdir, parents=True, exist_ok=True)
     if rebuild_cases or not _all_case_files_exist(cases_dir):
@@ -73,6 +80,20 @@ async def run_pre_pilot_quality_suite(
             kb_seed_path=kb_seed_path,
             output_dir=cases_dir,
         )
+
+    case_paths = _case_paths(
+        cases_dir=cases_dir,
+        sections=sections,
+        followup_cases_path=followup_cases_path,
+    )
+    provenance = await asyncio.to_thread(
+        build_release_provenance,
+        release_run_id=release_run_id,
+        target=target,
+        kb_seed_path=kb_seed_path,
+        case_paths=case_paths,
+        expected_git_sha=expected_git_sha,
+    )
 
     section_reports: dict[str, dict[str, Any]] = {}
     total_cost = 0.0
@@ -129,6 +150,9 @@ async def run_pre_pilot_quality_suite(
         section_reports=section_reports,
         max_llm_cost_rub=max_llm_cost_rub,
         stopped_by_budget=stopped_by_budget,
+        release_run_id=release_run_id,
+        trace_required=True,
+        provenance=provenance,
     )
     summary_path = output_dir / "summary.json"
     summary_md_path = output_dir / "summary.md"
@@ -333,21 +357,43 @@ def _build_summary(
     section_reports: dict[str, dict[str, Any]],
     max_llm_cost_rub: float | None,
     stopped_by_budget: bool,
+    release_run_id: str,
+    trace_required: bool,
+    provenance: dict[str, Any],
 ) -> dict[str, Any]:
+    requested_sections = list(sections)
+    completed_sections = list(section_reports)
+    sections_complete = bool(requested_sections) and completed_sections == requested_sections
+    section_passed = {
+        name: _section_passed(name, report, trace_required=trace_required)
+        for name, report in section_reports.items()
+    }
+    provenance_complete = provenance.get("complete") is True
     return {
         "generated_at": datetime.now(UTC).isoformat(),
+        "release_run_id": release_run_id,
+        "expected_git_sha": provenance.get("expected_git_sha"),
         "target": target,
         "cases_dir": str(cases_dir),
         "output_dir": str(output_dir),
-        "requested_sections": list(sections),
-        "completed_sections": list(section_reports),
-        "passed": all(_section_passed(report) for report in section_reports.values())
-        and not stopped_by_budget,
+        "requested_sections": requested_sections,
+        "completed_sections": completed_sections,
+        "sections_complete": sections_complete,
+        "trace_required": trace_required,
+        "passed": sections_complete
+        and all(section_passed.values())
+        and not stopped_by_budget
+        and provenance_complete,
         "max_llm_cost_rub": max_llm_cost_rub,
         "llm_estimated_cost_rub": round(sum(_section_cost(r) for r in section_reports.values()), 6),
         "llm_budget_stopped": stopped_by_budget,
+        "provenance": provenance,
         "sections": {
-            name: _compact_section_report(name, report) for name, report in section_reports.items()
+            name: {
+                **_compact_section_report(name, report),
+                "passed": section_passed[name],
+            }
+            for name, report in section_reports.items()
         },
     }
 
@@ -356,6 +402,8 @@ def _compact_section_report(name: str, report: dict[str, Any]) -> dict[str, Any]
     if name == "followup":
         return {
             "turns_total": report.get("turns_total"),
+            "conversations_total": report.get("conversations_total"),
+            "conversations_executed": report.get("conversations_executed"),
             "turn_pass_rate": report.get("turn_pass_rate"),
             "conversation_pass_rate": report.get("conversation_pass_rate"),
             "http_success_rate": report.get("http_success_rate"),
@@ -366,6 +414,8 @@ def _compact_section_report(name: str, report: dict[str, Any]) -> dict[str, Any]
             "llm_estimated_cost_rub": report.get("llm_estimated_cost_rub"),
             "generator_model_counts": report.get("generator_model_counts"),
             "failure_reason_counts": report.get("failure_reason_counts"),
+            "eval_run_id": report.get("eval_run_id"),
+            "llm_budget_stopped": report.get("llm_budget_stopped"),
         }
     return {
         "cases_total": report.get("cases_total"),
@@ -379,15 +429,54 @@ def _compact_section_report(name: str, report: dict[str, Any]) -> dict[str, Any]
         "llm_estimated_cost_rub": report.get("llm_estimated_cost_rub"),
         "generator_model_counts": report.get("generator_model_counts"),
         "failure_reason_counts": report.get("failure_reason_counts"),
+        "eval_run_id": report.get("eval_run_id"),
+        "llm_budget_stopped": report.get("llm_budget_stopped"),
     }
 
 
-def _section_passed(report: dict[str, Any]) -> bool:
+def _section_passed(
+    name: str,
+    report: dict[str, Any],
+    *,
+    trace_required: bool = True,
+) -> bool:
+    if report.get("llm_budget_stopped") is True:
+        return False
+    if trace_required and not _rate_meets(
+        report.get("trace_coverage_rate"), RELEASE_MIN_TRACE_COVERAGE_RATE
+    ):
+        return False
     if "pass_rate" in report:
-        return float(report.get("pass_rate") or 0.0) >= 0.9
-    turn_passed = float(report.get("turn_pass_rate") or 0.0) >= 0.9
-    conversation_passed = float(report.get("conversation_pass_rate") or 0.0) >= 0.9
+        if _positive_int(report.get("cases_total")) is None:
+            return False
+        threshold = SAFETY_MIN_PASS_RATE if name == "safety" else DEFAULT_MIN_SECTION_PASS_RATE
+        return _rate_meets(report.get("pass_rate"), threshold)
+    if _positive_int(report.get("turns_total")) is None:
+        return False
+    conversations_total = _positive_int(report.get("conversations_total"))
+    conversations_executed = _positive_int(report.get("conversations_executed"))
+    if conversations_total is None or conversations_executed != conversations_total:
+        return False
+    turn_passed = _rate_meets(report.get("turn_pass_rate"), DEFAULT_MIN_SECTION_PASS_RATE)
+    conversation_passed = _rate_meets(
+        report.get("conversation_pass_rate"), DEFAULT_MIN_SECTION_PASS_RATE
+    )
     return turn_passed and conversation_passed
+
+
+def _rate_meets(value: Any, threshold: float) -> bool:
+    try:
+        return float(value) >= threshold
+    except (TypeError, ValueError):
+        return False
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _section_cost(report: dict[str, Any]) -> float:
@@ -408,10 +497,28 @@ def _remaining_budget(max_llm_cost_rub: float | None, spent: float) -> float | N
 
 
 def _validate_sections(sections: tuple[str, ...]) -> None:
+    if not sections:
+        raise ValueError("At least one pre-pilot section is required")
     valid = set(DEFAULT_SECTIONS)
     invalid = [section for section in sections if section not in valid]
     if invalid:
         raise ValueError(f"Unknown pre-pilot sections: {', '.join(invalid)}")
+
+
+def _case_paths(
+    *,
+    cases_dir: Path,
+    sections: tuple[str, ...],
+    followup_cases_path: Path | None,
+) -> dict[str, Path]:
+    return {
+        section: (
+            followup_cases_path or (cases_dir / FOLLOWUP_FILE)
+            if section == "followup"
+            else cases_dir / ASK_SECTION_FILES[section]
+        )
+        for section in sections
+    }
 
 
 def _all_case_files_exist(cases_dir: Path) -> bool:
@@ -470,8 +577,13 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         "# Pre-pilot Quality Suite",
         "",
         f"- Generated: `{summary.get('generated_at')}`",
+        f"- Release run: `{summary.get('release_run_id')}`",
+        f"- Expected Git SHA: `{summary.get('expected_git_sha')}`",
+        f"- Git SHA: `{(summary.get('provenance') or {}).get('git_sha')}`",
         f"- Target: `{summary.get('target')}`",
         f"- Passed: `{summary.get('passed')}`",
+        f"- Sections complete: `{summary.get('sections_complete')}`",
+        f"- Trace required: `{summary.get('trace_required')}`",
         f"- Cost, RUB: `{summary.get('llm_estimated_cost_rub')}`",
         f"- Budget, RUB: `{summary.get('max_llm_cost_rub')}`",
         f"- Budget stopped: `{summary.get('llm_budget_stopped')}`",
@@ -522,6 +634,8 @@ def main() -> None:
     parser.add_argument("--use-cache", action="store_true")
     parser.add_argument("--max-llm-cost-rub", type=float, default=200.0)
     parser.add_argument("--allow-unbounded-llm-cost", action="store_true")
+    parser.add_argument("--release-run-id", default="")
+    parser.add_argument("--expected-git-sha", default="")
     args = parser.parse_args()
 
     summary = asyncio.run(
@@ -544,6 +658,8 @@ def main() -> None:
                 None if args.allow_unbounded_llm_cost else args.max_llm_cost_rub
             ),
             allow_unbounded_llm_cost=args.allow_unbounded_llm_cost,
+            release_run_id=args.release_run_id or None,
+            expected_git_sha=args.expected_git_sha or None,
         )
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))

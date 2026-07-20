@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from src.security.pii_masker import PIIMasker
+import pytest
+
+from src.security.pii_masker import PIIMasker, PIIMaskingUnavailable
 
 
 def test_masks_email_phone_passport_and_date() -> None:
@@ -59,3 +61,11 @@ def test_does_not_mask_forum_intent_phrase_as_person_name() -> None:
 
     assert masked == "Иволга письмо-вызов"
     assert "name" not in mapping
+
+
+def test_ner_failure_is_fail_closed_instead_of_returning_raw_names() -> None:
+    masker = PIIMasker()
+    masker._load_error = RuntimeError("synthetic load failure")
+
+    with pytest.raises(PIIMaskingUnavailable, match="pii_ner_unavailable"):
+        masker.mask("Иван Иванов написал сообщение")

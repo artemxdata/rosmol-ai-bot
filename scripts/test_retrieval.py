@@ -31,7 +31,13 @@ async def main() -> None:
         chunks = retriever.retrieve(args.query, filters, top_k=args.top_k)
     else:
         settings = get_settings()
-        retriever = Retriever(AsyncQdrantClient(url=settings.qdrant_url), Embedder())
+        retriever = Retriever(
+            AsyncQdrantClient(
+                url=settings.qdrant_url,
+                api_key=settings.qdrant_api_key or None,
+            ),
+            Embedder(),
+        )
         chunks = await retriever.retrieve(args.query, filters, top_k=args.top_k)
 
     for chunk in chunks:

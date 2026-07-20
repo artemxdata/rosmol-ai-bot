@@ -1,19 +1,91 @@
 name: rosmol-ai-bot
 
+x-offline-model-environment: &offline-model-environment
+  BGE_M3_MODEL_PATH: /opt/models/bge-m3
+  BGE_RERANKER_MODEL_PATH: /opt/models/bge-reranker-v2-m3
+  HF_MODEL_LOCK_PATH: /app/deploy/huggingface_models.lock.json
+  HF_MODEL_VERIFICATION_RECEIPT: /opt/models/.verified-models.json
+  HF_HUB_OFFLINE: "1"
+  HF_DATASETS_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+
 services:
-  app-ml:
+  ml-cache-init:
     profiles: ["ml"]
-    image: rosmol-ai-bot-ml:latest
+    image: rosmol-ai-bot-ml:dev
     build:
       context: .
       target: runtime
       args:
         INSTALL_ML: "true"
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
+    container_name: rosmol-ml-cache-init
+    restart: "no"
+    user: root
+    entrypoint: ["chown"]
+    command:
+      [
+        "-R",
+        "app:app",
+        "/home/app/.cache/huggingface",
+        "/home/app/.cache/torch",
+        "/opt/models",
+      ]
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - hf_cache:/home/app/.cache/huggingface
+      - torch_cache:/home/app/.cache/torch
+      - model_cache:/opt/models
+
+  model-prefetch:
+    profiles: ["ml"]
+    image: rosmol-ai-bot-ml:dev
+    build:
+      context: .
+      target: runtime
+      args:
+        INSTALL_ML: "true"
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
+    container_name: rosmol-model-prefetch
+    restart: "no"
+    user: app
+    entrypoint: ["python", "scripts/prefetch_huggingface_models.py"]
+    command:
+      [
+        "--manifest",
+        "deploy/huggingface_models.lock.json",
+        "--output-root",
+        "/opt/models",
+      ]
+    environment:
+      HF_HOME: /tmp/huggingface
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - model_cache:/opt/models
+    depends_on:
+      ml-cache-init:
+        condition: service_completed_successfully
+
+  app-ml:
+    profiles: ["ml"]
+    image: rosmol-ai-bot-ml:dev
+    build:
+      context: .
+      target: runtime
+      args:
+        INSTALL_ML: "true"
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
     container_name: rosmol-app-ml
     restart: unless-stopped
-    user: root
+    user: app
     command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      <<: *offline-model-environment
       APP_ENV: ${APP_ENV:-local}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
@@ -38,6 +110,13 @@ services:
       HDE_RATE_LIMIT_RPM: ${HDE_RATE_LIMIT_RPM:-250}
       HDE_RATE_LIMIT_REMAINING_RESERVE: ${HDE_RATE_LIMIT_REMAINING_RESERVE:-30}
       HDE_RATE_LIMIT_BAN_SECONDS: ${HDE_RATE_LIMIT_BAN_SECONDS:-1200}
+      HDE_TRANSPORT_ENABLED: ${HDE_TRANSPORT_ENABLED:-false}
+      HDE_TRANSPORT_EVENT_KEY_SECRET: ${HDE_TRANSPORT_EVENT_KEY_SECRET:-}
+      HDE_TRANSPORT_ENCRYPTION_KEY: ${HDE_TRANSPORT_ENCRYPTION_KEY:-}
+      HDE_TRANSPORT_LEASE_TIMEOUT_SECONDS: ${HDE_TRANSPORT_LEASE_TIMEOUT_SECONDS:-420}
+      HDE_TRANSPORT_RECOVERY_INTERVAL_SECONDS: ${HDE_TRANSPORT_RECOVERY_INTERVAL_SECONDS:-30}
+      HDE_TRANSPORT_SHUTDOWN_TIMEOUT_SECONDS: ${HDE_TRANSPORT_SHUTDOWN_TIMEOUT_SECONDS:-420}
+      HDE_TRANSPORT_QUEUE_STALE_AFTER_SECONDS: ${HDE_TRANSPORT_QUEUE_STALE_AFTER_SECONDS:-900}
       CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:-}
       CLOUD_RU_CHAT_COMPLETIONS_URL: ${CLOUD_RU_CHAT_COMPLETIONS_URL:-https://foundation-models.api.cloud.ru/v1/chat/completions}
       CLOUD_RU_MODEL: ${CLOUD_RU_MODEL:-}
@@ -80,7 +159,12 @@ services:
       - ./data/private/runtime:/app/data/private
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
+      - model_cache:/opt/models:ro
     depends_on:
+      ml-cache-init:
+        condition: service_completed_successfully
+      model-prefetch:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -92,7 +176,13 @@ services:
       init-qdrant:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).read()",
+        ]
       start_period: 240s
       interval: 10s
       timeout: 5s
@@ -100,31 +190,41 @@ services:
 
   ml-check:
     profiles: ["ml"]
-    image: rosmol-ai-bot-ml:latest
+    image: rosmol-ai-bot-ml:dev
     build:
       context: .
       target: runtime
       args:
         INSTALL_ML: "true"
-    user: root
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
+    user: app
+    network_mode: none
     entrypoint: ["python", "scripts/check_ml_runtime.py"]
     command: []
     environment:
+      <<: *offline-model-environment
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     volumes:
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
+      - model_cache:/opt/models:ro
+    depends_on:
+      ml-cache-init:
+        condition: service_completed_successfully
+      model-prefetch:
+        condition: service_completed_successfully
 
   index-kb:
     profiles: ["ml"]
-    image: rosmol-ai-bot-ml:latest
+    image: rosmol-ai-bot-ml:dev
     build:
       context: .
       target: runtime
       args:
         INSTALL_ML: "true"
-    user: root
+        RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:-0000000000000000000000000000000000000000}
+    user: app
     command:
       [
         "sh",
@@ -132,6 +232,7 @@ services:
         "python scripts/init_qdrant.py && python scripts/index_kb.py --path data/knowledge_base_seed.json",
       ]
     environment:
+      <<: *offline-model-environment
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
       HF_HOME: /home/app/.cache/huggingface
@@ -140,7 +241,12 @@ services:
       - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
+      - model_cache:/opt/models:ro
     depends_on:
+      ml-cache-init:
+        condition: service_completed_successfully
+      model-prefetch:
+        condition: service_completed_successfully
       qdrant:
         condition: service_healthy
 
@@ -154,3 +260,4 @@ services:
 volumes:
   hf_cache:
   torch_cache:
+  model_cache:

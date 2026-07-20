@@ -1,0 +1,402 @@
+name: rosmol-ai-bot
+
+x-production-app-environment: &production-app-environment
+  APP_ENV: production
+  RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+  API_AUTH_TOKEN: ${API_AUTH_TOKEN:?API_AUTH_TOKEN is required}
+  WEBHOOK_AUTH_TOKEN: ${WEBHOOK_AUTH_TOKEN:?WEBHOOK_AUTH_TOKEN is required}
+  ADMIN_AUTH_TOKEN: ${ADMIN_AUTH_TOKEN:?ADMIN_AUTH_TOKEN is required}
+  ADMIN_READ_ONLY: "true"
+  USER_HASH_SECRET: ${USER_HASH_SECRET:?USER_HASH_SECRET is required}
+  POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL with authentication is required}
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+  QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+  QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
+  KB_SEED_PATH: /app/data/knowledge_base_seed.json
+  # Recovery release is built from the reviewed frozen seed only.
+  YONOTE_SYNC_ENABLED: "false"
+  YONOTE_API_TOKEN: ""
+
+x-production-ml-environment: &production-ml-environment
+  <<: *production-app-environment
+  BGE_M3_MODEL_PATH: /opt/models/bge-m3
+  BGE_RERANKER_MODEL_PATH: /opt/models/bge-reranker-v2-m3
+  HF_MODEL_LOCK_PATH: /app/deploy/huggingface_models.lock.json
+  HF_MODEL_VERIFICATION_RECEIPT: /opt/models/.verified-models.json
+  HF_HUB_OFFLINE: "1"
+  HF_DATASETS_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  HDE_TRIGGER_PREFIX: ${HDE_TRIGGER_PREFIX:?HDE_TRIGGER_PREFIX is required}
+  HDE_BASE_URL: ${HDE_BASE_URL:?HDE_BASE_URL is required}
+  HDE_API_EMAIL: ${HDE_API_EMAIL:?HDE_API_EMAIL is required}
+  HDE_API_KEY: ${HDE_API_KEY:?HDE_API_KEY is required}
+  HDE_BOT_USER_ID: ${HDE_BOT_USER_ID:-}
+  HDE_TRANSPORT_ENABLED: "true"
+  HDE_TRANSPORT_EVENT_KEY_SECRET: ${HDE_TRANSPORT_EVENT_KEY_SECRET:?HDE_TRANSPORT_EVENT_KEY_SECRET is required}
+  HDE_TRANSPORT_ENCRYPTION_KEY: ${HDE_TRANSPORT_ENCRYPTION_KEY:?HDE_TRANSPORT_ENCRYPTION_KEY is required}
+  HDE_TRANSPORT_LEASE_TIMEOUT_SECONDS: ${HDE_TRANSPORT_LEASE_TIMEOUT_SECONDS:-420}
+  HDE_TRANSPORT_RECOVERY_INTERVAL_SECONDS: ${HDE_TRANSPORT_RECOVERY_INTERVAL_SECONDS:-30}
+  HDE_TRANSPORT_SHUTDOWN_TIMEOUT_SECONDS: ${HDE_TRANSPORT_SHUTDOWN_TIMEOUT_SECONDS:-420}
+  HDE_TRANSPORT_QUEUE_STALE_AFTER_SECONDS: ${HDE_TRANSPORT_QUEUE_STALE_AFTER_SECONDS:-900}
+  CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:?CLOUD_RU_API_KEY is required}
+  CLOUD_RU_CHAT_COMPLETIONS_URL: ${CLOUD_RU_CHAT_COMPLETIONS_URL:?CLOUD_RU_CHAT_COMPLETIONS_URL is required}
+
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-production-build-args: &production-build-args
+  RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:?RELEASE_GIT_SHA (full 40-character lowercase SHA) is required}
+  PYTHON_BASE_IMAGE: python:3.11.15-slim-trixie@sha256:00af38ae2ed311628970782e8a2d7f014d8909dbc63cb97bc0a158187f4db045
+
+services:
+  postgres:
+    pull_policy: never
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    ports: !override []
+    networks: [data]
+    logging: *json-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPU_LIMIT:-2.0}"
+          memory: ${POSTGRES_MEMORY_LIMIT:-2G}
+
+  redis:
+    pull_policy: never
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      ["sh", "-eu", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping"]
+    ports: !override []
+    networks: [data]
+    logging: *json-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-1.0}"
+          memory: ${REDIS_MEMORY_LIMIT:-1G}
+
+  qdrant:
+    pull_policy: never
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports: !override []
+    networks: [data]
+    logging: *json-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "${QDRANT_CPU_LIMIT:-3.0}"
+          memory: ${QDRANT_MEMORY_LIMIT:-4G}
+
+  migrate:
+    image: rosmol-ai-bot-app:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "false"
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [data]
+    logging: *json-logging
+
+  init-qdrant:
+    image: rosmol-ai-bot-app:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "false"
+    environment:
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+      QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [data]
+    logging: *json-logging
+
+  runtime-egress-proxy:
+    image: ubuntu/squid:6.6-24.04_edge@sha256:94f844158e12b52f51b4ae996515e37e8fb3e8d85e1c86caba1a297376e4ec4f
+    pull_policy: never
+    platform: linux/amd64
+    restart: unless-stopped
+    volumes:
+      - ./data/private/runtime-egress/squid.conf:/etc/squid/squid.conf:ro
+    read_only: true
+    tmpfs:
+      - /run:rw,nosuid,nodev,noexec,size=16m,mode=0755
+      - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
+      - /var/log/squid:rw,nosuid,nodev,noexec,size=32m,mode=0750,uid=13,gid=13
+      - /var/spool/squid:rw,nosuid,nodev,noexec,size=32m,mode=0750,uid=13,gid=13
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
+    networks: [runtime_egress, egress]
+    logging: *json-logging
+    healthcheck:
+      test: ["CMD", "/usr/bin/bash", "-c", "</dev/tcp/127.0.0.1/3128"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "${EGRESS_PROXY_CPU_LIMIT:-0.5}"
+          memory: ${EGRESS_PROXY_MEMORY_LIMIT:-256M}
+          pids: 128
+
+  edge-relay:
+    image: haproxy:3.4.2-alpine@sha256:0878b11eb64c433be1b0f578a584b8aca12f6caaa64c8f239b8b556c0dd5eeeb
+    pull_policy: never
+    platform: linux/amd64
+    container_name: rosmol-edge-relay
+    restart: unless-stopped
+    ports:
+      - "${NGINX_BIND:?NGINX_BIND is required}:${NGINX_HOST_PORT:?NGINX_HOST_PORT is required}:8080"
+      - "${NGINX_TLS_BIND:?NGINX_TLS_BIND is required}:${NGINX_TLS_HOST_PORT:?NGINX_TLS_HOST_PORT is required}:8443"
+    volumes:
+      - ./haproxy/edge-relay.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      nginx:
+        condition: service_healthy
+    networks: [ingress, edge]
+    logging: *json-logging
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "${EDGE_RELAY_CPU_LIMIT:-0.5}"
+          memory: ${EDGE_RELAY_MEMORY_LIMIT:-128M}
+          pids: 128
+
+  app:
+    image: rosmol-ai-bot-app:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "false"
+    environment:
+      <<: *production-app-environment
+      RUNTIME_ROLE: api
+      CLOUD_RU_API_KEY: ""
+      HDE_TRIGGER_PREFIX: ""
+      HDE_BASE_URL: ""
+      HDE_API_EMAIL: ""
+      HDE_API_KEY: ""
+      HDE_BOT_USER_ID: ""
+      HDE_TRANSPORT_ENABLED: "false"
+      HDE_TRANSPORT_EVENT_KEY_SECRET: ""
+      HDE_TRANSPORT_ENCRYPTION_KEY: ""
+      ML_PREWARM_ON_STARTUP: "false"
+    ports: !override []
+    volumes: !override
+      - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [edge, data]
+    logging: *json-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "${APP_CPU_LIMIT:-2.0}"
+          memory: ${APP_MEMORY_LIMIT:-2G}
+          pids: 256
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  app-ml:
+    image: rosmol-ai-bot-ml:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "true"
+    user: app
+    stop_grace_period: 450s
+    environment:
+      <<: *production-ml-environment
+      RUNTIME_ROLE: ml
+      ML_PREWARM_ON_STARTUP: "true"
+      ML_PREWARM_TIMEOUT_SECONDS: ${ML_PREWARM_TIMEOUT_SECONDS:-300}
+      HTTP_PROXY: ""
+      HTTPS_PROXY: http://runtime-egress-proxy:3128
+      ALL_PROXY: ""
+      NO_PROXY: 127.0.0.1,localhost,postgres,redis,qdrant,app,app-ml
+    ports:
+      - "127.0.0.1:${APP_ML_HOST_PORT:-8001}:8000"
+    volumes: !override
+      - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
+      - hf_cache:/home/app/.cache/huggingface
+      - torch_cache:/home/app/.cache/torch
+      - model_cache:/opt/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=1g,mode=1777
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      runtime-egress-proxy:
+        condition: service_healthy
+    networks: [edge, data, runtime_egress]
+    logging: *json-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "${APP_ML_CPU_LIMIT:-6.0}"
+          memory: ${APP_ML_MEMORY_LIMIT:-12G}
+          pids: 512
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=8).read()",
+        ]
+      start_period: 360s
+      interval: 15s
+      timeout: 10s
+      retries: 8
+
+  ml-check:
+    image: rosmol-ai-bot-ml:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "true"
+    user: app
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    logging: *json-logging
+
+  index-kb:
+    image: rosmol-ai-bot-ml:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "true"
+    user: app
+    environment:
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [data]
+    logging: *json-logging
+
+  nginx:
+    pull_policy: never
+    ports: !override []
+    networks: [edge]
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:rw,nosuid,nodev,noexec,size=16m,mode=0755
+      - /var/cache/nginx:rw,nosuid,nodev,noexec,size=64m,mode=0755
+      - /var/run:rw,nosuid,nodev,noexec,size=16m,mode=0755
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETGID, SETUID, NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    logging: *json-logging
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "${NGINX_CPU_LIMIT:-1.0}"
+          memory: ${NGINX_MEMORY_LIMIT:-256M}
+          pids: 128
+
+  ml-cache-init:
+    image: rosmol-ai-bot-ml:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "true"
+    logging: *json-logging
+
+  model-prefetch:
+    image: rosmol-ai-bot-ml:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      args:
+        <<: *production-build-args
+        INSTALL_ML: "true"
+    user: app
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Production runtime may only verify the already-prefetched, hash-checked
+    # model volume. Networked downloads happen in the earlier secretless gate.
+    network_mode: none
+    logging: *json-logging
+
+networks:
+  ingress:
+    # Only the secretless L4 edge relay joins this external bridge. TLS keys,
+    # decrypted requests and application credentials stay on internal `edge`.
+  edge:
+    internal: true
+  data:
+    internal: true
+  runtime_egress:
+    internal: true
+  egress:
