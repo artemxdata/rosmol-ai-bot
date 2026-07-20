@@ -1,6 +1,7 @@
 # Recovery test-production runbook — HDE/VK
 
-Дата окна: 20 июля 2026 года. Целевой результат — вернуть бота только в ограниченный тестовый
+Дата подготовки: 20 июля 2026 года. Фактическое окно clean deployment и UTC каждого gate
+фиксируются в private evidence. Целевой результат — вернуть бота только в ограниченный тестовый
 HDE/VK-контур на новом чистом сервере. HDE остаётся транспортом до тестового VK-канала; прямые
 `/webhook/vk` и `/webhook/max` в этом релизе не используются.
 
@@ -17,6 +18,8 @@ evidence. Dispatcher включается последним и только д�
 - Yonote sync и Apply выключены. Новый Yonote token для этого запуска не нужен.
 - Массовые проверки выполняются server-local через `/ask`, а не через HDE/VK.
 - Значения секретов не записываются в runbook, Git, issue, чат, shell history или логи.
+- GitHub Actions выполняет только secretless CI. Он не получает product secrets, SSH/deploy
+  access, GitHub Environment и не выполняет deployment; оператор вручную выбирает зелёный SHA.
 
 ## Пятичасовой critical path
 
@@ -47,10 +50,13 @@ content verdict по «Машуку» или regression-first correction cycle �
 
 Обязательные подтверждения:
 
-1. Два dispatcher rule старого webhook удалены или выключены.
-2. Для глобального HDE API key составлен dependency inventory. Предпочтителен отдельный
-   least-privilege API user/key только для этого бота; общий key не менять без согласования
-   владельцев зависимых интеграций.
+1. По подтверждению владельца два старых тестовых HDE-канала отключены и связанные keys удалены.
+   Перед live smoke в HDE UI повторно подтверждено, что старый endpoint/rules остаются inactive.
+2. Глобальный HDE API key по явному решению владельца не меняется из-за зависимых интеграций и
+   записан как `retained_exception`, а не rotated/verified. До установки проверить provider
+   usage/audit и минимальный scope; в runtime обязательны egress allowlist, rate/cost alerts,
+   один test dispatcher и доступный kill switch. Dedicated bot API user/key остаётся будущим
+   планом безопасной миграции.
 3. В Selectel завершены account/MFA/session, API/application credential и project SSH key audit.
 4. В GitHub проверены security log, PAT, account SSH keys, deploy keys, OAuth Apps, webhooks,
    Actions secrets/environments и активные sessions.
@@ -61,6 +67,8 @@ content verdict по «Машуку» или regression-first correction cycle �
 7. Trusted commit проверен с доверенного локального устройства и записан полным Git object ID
    (40 hex для текущего SHA-1 repository format). Live remote, local checkout и будущий server
    checkout должны совпасть.
+8. Exact commit имеет зелёный GitHub check `Secretless release gate`; workflow не использует
+   Actions secrets и не deploy-ит. Контракт зафиксирован в `docs/github_release_workflow.md`.
 
 ## Gate 1 — классы новых identities
 
@@ -73,7 +81,8 @@ Server-bound identities создаются только на clean host:
 - новые независимые `API_AUTH_TOKEN`, `WEBHOOK_AUTH_TOKEN`, `ADMIN_AUTH_TOKEN`,
   `USER_HASH_SECRET` и `HDE_TRIGGER_PREFIX`;
 - новый Cloud.ru key с минимальным scope;
-- отдельный HDE API credential после dependency verdict;
+- сохранённый shared HDE API credential только как явно принятый `retained_exception`; оператор
+  переносит его из password manager непосредственно в server-only env без показа Codex;
 - Redis/Qdrant credentials, если они включены production overlay; иначе только internal network
   и отсутствие опубликованных data ports фиксируются как временный residual risk.
 
@@ -176,6 +185,9 @@ ports могут обходить правила UFW; поэтому внешн�
 соединением fingerprint GitHub host key сверяется с официальной документацией GitHub с
 доверенного устройства.
 
+Public key в GitHub вставляет оператор. Ни public key body, ни private key, ни вывод `cat` не
+возвращаются Codex; достаточно безопасного fingerprint и статуса `read-only clone passed`.
+
 ```bash
 set -Eeuo pipefail
 export DEPLOY_USER='<NEW_DEPLOY_USER>'
@@ -236,6 +248,10 @@ sudo -u "$DEPLOY_USER" git log -1 --format='commit=%H time=%cI subject=%s'
 
 Если каталог уже существует, команда намеренно останавливается: это не повод удалять или
 переиспользовать неизвестное содержимое.
+
+Для дальнейших обновлений запрещён плавающий `git pull`: оператор выполняет `git fetch`,
+проверяет наличие вручную объявленного зелёного SHA и делает detached checkout по процедуре из
+`docs/github_release_workflow.md`.
 
 ## Gate 3 — build и data plane
 
@@ -405,10 +421,11 @@ sudo -u "$DEPLOY_USER" python3 scripts/generate_production_env.py init \
   --template .env.production.example --output .env.production
 ```
 
-Затем в защищённом редакторе/secret manager заполняются только новые provider-side значения:
-HDE, Cloud.ru, новый DNS host и ACME email. Никакое значение не вставляется в командную строку,
-чат или Git. В `RELEASE_GIT_SHA` записывается тот же `TRUSTED_GIT_SHA`. До запуска data plane
-обязательна проверка:
+Затем оператор в защищённом редакторе заполняет provider-side значения: новый Cloud.ru key,
+сохранённый по принятому исключению HDE key, новый DNS host и ACME email. Значения переносятся из
+password manager непосредственно в server-only файл и не показываются Codex. Никакое значение не
+вставляется в командную строку, чат или Git. В `RELEASE_GIT_SHA` записывается тот же
+`TRUSTED_GIT_SHA`. До запуска data plane обязательна проверка:
 
 ```bash
 set -Eeuo pipefail
