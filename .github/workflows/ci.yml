@@ -13,7 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_VENV: ${{ runner.temp }}/rosmol-ci-venv
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PIP_NO_CACHE_DIR: "1"
   PYTHONDONTWRITEBYTECODE: "1"
@@ -51,16 +50,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python -m venv --clear "$CI_VENV"
-          "$CI_VENV/bin/python" -c "from importlib.metadata import version; assert version('pip') == '24.0'; assert version('setuptools') == '79.0.1'"
-          "$CI_VENV/bin/python" -m pip install --require-hashes --only-binary=:all: \
+          python -m venv --clear "$RUNNER_TEMP/rosmol-ci-venv"
+          "$RUNNER_TEMP/rosmol-ci-venv/bin/python" -c "from importlib.metadata import version; assert version('pip') == '24.0'; assert version('setuptools') == '79.0.1'"
+          "$RUNNER_TEMP/rosmol-ci-venv/bin/python" -m pip install --require-hashes --only-binary=:all: \
             -r requirements/sdist-build-tools.lock
-          "$CI_VENV/bin/python" -c "from importlib.metadata import version; assert version('pip') == '26.1.2'; assert version('setuptools') == '83.0.0'"
-          "$CI_VENV/bin/python" -m pip install --require-hashes --no-deps \
+          "$RUNNER_TEMP/rosmol-ci-venv/bin/python" -c "from importlib.metadata import version; assert version('pip') == '26.1.2'; assert version('setuptools') == '83.0.0'"
+          "$RUNNER_TEMP/rosmol-ci-venv/bin/python" -m pip install --require-hashes --no-deps \
             --no-build-isolation --no-binary=docopt -r requirements/sdist-bootstrap.lock
-          "$CI_VENV/bin/python" -m pip install --require-hashes --only-binary=:all: \
+          "$RUNNER_TEMP/rosmol-ci-venv/bin/python" -m pip install --require-hashes --only-binary=:all: \
             -r requirements/dev.lock
-          echo "$CI_VENV/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/rosmol-ci-venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify installed dependency graph
         run: python -m pip check

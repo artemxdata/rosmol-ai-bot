@@ -51,8 +51,8 @@ def test_ci_actions_and_runner_are_immutable_and_least_privilege() -> None:
         assert "python -m pip check" in workflow
 
         if workflow_path == CI_WORKFLOW:
-            assert 'python -m venv --clear "$CI_VENV"' in workflow
-            assert 'echo "$CI_VENV/bin" >> "$GITHUB_PATH"' in workflow
+            assert 'python -m venv --clear "$RUNNER_TEMP/rosmol-ci-venv"' in workflow
+            assert 'echo "$RUNNER_TEMP/rosmol-ci-venv/bin" >> "$GITHUB_PATH"' in workflow
         else:
             assert "python -m venv --clear .ci-venv" in workflow
             assert 'echo "$PWD/.ci-venv/bin" >> "$GITHUB_PATH"' in workflow
