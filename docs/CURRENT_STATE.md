@@ -2,11 +2,11 @@
 
 **Обновлено:** 20 июля 2026
 **Ветка:** `master`  
-**Текущий recovery candidate:** `38525de30ad808ce34e41c2ad1addda23abde29c` (`Fix CI runner temp
-path`).
-**Git:** recovery/CI implementation `38525de30ad808ce34e41c2ad1addda23abde29c` опубликована в
-`origin/master` 20 июля и прошла GitHub `CI #107 / Secretless release gate`; этот файл
-фиксируется следующим docs-only handoff commit.
+**Текущий recovery candidate:** `c313ad9802fd8460bebaf8609ba57d80932425e2` (`Upgrade PyTorch and
+repair security gates`).
+**Git:** candidate создан локально 20 июля после полного gate; этот файл фиксируется следующим
+docs-only handoff commit. Перед использованием на VM обязательно подтвердить публикацию обоих
+commit в `origin/master` и зелёный GitHub `Secretless release gate` для tip ветки.
 **Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
 (`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
 **Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
@@ -877,8 +877,8 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
    GitHub account-wide session/PAT/SSH/OAuth inventory, зафиксировать Selectel status и provider
    status восьми прежних PyTorch alerts после push. Значения secrets и private provider identifiers
    в Git/чат не переносить.
-2. Зафиксировать trusted runtime SHA
-   `38525de30ad808ce34e41c2ad1addda23abde29c` и создать новую VM только из clean vendor image.
+2. После зелёного GitHub CI зафиксировать trusted runtime SHA
+   `c313ad9802fd8460bebaf8609ba57d80932425e2` и создать новую VM только из clean vendor image.
    Старые snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup не применять.
 3. Настроить SSH key-only, trusted CIDR для `22`, firewall `80/443`, time sync, provider flow/DNS
    logs и alerts. Выполнить clean detached checkout точного SHA.
