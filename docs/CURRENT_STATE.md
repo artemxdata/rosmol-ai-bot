@@ -1,15 +1,18 @@
 # Текущее состояние проекта
 
-**Обновлено:** 16 июля 2026
+**Обновлено:** 20 июля 2026
 **Ветка:** `master`  
-**Текущий release candidate:** `8bca860 Fix HDE delivery telemetry update`
-**Git:** code RC `8bca860`, последний pre-incident operator-holdout state `6acf6fb`; hash этого
-docs-only recovery handoff смотреть в последнем commit `origin/master`.
+**Текущий recovery candidate:** `ad238ededa1d9fda0e17705b90ae1d166a662e50` (`Harden clean
+recovery deployment`).
+**Git:** recovery implementation `ad238ededa1d9fda0e17705b90ae1d166a662e50` опубликована в
+`origin/master` 20 июля; этот файл фиксируется следующим docs-only handoff commit.
 **Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
 (`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
 **Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
-является итоговой оценкой конверсии. Код, routing, prompts, thresholds и KB в Git не менялись;
-до clean rebuild действует recovery freeze. Полные факты инцидента и граница доверия:
+является итоговой оценкой конверсии. В рамках разрешённого recovery patch изменены security,
+build/deploy и HDE transport/durability; логика ответов, routing, prompts, thresholds и frozen KB
+не менялись. До provider Gate 0, clean rebuild, новых secrets и runtime acceptance действует
+recovery freeze. Полные факты инцидента и граница доверия:
 `docs/security_incident_20260715.md`. Последняя обратная связь Наты и quality backlog:
 `docs/operator_feedback_20260715.md`. Активный полный реестр секретов и статусы ротации:
 `docs/secret_rotation_20260716.md`.
@@ -87,12 +90,14 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Постоянная память диалога: последние 20 пар в Redis, полная маскированная история и
   структурированный контекст в PostgreSQL, rolling summary старой части.
 - Фиксированного лимита уточнений нет; число ходов само по себе не вызывает эскалацию.
-- HDE webhook обрабатывается в background task и отправляет один публичный ответ.
+- HDE webhook в recovery candidate сначала атомарно фиксируется в PostgreSQL inbox; отдельный
+  worker обрабатывает ordered ticket jobs, а delivery проходит через durable outbox с retry,
+  dead-letter, HMAC event key, encrypted payload и аудируемым ручным recovery.
 - Ограничение HDE учитывает общий лимит 300 RPM и резерв для других процессов.
 - Yonote preview/apply, validation и reindex доступны через админ-панель.
 - Операционный отчёт в админке: latency, стоимость, cache, эскалации и проблемные темы.
-- Миграции БД `006_conversation_memory` и `007_hde_delivery_telemetry` применены на сервере;
-  Alembic current — `007_hde_delivery_telemetry (head)`.
+- Миграция `008_hde_durable_transport` добавлена и полностью проверена локально. На новом сервере
+  она ещё не применялась; pre-incident runtime исторически оставался на `007` и недоверенен.
 
 ## 5. Ранние pre-pilot итерации (архив)
 
@@ -175,8 +180,37 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Старые бот, HDE webhook и админка offline. Старую VM не включать и не использовать.
 - Selectel ticket `3986352` открыт; на 16 июля ответ поддержки не получен. Ситуация временно
   локализована выключением, но не расследована и не закрыта.
-- Ничего со старого сервера не переносится в новый runtime. Отдельная следующая задача —
-  перевыпуск всех потенциально раскрытых ключей/секретов; после неё — clean rebuild.
+- Ничего со старого сервера не переносится в новый runtime. Новые provider credentials создаются
+  только после provider Gate 0 и secretless build/scan на чистом host, а не до них.
+
+### Recovery candidate `ad238ed` — локально готов, server acceptance не выполнена
+
+- Добавлены production overlay и генератор mode-`0600` env, pinned/hash-locked Python и container
+  supply chain, offline model lock/prefetch/receipt, strict roles/readiness, fail-closed PII prewarm,
+  migration `008` и durable HDE inbox/outbox/recovery tooling.
+- Provider-bearing `app-ml` выходит к Cloud.ru/HDE только через pinned Squid CONNECT policy.
+  Публичные `80/443` принадлежат secretless TCP HAProxy relay; Nginx с TLS/webhook secrets не
+  публикует ports и находится только во внутренней `edge` network. Полным DNS/egress allowlist это
+  не называется: host-mediated Docker DNS остаётся явно принятым residual узкого test-production.
+- Все production images закреплены tag+digest или release SHA и после сканирования имеют
+  `pull_policy: never`. Локально доказаны Compose merge, фактический host -> relay -> Nginx flow,
+  отсутствие прямого Nginx egress, Squid config/CONNECT allow/deny и Qdrant client/server smoke.
+- Clean `--pull --no-cache` build app/app-ml, offline model imports, `pip check`, image hygiene,
+  SBOM/image-secret и Critical gate пройдены локально. Trivy DB имела `UpdatedAt`
+  `2026-07-20T07:44:03Z`; scoped exact-PURL VEX только для app, PostgreSQL и Qdrant истекают
+  `2026-07-27` и требуют повторного review. Redis/Nginx/Certbot/Squid/HAProxy прошли без VEX.
+- Финальный локальный gate 20 июля: `ruff check .` — успешно; `pytest` — `1311 passed`; KB
+  validate — `2186 valid`, из них `2152 published`; KB audit — `0 errors`, `4` известных warning;
+  production Compose merge/no-pull assertions и Git Bash syntax — успешно.
+- Для commit `ad238ededa1d9fda0e17705b90ae1d166a662e50` release provenance показал clean worktree и
+  `complete=true`. Pinned Gitleaks `v8.28.0` после commit проверил `207 commits`: leaks не найдено.
+- Добавлен исполнимый пошаговый runbook:
+  `docs/recovery_test_production_runbook_20260720.md`. Он разделяет provider Gate 0, secretless
+  build/scan, выпуск новых credentials, clean data plane, preliminary acceptance, обязательный
+  Nata/Mashuk correction re-release, traffic observation, HDE smoke и cohort boundary.
+- Это не live deployment: новый host, `.env.production`, TLS, новые provider keys, migration `008`,
+  Qdrant index, `/ready`, admin, входящий/исходящий traffic и реальный HDE/VK smoke ещё не
+  создавались и не проверялись.
 
 ### Проверка текущего docs-only handoff 16 июля
 
@@ -758,25 +792,31 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 ### Блокирующие сейчас
 
 - Старый сервер скомпрометирован и выключен. Причина проникновения, destinations/protocols и
-  полный scope неизвестны; Selectel ticket `3986352` ожидает ответа.
+  полный scope неизвестны; последний зафиксированный статус Selectel ticket `3986352` от 16 июля
+  — ожидание ответа, актуальный provider status требуется сверить.
 - Старые IP, webhook, админка, TLS state, credentials, Docker/runtime data и backups недоверенны.
   Ничего со старого сервера не переносить в новый контур.
 - Revoke-only этап ротации начат. По подтверждению владельца 16 июля удалены все Cloud.ru API
   keys, старый GitHub server deploy key и все Yonote tokens. Новые credentials намеренно не
-  создаются до отдельной clean-rebuild задачи. Старый локальный ignored `.env` удалён без чтения
-  содержимого; `.env.example` сохранён. Точно идентифицированный `id_ed25519_server`, привязанный
+  создаются до закрытия provider Gate 0 и secretless scanner gate. Старый локальный ignored
+  `.env` удалён без чтения содержимого; `.env.example` сохранён. Точно идентифицированный
+  `id_ed25519_server`, привязанный
   только к старому host, удалён вместе с public part/config/known_hosts entries. Отдельный
   `id_ed25519` другого проекта сохранён и не изменялся. Остальные credential classes ещё не
   закрыты.
 - Глобальный HDE API key пока не инвалидирован: он может использоваться другими интеграциями.
   Изменение остановлено до dependency inventory и подтверждения Лёши. Два dispatcher rule нашего
   старого webhook можно удалить независимо; выполнение ещё не подтверждено.
+- Provider Gate 0 не закрыт: нет private evidence удаления/отключения двух старых HDE dispatcher
+  rules; не зафиксирован verdict по global key dependency и dedicated bot user; не завершены
+  GitHub account/session/deploy-key/Actions inventory и provider-side Selectel audit/ticket.
 - 16 июля выполнен read-only инвентарь credential classes без чтения `.env` и без вывода
   значений. Для Cloud.ru, GitHub deploy access и Yonote provider-side отзыв подтверждён
   владельцем; для остальных external classes он ещё не закрыт. Полный журнал и порядок находятся
   в `docs/secret_rotation_20260716.md`. Redis legacy работал без password, Qdrant — без API key,
   поэтому они отмечены `legacy_not_configured`, а не ложно `rotated`.
-- Доверенного runtime нет; release gate и операторский тест не активны.
+- Recovery code commit опубликован, но доверенного runtime нет; server release gate и операторский
+  тест не активны. Новые ключи и `.env.production` не создавались.
 - Начатый 15 июля cohort прерван. Независимой финальной оценки полной multi-turn конверсии нет;
   старые и новые тикеты нельзя объединять в одну метрику.
 
@@ -798,8 +838,10 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 - Semantic audit не имеет ошибок, но остаются warnings по grant taxonomy (`236` записей),
   normalized duplicate text (`234` группы), событию `Время молодых` без published chunks и `79`
   Yonote/event labels вне pilot registry. Массово исправлять без разметки нельзя.
-- HDE delivery использует FastAPI `BackgroundTasks`, а не durable outbox. Stable event id, lease
-  и fail-closed 503 снижают риск, но не обеспечивают exactly-once после аварии процесса.
+- Recovery candidate заменяет FastAPI `BackgroundTasks` на PostgreSQL durable inbox/outbox с
+  ordered worker, retry/dead-letter и аудируемым recovery. Это доказано локальными transaction и
+  crash/retry regressions, но ещё не принято на чистом server runtime и не даёт права обещать
+  provider exactly-once при неоднозначном сетевом исходе.
 - Список админки по умолчанию показывает 50 строк, а не весь размер KB. Последний известный
   pre-incident count — `2152` published из `2186` seed records; его нужно подтвердить заново.
 - Панель `Quality` может показывать embedded presentation-report, а не последний private suite.
@@ -807,44 +849,38 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 
 ## 9. Активный план восстановления и продолжения качества
 
-1. Сохранять старую VM в `SHUTOFF`; не выполнять на ней deploy, backup restore или запуск бота.
-   Не удалять VM/диск до согласования provider-side forensic image/evidence preservation;
-   наличие такого image пока не подтверждено.
-2. Параллельно вести Selectel ticket `3986352`: остановка трафика/тарификации, flow telemetry,
-   forensic options и рекомендации по удалению VM. Ответ не блокирует ротацию/clean host, но
-   требуется перед удалением старого evidence.
-3. Уведомить операторов/владельца HDE о паузе и отключить/заморозить старое webhook rule, чтобы
-   обращения не терялись и не считались новым тестом. Выполнение пока не подтверждено.
-4. Выполнять revoke-only этап строго по `docs/secret_rotation_20260716.md`. Значения не выводить
-   и не коммитить. Cloud.ru API keys, GitHub server deploy key и Yonote tokens уже удалены
-   владельцем. Текущий точный шаг — удалить только два старых HDE dispatcher rule. Глобальный
-   `HDE_API_KEY` не менять до ответа Лёши; новые credentials сейчас не создавать.
-5. С доверенного локального устройства проверить GitHub account/audit history, deploy
-   keys/tokens, commits/tags/Actions; отозвать server deploy credentials и зафиксировать trusted
-   commit hash.
-6. Создать новую VM только из чистого vendor image. Не использовать старый image/snapshot/disk,
-   Docker images/volumes, `.env`, certificates, Redis, PostgreSQL/Qdrant artifacts или файлы хоста.
-7. Настроить SSH key-only и allowlist для 22/tcp; публично оставить 80/443; включить egress/flow
-   monitoring и traffic/CPU alerts.
-8. Выполнить clean Git checkout только после GitHub audit и сверить trusted commit с
-   `origin/master`. Использовать проверенный параметризованный Nginx/ACME flow: новый endpoint
-   задаётся только через `ADMIN_PUBLIC_HOST`, а plaintext admin во время bootstrap закрыт.
-9. Собрать containers с нуля, создать новый `.env` только из новых секретов и выпустить новый TLS
-   certificate.
-10. Создать БД/Redis/Qdrant с нуля, применить migrations и заново индексировать только versioned
-    published seed frozen RC. Не выполнять свежий Yonote Apply и не загружать старые runtime
-    dump/snapshot.
-11. Выполнить preliminary security/runtime acceptance: local checks, migration head, `/ready`,
-    Qdrant count и короткий server-local smoke. HDE endpoint и operator cohort пока не включать.
-12. На чистом runtime воспроизвести feedback Наты, получить content verdict по «Машуку» и
-    выполнить один явно согласованный минимальный regression-first correction cycle. Если verdict
-    требует KB/Yonote change, оформить его отдельно, versioned и с validation/reindex.
-13. После исправлений пройти финальный полный server-local suite и короткий реальный HDE
-    delivery/dedupe smoke.
-14. Зафиксировать финальный handoff, включить новый HDE endpoint и начать новый cohort по
-    timestamp первого реального HDE trace.
-15. Считать ticket-level conversion на новом независимом cohort; старый interrupted cohort
-    использовать только как предварительный qualitative input.
+Единственная исполнимая инструкция —
+`docs/recovery_test_production_runbook_20260720.md`; сокращённый порядок ниже не заменяет его.
+
+1. Закрыть provider Gate 0 до новых ключей и VM runtime: сохранить старую VM в `SHUTOFF`, получить
+   evidence по двум старым HDE rules, dependency verdict по global HDE key/dedicated bot user,
+   закончить GitHub account/session/key/Actions inventory и зафиксировать текущий Selectel status.
+   Значения secrets и private provider identifiers в Git/чат не переносить.
+2. Зафиксировать trusted runtime SHA
+   `ad238ededa1d9fda0e17705b90ae1d166a662e50` и создать новую VM только из clean vendor image.
+   Старые snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup не применять.
+3. Настроить SSH key-only, trusted CIDR для `22`, firewall `80/443`, time sync, provider flow/DNS
+   logs и alerts. Выполнить clean detached checkout точного SHA.
+4. **До provider credentials** выполнить secretless build, model prefetch/receipt, offline load,
+   Gitleaks, SBOM, image-secret и Critical scan всех девяти production images. Истёкший VEX,
+   изменившийся PURL/digest или finding означает `STOP`.
+5. Только после зелёного Gate 3 сгенерировать локальные PostgreSQL/Redis/Qdrant/API/HMAC/encryption
+   secrets и создать новые минимальные Cloud.ru/HDE credentials в защищённом editor/secret
+   manager. Ничего не вставлять в CLI, логи, Git или этот файл.
+6. Поднять fresh data plane без build/pull, применить migration `008`, с нуля индексировать только
+   frozen published seed и доказать `knowledge_base=2152`, `response_cache=0`, offline models,
+   proxy/relay memberships, TLS и strict `/ready`. Dispatcher остаётся `OFF`.
+7. Выполнить Gate 4A code invariants, безопасный Gate 4B live security report, полный server-local
+   acceptance и admin login/logout/read-only checks. Не отправлять load/eval через HDE/VK.
+8. На принятом чистом runtime воспроизвести `Начать`, вопрос про даты и «Машук», получить content
+   verdict и выполнить ровно один согласованный regression-first correction. Новый commit требует
+   обязательного clean rebuild/rescan/re-release и повторения Gates 3–4.
+9. До первого HDE события запустить foreground traffic observer. Затем включить только один новый
+   dispatcher/channel и выполнить три коротких HDE/VK scenarios с проверкой
+   `upstream id -> inbox -> trace -> outbox -> delivery`; при dead-letter/неожиданном traffic —
+   dispatcher `OFF` и `NO GO`.
+10. После финального admin/traffic/handoff gate начать новый sealed cohort с timestamp первого
+    реального HDE trace. Старый interrupted cohort использовать только как qualitative input.
 
 ## 10. Правило продолжения в новом чате
 
@@ -852,15 +888,14 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 
 ```text
 Прочитай AGENTS.md, docs/CURRENT_STATE.md, docs/security_incident_20260715.md,
+docs/secret_rotation_20260716.md, docs/recovery_test_production_runbook_20260720.md,
 docs/operator_feedback_20260715.md, docs/operator_holdout_runbook.md и docs/DECISIONS.md.
 Ничего не меняй и ничего не переноси со старого сервера. Сначала проверь git status,
 git log -5 и origin/master, затем кратко перескажи: цель проекта, последнюю quality baseline,
-feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze и точный следующий шаг.
+feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze, trusted SHA и provider Gate 0.
 ```
 
-Ближайшая отдельная задача уже начата: revoke-only этап ведётся по
-`docs/secret_rotation_20260716.md`; Cloud.ru API keys, GitHub server deploy key и Yonote tokens
-удалены, HDE dispatcher/глобальный API key и Selectel остаются следующими. Глобальный HDE key
-заблокирован на согласовании с Лёшей. Новые credentials будут созданы в отдельном чате.
-После неё — clean rebuild без единого артефакта старого сервера. Улучшения greeting, clarification и «Машука»
+Точный следующий шаг: закрыть provider Gate 0 private evidence по HDE/GitHub/Selectel. Затем
+выполнить на новой clean VM secretless Gate 2–3 из recovery runbook. Новые credentials разрешено
+создавать только после его зелёного scanner gate. Улучшения greeting, clarification и «Машука»
 выполнять на чистом runtime после preliminary acceptance, но до финального gate и нового cohort.
