@@ -18,8 +18,7 @@ production secrets и не как средство автоматическог�
 
 ## Что делает GitHub Actions
 
-`.github/workflows/secretless-ci.yml` запускается для push/PR в `master` и вручную. Один required
-check `Secretless release gate`:
+`.github/workflows/ci.yml` запускается для push/PR. Job `Secretless release gate`:
 
 - получает полную Git history без сохранения checkout credential;
 - запускает закреплённый digest Gitleaks с redaction;

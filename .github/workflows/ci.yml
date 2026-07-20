@@ -3,32 +3,97 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI_VENV: ${{ runner.temp }}/rosmol-ci-venv
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_CACHE_DIR: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  RELEASE_GIT_SHA: ${{ github.sha }}
+
 jobs:
   test:
+    name: Secretless release gate
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Check out the complete repository history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+
+      - name: Scan Git history for secrets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker run --rm --network none --platform linux/amd64 \
+            -v "$PWD:/repo:ro" \
+            zricethezav/gitleaks:v8.28.0@sha256:bf00b5e039f0fad4b32935dc5ec1e358f227ccd097bcb64b971f0331072fe2ae \
+            detect --source=/repo --redact --no-banner --exit-code=1 --log-opts=--all
+
+      - name: Set up the release Python version
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11.15"
+          architecture: x64
+
       - name: Install dependencies
+        shell: bash
         run: |
-          python -m venv --clear .ci-venv
-          .ci-venv/bin/python -c "from importlib.metadata import version; assert version('pip') == '24.0'; assert version('setuptools') == '79.0.1'"
-          .ci-venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements/sdist-build-tools.lock
-          .ci-venv/bin/python -c "from importlib.metadata import version; assert version('pip') == '26.1.2'; assert version('setuptools') == '83.0.0'"
-          .ci-venv/bin/python -m pip install --require-hashes --no-deps --no-build-isolation --no-binary=docopt -r requirements/sdist-bootstrap.lock
-          .ci-venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements/dev.lock
-          echo "$PWD/.ci-venv/bin" >> "$GITHUB_PATH"
+          set -Eeuo pipefail
+          python -m venv --clear "$CI_VENV"
+          "$CI_VENV/bin/python" -c "from importlib.metadata import version; assert version('pip') == '24.0'; assert version('setuptools') == '79.0.1'"
+          "$CI_VENV/bin/python" -m pip install --require-hashes --only-binary=:all: \
+            -r requirements/sdist-build-tools.lock
+          "$CI_VENV/bin/python" -c "from importlib.metadata import version; assert version('pip') == '26.1.2'; assert version('setuptools') == '83.0.0'"
+          "$CI_VENV/bin/python" -m pip install --require-hashes --no-deps \
+            --no-build-isolation --no-binary=docopt -r requirements/sdist-bootstrap.lock
+          "$CI_VENV/bin/python" -m pip install --require-hashes --only-binary=:all: \
+            -r requirements/dev.lock
+          echo "$CI_VENV/bin" >> "$GITHUB_PATH"
+
       - name: Verify installed dependency graph
         run: python -m pip check
+
       - name: Ruff
-        run: ruff check .
+        run: python -m ruff check .
+
       - name: Pytest
-        run: pytest
+        run: python -m pytest -p no:cacheprovider -q
+
+      - name: Validate the frozen knowledge base
+        run: python scripts/index_kb.py --validate-only
+
+      - name: Validate production Compose without runtime secrets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test ! -e .env
+          test ! -e .env.production
+          docker compose --env-file .env.production.example \
+            -f docker-compose.yml \
+            -f docker-compose.ml.yml \
+            -f docker-compose.prod.yml \
+            --profile ml config --quiet
+          docker compose --env-file .env.production.example \
+            -f docker-compose.yml \
+            -f docker-compose.ml.yml \
+            -f docker-compose.prod.yml \
+            -f docker-compose.admin-tls.yml \
+            --profile ml --profile tls config --quiet
+
+      - name: Confirm the checkout stayed clean
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain --untracked-files=normal)"
