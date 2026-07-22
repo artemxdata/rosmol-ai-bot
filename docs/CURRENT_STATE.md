@@ -3,14 +3,14 @@
 **Обновлено:** 22 июля 2026
 **Ветка:** `master`  
 **Последний preliminary server candidate:**
-`49b29d4bdc525caedf4609f8fc948364c1c92726` (`Scope new Storable scanner exception`). Его
-checkout и GitHub CI зелёные, но первый rebuild корректно остановлен до ML/scanner gate: обычный
-`sudo` удалил `RELEASE_GIT_SHA`, и Compose собрал development OCI revision из 40 нулей. Эти
-образы отвергнуты и не являются release artifacts.
-**Git:** следующий candidate — минимальная fail-closed правка secretless build runbook, явно
-передающая публичный SHA через `sudo env -i` и автоматически сверяющая обе OCI revision. Его
-полный SHA становится trusted только после публикации в `origin/master`, зелёного GitHub
-`Secretless release gate` и fresh server-side scanner gate.
+`15f3c2aae3891a7e064a48f1fff3f21c1956296d` (`Preserve release SHA across sudo build`). Его
+checkout, GitHub CI, SHA-bound image revisions, model prefetch и offline ML load зелёные. Fresh
+scanner gate остановлен до credentials на `CVE-2026-59873` в Qdrant Web UI SPDX inventory;
+исполняемый node-tar и Node runtime в exact image отсутствуют.
+**Git:** следующий candidate — минимальный exact-PURL metadata-reachability patch для Qdrant,
+содержащий этот handoff. Его полный SHA становится trusted только после публикации в
+`origin/master`, зелёного GitHub `Secretless release gate` и fresh полного server-side scanner
+gate всех девяти images.
 **Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
 (`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
 **Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
@@ -32,7 +32,13 @@ Debian package-content и server image review подтвердили отсут�
 исключение принято в `49b29d4bdc525caedf4609f8fc948364c1c92726` до 27 июля. Clean checkout этого
 SHA прошёл, но rebuild выявил, что исходная команда runbook теряет публичный SHA через `sudo` и
 получает нулевую development revision. Gate остановился до model jobs и scanner; нулевые образы
-отвергнуты. Старый partial scan не является зелёным evidence и не перезаписывается.
+отвергнуты. Исправление `15f3c2aae3891a7e064a48f1fff3f21c1956296d` прошло CI, clean rebuild,
+точную OCI revision и offline загрузку обеих моделей. Его fresh Gitleaks проверил 216 commits и
+не нашёл утечек; Trivy затем fail-closed остановился на `CVE-2026-59873` в exact Qdrant digest.
+Upstream advisory требует фактического node-tar archive parse/extract, но exact-image probe
+подтвердил отсутствие node/npm/npx и файлов `node_modules/tar`: `tar@7.5.16` присутствует только
+как запись `/qdrant/static/qdrant-web-ui.spdx.json`. Готовится короткоживущее exact-PURL
+исключение до 27 июля. Ни один partial scan не является зелёным evidence и не перезаписывается.
 `.env.production` и provider credentials на новой VM ещё не создавались.
 
 ## 1. Цель
@@ -893,11 +899,11 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
    GitHub account-wide session/PAT/SSH/OAuth inventory, зафиксировать Selectel status и provider
    status восьми прежних PyTorch alerts после push. Значения secrets и private provider identifiers
    в Git/чат не переносить.
-2. Clean VM уже создана, а preliminary checkout
-   `6364efe8e5a111942f005a7bfdccac4f67237eeb` прошёл build/offline-ML, но его scanner evidence
-   заблокирован новым `CVE-2026-57433`. После публикации и зелёного CI security-policy patch
-   зафиксировать новый 40-символьный SHA, выполнить clean detached checkout и не использовать
-   старые snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup.
+2. Clean VM уже создана. Candidate `15f3c2aae3891a7e064a48f1fff3f21c1956296d` прошёл
+   build/offline-ML и Gitleaks, но Trivy evidence заблокирован новым `CVE-2026-59873` inventory
+   finding. После публикации и зелёного CI exact-PURL policy patch зафиксировать новый
+   40-символьный SHA, выполнить clean detached checkout и не использовать старые
+   snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup.
 3. Настроить SSH key-only, trusted CIDR для `22`, firewall `80/443`, time sync, provider flow/DNS
    logs и alerts. Выполнить clean detached checkout точного SHA.
 4. **До provider credentials** для нового SHA повторить secretless build с новой OCI revision,
@@ -937,9 +943,9 @@ git log -5 и origin/master, затем кратко перескажи: цел�
 feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze, trusted SHA и provider Gate 0.
 ```
 
-Точный следующий шаг: опубликовать минимальный `CVE-2026-57433` exact-PURL policy patch, дождаться
-зелёного GitHub `Secretless release gate`, зафиксировать новый SHA и на уже подготовленной clean VM
-повторить SHA-bound app/app-ml build и полный Gate 3 в новом evidence-каталоге. Новые credentials
-разрешено создавать только после его зелёного scanner gate. Улучшения greeting, clarification и
-«Машука» выполнять на чистом runtime после preliminary acceptance, но до финального gate и нового
-cohort.
+Точный следующий шаг: опубликовать минимальный `CVE-2026-59873` exact-PURL metadata-reachability
+patch, дождаться зелёного GitHub `Secretless release gate`, зафиксировать новый SHA и на уже
+подготовленной clean VM повторить SHA-bound app/app-ml build и полный Gate 3 в новом
+evidence-каталоге. Новые credentials разрешено создавать только после его зелёного scanner gate.
+Улучшения greeting, clarification и «Машука» выполнять на чистом runtime после preliminary
+acceptance, но до финального gate и нового cohort.

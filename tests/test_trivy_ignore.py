@@ -6,15 +6,17 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_AND_QDRANT_IDS = {
+PERL_IDS = {
     "CVE-2026-8376",
     "CVE-2026-42496",
     "CVE-2026-13221",
     "CVE-2026-57433",
 }
+QDRANT_IDS = PERL_IDS | {"CVE-2026-59873"}
 PERL_PURL = (
     "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
 )
+QDRANT_WEB_UI_TAR_PURL = "pkg:npm/tar@7.5.16"
 POSTGRES_PURL = "pkg:golang/stdlib@v1.24.6"
 
 
@@ -34,12 +36,17 @@ def _assert_short_lived(entries: list[dict[str, object]]) -> None:
 
 
 def test_perl_ignore_policies_are_exact_scoped_and_short_lived() -> None:
-    for filename in ("trivy-app-ignore.yaml", "trivy-qdrant-ignore.yaml"):
+    expected_ids = {
+        "trivy-app-ignore.yaml": PERL_IDS,
+        "trivy-qdrant-ignore.yaml": QDRANT_IDS,
+    }
+    for filename, expected in expected_ids.items():
         entries = _load_entries(filename)
+        perl_entries = [entry for entry in entries if entry["id"] in PERL_IDS]
 
-        assert {entry["id"] for entry in entries} == APP_AND_QDRANT_IDS
-        assert len(entries) == len(APP_AND_QDRANT_IDS)
-        assert all(entry["purls"] == [PERL_PURL] for entry in entries)
+        assert {entry["id"] for entry in entries} == expected
+        assert len(perl_entries) == len(PERL_IDS)
+        assert all(entry["purls"] == [PERL_PURL] for entry in perl_entries)
         assert all(
             entry["expired_at"] == date(2026, 7, 27) for entry in entries
         )
@@ -56,6 +63,19 @@ def test_storable_exception_records_the_unavailable_runtime_module() -> None:
 
         assert "Storable" in statement
         assert "no Perl" in statement or "does not ship" in statement
+
+
+def test_qdrant_node_tar_exception_records_metadata_only_reachability() -> None:
+    entries = _load_entries("trivy-qdrant-ignore.yaml")
+    entry = next(item for item in entries if item["id"] == "CVE-2026-59873")
+
+    assert entry["purls"] == [QDRANT_WEB_UI_TAR_PURL]
+    assert entry["expired_at"] == date(2026, 7, 27)
+    statement = str(entry["statement"])
+    assert "qdrant-web-ui.spdx.json" in statement
+    assert "zero node_modules/tar files" in statement
+    assert "no node, npm, or npx executable" in statement
+    assert "Rust Qdrant binary" in statement
 
 
 def test_postgres_ignore_policy_is_exact_scoped_and_short_lived() -> None:

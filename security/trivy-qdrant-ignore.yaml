@@ -31,3 +31,17 @@ vulnerabilities:
       loadable Storable module. Qdrant starts its Rust binary directly and has
       no Perl deserialization path. Re-review on any image digest,
       package-content, or runtime-entrypoint change.
+  - id: CVE-2026-59873
+    purls:
+      - "pkg:npm/tar@7.5.16"
+    expired_at: 2026-07-27
+    statement: >-
+      Not executable or reachable in the pinned Qdrant runtime: tar@7.5.16 is
+      present only as inventory metadata in
+      /qdrant/static/qdrant-web-ui.spdx.json. The exact image contains no
+      node, npm, or npx executable and zero node_modules/tar files; its shell
+      entrypoint starts the Rust Qdrant binary. CVE-2026-59873 requires
+      node-tar to parse or extract an attacker-controlled archive. Re-review
+      on any image digest, embedded-SBOM/static content, runtime-tool, or
+      entrypoint change, and remove this bridge when upstream ships patched
+      Web UI inventory.

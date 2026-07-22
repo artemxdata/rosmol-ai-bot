@@ -32,6 +32,18 @@ records an absent affected component, not a generic acceptance of a reachable
 Critical vulnerability. The server scan must still be repeated from a fresh
 SHA-bound evidence directory after this policy change.
 
+The next fresh scan correctly stopped again on `CVE-2026-59873`, mapped to
+`pkg:npm/tar@7.5.16` in the exact pinned Qdrant digest. The upstream advisory
+requires a process to invoke node-tar's parse/extract path on an untrusted
+archive; affected releases lack cumulative decompression and entry-count
+limits. Exact-image inspection found no `node`, `npm`, or `npx` executable and
+zero `node_modules/tar` files. The only `tar@7.5.16` record is inventory
+metadata in `/qdrant/static/qdrant-web-ui.spdx.json`; the final image starts a
+shell entrypoint which launches the Rust Qdrant binary. The package is therefore
+not executable or reachable in this runtime. This is a temporary metadata-only
+bridge, not acceptance of a reachable archive-extraction service, and still
+requires a new SHA and fresh complete scan.
+
 Raw Trivy JSON and SBOM remain in the ignored private security-scan directory;
 they are not committed because package paths can disclose unnecessary runtime
 detail.
@@ -63,6 +75,10 @@ Authoritative references:
 - <https://security-tracker.debian.org/tracker/CVE-2026-57433>
 - <https://packages.debian.org/trixie/amd64/perl-base/filelist>
 - <https://github.com/Perl/perl5/commit/e4f681784bcdeaa91ff02a2fa4cdcae5c46779d7>
+- <https://github.com/isaacs/node-tar/security/advisories/GHSA-23hp-3jrh-7fpw>
+- <https://github.com/isaacs/node-tar/commit/2812e9338665659b183aa7226518c307044957d3>
+- <https://github.com/qdrant/qdrant/blob/v1.18.3/Dockerfile>
+- <https://github.com/qdrant/qdrant/blob/v1.18.3/tools/sync-web-ui.sh>
 
 ## Fail-closed boundary
 
@@ -91,14 +107,16 @@ replaced only after scanning the current official candidates:
 Nginx, Certbot, Redis, Squid and HAProxy have zero active Critical findings and
 without an exception policy.
 The refreshed Qdrant image removed seven actionable Critical findings; its
-20 July DB findings were the same three `perl-base` records. Server-local
-inspection confirms the newly reported Storable module is also not loadable in
-the exact image. The image is amd64, has no `Archive::Tar` or Perl entrypoints,
-and starts the Rust binary directly. `security/trivy-qdrant-ignore.yaml` adds
-the fourth exact-PURL rule until 27 July, but the zero-active verdict remains
-pending until the fresh full scan records that finding as suppressed. A real
-isolated smoke proved qdrant-client `1.11.3` can create, upsert and search
-against Qdrant `1.18.3`.
+20 July DB findings were the same three `perl-base` records. Exact-image
+inspection confirms that Storable and Archive::Tar are not loadable, no Perl
+entrypoint exists, and the service starts its Rust binary directly. The later
+`CVE-2026-59873` record is confined to the embedded Web UI SPDX inventory:
+Node/npm/npx and executable node-tar files are absent. The Qdrant policy scopes
+all five records to their exact PURLs until 27 July; a digest, inventory,
+runtime-tool or entrypoint change invalidates the corresponding decision. The
+zero-active verdict remains pending until a new fresh full scan records these
+findings as suppressed. A real isolated smoke proved qdrant-client `1.11.3`
+can create, upsert and search against Qdrant `1.18.3`.
 
 The refreshed PostgreSQL image has one scanner finding in the Go standard
 library embedded in `gosu`: `CVE-2025-68121`. The authoritative Go advisory

@@ -440,6 +440,15 @@ Redis/Nginx/Certbot/Squid/HAProxy сканируются без исключен
 прерванный scan: нужен новый Git SHA, новые SHA-bound app/app-ml images и fresh `SCAN_DIR`; срок
 повторного review остаётся `2026-07-27`.
 
+Следующий fresh scan SHA `15f3c2aae3891a7e064a48f1fff3f21c1956296d` также штатно остановился до
+credentials на `CVE-2026-59873` (`pkg:npm/tar@7.5.16`) в pinned Qdrant digest. Exact-image
+inspection показал, что запись существует только в embedded
+`/qdrant/static/qdrant-web-ui.spdx.json`: `node`, `npm`, `npx` и файлы `node_modules/tar`
+отсутствуют, а entrypoint запускает Rust Qdrant. Уязвимый parse/extract path недостижим, поэтому
+короткоживущее исключение применяется только к этому PURL и digest до `2026-07-27`. Partial scan
+не продолжается: после policy patch снова обязательны новый trusted SHA, новые SHA-bound app/ML
+images и fresh полный scan всех девяти images.
+
 ### Новый production env без вывода значений
 
 Локальные application/database secrets генерируются только на clean host. Скрипт создаёт файл
