@@ -1,4 +1,4 @@
-# Security scan verdict — 20 July 2026
+# Security scan verdict — 20 July 2026; fail-closed re-review 22 July 2026
 
 The first part of this verdict is deliberately narrow. It applies only to the
 `app` and `app-ml` images built for `linux/amd64` from
@@ -20,6 +20,18 @@ architecture, or a different package PURL.
   shebangs;
 - both images start Python directly as the unprivileged `app` user.
 
+The clean recovery-host scan on 22 July refreshed the pinned Trivy DB and
+correctly stopped before provider credentials on the newly published
+`CVE-2026-57433`. The finding was mapped to the same exact `perl-base=5.40.1-6`
+PURL. The affected implementation is `Storable` before 3.41, specifically its
+crafted `SX_HOOK` deserialization path. Debian's authoritative file list for
+the exact Trixie `perl-base` package contains no `Storable.pm` or Storable
+shared object; the runtime Dockerfile adds no Debian packages and the module is
+not loadable in the built application images. The exception below therefore
+records an absent affected component, not a generic acceptance of a reachable
+Critical vulnerability. The server scan must still be repeated from a fresh
+SHA-bound evidence directory after this policy change.
+
 Raw Trivy JSON and SBOM remain in the ignored private security-scan directory;
 they are not committed because package paths can disclose unnecessary runtime
 detail.
@@ -37,12 +49,20 @@ detail.
    service path: the service does not invoke Perl or compile attacker-controlled
    Perl regular expressions. Any introduction of a Perl entrypoint invalidates
    this verdict.
+4. `CVE-2026-57433` is not present in these images: exploitation requires a
+   crafted blob to reach `Storable::thaw` or `Storable::retrieve`, while the
+   exact `perl-base` package does not ship Storable and the Python service has no
+   Perl deserialization path. A base-image/package-content/entrypoint change
+   invalidates this verdict.
 
 Authoritative references:
 
 - <https://security-tracker.debian.org/tracker/CVE-2026-8376>
 - <https://security-tracker.debian.org/tracker/CVE-2026-42496>
 - <https://security-tracker.debian.org/tracker/CVE-2026-13221>
+- <https://security-tracker.debian.org/tracker/CVE-2026-57433>
+- <https://packages.debian.org/trixie/amd64/perl-base/filelist>
+- <https://github.com/Perl/perl5/commit/e4f681784bcdeaa91ff02a2fa4cdcae5c46779d7>
 
 ## Fail-closed boundary
 
@@ -70,12 +90,15 @@ replaced only after scanning the current official candidates:
 
 Nginx, Certbot, Redis, Squid and HAProxy have zero active Critical findings and
 without an exception policy.
-The refreshed Qdrant image removed seven actionable Critical findings; its only
-remaining findings are the same three `perl-base` records. The image is amd64,
-has no `Archive::Tar` and no Perl entrypoints, and starts the Rust binary
-directly. `security/trivy-qdrant-ignore.yaml` records that exact-PURL verdict until
-27 July. A real isolated smoke proved qdrant-client `1.11.3` can create, upsert
-and search against Qdrant `1.18.3`.
+The refreshed Qdrant image removed seven actionable Critical findings; its
+20 July DB findings were the same three `perl-base` records. Server-local
+inspection confirms the newly reported Storable module is also not loadable in
+the exact image. The image is amd64, has no `Archive::Tar` or Perl entrypoints,
+and starts the Rust binary directly. `security/trivy-qdrant-ignore.yaml` adds
+the fourth exact-PURL rule until 27 July, but the zero-active verdict remains
+pending until the fresh full scan records that finding as suppressed. A real
+isolated smoke proved qdrant-client `1.11.3` can create, upsert and search
+against Qdrant `1.18.3`.
 
 The refreshed PostgreSQL image has one scanner finding in the Go standard
 library embedded in `gosu`: `CVE-2025-68121`. The authoritative Go advisory

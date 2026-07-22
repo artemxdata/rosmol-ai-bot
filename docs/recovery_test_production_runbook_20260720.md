@@ -416,6 +416,13 @@ Redis/Nginx/Certbot/Squid/HAProxy сканируются без исключен
 `docs/security_scan_verdict_20260720.md`. Scanner JSON и SBOM не публикуются автоматически: они
 могут содержать package paths и остаются private evidence.
 
+22 июля refreshed DB обнаружила новый `CVE-2026-57433` и штатно остановила первый clean-host scan.
+После проверки upstream patch и package contents исключение добавлено только для exact
+`perl-base=5.40.1-6` PURL app/app-ml и Qdrant: уязвимый модуль Storable в этих runtime images
+отсутствует, а entrypoints не используют Perl. Это решение не разрешает продолжить старый
+прерванный scan: нужен новый Git SHA, новые SHA-bound app/app-ml images и fresh `SCAN_DIR`; срок
+повторного review остаётся `2026-07-27`.
+
 ### Новый production env без вывода значений
 
 Локальные application/database secrets генерируются только на clean host. Скрипт создаёт файл

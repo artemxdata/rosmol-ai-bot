@@ -21,3 +21,13 @@ vulnerabilities:
     statement: >-
       Not reachable: Qdrant starts its Rust binary directly and contains no Perl
       entrypoints that compile attacker-controlled Perl regular expressions.
+  - id: CVE-2026-57433
+    purls:
+      - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
+    expired_at: 2026-07-27
+    statement: >-
+      Not present in the pinned image: CVE-2026-57433 affects the Storable
+      module, but the image's exact perl-base package does not provide a
+      loadable Storable module. Qdrant starts its Rust binary directly and has
+      no Perl deserialization path. Re-review on any image digest,
+      package-content, or runtime-entrypoint change.

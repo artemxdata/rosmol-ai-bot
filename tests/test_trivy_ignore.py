@@ -10,6 +10,7 @@ APP_AND_QDRANT_IDS = {
     "CVE-2026-8376",
     "CVE-2026-42496",
     "CVE-2026-13221",
+    "CVE-2026-57433",
 }
 PERL_PURL = (
     "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
@@ -29,7 +30,7 @@ def _assert_short_lived(entries: list[dict[str, object]]) -> None:
         assert str(entry["statement"]).strip()
         expiry = entry["expired_at"]
         assert isinstance(expiry, date)
-        assert date.today() <= expiry <= date.today() + timedelta(days=14)
+        assert date.today() < expiry <= date.today() + timedelta(days=14)
 
 
 def test_perl_ignore_policies_are_exact_scoped_and_short_lived() -> None:
@@ -39,7 +40,22 @@ def test_perl_ignore_policies_are_exact_scoped_and_short_lived() -> None:
         assert {entry["id"] for entry in entries} == APP_AND_QDRANT_IDS
         assert len(entries) == len(APP_AND_QDRANT_IDS)
         assert all(entry["purls"] == [PERL_PURL] for entry in entries)
+        assert all(
+            entry["expired_at"] == date(2026, 7, 27) for entry in entries
+        )
         _assert_short_lived(entries)
+
+
+def test_storable_exception_records_the_unavailable_runtime_module() -> None:
+    for filename in ("trivy-app-ignore.yaml", "trivy-qdrant-ignore.yaml"):
+        entries = _load_entries(filename)
+        entry = next(
+            item for item in entries if item["id"] == "CVE-2026-57433"
+        )
+        statement = str(entry["statement"])
+
+        assert "Storable" in statement
+        assert "no Perl" in statement or "does not ship" in statement
 
 
 def test_postgres_ignore_policy_is_exact_scoped_and_short_lived() -> None:

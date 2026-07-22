@@ -1,12 +1,15 @@
 # Текущее состояние проекта
 
-**Обновлено:** 20 июля 2026
+**Обновлено:** 22 июля 2026
 **Ветка:** `master`  
-**Текущий recovery candidate:** `c313ad9802fd8460bebaf8609ba57d80932425e2` (`Upgrade PyTorch and
-repair security gates`).
-**Git:** candidate создан локально 20 июля после полного gate; этот файл фиксируется следующим
-docs-only handoff commit. Перед использованием на VM обязательно подтвердить публикацию обоих
-commit в `origin/master` и зелёный GitHub `Secretless release gate` для tip ветки.
+**Последний preliminary server candidate:**
+`6364efe8e5a111942f005a7bfdccac4f67237eeb` (`Record PyTorch recovery handoff`; runtime code
+совпадает с `c313ad9802fd8460bebaf8609ba57d80932425e2`). Его build/offline-ML зелёные, но refreshed
+Trivy DB заблокировала scanner gate на `CVE-2026-57433`; использовать этот SHA для выпуска
+credentials нельзя.
+**Git:** следующий candidate — минимальный exact-PURL security-policy patch, содержащий этот
+handoff. Его полный SHA становится trusted только после публикации в `origin/master`, зелёного
+GitHub `Secretless release gate` и fresh server-side scanner gate.
 **Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
 (`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
 **Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
@@ -18,6 +21,17 @@ build/deploy и HDE transport/durability; логика ответов, routing, 
 `docs/security_incident_20260715.md`. Последняя обратная связь Наты и quality backlog:
 `docs/operator_feedback_20260715.md`. Активный полный реестр секретов и статусы ротации:
 `docs/secret_rotation_20260716.md`.
+
+**Clean-host recovery progress, 22 июля:** новая Ubuntu 24.04 VM прошла OS/SSH/firewall/Docker
+preflight, получила 8 GiB swap как временный ресурсный запас, а read-only GitHub deploy key
+клонировал clean detached checkout `6364efe8e5a111942f005a7bfdccac4f67237eeb`. Secretless
+app/app-ml build, pinned OCI revision, model prefetch и фактическая offline
+BGE-M3/BGE-reranker загрузка прошли. Первый server Trivy scan с refreshed DB fail-closed
+остановился до любых provider credentials на новом `CVE-2026-57433`
+(`perl-base=5.40.1-6`). Upstream и Debian package-content review подтвердили, что уязвимый модуль
+Storable не входит в exact `perl-base` runtime; готовится короткоживущее exact-PURL исключение с
+regression-тестом. Старый partial scan не является зелёным evidence и не перезаписывается.
+`.env.production` и provider credentials на новой VM ещё не создавались.
 
 ## 1. Цель
 
@@ -877,14 +891,18 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
    GitHub account-wide session/PAT/SSH/OAuth inventory, зафиксировать Selectel status и provider
    status восьми прежних PyTorch alerts после push. Значения secrets и private provider identifiers
    в Git/чат не переносить.
-2. После зелёного GitHub CI зафиксировать trusted runtime SHA
-   `c313ad9802fd8460bebaf8609ba57d80932425e2` и создать новую VM только из clean vendor image.
-   Старые snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup не применять.
+2. Clean VM уже создана, а preliminary checkout
+   `6364efe8e5a111942f005a7bfdccac4f67237eeb` прошёл build/offline-ML, но его scanner evidence
+   заблокирован новым `CVE-2026-57433`. После публикации и зелёного CI security-policy patch
+   зафиксировать новый 40-символьный SHA, выполнить clean detached checkout и не использовать
+   старые snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup.
 3. Настроить SSH key-only, trusted CIDR для `22`, firewall `80/443`, time sync, provider flow/DNS
    logs и alerts. Выполнить clean detached checkout точного SHA.
-4. **До provider credentials** выполнить secretless build, model prefetch/receipt, offline load,
-   Gitleaks, SBOM, image-secret и Critical scan всех девяти production images. Истёкшее исключение,
-   изменившийся PURL/digest или finding означает `STOP`.
+4. **До provider credentials** для нового SHA повторить secretless build с новой OCI revision,
+   использовать уже проверенный immutable model cache только после receipt/offline load, затем
+   создать fresh SHA-bound scan evidence и выполнить Gitleaks, SBOM, image-secret и Critical scan
+   всех девяти production images. Partial evidence старого SHA не продолжать и не выдавать за
+   зелёный gate. Истёкшее исключение, изменившийся PURL/digest или finding означает `STOP`.
 5. Только после зелёного Gate 3 сгенерировать локальные PostgreSQL/Redis/Qdrant/API/HMAC/encryption
    secrets, создать новый минимальный Cloud.ru credential и перенести retained HDE credential из
    password manager прямо в server-only env. Ничего не показывать Codex и не вставлять в CLI,
@@ -917,9 +935,9 @@ git log -5 и origin/master, затем кратко перескажи: цел�
 feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze, trusted SHA и provider Gate 0.
 ```
 
-Точный следующий шаг: закрыть оставшийся provider Gate 0 evidence по HDE, GitHub account и
-Selectel, а также явно выбрать upgrade или ограниченное risk acceptance для PyTorch alerts. Затем
-выполнить на новой clean VM secretless Gate 2–3 из recovery runbook для exact green SHA
-`38525de30ad808ce34e41c2ad1addda23abde29c`. Новые credentials разрешено создавать только после
-его зелёного scanner gate. Улучшения greeting, clarification и «Машука» выполнять на чистом
-runtime после preliminary acceptance, но до финального gate и нового cohort.
+Точный следующий шаг: опубликовать минимальный `CVE-2026-57433` exact-PURL policy patch, дождаться
+зелёного GitHub `Secretless release gate`, зафиксировать новый SHA и на уже подготовленной clean VM
+повторить SHA-bound app/app-ml build и полный Gate 3 в новом evidence-каталоге. Новые credentials
+разрешено создавать только после его зелёного scanner gate. Улучшения greeting, clarification и
+«Машука» выполнять на чистом runtime после preliminary acceptance, но до финального gate и нового
+cohort.
