@@ -92,7 +92,7 @@ jobs:
           POSTGRES_DB: rosmol_ai_bot_test
         run: |
           set -Eeuo pipefail
-          export POSTGRES_PASSWORD="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export POSTGRES_PASSWORD="$(python -c 'import os; print(os.urandom(32).hex())')"
           export POSTGRES_DSN="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
           export HDE_TRANSPORT_TEST_POSTGRES_DSN="$POSTGRES_DSN"
           cleanup() {

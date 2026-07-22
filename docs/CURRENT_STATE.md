@@ -7,10 +7,13 @@
 checkout, GitHub CI, SHA-bound app/app-ml images, model prefetch, offline ML load и fresh scan всех
 девяти production images зелёные: active Critical `0`, secret findings `0`, Gitleaks findings `0`;
 `14` findings подавлены только действующими exact-PURL policy exceptions.
-**Git:** `origin/master` пока указывает на `e6b1970`; локальный `master` содержит один новый commit
-`Fix HDE transport SQL typing` с явной PostgreSQL-типизацией, PostgreSQL-backed CI regression и
-исправлением пропущенного `--profile ml` в runbook. Его полный SHA становится trusted только после
-push, зелёного `Secretless release gate`, clean SHA-bound rebuild и нового app/app-ml rescan.
+**Git:** correction chain опубликован начиная с
+`50b21b0471aa7554b87c60a15a90c23af9db9cd7` (`Fix HDE transport SQL typing`): явная
+PostgreSQL-типизация, PostgreSQL-backed CI regression и исправление пропущенного `--profile ml` в
+runbook. GitHub CI run `#113` остановился до PostgreSQL step только на fail-closed guard: стандартный
+Python-вызов `secrets.token_hex()` содержал запрещённую строку `secrets.`. Текущий follow-up сохраняет
+те же 32 случайных байта через `os.urandom()` и не ослабляет guard. Exact HEAD становится trusted
+только после зелёного `Secretless release gate`, clean SHA-bound rebuild и нового app/app-ml rescan.
 **Server:** на новой чистой Ubuntu 24.04 VM создан и проверен server-only `.env.production`,
 сгенерирован egress allowlist ровно для Cloud.ru/HDE, подняты healthy PostgreSQL/Redis/Qdrant/Squid,
 применена migration `008`, а frozen seed заново проиндексирован: `2152`, skipped `0`, stale `0`.
@@ -56,7 +59,7 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
 потерю telemetry-полей, исправленную в `98de023`. Server-local качество и HDE delivery gate этого
 кандидата были доказаны до инцидента. Независимый operator holdout был начат, но прерван P0.
-Точный следующий шаг — выпустить минимальный HDE SQL correction commit, пройти GitHub CI,
+Точный следующий шаг — получить зелёный GitHub CI для текущего HDE SQL correction HEAD,
 пересобрать и пересканировать новые SHA-bound app/app-ml images на уже подготовленной чистой VM,
 атомарно обновить только release SHA в server-only env и повторить runtime acceptance. До этого
 TLS, dispatcher и operator cohort остаются выключенными.
@@ -893,11 +896,12 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 1. Уже завершено: clean VM, OS/Docker preflight, trusted checkout `e6b1970`, secretless build,
    offline ML, full nine-image scan, server-only env, egress allowlist, migration `008` и frozen
    Qdrant index `2152`. Старые snapshots/runtime/secrets не использовались.
-2. Завершить минимальный HDE SQL blocker patch: explicit PostgreSQL casts, static regression,
-   non-mutating PostgreSQL `prepare()` gate и исправленные `--profile ml` runbook-команды. Полный
-   локальный Ruff/Pytest/KB gate обязателен до commit.
-3. Commit/push в `master`, дождаться зелёного GitHub `Secretless release gate` с новым PostgreSQL
-   integration step и зафиксировать exact 40-символьный correction SHA.
+2. Минимальный HDE SQL blocker patch опубликован в correction chain: explicit PostgreSQL casts,
+   static regression, non-mutating PostgreSQL `prepare()` gate и исправленные `--profile ml`
+   runbook-команды. Локальный Ruff/Pytest/KB gate и isolated PostgreSQL 16.14 prepare gate зелёные.
+3. Проверить зелёный GitHub `Secretless release gate` текущего HEAD с новым PostgreSQL integration
+   step и зафиксировать exact 40-символьный correction SHA. Run `#113` не является release evidence:
+   он fail-closed остановился на строковом guard до выполнения PostgreSQL step.
 4. На VM оставить dispatcher/TLS `OFF`, fetch/checkout нового SHA, создать отдельный secretless
    release source, пересобрать SHA-bound app/app-ml и проверить OCI revisions/pip. Затем выполнить
    Gitleaks и fresh SBOM/Critical/secret rescan обоих новых application images. Старые credentials
@@ -931,8 +935,8 @@ git log -5 и origin/master, затем кратко перескажи: цел�
 feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze, trusted SHA и provider Gate 0.
 ```
 
-Точный следующий шаг: отправить текущий HDE SQL correction commit в `origin/master`, дождаться
-зелёного GitHub CI и выполнить обязательный secretless app/app-ml rebuild/rescan по разделу
+Точный следующий шаг: дождаться зелёного GitHub CI текущего correction HEAD и выполнить обязательный
+secretless app/app-ml rebuild/rescan по разделу
 «Обязательный re-release после regression-first correction». Существующие server-only secrets и
 healthy data volumes сохранить; host hotfix, старые image tags, TLS и dispatcher до нового strict
 `/ready` запрещены.
