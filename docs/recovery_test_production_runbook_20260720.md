@@ -518,8 +518,39 @@ dc=(sudo docker compose --env-file .env.production \
   -f docker-compose.prod.yml)
 
 "${dc[@]}" --profile ml config --quiet
-"${dc[@]}" up -d --no-build postgres redis qdrant runtime-egress-proxy
-"${dc[@]}" run --rm --pull never migrate
+"${dc[@]}" --profile ml up -d --no-build postgres redis qdrant runtime-egress-proxy
+"${dc[@]}" --profile ml run --rm --pull never migrate
+"${dc[@]}" --profile ml run --rm --pull never -T migrate python - <<'PY'
+import asyncio
+import os
+
+import asyncpg
+
+from src.channels.hde_transport import (
+    FAIL_INBOX_SQL,
+    FAIL_OUTBOX_SQL,
+    RECOVER_STALE_INBOX_SQL,
+    RECOVER_STALE_OUTBOX_SQL,
+)
+
+
+async def main() -> None:
+    connection = await asyncpg.connect(os.environ["POSTGRES_DSN"])
+    try:
+        for query in (
+            RECOVER_STALE_INBOX_SQL,
+            RECOVER_STALE_OUTBOX_SQL,
+            FAIL_INBOX_SQL,
+            FAIL_OUTBOX_SQL,
+        ):
+            await connection.prepare(query)
+    finally:
+        await connection.close()
+
+
+asyncio.run(main())
+print("hde_transport_sql_prepare=passed")
+PY
 "${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
   'python scripts/init_qdrant.py && python scripts/index_kb.py \
    --path data/knowledge_base_seed.json --prune-stale'
@@ -537,7 +568,7 @@ jq -e --arg sha "$TRUSTED_GIT_SHA" '
   .hde_transport_counts.outbox_dead_letter == 0
 ' <<<"$ready_json" >/dev/null
 
-collection_counts="$("${dc[@]}" exec -T app-ml python - <<'PY'
+collection_counts="$("${dc[@]}" --profile ml exec -T app-ml python - <<'PY'
 import asyncio
 import json
 
@@ -580,7 +611,7 @@ host должны вернуть proxy status `200`, посторонний host
 
 ```bash
 set -Eeuo pipefail
-"${dc[@]}" exec -T app-ml python - <<'PY'
+"${dc[@]}" --profile ml exec -T app-ml python - <<'PY'
 import os
 import socket
 from urllib.parse import urlsplit
@@ -613,8 +644,8 @@ for target in (("1.1.1.1", 443), ("169.254.169.254", 80)):
 print("runtime_https_egress_gate=passed")
 PY
 
-app_ml_id="$("${dc[@]}" ps -q app-ml)"
-proxy_id="$("${dc[@]}" ps -q runtime-egress-proxy)"
+app_ml_id="$("${dc[@]}" --profile ml ps -q app-ml)"
+proxy_id="$("${dc[@]}" --profile ml ps -q runtime-egress-proxy)"
 test -n "$app_ml_id" && test -n "$proxy_id"
 sudo docker inspect "$app_ml_id" --format '{{json .NetworkSettings.Networks}}' | jq -e '
   (keys | length) == 3 and
@@ -644,9 +675,9 @@ sudo docker image inspect \
   "rosmol-ai-bot-app:${TRUSTED_GIT_SHA}" \
   "rosmol-ai-bot-ml:${TRUSTED_GIT_SHA}" \
   --format '{{.RepoTags}} {{.Id}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
-"${dc[@]}" exec -T app python -m pip check
-"${dc[@]}" exec -T app-ml python -m pip check
-test "$("${dc[@]}" exec -T postgres sh -c \
+"${dc[@]}" --profile ml exec -T app python -m pip check
+"${dc[@]}" --profile ml exec -T app-ml python -m pip check
+test "$("${dc[@]}" --profile ml exec -T postgres sh -c \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
    "select version_num from alembic_version"' | tr -d '\r')" = 008_hde_durable_transport
 ```
@@ -661,8 +692,8 @@ test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/health)" = 200
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/ask)" = 426
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/webhook/hde)" = 426
 
-nginx_id="$("${dc[@]}" ps -q nginx)"
-relay_id="$("${dc[@]}" ps -q edge-relay)"
+nginx_id="$("${dc[@]}" --profile ml ps -q nginx)"
+relay_id="$("${dc[@]}" --profile ml ps -q edge-relay)"
 test -n "$nginx_id" && test -n "$relay_id"
 sudo docker inspect "$nginx_id" --format '{{json .NetworkSettings.Networks}}' | jq -e '
   (keys | length) == 1 and any(keys[]; endswith("_edge"))
@@ -677,11 +708,11 @@ sudo docker inspect "$relay_id" --format '{{json .NetworkSettings.Networks}}' | 
 sudo docker inspect "$relay_id" --format '{{json .HostConfig.PortBindings}}' | jq -e '
   (keys | sort) == ["8080/tcp", "8443/tcp"]
 ' >/dev/null
-if "${dc[@]}" exec -T nginx wget -q -T 3 -O /dev/null http://1.1.1.1; then
+if "${dc[@]}" --profile ml exec -T nginx wget -q -T 3 -O /dev/null http://1.1.1.1; then
   echo 'STOP: Nginx direct public egress is reachable'
   exit 1
 fi
-if "${dc[@]}" exec -T nginx wget -q -T 3 -O /dev/null http://169.254.169.254; then
+if "${dc[@]}" --profile ml exec -T nginx wget -q -T 3 -O /dev/null http://169.254.169.254; then
   echo 'STOP: Nginx metadata egress is reachable'
   exit 1
 fi
@@ -866,7 +897,7 @@ printf '%s' "$CORRECTION_GIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
 
 old_dc=(sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml)
-"${old_dc[@]}" stop edge-relay nginx app app-ml
+"${old_dc[@]}" --profile ml stop edge-relay nginx app app-ml
 
 sudo -u "$DEPLOY_USER" git fetch --prune origin master
 sudo -u "$DEPLOY_USER" git cat-file -e "${CORRECTION_GIT_SHA}^{commit}"
@@ -993,7 +1024,38 @@ python3 scripts/generate_production_env.py validate .env.production
 TRUSTED_GIT_SHA="$CORRECTION_GIT_SHA"
 dc=(sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml)
-"${dc[@]}" run --rm --pull never migrate
+"${dc[@]}" --profile ml run --rm --pull never migrate
+"${dc[@]}" --profile ml run --rm --pull never -T migrate python - <<'PY'
+import asyncio
+import os
+
+import asyncpg
+
+from src.channels.hde_transport import (
+    FAIL_INBOX_SQL,
+    FAIL_OUTBOX_SQL,
+    RECOVER_STALE_INBOX_SQL,
+    RECOVER_STALE_OUTBOX_SQL,
+)
+
+
+async def main() -> None:
+    connection = await asyncpg.connect(os.environ["POSTGRES_DSN"])
+    try:
+        for query in (
+            RECOVER_STALE_INBOX_SQL,
+            RECOVER_STALE_OUTBOX_SQL,
+            FAIL_INBOX_SQL,
+            FAIL_OUTBOX_SQL,
+        ):
+            await connection.prepare(query)
+    finally:
+        await connection.close()
+
+
+asyncio.run(main())
+print("hde_transport_sql_prepare=passed")
+PY
 "${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
   'python scripts/init_qdrant.py && python scripts/index_kb.py \
    --path data/knowledge_base_seed.json --prune-stale'

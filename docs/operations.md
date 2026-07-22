@@ -448,7 +448,7 @@ or admin recovery endpoint. First disable the dispatcher and inspect privacy-saf
 ```bash
 dc=(sudo docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml)
-"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py list
+"${dc[@]}" --profile ml exec -T app-ml python scripts/hde_transport_admin.py list
 ```
 
 The operator reviews the corresponding HDE ticket/posts without copying them to Git or chat,
@@ -457,24 +457,24 @@ an operator id, one fixed reason code, evidence digest and a repeated job id. Ch
 
 ```bash
 # HDE confirms that the public post exists:
-"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py \
+"${dc[@]}" --profile ml exec -T app-ml python scripts/hde_transport_admin.py \
   reconcile-delivered --job-id <ID> --confirm-job-id <ID> \
   --operator <CORPORATE_LOGIN> --reason provider_confirmed_delivered \
   --evidence-sha256 <64_HEX_DIGEST> --http-status 200
 
 # HDE confirms that no public post was accepted:
-"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py \
+"${dc[@]}" --profile ml exec -T app-ml python scripts/hde_transport_admin.py \
   requeue-outbox --job-id <ID> --confirm-job-id <ID> \
   --operator <CORPORATE_LOGIN> --reason provider_confirmed_not_delivered \
   --evidence-sha256 <64_HEX_DIGEST>
 
 # Inbox processing side effects were reviewed and safe resume is proven:
-"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py \
+"${dc[@]}" --profile ml exec -T app-ml python scripts/hde_transport_admin.py \
   requeue-inbox --job-id <ID> --confirm-job-id <ID> \
   --operator <CORPORATE_LOGIN> --reason side_effects_reviewed_safe_to_resume \
   --evidence-sha256 <64_HEX_DIGEST>
 
-"${dc[@]}" exec -T app-ml python scripts/hde_transport_admin.py audit --job-id <ID>
+"${dc[@]}" --profile ml exec -T app-ml python scripts/hde_transport_admin.py audit --job-id <ID>
 ```
 
 Every mutation and its reason/evidence digest are committed atomically to

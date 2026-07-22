@@ -2,44 +2,39 @@
 
 **Обновлено:** 22 июля 2026
 **Ветка:** `master`  
-**Последний preliminary server candidate:**
-`15f3c2aae3891a7e064a48f1fff3f21c1956296d` (`Preserve release SHA across sudo build`). Его
-checkout, GitHub CI, SHA-bound image revisions, model prefetch и offline ML load зелёные. Fresh
-scanner gate остановлен до credentials на `CVE-2026-59873` в Qdrant Web UI SPDX inventory;
-исполняемый node-tar и Node runtime в exact image отсутствуют.
-**Git:** следующий candidate — минимальный exact-PURL metadata-reachability patch для Qdrant,
-содержащий этот handoff. Его полный SHA становится trusted только после публикации в
-`origin/master`, зелёного GitHub `Secretless release gate` и fresh полного server-side scanner
-gate всех девяти images.
-**Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
-(`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
-**Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
-является итоговой оценкой конверсии. В рамках разрешённого recovery patch изменены security,
-build/deploy и HDE transport/durability; логика ответов, routing, prompts, thresholds и frozen KB
-не менялись. До provider Gate 0, clean rebuild, выпуска новых local/Cloud.ru secrets, принятого
-решения по retained HDE credential и runtime acceptance действует recovery freeze. Полные факты
-инцидента и граница доверия:
+**Последний полностью просканированный server candidate:**
+`e6b1970fa657b973997058a0b616ed2da34a5354` (`Scope Qdrant Web UI metadata finding`). Его clean
+checkout, GitHub CI, SHA-bound app/app-ml images, model prefetch, offline ML load и fresh scan всех
+девяти production images зелёные: active Critical `0`, secret findings `0`, Gitleaks findings `0`;
+`14` findings подавлены только действующими exact-PURL policy exceptions.
+**Git:** `origin/master` пока указывает на `e6b1970`; локальный `master` содержит один новый commit
+`Fix HDE transport SQL typing` с явной PostgreSQL-типизацией, PostgreSQL-backed CI regression и
+исправлением пропущенного `--profile ml` в runbook. Его полный SHA становится trusted только после
+push, зелёного `Secretless release gate`, clean SHA-bound rebuild и нового app/app-ml rescan.
+**Server:** на новой чистой Ubuntu 24.04 VM создан и проверен server-only `.env.production`,
+сгенерирован egress allowlist ровно для Cloud.ru/HDE, подняты healthy PostgreSQL/Redis/Qdrant/Squid,
+применена migration `008`, а frozen seed заново проиндексирован: `2152`, skipped `0`, stale `0`.
+`app`/`app-ml` остановлены после fail-closed startup ошибки; TLS/Nginx/edge-relay и dispatcher не
+включались. Старая VM остаётся выключенной (`SHUTOFF`), её IP/runtime/data не использовались.
+**Статус релиза:** `NO GO / RUNTIME BLOCKER`. Первый запуск `app-ml` доказал `ml_prewarm_ok`, но
+PostgreSQL отклонил `RECOVER_STALE_INBOX_SQL`: `$2` выводился одновременно как `text` и
+`timestamptz`. Crash-loop остановлен без удаления volumes. Локальный patch явно типизирует recovery
+и аналогичные retry/dead-letter параметры; миграции `001→008` и non-mutating `prepare()` всех
+четырёх запросов прошли на чистом PostgreSQL 16.14. Логика ответов, routing, prompts, thresholds и
+frozen KB не менялись. Operator holdout, начатый 15 июля 2026, прерван и не является итоговой
+оценкой конверсии. Полные факты инцидента и граница доверия:
 `docs/security_incident_20260715.md`. Последняя обратная связь Наты и quality backlog:
 `docs/operator_feedback_20260715.md`. Активный полный реестр секретов и статусы ротации:
 `docs/secret_rotation_20260716.md`.
 
-**Clean-host recovery progress, 22 июля:** новая Ubuntu 24.04 VM прошла OS/SSH/firewall/Docker
-preflight, получила 8 GiB swap как временный ресурсный запас, а read-only GitHub deploy key
-клонировал clean detached checkout. На `6364efe8e5a111942f005a7bfdccac4f67237eeb` прошли
-secretless build, pinned OCI revision, model prefetch и offline BGE-M3/BGE-reranker load; refreshed
-Trivy DB затем fail-closed остановила scan на новом `CVE-2026-57433`. Upstream,
-Debian package-content и server image review подтвердили отсутствие уязвимого Storable; exact-PURL
-исключение принято в `49b29d4bdc525caedf4609f8fc948364c1c92726` до 27 июля. Clean checkout этого
-SHA прошёл, но rebuild выявил, что исходная команда runbook теряет публичный SHA через `sudo` и
-получает нулевую development revision. Gate остановился до model jobs и scanner; нулевые образы
-отвергнуты. Исправление `15f3c2aae3891a7e064a48f1fff3f21c1956296d` прошло CI, clean rebuild,
-точную OCI revision и offline загрузку обеих моделей. Его fresh Gitleaks проверил 216 commits и
-не нашёл утечек; Trivy затем fail-closed остановился на `CVE-2026-59873` в exact Qdrant digest.
-Upstream advisory требует фактического node-tar archive parse/extract, но exact-image probe
-подтвердил отсутствие node/npm/npx и файлов `node_modules/tar`: `tar@7.5.16` присутствует только
-как запись `/qdrant/static/qdrant-web-ui.spdx.json`. Готовится короткоживущее exact-PURL
-исключение до 27 июля. Ни один partial scan не является зелёным evidence и не перезаписывается.
-`.env.production` и provider credentials на новой VM ещё не создавались.
+**Clean-host recovery progress, 22 июля:** OS/SSH/firewall/Docker preflight и 8 GiB swap зелёные;
+read-only GitHub deploy key используется только для clean checkout. После двух fail-closed scanner
+остановок exact-image reachability для Storable и Qdrant Web UI metadata оформлена узкими
+исключениями до 27 июля. Candidate `e6b1970` затем прошёл новый полный девятиобразный scan,
+Gitleaks и secret scan. Новые локальные credentials созданы только на VM; Cloud.ru/HDE значения
+внесены человеком напрямую и Codex их не видел. Yonote sync остаётся выключенным, baseline строится
+только из versioned frozen seed. Preliminary runtime не принят: обнаруженный HDE SQL blocker требует
+нового commit/image/rescan, а не host hotfix или подавление startup exception.
 
 ## 1. Цель
 
@@ -61,10 +56,10 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
 потерю telemetry-полей, исправленную в `98de023`. Server-local качество и HDE delivery gate этого
 кандидата были доказаны до инцидента. Независимый operator holdout был начат, но прерван P0.
-Точный следующий шаг — отдельно перевыпустить все ключи/секреты, построить чистый сервер без
-переноса каких-либо артефактов старого хоста, повторить security/release gate и только затем
-начать новый operator cohort. После восстановления — пакетно обработать feedback Наты, а не
-исправлять единичные ответы сейчас.
+Точный следующий шаг — выпустить минимальный HDE SQL correction commit, пройти GitHub CI,
+пересобрать и пересканировать новые SHA-bound app/app-ml images на уже подготовленной чистой VM,
+атомарно обновить только release SHA в server-only env и повторить runtime acceptance. До этого
+TLS, dispatcher и operator cohort остаются выключенными.
 
 ## 2. Что представляет собой проект
 
@@ -120,8 +115,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Ограничение HDE учитывает общий лимит 300 RPM и резерв для других процессов.
 - Yonote preview/apply, validation и reindex доступны через админ-панель.
 - Операционный отчёт в админке: latency, стоимость, cache, эскалации и проблемные темы.
-- Миграция `008_hde_durable_transport` добавлена и полностью проверена локально. На новом сервере
-  она ещё не применялась; pre-incident runtime исторически оставался на `007` и недоверенен.
+- Миграция `008_hde_durable_transport` применена на новой VM; свежие PostgreSQL transport tables
+  пусты. Первый runtime startup обнаружил ambiguity в SQL prepare, а не дефект схемы или данных.
 
 ## 5. Ранние pre-pilot итерации (архив)
 
@@ -851,8 +846,9 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   владельцем; для остальных external classes он ещё не закрыт. Полный журнал и порядок находятся
   в `docs/secret_rotation_20260716.md`. Redis legacy работал без password, Qdrant — без API key,
   поэтому они отмечены `legacy_not_configured`, а не ложно `rotated`.
-- Recovery code commit опубликован, но доверенного runtime нет; server release gate и операторский
-  тест не активны. Новые ключи и `.env.production` не создавались.
+- Candidate `e6b1970` опубликован, CI и полный fresh scanner gate зелёные. На новой VM создан
+  server-only `.env.production`, но работающий runtime ещё не принят: `app-ml` fail-closed
+  остановлен на PostgreSQL SQL-typing blocker. TLS, dispatcher и операторский тест не активны.
 - Для прежнего `torch==2.6.0+cpu` GitHub открыл `8` alerts (`3 moderate`, `5 low`). Локально
   подготовлен recovery upgrade до `torch==2.13.0+cpu`: hash-lock, Docker build, CPU-only invariant,
   verified offline BGE-M3/BGE-reranker encode/rerank, `pip check`, Ruff, `1313` tests, KB validate,
@@ -894,39 +890,31 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 Единственная исполнимая инструкция —
 `docs/recovery_test_production_runbook_20260720.md`; сокращённый порядок ниже не заменяет его.
 
-1. Закрыть provider Gate 0 до новых ключей и VM runtime: сохранить старую VM в `SHUTOFF`, получить
-   evidence inactive старого HDE endpoint/rules и usage/audit retained global HDE key, закончить
-   GitHub account-wide session/PAT/SSH/OAuth inventory, зафиксировать Selectel status и provider
-   status восьми прежних PyTorch alerts после push. Значения secrets и private provider identifiers
-   в Git/чат не переносить.
-2. Clean VM уже создана. Candidate `15f3c2aae3891a7e064a48f1fff3f21c1956296d` прошёл
-   build/offline-ML и Gitleaks, но Trivy evidence заблокирован новым `CVE-2026-59873` inventory
-   finding. После публикации и зелёного CI exact-PURL policy patch зафиксировать новый
-   40-символьный SHA, выполнить clean detached checkout и не использовать старые
-   snapshots/disks/images/volumes/cache/env/TLS/Redis/PostgreSQL/Qdrant/backup.
-3. Настроить SSH key-only, trusted CIDR для `22`, firewall `80/443`, time sync, provider flow/DNS
-   logs и alerts. Выполнить clean detached checkout точного SHA.
-4. **До provider credentials** для нового SHA повторить secretless build с новой OCI revision,
-   использовать уже проверенный immutable model cache только после receipt/offline load, затем
-   создать fresh SHA-bound scan evidence и выполнить Gitleaks, SBOM, image-secret и Critical scan
-   всех девяти production images. Partial evidence старого SHA не продолжать и не выдавать за
-   зелёный gate. Истёкшее исключение, изменившийся PURL/digest или finding означает `STOP`.
-5. Только после зелёного Gate 3 сгенерировать локальные PostgreSQL/Redis/Qdrant/API/HMAC/encryption
-   secrets, создать новый минимальный Cloud.ru credential и перенести retained HDE credential из
-   password manager прямо в server-only env. Ничего не показывать Codex и не вставлять в CLI,
-   логи, Git или этот файл.
-6. Поднять fresh data plane без build/pull, применить migration `008`, с нуля индексировать только
-   frozen published seed и доказать `knowledge_base=2152`, `response_cache=0`, offline models,
-   proxy/relay memberships, TLS и strict `/ready`. Dispatcher остаётся `OFF`.
-7. Выполнить Gate 4A code invariants, безопасный Gate 4B live security report, полный server-local
-   acceptance и admin login/logout/read-only checks. Не отправлять load/eval через HDE/VK.
-8. На принятом чистом runtime воспроизвести `Начать`, вопрос про даты и «Машук», получить content
-   verdict и выполнить ровно один согласованный regression-first correction. Новый commit требует
-   обязательного clean rebuild/rescan/re-release и повторения Gates 3–4.
-9. До первого HDE события запустить foreground traffic observer. Затем включить только один новый
-   dispatcher/channel и выполнить три коротких HDE/VK scenarios с проверкой
-   `upstream id -> inbox -> trace -> outbox -> delivery`; при dead-letter/неожиданном traffic —
-   dispatcher `OFF` и `NO GO`.
+1. Уже завершено: clean VM, OS/Docker preflight, trusted checkout `e6b1970`, secretless build,
+   offline ML, full nine-image scan, server-only env, egress allowlist, migration `008` и frozen
+   Qdrant index `2152`. Старые snapshots/runtime/secrets не использовались.
+2. Завершить минимальный HDE SQL blocker patch: explicit PostgreSQL casts, static regression,
+   non-mutating PostgreSQL `prepare()` gate и исправленные `--profile ml` runbook-команды. Полный
+   локальный Ruff/Pytest/KB gate обязателен до commit.
+3. Commit/push в `master`, дождаться зелёного GitHub `Secretless release gate` с новым PostgreSQL
+   integration step и зафиксировать exact 40-символьный correction SHA.
+4. На VM оставить dispatcher/TLS `OFF`, fetch/checkout нового SHA, создать отдельный secretless
+   release source, пересобрать SHA-bound app/app-ml и проверить OCI revisions/pip. Затем выполнить
+   Gitleaks и fresh SBOM/Critical/secret rescan обоих новых application images. Старые credentials
+   не ротировать повторно и не передавать build/scanner.
+5. Только после зелёного rescan атомарно заменить `RELEASE_GIT_SHA` в существующем mode `0600`
+   env, повторить migration/reindex/offline ML и запустить новые app/app-ml tags. Доказать strict
+   `/ready`, `knowledge_base=2152`, `response_cache=0`, пустые HDE queues и отсутствие restart loop.
+6. Проверить runtime egress allowlist/deny, network memberships, OCI/dependency versions, затем
+   поднять HTTP bootstrap, выпустить IP TLS и пройти Gate 4B, полный server-local acceptance и
+   admin login/logout/read-only checks. Нагрузку через HDE/VK не отправлять.
+7. Создать обе HDE dispatcher rules выключенными: только тестовый канал и visitor events,
+   Bearer/X-Webhook auth, новый trigger prefix только в первой rule. Исключить bot/API-user events.
+8. На принятом runtime воспроизвести `Начать`, вопрос про даты и «Машук», получить content verdict
+   и выполнить ровно один согласованный regression-first correction cycle до финального handoff.
+9. Перед первым HDE событием запустить foreground traffic observer; затем включить только новый
+   тестовый dispatcher и выполнить короткий smoke с цепочкой
+   `upstream id -> inbox -> trace -> outbox -> delivery`. При dead-letter или лишнем traffic — OFF.
 10. После финального admin/traffic/handoff gate начать новый sealed cohort с timestamp первого
     реального HDE trace. Старый interrupted cohort использовать только как qualitative input.
 
@@ -943,9 +931,8 @@ git log -5 и origin/master, затем кратко перескажи: цел�
 feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze, trusted SHA и provider Gate 0.
 ```
 
-Точный следующий шаг: опубликовать минимальный `CVE-2026-59873` exact-PURL metadata-reachability
-patch, дождаться зелёного GitHub `Secretless release gate`, зафиксировать новый SHA и на уже
-подготовленной clean VM повторить SHA-bound app/app-ml build и полный Gate 3 в новом
-evidence-каталоге. Новые credentials разрешено создавать только после его зелёного scanner gate.
-Улучшения greeting, clarification и «Машука» выполнять на чистом runtime после preliminary
-acceptance, но до финального gate и нового cohort.
+Точный следующий шаг: отправить текущий HDE SQL correction commit в `origin/master`, дождаться
+зелёного GitHub CI и выполнить обязательный secretless app/app-ml rebuild/rescan по разделу
+«Обязательный re-release после regression-first correction». Существующие server-only secrets и
+healthy data volumes сохранить; host hotfix, старые image tags, TLS и dispatcher до нового strict
+`/ready` запрещены.

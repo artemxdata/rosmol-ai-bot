@@ -745,13 +745,16 @@ LIMIT 1
 
 FAIL_INBOX_SQL = """
 UPDATE hde_inbox
-SET status = $3,
-    next_attempt_at = $4,
+SET status = $3::varchar(24),
+    next_attempt_at = $4::timestamptz,
     last_error_code = $5,
-    dead_lettered_at = CASE WHEN $3 = 'dead_letter' THEN $6 ELSE NULL END,
+    dead_lettered_at = CASE
+        WHEN $3::varchar(24) = 'dead_letter' THEN $6::timestamptz
+        ELSE NULL
+    END,
     locked_at = NULL,
     locked_by = NULL,
-    updated_at = $6
+    updated_at = $6::timestamptz
 WHERE id = $1 AND status = 'processing' AND locked_by = $2
 RETURNING status
 """
@@ -863,15 +866,18 @@ JOIN purged_inbox ON purged_inbox.id = delivered.inbox_id
 
 FAIL_OUTBOX_SQL = """
 UPDATE hde_outbox
-SET status = $3,
-    next_attempt_at = $4,
+SET status = $3::varchar(24),
+    next_attempt_at = $4::timestamptz,
     last_error_code = $5,
     delivery_http_status = $6,
     retry_after_seconds = $7,
-    dead_lettered_at = CASE WHEN $3 = 'dead_letter' THEN $8 ELSE NULL END,
+    dead_lettered_at = CASE
+        WHEN $3::varchar(24) = 'dead_letter' THEN $8::timestamptz
+        ELSE NULL
+    END,
     locked_at = NULL,
     locked_by = NULL,
-    updated_at = $8
+    updated_at = $8::timestamptz
 WHERE id = $1 AND status = 'sending' AND locked_by = $2
 RETURNING status
 """
@@ -907,7 +913,7 @@ WITH recovered AS (
             THEN 'retry'
             ELSE 'dead_letter'
         END,
-        next_attempt_at = $2,
+        next_attempt_at = $2::timestamptz,
         last_error_code = CASE
             WHEN inbox.attempt_count < inbox.max_attempts
                  AND EXISTS (
@@ -928,12 +934,12 @@ WITH recovered AS (
                        AND NULLIF(trace.response_text, '') IS NOT NULL
                  )
             THEN NULL
-            ELSE $2
+            ELSE $2::timestamptz
         END,
         locked_at = NULL,
         locked_by = NULL,
-        updated_at = $2
-    WHERE inbox.status = 'processing' AND inbox.locked_at < $1
+        updated_at = $2::timestamptz
+    WHERE inbox.status = 'processing' AND inbox.locked_at < $1::timestamptz
     RETURNING inbox.status
 )
 SELECT COUNT(*) FILTER (WHERE status = 'retry')::int AS retried,
@@ -946,13 +952,13 @@ RECOVER_STALE_OUTBOX_SQL = """
 WITH recovered AS (
     UPDATE hde_outbox
     SET status = 'dead_letter',
-        next_attempt_at = $2,
+        next_attempt_at = $2::timestamptz,
         last_error_code = 'worker_lease_expired_ambiguous_delivery',
-        dead_lettered_at = $2,
+        dead_lettered_at = $2::timestamptz,
         locked_at = NULL,
         locked_by = NULL,
-        updated_at = $2
-    WHERE status = 'sending' AND locked_at < $1
+        updated_at = $2::timestamptz
+    WHERE status = 'sending' AND locked_at < $1::timestamptz
     RETURNING status
 )
 SELECT COUNT(*) FILTER (WHERE status = 'retry')::int AS retried,

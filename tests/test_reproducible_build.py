@@ -261,8 +261,11 @@ def test_recovery_runbook_uses_supported_no_pull_runtime_commands() -> None:
     assert "up -d --no-build app app-ml nginx edge-relay" in runbook
     assert "from src.config import get_settings" in runbook
     assert "settings = get_settings()" in runbook
+    assert runbook.count('print("hde_transport_sql_prepare=passed")') == 2
+    assert runbook.count("await connection.prepare(query)") == 2
     assert "-X POST -H 'Content-Type: application/json'" in runbook
     assert ".dockerignore Dockerfile requirements deploy/huggingface_models.lock.json" in runbook
+    assert re.search(r'"\$\{(?:dc|old_dc)\[@\]\}"(?! --profile ml)', runbook) is None
 
 
 def test_recovery_secretless_build_preserves_only_the_public_release_sha() -> None:

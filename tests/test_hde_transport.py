@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,14 @@ from src.channels.hde_transport import (
     CLAIM_OUTBOX_SQL,
     COMPLETE_INBOX_WITH_OUTBOX_SQL,
     ENQUEUE_INBOX_SQL,
+    FAIL_INBOX_SQL,
+    FAIL_OUTBOX_SQL,
     HDE_RECOVERY_RECONCILE_DELIVERED_REASON,
     HDE_RECOVERY_REQUEUE_INBOX_REASON,
     HDE_RECOVERY_REQUEUE_OUTBOX_REASON,
     MARK_OUTBOX_DELIVERED_SQL,
+    RECOVER_STALE_INBOX_SQL,
+    RECOVER_STALE_OUTBOX_SQL,
     HDEInboxJob,
     HDEOutboxJob,
     HDEStableEventRequired,
@@ -510,6 +515,31 @@ async def test_recovery_requeues_or_dead_letters_stale_worker_leases() -> None:
     assert "NULLIF(trace.response_text, '') IS NOT NULL" in executor.calls[0][0]
     assert "worker_lease_expired_ambiguous_delivery" in executor.calls[1][0]
     assert executor.calls[0][1] == (stale_before, NOW)
+
+
+@pytest.mark.parametrize(
+    ("query", "timestamp_parameters"),
+    [
+        (RECOVER_STALE_INBOX_SQL, (1, 2)),
+        (RECOVER_STALE_OUTBOX_SQL, (1, 2)),
+        (FAIL_INBOX_SQL, (4, 6)),
+        (FAIL_OUTBOX_SQL, (4, 8)),
+    ],
+)
+def test_transport_timestamp_parameters_are_explicitly_typed(
+    query: str,
+    timestamp_parameters: tuple[int, ...],
+) -> None:
+    # asyncpg asks PostgreSQL to infer positional parameter types while preparing
+    # the statement. A parameter used in a CASE with NULL can otherwise resolve
+    # to text even when another occurrence targets a timestamptz column.
+    for parameter in timestamp_parameters:
+        assert re.search(rf"\${parameter}(?!::timestamptz)", query) is None
+
+
+@pytest.mark.parametrize("query", [FAIL_INBOX_SQL, FAIL_OUTBOX_SQL])
+def test_transport_failure_status_parameter_is_explicitly_typed(query: str) -> None:
+    assert re.search(r"\$3(?!::varchar\(24\))", query) is None
 
 
 @pytest.mark.asyncio

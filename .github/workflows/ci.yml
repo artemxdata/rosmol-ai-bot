@@ -85,6 +85,24 @@ jobs:
       - name: Pytest
         run: python -m pytest -p no:cacheprovider -q
 
+      - name: Compile durable HDE transport SQL against PostgreSQL
+        shell: bash
+        env:
+          POSTGRES_USER: rosmol_ci
+          POSTGRES_DB: rosmol_ai_bot_test
+        run: |
+          set -Eeuo pipefail
+          export POSTGRES_PASSWORD="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export POSTGRES_DSN="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+          export HDE_TRANSPORT_TEST_POSTGRES_DSN="$POSTGRES_DSN"
+          cleanup() {
+            docker compose -f docker-compose.yml down --volumes
+          }
+          trap cleanup EXIT
+          docker compose -f docker-compose.yml up -d --wait --wait-timeout 120 postgres
+          python -m alembic upgrade head
+          python -m pytest -p no:cacheprovider -q tests/test_hde_transport_postgres.py
+
       - name: Validate the frozen knowledge base
         run: python scripts/index_kb.py --validate-only
 
