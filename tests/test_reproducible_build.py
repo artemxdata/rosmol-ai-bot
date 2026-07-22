@@ -263,3 +263,20 @@ def test_recovery_runbook_uses_supported_no_pull_runtime_commands() -> None:
     assert "settings = get_settings()" in runbook
     assert "-X POST -H 'Content-Type: application/json'" in runbook
     assert ".dockerignore Dockerfile requirements deploy/huggingface_models.lock.json" in runbook
+
+
+def test_recovery_secretless_build_preserves_only_the_public_release_sha() -> None:
+    runbook = _read("docs/recovery_test_production_runbook_20260720.md")
+    secretless_section = runbook.split("### Secretless build gate", maxsplit=1)[1]
+    build_block = secretless_section.split("```bash\n", maxsplit=1)[1].split(
+        "\n```", maxsplit=1
+    )[0]
+
+    assert "build_dc=(sudo env -i \\" in build_block
+    assert 'HOME=/root RELEASE_GIT_SHA="$TRUSTED_GIT_SHA" \\' in build_block
+    assert 'export RELEASE_GIT_SHA="$TRUSTED_GIT_SHA"' not in build_block
+    assert 'test "$(git rev-parse HEAD)" = "$TRUSTED_GIT_SHA"' in build_block
+    assert "org.opencontainers.image.revision" in build_block
+    assert build_block.index("org.opencontainers.image.revision") < build_block.index(
+        "ml-cache-init"
+    )

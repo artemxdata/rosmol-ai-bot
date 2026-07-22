@@ -287,19 +287,35 @@ data и credential files не являются допустимым входом
 - образ не содержит `.env*`, private data, SSH/TLS keys, backups, local caches или stale build tree.
 
 Нельзя подменять закреплённые references свежими тегами «для ускорения». Secretless build и
-подготовка моделей выполняются до создания `.env.production`:
+подготовка моделей выполняются до создания `.env.production`. Обычный `sudo` удаляет
+`RELEASE_GIT_SHA` из окружения, поэтому Compose запускается через изолированное окружение с
+единственным явно переданным публичным SHA; иначе он молча применит development fallback из
+40 нулей:
 
 ```bash
 set -Eeuo pipefail
 cd /opt/rosmol-ai-bot
-export RELEASE_GIT_SHA="$TRUSTED_GIT_SHA"
+printf '%s' "$TRUSTED_GIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
+test "$(git rev-parse HEAD)" = "$TRUSTED_GIT_SHA"
+test -z "$(git status --porcelain --untracked-files=normal)"
 test ! -e .env.production
 
-build_dc=(sudo docker compose -f docker-compose.yml -f docker-compose.ml.yml)
+build_dc=(sudo env -i \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root RELEASE_GIT_SHA="$TRUSTED_GIT_SHA" \
+  docker compose -f docker-compose.yml -f docker-compose.ml.yml)
 "${build_dc[@]}" --profile ml config --quiet
 "${build_dc[@]}" --profile ml build --pull app app-ml
 sudo docker image tag rosmol-ai-bot-app:dev "rosmol-ai-bot-app:${TRUSTED_GIT_SHA}"
 sudo docker image tag rosmol-ai-bot-ml:dev "rosmol-ai-bot-ml:${TRUSTED_GIT_SHA}"
+
+for image in \
+  "rosmol-ai-bot-app:${TRUSTED_GIT_SHA}" \
+  "rosmol-ai-bot-ml:${TRUSTED_GIT_SHA}"; do
+  test "$(sudo docker image inspect "$image" \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+    = "$TRUSTED_GIT_SHA"
+done
 
 "${build_dc[@]}" --profile ml run --rm --no-deps --pull never ml-cache-init
 "${build_dc[@]}" --profile ml run --rm --no-deps --pull never model-prefetch
@@ -311,7 +327,8 @@ sudo docker image inspect \
   --format '{{.RepoTags}} {{.Id}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
 ```
 
-Обе строки `revision=` обязаны совпасть с `TRUSTED_GIT_SHA`. `ml-check` работает с
+Цикл до one-shot jobs fail-closed проверяет обе OCI revision, а диагностический вывод после них
+должен показывать тот же `TRUSTED_GIT_SHA`. `ml-check` работает с
 `network_mode: none`, читает модели из read-only volume и тем самым доказывает offline load.
 Затем выполняется один закреплённый scanner workflow. Теги ниже дополнительно закреплены
 linux/amd64 manifest digest; менять version/digest без отдельного review нельзя. Gitleaks читает

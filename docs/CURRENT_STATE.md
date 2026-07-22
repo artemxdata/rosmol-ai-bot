@@ -3,13 +3,14 @@
 **Обновлено:** 22 июля 2026
 **Ветка:** `master`  
 **Последний preliminary server candidate:**
-`6364efe8e5a111942f005a7bfdccac4f67237eeb` (`Record PyTorch recovery handoff`; runtime code
-совпадает с `c313ad9802fd8460bebaf8609ba57d80932425e2`). Его build/offline-ML зелёные, но refreshed
-Trivy DB заблокировала scanner gate на `CVE-2026-57433`; использовать этот SHA для выпуска
-credentials нельзя.
-**Git:** следующий candidate — минимальный exact-PURL security-policy patch, содержащий этот
-handoff. Его полный SHA становится trusted только после публикации в `origin/master`, зелёного
-GitHub `Secretless release gate` и fresh server-side scanner gate.
+`49b29d4bdc525caedf4609f8fc948364c1c92726` (`Scope new Storable scanner exception`). Его
+checkout и GitHub CI зелёные, но первый rebuild корректно остановлен до ML/scanner gate: обычный
+`sudo` удалил `RELEASE_GIT_SHA`, и Compose собрал development OCI revision из 40 нулей. Эти
+образы отвергнуты и не являются release artifacts.
+**Git:** следующий candidate — минимальная fail-closed правка secretless build runbook, явно
+передающая публичный SHA через `sudo env -i` и автоматически сверяющая обе OCI revision. Его
+полный SHA становится trusted только после публикации в `origin/master`, зелёного GitHub
+`Secretless release gate` и fresh server-side scanner gate.
 **Server:** доверенного работающего runtime сейчас нет. Старая VM выключена
 (`SHUTOFF`) после P0-компрометации; прежние IP, webhook и админка выведены из эксплуатации.
 **Статус релиза:** `NO GO / SECURITY HOLD`. Operator holdout, начатый 15 июля 2026, прерван и не
@@ -24,13 +25,14 @@ build/deploy и HDE transport/durability; логика ответов, routing, 
 
 **Clean-host recovery progress, 22 июля:** новая Ubuntu 24.04 VM прошла OS/SSH/firewall/Docker
 preflight, получила 8 GiB swap как временный ресурсный запас, а read-only GitHub deploy key
-клонировал clean detached checkout `6364efe8e5a111942f005a7bfdccac4f67237eeb`. Secretless
-app/app-ml build, pinned OCI revision, model prefetch и фактическая offline
-BGE-M3/BGE-reranker загрузка прошли. Первый server Trivy scan с refreshed DB fail-closed
-остановился до любых provider credentials на новом `CVE-2026-57433`
-(`perl-base=5.40.1-6`). Upstream и Debian package-content review подтвердили, что уязвимый модуль
-Storable не входит в exact `perl-base` runtime; готовится короткоживущее exact-PURL исключение с
-regression-тестом. Старый partial scan не является зелёным evidence и не перезаписывается.
+клонировал clean detached checkout. На `6364efe8e5a111942f005a7bfdccac4f67237eeb` прошли
+secretless build, pinned OCI revision, model prefetch и offline BGE-M3/BGE-reranker load; refreshed
+Trivy DB затем fail-closed остановила scan на новом `CVE-2026-57433`. Upstream,
+Debian package-content и server image review подтвердили отсутствие уязвимого Storable; exact-PURL
+исключение принято в `49b29d4bdc525caedf4609f8fc948364c1c92726` до 27 июля. Clean checkout этого
+SHA прошёл, но rebuild выявил, что исходная команда runbook теряет публичный SHA через `sudo` и
+получает нулевую development revision. Gate остановился до model jobs и scanner; нулевые образы
+отвергнуты. Старый partial scan не является зелёным evidence и не перезаписывается.
 `.env.production` и provider credentials на новой VM ещё не создавались.
 
 ## 1. Цель
