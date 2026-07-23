@@ -4,12 +4,13 @@
 
 Качество бота повышается не бесконечной настройкой модели, а управляемым циклом: реальные вопросы пользователей превращаются в пробелы базы знаний, пробелы закрываются в Yonote/KB, затем RAG переиндексируется и проверяется eval-набором.
 
-## Текущий режим: security recovery до улучшений
+## Текущий режим: limited clean test-production до улучшений
 
-Операторский тест, начатый 15 июля 2026, прерван P0-компрометацией старого сервера. Текущий
-статус — `NO GO / SECURITY HOLD`; runtime отсутствует. Сначала выполняются отдельная ротация всех
-ключей/секретов, clean rebuild без переноса старых server artifacts и новый release gate. Детали:
-`docs/security_incident_20260715.md` и `docs/operator_holdout_runbook.md`.
+Операторский тест, начатый 15 июля 2026, прерван P0-компрометацией старого сервера. Новый clean
+runtime и ограниченный HDE/VK smoke уже работают, но финальный handoff и новая cohort boundary ещё
+не закрыты. Ротация/принятые исключения и contamination boundary остаются обязательными. Детали:
+`docs/CURRENT_STATE.md`, `docs/security_incident_20260715.md` и
+`docs/operator_holdout_runbook.md`.
 
 До нового handoff действует freeze кода ответов, routing, prompts, thresholds, cache policy и KB.
 Последние тесты Наты зафиксированы в `docs/operator_feedback_20260715.md` как будущий
@@ -38,8 +39,10 @@ verdict даёт оператор по полному тикету.
    - оставить operator-only, если вопрос опасный или индивидуальный.
 5. До изменений разделить новые кейсы на calibration и sealed holdout, затем согласовать один
    пакет исправлений.
-6. Обновить KB через Yonote sync или админку только если подтверждён knowledge gap.
-7. Запустить validation и reindex при фактическом изменении KB.
+6. После content approval получить полный Yonote Preview diff и оформить versioned seed change;
+   production admin Apply не использовать.
+7. Провести review, validation/regression и контролируемый полный reindex при фактическом изменении
+   KB.
 8. Прогнать smoke, типовые, нетиповые, safety, off-topic, PII и follow-up.
 9. Проверить calibration, затем один раз sealed holdout; зафиксировать метрики и изменения.
 

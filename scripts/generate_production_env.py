@@ -52,6 +52,7 @@ EXTERNAL_DNS_NAME = re.compile(
 CLOUD_RU_ENDPOINT_HOST = "foundation-models.api.cloud.ru"
 CLOUD_RU_ENDPOINT_PATH = "/v1/chat/completions"
 HDE_ENDPOINT_HOST = "rosmolodezh.helpdeskeddy.com"
+YONOTE_ENDPOINT_HOST = "rossmol.yonote.ru"
 FULL_RELEASE_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -270,11 +271,21 @@ def _validate_provider_endpoint_binding(
     elif key == "HDE_BASE_URL":
         if host != HDE_ENDPOINT_HOST or parsed.path not in {"", "/"}:
             errors.append(f"{key}: must_match_reviewed_hde_tenant_endpoint")
+    elif key == "YONOTE_BASE_URL":
+        if host != YONOTE_ENDPOINT_HOST or parsed.path not in {"", "/"}:
+            errors.append(f"{key}: must_match_reviewed_yonote_endpoint")
+
+
+def _runtime_egress_endpoint_keys(values: dict[str, str]) -> tuple[str, ...]:
+    keys = ["HDE_BASE_URL", "CLOUD_RU_CHAT_COMPLETIONS_URL"]
+    if values.get("YONOTE_SYNC_ENABLED", "").strip().casefold() == "true":
+        keys.append("YONOTE_BASE_URL")
+    return tuple(keys)
 
 
 def _runtime_egress_proxy_config(values: dict[str, str]) -> str:
     hosts: set[str] = set()
-    for key in ("HDE_BASE_URL", "CLOUD_RU_CHAT_COMPLETIONS_URL"):
+    for key in _runtime_egress_endpoint_keys(values):
         value = values.get(key, "")
         url_errors: list[str] = []
         _validate_https_url(key, value, url_errors)
@@ -324,7 +335,7 @@ def generate_runtime_egress_proxy_config(env_path: Path, output: Path) -> int:
     return len(
         {
             urlsplit(values[key]).hostname.casefold()
-            for key in ("HDE_BASE_URL", "CLOUD_RU_CHAT_COMPLETIONS_URL")
+            for key in _runtime_egress_endpoint_keys(values)
             if urlsplit(values[key]).hostname
         }
     )
@@ -402,6 +413,36 @@ def validate_env(path: Path) -> list[str]:
             _validate_https_url(key, value, errors)
             if len(errors) == issue_count:
                 _validate_provider_endpoint_binding(key, value, errors)
+
+    yonote_flag = values.get("YONOTE_SYNC_ENABLED", "").strip().casefold()
+    if yonote_flag not in {"", "false", "true"}:
+        errors.append("YONOTE_SYNC_ENABLED: must_be_true_or_false")
+    yonote_enabled = yonote_flag == "true"
+    yonote_token = values.get("YONOTE_API_TOKEN", "").strip()
+    yonote_mode = values.get("YONOTE_SYNC_MODE", "manual").strip()
+    yonote_collection_names = values.get("YONOTE_COLLECTION_NAMES", "").strip()
+    if yonote_enabled:
+        if _is_placeholder(yonote_token):
+            errors.append("YONOTE_API_TOKEN: missing_or_placeholder")
+        if yonote_mode != "manual":
+            errors.append("YONOTE_SYNC_MODE: must_equal_manual")
+        delimiter = ";" if ";" in yonote_collection_names else "|"
+        if not any(item.strip() for item in yonote_collection_names.split(delimiter)):
+            errors.append("YONOTE_COLLECTION_NAMES: missing")
+        yonote_url = values.get("YONOTE_BASE_URL", "")
+        if _is_placeholder(yonote_url):
+            errors.append("YONOTE_BASE_URL: missing_or_placeholder")
+        else:
+            issue_count = len(errors)
+            _validate_https_url("YONOTE_BASE_URL", yonote_url, errors)
+            if len(errors) == issue_count:
+                _validate_provider_endpoint_binding(
+                    "YONOTE_BASE_URL",
+                    yonote_url,
+                    errors,
+                )
+    elif yonote_token:
+        errors.append("YONOTE_API_TOKEN: must_be_empty_when_sync_disabled")
 
     email_pattern = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     for key in ("HDE_API_EMAIL", "CERTBOT_EMAIL"):

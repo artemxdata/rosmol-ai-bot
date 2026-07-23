@@ -3,14 +3,15 @@
 ## Статус
 
 **Начато:** 16 июля 2026  
-**Режим:** `SECURITY HOLD`; production runtime отсутствует  
-**Источник доверия:** локальный clean checkout и `origin/master`; старая VM остаётся `SHUTOFF`  
-**Текущий этап:** recovery preparation; Cloud.ru API key, GitHub server deploy key и Yonote token
-отозваны владельцем. По подтверждению владельца 20 июля два старых тестовых HDE-канала отключены,
-а связанные с ними ключи удалены. Глобальный HDE API key по явному решению владельца сохраняется
-из-за зависимых интеграций как принятый риск, а не считается rotated/verified. Новый clean host и
-новый GitHub deploy key ещё не создавались. Product credentials не создаются до прохождения
-secretless build/supply-chain gate и фиксации trusted commit.
+**Режим:** ограниченный clean test-production; финальный handoff ещё не закрыт
+**Источник доверия:** локальный clean checkout, `origin/master` и exact SHA на новой clean VM;
+старая VM остаётся `SHUTOFF`
+**Текущий этап:** новый runtime собран из проверенного Git SHA, а product credentials установлены
+человеком непосредственно в server-only env и не передавались Codex. По подтверждению владельца
+два старых тестовых HDE-канала отключены, связанные ключи удалены. Глобальный HDE API key по явному
+решению владельца сохраняется из-за зависимых интеграций как принятый риск, а не считается
+rotated/verified. Все старые Yonote tokens отозваны; новый Yonote token пока не выпускался и не
+устанавливался.
 
 Этот документ — журнал статусов, а не хранилище секретов. Значения, части значений, длины,
 пароли, DSN, private keys, recovery codes, cookies и заголовки авторизации сюда не записываются.
@@ -61,7 +62,7 @@ Private evidence хранится вне Git; в журнале допустим
 | 2a | GitHub PAT / account SSH keys / OAuth Apps / webhooks / sessions | `not_started` | `not_started` | Repository audit 20 июля: Actions secrets/variables, environments, deploy keys и webhooks отсутствуют; Actions hardened. Account security log/PAT/SSH/OAuth/sessions ещё проверить и удалить всё серверное, неизвестное или недоверенное |
 | 3a | HDE старые тестовые каналы, связанные keys и dispatcher rules | `old_revoked` | `not_started` | По подтверждению владельца 20 июля два старых тестовых канала отключены и связанные keys удалены; перед новым live smoke в HDE UI отдельно подтвердить, что старый endpoint/rules остаются inactive |
 | 3b | HDE global `HDE_API_KEY` и API-user access | `retained_exception` | `not_applicable` | По явному решению владельца shared key не меняется из-за зависимых интеграций. Считать потенциально раскрытым: проверить usage/audit, минимальный scope, egress allowlist, rate/cost alerts, один test dispatcher и kill switch; позднее перейти на dedicated bot API user/key |
-| 4 | Yonote `YONOTE_API_TOKEN` | `old_revoked` | `not_started` | Владелец удалил все Yonote tokens 16 июля; новый token позже строго read-only, без `Apply to KB` |
+| 4 | Yonote `YONOTE_API_TOKEN` | `old_revoked` | `not_started` | Владелец удалил все Yonote tokens 16 июля. Новый dedicated token выпускается только с provider-side read-only scope к двум выбранным коллекциям, передаётся password manager → server-only env без shell/chat/Git и попадает только в `app-ml`; manual Preview идёт только к exact `rossmol.yonote.ru`, production Apply запрещён |
 | 5 | Selectel account password, MFA, sessions | `not_started` | `not_started` | Сменить пароль/MFA recovery, завершить старые/неизвестные sessions; старая VM остаётся `SHUTOFF` |
 | 6 | Selectel API/application/service credentials | `not_started` | `not_started` | Отозвать все credentials, которые могли быть на VM или имеют неизвестное происхождение; новые — только least privilege |
 | 7 | Selectel project SSH keypairs / metadata keys | `not_started` | `not_started` | Удалить старые public keys из control plane; новый admin key не совпадает с GitHub deploy key |
@@ -135,11 +136,12 @@ read-only deploy key и новый TLS/ACME state. Новый `.env.production` 
 
 ### 4. Provider credentials для runtime
 
-Только после подготовки clean host выпустить новый Cloud.ru credential и установить его в новый
-`.env.production`. Сохранённый global HDE credential оператор переносит из password manager
-непосредственно в server-only env без показа Codex; это исключение не меняет его статус
-`retained_exception`. Yonote credential для recovery launch не выпускается: sync/Apply выключены.
-HDE dispatcher остаётся выключенным до полного release gate. Перед любой последующей
+Для initial frozen recovery launch Yonote credential не требовался и не выпускался. После
+trusted preview-capability candidate и его scan человек может отдельно выпустить dedicated
+read-only token и включить только ручной Preview. Статус строки 4 меняется лишь после проверки
+provider scope, server-only установки, успешного полного preview и отрицательной проверки
+disabled/Apply; значение или suffix токена не фиксируются. Apply и автоматический scheduler
+остаются выключенными. Перед любой последующей
 ротацией `HDE_TRANSPORT_EVENT_KEY_SECRET` или `HDE_TRANSPORT_ENCRYPTION_KEY` inbox, outbox и
 dead-letter должны быть пусты; encryption key нельзя менять при наличии ciphertext.
 

@@ -20,6 +20,7 @@ def _values() -> dict[str, str]:
         "HDE_API_EMAIL": "hde-api-user@example.test",
         "HDE_API_KEY": "h" * 48,
         "CLOUD_RU_API_KEY": "c" * 48,
+        "YONOTE_API_TOKEN": "y" * 48,
         "POSTGRES_DSN": "postgresql://internal-value",
         "REDIS_URL": "redis://internal-value",
     }
@@ -111,6 +112,7 @@ def test_live_gate_passes_safe_probes_without_provider_delivery() -> None:
     serialized = json.dumps(report)
     assert values["ADMIN_AUTH_TOKEN"] not in serialized
     assert values["HDE_API_KEY"] not in serialized
+    assert values["YONOTE_API_TOKEN"] not in serialized
 
 
 def test_live_gate_fails_closed_on_queue_backlog_and_log_secret() -> None:
@@ -132,6 +134,28 @@ def test_live_gate_fails_closed_on_queue_backlog_and_log_secret() -> None:
     assert "logs_rosmol-nginx" in failed
     assert "logs_rosmol-edge-relay" in failed
     assert values["HDE_API_KEY"] not in json.dumps(report)
+
+
+def test_live_gate_fails_closed_on_yonote_token_in_logs() -> None:
+    values = _values()
+    report = gate.run_runtime_security_acceptance(
+        values=values,
+        expected_git_sha="a" * 40,
+        runtime_base_url="https://bot.example.test",
+        log_since_utc=_recent_log_start(),
+        requester=FakeRequester(),
+        log_reader=lambda _container, _since: (
+            f"provider_token={values['YONOTE_API_TOKEN']}"
+        ),
+    )
+
+    assert report["passed"] is False
+    assert all(
+        not check["passed"]
+        for check in report["checks"]
+        if check["name"].startswith("logs_")
+    )
+    assert values["YONOTE_API_TOKEN"] not in json.dumps(report)
 
 
 def test_live_gate_cannot_omit_mandatory_log_containers() -> None:

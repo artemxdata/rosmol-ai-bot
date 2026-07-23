@@ -21,6 +21,10 @@ evidence. Dispatcher включается последним и только д�
 - GitHub Actions выполняет только secretless CI. Он не получает product secrets, SSH/deploy
   access, GitHub Environment и не выполняет deployment; оператор вручную выбирает зелёный SHA.
 
+Эта граница относится к initial frozen recovery launch. После его отдельной acceptance ручной
+read-only Yonote Preview может быть добавлен только как новый reviewed release/configuration
+change по `docs/operations.md`; production Apply, live KB mutation и scheduler остаются запрещены.
+
 ## Пятичасовой critical path
 
 | Окно | Работа | Gate |
@@ -484,11 +488,12 @@ sudo -u "$DEPLOY_USER" git check-ignore -q data/private/runtime-egress/squid.con
 test -z "$(sudo -u "$DEPLOY_USER" git status --porcelain --untracked-files=normal)"
 ```
 
-Generator принимает только точный reviewed Cloud.ru endpoint и точный tenant
-`rosmolodezh.helpdeskeddy.com`; cross-provider substitution, IP literal, другой порт, query,
-fragment или credentials в URL блокируют запуск. Сгенерированный Squid config содержит только
-два hostname, не содержит API keys и не перезаписывается неявно. До первого `up` его разбирает
-тот же закреплённый image, который будет работать в runtime:
+Generator принимает только точный reviewed Cloud.ru endpoint, точный tenant
+`rosmolodezh.helpdeskeddy.com` и — только при отдельно включённом ручном Preview — точный
+`rossmol.yonote.ru`; cross-provider substitution, IP literal, другой порт, query, fragment или
+credentials в URL блокируют запуск. Сгенерированный Squid config содержит два hostname при
+выключенном Yonote и ровно три при включённом Preview, не содержит API keys и не перезаписывается
+неявно. До первого `up` его разбирает тот же закреплённый image, который будет работать в runtime:
 
 ```bash
 set -Eeuo pipefail
@@ -621,8 +626,8 @@ unset app_ml_id ready_json collection_counts
 ```
 
 До dispatcher отдельно доказывается фактическая network policy. Проверка не передаёт provider
-credentials: она отправляет только HTTP `CONNECT` к двум host из уже проверенных URL. Разрешённые
-host должны вернуть proxy status `200`, посторонний host — `403`, а прямой TCP из `app-ml` к
+credentials: она отправляет только HTTP `CONNECT` к host из уже проверенных URL. Разрешённые host
+должны вернуть proxy status `200`, посторонний host — `403`, а прямой TCP из `app-ml` к
 публичному адресу и metadata endpoint обязан завершиться ошибкой:
 
 ```bash
@@ -637,6 +642,10 @@ allowed = {
     urlsplit(os.environ["CLOUD_RU_CHAT_COMPLETIONS_URL"]).hostname,
     urlsplit(os.environ["HDE_BASE_URL"]).hostname,
 }
+if os.environ.get("YONOTE_SYNC_ENABLED", "").strip().casefold() == "true":
+    yonote_host = urlsplit(os.environ["YONOTE_BASE_URL"]).hostname
+    assert yonote_host == "rossmol.yonote.ru"
+    allowed.add(yonote_host)
 
 def connect_status(host: str) -> int:
     with socket.create_connection(proxy, timeout=8) as stream:
@@ -645,10 +654,13 @@ def connect_status(host: str) -> int:
         status_line = stream.recv(4096).split(b"\r\n", 1)[0]
     return int(status_line.split()[1])
 
-assert allowed == {
+expected = {
     "foundation-models.api.cloud.ru",
     "rosmolodezh.helpdeskeddy.com",
 }
+if os.environ.get("YONOTE_SYNC_ENABLED", "").strip().casefold() == "true":
+    expected.add("rossmol.yonote.ru")
+assert allowed == expected
 assert all(connect_status(host) == 200 for host in allowed)
 assert connect_status("example.com") == 403
 for target in (("1.1.1.1", 443), ("169.254.169.254", 80)):
@@ -1454,7 +1466,8 @@ side effects. `--operator`, фиксированный `--reason`, `--evidence-s
 - неожиданные destination/port, постоянный egress без входящих запросов, CPU/disk spikes.
 
 Ожидаемый provider-bearing application TCP/HTTPS egress ограничен proxy CONNECT к согласованным
-Cloud.ru/HDE endpoint. У secretless L4 `edge-relay` есть внешний маршрут для публичного ingress;
+Cloud.ru/HDE endpoint; exact Yonote endpoint допустим только во время отдельно включённого ручного
+Preview. У secretless L4 `edge-relay` есть внешний маршрут для публичного ingress;
 его ответный трафик на входящие `80/443` соединения ожидаем, но любой необъяснимый relay-initiated
 destination без соответствующего inbound flow является stop criterion. Model и OS downloads
 выполняются до открытия dispatcher. Необъяснимый постоянный egress, новый listening port или
@@ -1488,13 +1501,14 @@ unset TRAFFIC_LOG
 
 Наружу ожидаются только `22` из trusted CIDR и `80/443`; `8001`, `5432/6379/6333/6334`
 не должны быть host listeners вообще. Наблюдаемый application
-egress во время smoke сопоставляется с согласованными HDE/Cloud.ru endpoints; model/package
-downloads к этому моменту уже завершены.
+egress во время smoke сопоставляется с согласованными HDE/Cloud.ru endpoints; Yonote egress
+ожидается только при явном manual Preview. Model/package downloads к этому моменту уже завершены.
 
 ## Gate 7 — admin и handoff
 
 - Admin доступен только по новому HTTPS URL и не публикуется до TLS acceptance.
-- В recovery release admin работает read-only; Yonote Apply и live KB mutation не используются.
+- В recovery release admin работает read-only. После отдельного enable разрешён только полный
+  Yonote Preview с неизменными seed/Qdrant; Yonote Apply и live KB mutation не используются.
 - Старые presentation `100%` reports не считаются текущим release evidence.
 - Проверяются login rate limit, logout/cookie invalidation, quality/ops report без PII и корректный
   security banner.

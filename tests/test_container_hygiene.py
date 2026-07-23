@@ -175,8 +175,12 @@ def test_production_compose_exposes_only_edge_ports() -> None:
     assert 'HDE_TRANSPORT_EVENT_KEY_SECRET: ""' in app
     assert 'HDE_TRANSPORT_ENCRYPTION_KEY: ""' in app
     assert 'CLOUD_RU_API_KEY: ""' in app
+    assert "YONOTE_API_TOKEN" not in app
     assert "networks: [edge, data, runtime_egress]" in app_ml
     assert "HTTPS_PROXY: http://runtime-egress-proxy:3128" in app_ml
+    assert "YONOTE_SYNC_ENABLED: ${YONOTE_SYNC_ENABLED:-false}" in app_ml
+    assert "YONOTE_API_TOKEN: ${YONOTE_API_TOKEN:-}" in app_ml
+    assert "YONOTE_BASE_URL: ${YONOTE_BASE_URL:-https://rossmol.yonote.ru}" in app_ml
     assert "condition: service_healthy" in app_ml
     assert "networks: [edge, data, egress]" not in app_ml
 
@@ -191,6 +195,7 @@ def test_production_compose_exposes_only_edge_ports() -> None:
     assert "ports:" not in egress_proxy
     assert "HDE_API_KEY" not in egress_proxy
     assert "CLOUD_RU_API_KEY" not in egress_proxy
+    assert "YONOTE_API_TOKEN" not in egress_proxy
     assert "uid=13,gid=13" in egress_proxy
     assert '"</dev/tcp/127.0.0.1/3128"' in egress_proxy
     assert re.search(r"(?ms)^  runtime_egress:\n    internal: true$", compose)

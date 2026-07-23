@@ -162,6 +162,15 @@ _HTML_TEMPLATE = """
     }
     .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(245, 217, 10, 0.08); }
     .product-chip { color: #758194; font-family: var(--mono); font-size: 11px; }
+    .read-only-notice {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--warn);
+      font-size: 11px;
+      font-weight: 750;
+      line-height: 1.4;
+    }
     .auth {
       max-width: 440px;
       margin: 72px auto;
@@ -511,7 +520,7 @@ _HTML_TEMPLATE = """
       </div>
     </div>
     <div class="top-actions">
-      <span class="product-chip">production workspace</span>
+      <span id="runtimeMode" class="product-chip">production workspace</span>
       <span class="status-pill">
         <span class="status-dot"></span>
         <span id="authState">проверка доступа</span>
@@ -561,7 +570,7 @@ _HTML_TEMPLATE = """
       </div>
       <div class="nav-spacer"></div>
       <div class="nav-foot">
-        <div class="nav-hint">Ctrl + S — сохранить<br>/ — поиск по базе</div>
+        <div id="navHint" class="nav-hint">Ctrl + S — сохранить<br>/ — поиск по базе</div>
         <button id="logoutButton" class="nav-item danger" type="button" title="Выйти">
           <svg class="icon"><use href="#icon-logout"></use></svg>
           <span>Выйти</span>
@@ -656,6 +665,9 @@ _HTML_TEMPLATE = """
                 <input id="reindexToggle" type="checkbox" checked>
                 Обновить Qdrant и сбросить semantic cache после сохранения
               </label>
+              <span id="readOnlyNotice" class="read-only-notice hidden">
+                Production работает только для просмотра: изменения и переиндексация отключены.
+              </span>
               <span id="detailStatus" class="status"></span>
             </div>
             <div class="document-head">
@@ -723,6 +735,8 @@ _HTML_TEMPLATE = """
     let editorOriginalStatus = "";
     let editorDirty = false;
     let lastYonoteReport = null;
+    const adminReadOnly = __ADMIN_READ_ONLY__;
+    const yonoteSyncEnabled = __YONOTE_SYNC_ENABLED__;
 
     function setStatus(id, message, cls = "") {
       const el = document.getElementById(id);
@@ -747,6 +761,32 @@ _HTML_TEMPLATE = """
       editorPanel.classList.toggle("report-mode", mode !== "knowledge");
       document.getElementById("editorPanelTitle").textContent = title;
     }
+    function knowledgeWorkspaceTitle() {
+      return adminReadOnly ? "Просмотр источника" : "Редактор источника";
+    }
+    function applyAdminMode() {
+      document.getElementById("runtimeMode").textContent = adminReadOnly
+        ? "production · только чтение"
+        : "production workspace";
+      document.getElementById("readOnlyNotice").classList.toggle("hidden", !adminReadOnly);
+      document.getElementById("reindexToggle").disabled = adminReadOnly;
+      document.getElementById("textClean").readOnly = adminReadOnly;
+      const yonoteButton = document.getElementById("yonoteButton");
+      yonoteButton.disabled = !yonoteSyncEnabled;
+      yonoteButton.title = yonoteSyncEnabled
+        ? "Получить актуальные данные из Yonote и показать изменения"
+        : "Yonote pull отключён в конфигурации runtime";
+      document.getElementById("navHint").innerHTML = adminReadOnly
+        ? "Только просмотр<br>/ — поиск по базе"
+        : "Ctrl + S — сохранить<br>/ — поиск по базе";
+    }
+    function requireWritableAdmin() {
+      if (!adminReadOnly) return true;
+      const message = "Production работает только для просмотра. Изменения и переиндексация отключены.";
+      setStatus("detailStatus", message, "warn");
+      showToast(message, "warn");
+      return false;
+    }
     function updateEditorDirty() {
       const text = document.getElementById("textClean").value;
       const status = document.getElementById("chunkStatus").value;
@@ -759,7 +799,7 @@ _HTML_TEMPLATE = """
     }
     function showKnowledgeWorkspace() {
       setActiveNav("knowledgeButton");
-      setWorkspaceMode("knowledge", "Редактор источника");
+      setWorkspaceMode("knowledge", knowledgeWorkspaceTitle());
       hideReportDashboards();
       setStatus(
         "detailStatus",
@@ -774,7 +814,7 @@ _HTML_TEMPLATE = """
       document.getElementById("authPanel").classList.toggle("hidden", isAuthenticated);
       document.getElementById("appShell").classList.toggle("hidden", !isAuthenticated);
       document.getElementById("authState").textContent = isAuthenticated
-        ? "доступ открыт"
+        ? (adminReadOnly ? "доступ открыт · только чтение" : "доступ открыт")
         : "нужен вход";
     }
     function adminErrorMessage(status, detail) {
@@ -830,11 +870,12 @@ _HTML_TEMPLATE = """
     function setEditorBusy(isBusy) {
       if (!selectedChunkId) return;
       document.getElementById("editorPanel").classList.toggle("is-busy", isBusy);
-      document.getElementById("saveChunkButton").disabled = isBusy;
-      document.getElementById("reindexButton").disabled = isBusy;
+      document.getElementById("saveChunkButton").disabled = adminReadOnly || isBusy;
+      document.getElementById("reindexButton").disabled = adminReadOnly || isBusy;
       document.getElementById("relatedCasesButton").disabled = isBusy;
       document.getElementById("textClean").disabled = isBusy;
-      document.getElementById("chunkStatus").disabled = isBusy;
+      document.getElementById("textClean").readOnly = adminReadOnly;
+      document.getElementById("chunkStatus").disabled = adminReadOnly || isBusy;
     }
     async function requestJson(path, options = {}) {
       const timeoutMs = options.timeoutMs || 240000;
@@ -1319,7 +1360,7 @@ _HTML_TEMPLATE = """
       lastYonoteReport = data;
       const dashboard = document.getElementById("yonoteDashboard");
       dashboard.classList.remove("hidden");
-      const shouldShowApply = !data.applied;
+      const shouldShowApply = !adminReadOnly && !data.applied;
       dashboard.innerHTML = `
         <div class="sync-guide">
           <div class="sync-step"><span class="sync-step-number">1</span><b>Проверить Yonote</b><span>Читаем документы и считаем разницу. База бота не меняется.</span></div>
@@ -1346,10 +1387,14 @@ _HTML_TEMPLATE = """
         ${renderYonoteChangeGroup("Удалённые из локального Yonote-слоя", data.removed_items, data.removed, "removed")}
         <div class="report-actions">
           <button id="downloadYonoteReportButton" class="secondary" type="button">Скачать полный отчёт .txt</button>
-          ${shouldShowApply
-            ? '<button id="applyYonoteButton" class="primary" type="button">Записать изменения в базу бота</button>'
-            : '<button class="secondary" type="button" disabled>Изменения записаны</button>'}
-          <span class="action-note">Yonote работает только на чтение. Кнопка не меняет документы коллег.</span>
+          ${adminReadOnly
+            ? '<button class="secondary" type="button" disabled>Production: только просмотр</button>'
+            : (shouldShowApply
+              ? '<button id="applyYonoteButton" class="primary" type="button">Записать изменения в базу бота</button>'
+              : '<button class="secondary" type="button" disabled>Изменения записаны</button>')}
+          <span class="action-note">${adminReadOnly
+            ? "Применение изменений к базе бота отключено. Предпросмотр Yonote остаётся доступен."
+            : "Yonote работает только на чтение. Кнопка не меняет документы коллег."}</span>
         </div>
       `;
       document.getElementById("downloadYonoteReportButton").addEventListener(
@@ -1497,7 +1542,7 @@ _HTML_TEMPLATE = """
       }
       try {
         setActiveNav("knowledgeButton");
-        setWorkspaceMode("knowledge", "Редактор источника");
+        setWorkspaceMode("knowledge", knowledgeWorkspaceTitle());
         hideReportDashboards();
         selectedChunkId = chunkId;
         document.querySelectorAll("tr.selected").forEach((el) => el.classList.remove("selected"));
@@ -1509,7 +1554,7 @@ _HTML_TEMPLATE = """
         );
         document.getElementById("detailTitle").textContent = data.chunk_id || "";
         document.getElementById("chunkStatus").value = data.status || "published";
-        document.getElementById("chunkStatus").disabled = false;
+        document.getElementById("chunkStatus").disabled = adminReadOnly;
         document.getElementById("chunkForum").textContent = data.forum_normalized || "";
         document.getElementById("chunkTopic").textContent = data.topic || data.intent_name || "";
         document.getElementById("chunkSource").textContent = data.source_type || "";
@@ -1518,11 +1563,16 @@ _HTML_TEMPLATE = """
         editorOriginalStatus = document.getElementById("chunkStatus").value;
         updateEditorDirty();
         document.getElementById("textClean").disabled = false;
-        document.getElementById("saveChunkButton").disabled = false;
-        document.getElementById("reindexButton").disabled = false;
+        document.getElementById("textClean").readOnly = adminReadOnly;
+        document.getElementById("saveChunkButton").disabled = adminReadOnly;
+        document.getElementById("reindexButton").disabled = adminReadOnly;
         document.getElementById("relatedCasesButton").disabled = false;
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
-        setStatus("detailStatus", "Готово", "ok");
+        setStatus(
+          "detailStatus",
+          adminReadOnly ? "Открыто для просмотра" : "Готово",
+          "ok"
+        );
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
         showToast(error.message, "error");
@@ -1530,6 +1580,7 @@ _HTML_TEMPLATE = """
     }
     async function saveChunk() {
       if (!selectedChunkId) return;
+      if (!requireWritableAdmin()) return;
       try {
         hideReportDashboards();
         setEditorBusy(true);
@@ -1589,6 +1640,7 @@ _HTML_TEMPLATE = """
     }
     async function reindexChunk() {
       if (!selectedChunkId) return;
+      if (!requireWritableAdmin()) return;
       try {
         hideReportDashboards();
         setEditorBusy(true);
@@ -1674,6 +1726,14 @@ _HTML_TEMPLATE = """
       }
     }
     async function previewYonoteSync() {
+      if (!yonoteSyncEnabled) {
+        const message = "Yonote pull отключён в конфигурации runtime.";
+        setStatus("detailStatus", message, "warn");
+        showToast(message, "warn");
+        return;
+      }
+      const yonoteButton = document.getElementById("yonoteButton");
+      yonoteButton.disabled = true;
       try {
         setActiveNav("yonoteButton");
         setWorkspaceMode("yonote", "Синхронизация Yonote");
@@ -1693,9 +1753,13 @@ _HTML_TEMPLATE = """
         );
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
+        showToast(error.message, "error");
+      } finally {
+        yonoteButton.disabled = !yonoteSyncEnabled;
       }
     }
     async function applyYonoteSync() {
+      if (!requireWritableAdmin()) return;
       const confirmed = window.confirm(
         "Записать показанные изменения в локальную базу знаний бота? " +
         "Документы Yonote не изменятся. После записи потребуется полная индексация Qdrant."
@@ -1758,7 +1822,7 @@ _HTML_TEMPLATE = """
     async function boot() {
       setAuthenticated(true);
       setActiveNav("knowledgeButton");
-      setWorkspaceMode("knowledge", "Редактор источника");
+      setWorkspaceMode("knowledge", knowledgeWorkspaceTitle());
       hideReportDashboards();
       await Promise.allSettled([
         loadChunks(),
@@ -1812,6 +1876,7 @@ _HTML_TEMPLATE = """
       event.preventDefault();
       event.returnValue = "";
     });
+    applyAdminMode();
     checkSession();
   </script>
 </body>
@@ -1819,4 +1884,22 @@ _HTML_TEMPLATE = """
 """
 
 
-ADMIN_KB_HTML = _HTML_TEMPLATE.replace("__LOGO_DATA_URI__", _logo_data_uri())
+_LOGO_DATA_URI = _logo_data_uri()
+
+
+def render_admin_kb_html(
+    *,
+    admin_read_only: bool,
+    yonote_sync_enabled: bool = False,
+) -> str:
+    return (
+        _HTML_TEMPLATE.replace("__LOGO_DATA_URI__", _LOGO_DATA_URI)
+        .replace("__ADMIN_READ_ONLY__", "true" if admin_read_only else "false")
+        .replace("__YONOTE_SYNC_ENABLED__", "true" if yonote_sync_enabled else "false")
+    )
+
+
+ADMIN_KB_HTML = render_admin_kb_html(
+    admin_read_only=False,
+    yonote_sync_enabled=False,
+)

@@ -259,11 +259,21 @@ def load_yonote_documents(
     *,
     limit_documents: int | None = None,
 ) -> list[YonoteDocument]:
+    if not collection_selectors:
+        raise YonoteApiError("No Yonote collection selectors are configured")
     collections = client.collections()
     selected = match_collections(collections, collection_selectors)
-    if not selected:
+    unmatched_selectors = [
+        selector
+        for selector in collection_selectors
+        if not any(
+            _collection_matches_selector(collection, selector)
+            for collection in collections
+        )
+    ]
+    if unmatched_selectors:
         raise YonoteApiError(
-            "No Yonote collections matched selectors: " + ", ".join(collection_selectors)
+            "Yonote collections not found: " + ", ".join(unmatched_selectors)
         )
 
     documents: list[YonoteDocument] = []
@@ -306,21 +316,30 @@ def match_collections(
 ) -> list[YonoteCollection]:
     matched: list[YonoteCollection] = []
     for selector in selectors:
-        normalized_selector = normalize_key(selector)
         found = next(
             (
                 collection
                 for collection in collections
-                if selector == collection.id
-                or selector == collection.url_id
-                or normalized_selector == normalize_key(collection.name)
-                or normalized_selector == normalize_key(collection.url or "")
+                if _collection_matches_selector(collection, selector)
             ),
             None,
         )
         if found and found.id not in {collection.id for collection in matched}:
             matched.append(found)
     return matched
+
+
+def _collection_matches_selector(
+    collection: YonoteCollection,
+    selector: str,
+) -> bool:
+    normalized_selector = normalize_key(selector)
+    return (
+        selector == collection.id
+        or selector == collection.url_id
+        or normalized_selector == normalize_key(collection.name)
+        or normalized_selector == normalize_key(collection.url or "")
+    )
 
 
 def build_document_path(item: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> tuple[str, ...]:

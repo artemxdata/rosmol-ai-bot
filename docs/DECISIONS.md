@@ -25,9 +25,15 @@
 ## D-004. Yonote только на чтение
 
 **Статус:** принято.  
-Интеграция читает только выбранные коллекции. Preview не меняет KB. Apply меняет только
-`data/knowledge_base_seed.json` проекта. Запись, изменение или удаление документов Yonote
-запрещены.
+Интеграция читает только выбранные коллекции. Production Preview выполняет полный ручной pull,
+проверяет наличие каждой коллекции и считает diff в памяти; он не меняет Yonote, tracked
+`data/knowledge_base_seed.json`, Qdrant, cache или ответы бота. Production Apply запрещён
+read-only UI и backend `403`.
+
+Существующий Apply допустим только в локальном/disposable release-engineering контуре после
+явного content review. Публикация в production выполняется как versioned Git-изменение seed с
+ручным review, validation/regression, clean candidate build, контролируемой полной индексацией и
+rollback evidence. Запись, изменение или удаление документов Yonote запрещены во всех режимах.
 
 ## D-005. LangGraph вместо автономной мультиагентности
 
@@ -230,10 +236,12 @@ security patch либо подтверждённой изоляции новых
 **Статус:** принято для ограниченного recovery test-production 20 июля 2026.
 `app-ml` не подключается к внешней Docker network. Единственный bridge между его internal
 `runtime_egress` и внешней `egress` — закреплённый digest Canonical Squid без provider secrets и
-без host port. Generated config разрешает только `CONNECT:443` к точному Cloud.ru endpoint и
-точному HDE tenant `rosmolodezh.helpdeskeddy.com`; неизвестный destination и plaintext HTTP
-запрещены. Cross-provider URL substitution блокируется до запуска. `app` остаётся без provider
-credentials и без egress.
+без host port. Generated config всегда разрешает только `CONNECT:443` к точному Cloud.ru endpoint
+и точному HDE tenant `rosmolodezh.helpdeskeddy.com`. При отдельно включённом ручном Yonote Preview
+добавляется ровно один точный destination `rossmol.yonote.ru`; при выключенном Preview его в
+allowlist нет. Неизвестный destination и plaintext HTTP запрещены. Cross-provider URL substitution
+блокируется до запуска. Новый read-only Yonote token получает только `app-ml`; Squid остаётся
+secretless, а `app` — без provider credentials и без egress.
 
 Networked model prefetch выполняется только в secretless bootstrap до создания production env,
 после hash/revision verification ML load проверяется offline. В production overlay

@@ -12,7 +12,8 @@
 2. Составные вопросы разбираются на несколько тем и закрываются несколькими источниками.
 3. Если данных нет, бот не выдумывает: даёт scope-note, уточнение или controlled escalation.
 4. Опасные темы уходят специалисту.
-5. Админка позволяет править чанки и сразу обновлять RAG.
+5. Production-админка позволяет безопасно искать и проверять чанки; публикация правок идёт через
+   отдельный versioned release.
 6. Ops report показывает стоимость, latency, cache hit, эскалации и проблемные темы.
 7. Yonote подключён безопасно: только чтение, без изменения чужой базы.
 
@@ -29,8 +30,8 @@
 | Вне базы | `Какая погода завтра в Москве?` | Scope-note без оператора |
 | Оператор | `Позови оператора` | Controlled escalation |
 | Safety | `Меня травят на мероприятии, я не чувствую себя в безопасности` | Controlled escalation без советов от модели |
-| Админка | Правка чанка + `Сохранить и обновить RAG` | Новый текст сразу попадает в индекс |
-| Yonote | Preview/apply обновления базы | Только чтение Yonote, обновляется наша KB |
+| Админка | Поиск и просмотр чанка | Production работает только на чтение |
+| Yonote | Полный manual Preview изменений | Yonote/seed/Qdrant не меняются; публикация — отдельный release |
 | Ops | `Работа бота` | Метрики запросов, стоимости и проблемных тем |
 
 ## Что сказать про качество
@@ -57,7 +58,7 @@
 
 | Риск | Что будет | Как закрыли |
 | --- | --- | --- |
-| Устаревшая база | Бот даст старый ответ | Yonote read-only sync, админка, validation, reindex |
+| Устаревшая база | Бот даст старый ответ | Manual Yonote Preview, versioned KB review, validation и полный reindex |
 | Новый вопрос вне базы | Бот не сможет закрыть обращение | Scope-note/уточнение/эскалация + weekly gap analysis |
 | Галлюцинация | Ответ без источника | Source-only/RAG guard, cited_sources, verifier |
 | ПДн в LLM или Git | Утечка данных | PII masking, `data/private`, `.gitignore`, sanitized eval |
@@ -65,7 +66,7 @@
 | HDE бан по лимиту | Ответы перестанут уходить в канал | Локальные тесты, rate-limit awareness, HDE только для smoke |
 | Старый бот отвечает параллельно | Непонятно, кто дал ответ | Тестовый канал, правила диспетчера, trace |
 | Дорогие LLM-вызовы | Рост расходов | Source_chunk first, Max только для сложных случаев, cost trace |
-| Ошибка редактора в админке | Плохой текст попадёт в RAG | Validation, точечный reindex, git/backup как rollback |
+| Ошибка редактора в админке | Плохой текст попадёт в RAG | Production read-only, versioned review, validation и rollback |
 
 ## Еженедельный процесс улучшения
 
@@ -78,8 +79,8 @@
    - тема вне зоны бота;
    - safety/operator-only.
 5. Для недостающих источников поставить задачу контент-владельцу или копирайтеру.
-6. Обновить Yonote или админку KB.
-7. Пересобрать RAG: preview -> apply -> validation -> index.
+6. Обновить Yonote у владельца контента и получить manual Preview diff.
+7. Опубликовать versioned KB change: review -> validation -> regression -> full index -> smoke.
 8. Прогнать eval и smoke.
 9. Зафиксировать метрики: conversion without operator, escalation rate, source coverage, hallucination rate, latency, cost.
 

@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 import hmac
 import re
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
+from threading import Lock
 from time import perf_counter, time
 from typing import Any
 from urllib.parse import urlsplit
@@ -165,6 +167,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Rosmol AI Bot", version="0.1.0", lifespan=lifespan)
+_YONOTE_SYNC_LOCK = Lock()
+
+
+def _run_with_yonote_sync_lock(
+    operation: Callable[..., dict[str, Any]],
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    try:
+        return operation(*args, **kwargs)
+    finally:
+        _YONOTE_SYNC_LOCK.release()
 
 vk_adapter = VKAdapter()
 max_adapter = MaxAdapter()
@@ -340,6 +354,45 @@ def _validate_runtime_security(settings: Any) -> None:
                 or hde_endpoint.path not in {"", "/"}
             ):
                 errors.append("HDE_BASE_URL must match the reviewed HDE tenant endpoint")
+            yonote_enabled = bool(getattr(settings, "yonote_sync_enabled", False))
+            yonote_token = _setting_text(settings, "yonote_api_token")
+            if yonote_enabled:
+                if not yonote_token:
+                    errors.append(
+                        "YONOTE_API_TOKEN is required when Yonote sync is enabled"
+                    )
+                elif _looks_like_placeholder(yonote_token):
+                    errors.append("YONOTE_API_TOKEN still contains a placeholder value")
+                yonote_mode = _setting_text(settings, "yonote_sync_mode")
+                if yonote_mode != "manual":
+                    errors.append("YONOTE_SYNC_MODE must equal manual in production")
+                yonote_collection_names = _setting_text(
+                    settings,
+                    "yonote_collection_names",
+                )
+                delimiter = ";" if ";" in yonote_collection_names else "|"
+                if not any(
+                    item.strip() for item in yonote_collection_names.split(delimiter)
+                ):
+                    errors.append(
+                        "YONOTE_COLLECTION_NAMES must contain at least one collection"
+                    )
+                yonote_endpoint = urlsplit(_setting_text(settings, "yonote_base_url"))
+                yonote_host = (yonote_endpoint.hostname or "").casefold()
+                if (
+                    yonote_endpoint.scheme.casefold() != "https"
+                    or yonote_host != "rossmol.yonote.ru"
+                    or yonote_endpoint.path not in {"", "/"}
+                    or yonote_endpoint.query
+                    or yonote_endpoint.fragment
+                ):
+                    errors.append(
+                        "YONOTE_BASE_URL must match the reviewed read-only Yonote endpoint"
+                    )
+            elif yonote_token:
+                errors.append(
+                    "YONOTE_API_TOKEN must be empty when Yonote sync is disabled"
+                )
         if runtime_role == "api":
             forbidden_provider_settings = (
                 "cloud_ru_api_key",
@@ -350,6 +403,8 @@ def _validate_runtime_security(settings: Any) -> None:
                 "hde_bot_user_id",
                 "hde_transport_event_key_secret",
                 "hde_transport_encryption_key",
+                "yonote_api_token",
+                "yonote_sync_enabled",
             )
             if any(_setting_text(settings, name) for name in forbidden_provider_settings):
                 errors.append(
@@ -687,7 +742,16 @@ def _optional_trace_identifier(value: str | None) -> str | None:
 @app.get("/admin/kb", response_class=HTMLResponse)
 async def admin_kb_page() -> HTMLResponse:
     _require_admin_enabled()
-    return HTMLResponse(content=ui.ADMIN_KB_HTML)
+    settings = get_settings()
+    return HTMLResponse(
+        content=ui.render_admin_kb_html(
+            admin_read_only=bool(getattr(settings, "admin_read_only", False)),
+            yonote_sync_enabled=bool(
+                getattr(settings, "yonote_sync_enabled", False)
+            ),
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/admin/kb/login")
@@ -805,11 +869,24 @@ async def admin_preview_yonote_sync(
     request: Request,
 ) -> dict[str, Any]:
     _require_admin_secret(request)
+    _require_yonote_sync_enabled()
+    settings = get_settings()
+    if (
+        _setting_text(settings, "app_env").casefold() == "production"
+        and payload.limit_documents is not None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="limit_documents is not allowed for production Yonote preview",
+        )
+    if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Yonote sync is already running")
     try:
         return await asyncio.to_thread(
+            _run_with_yonote_sync_lock,
             preview_yonote_sync,
             _kb_seed_path(),
-            get_settings(),
+            settings,
             limit_documents=payload.limit_documents,
         )
     except YonoteSyncConfigError as exc:
@@ -826,9 +903,13 @@ async def admin_apply_yonote_sync(
     request: Request,
 ) -> dict[str, Any]:
     _require_admin_secret(request)
+    _require_yonote_sync_enabled()
     _require_admin_writable()
+    if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Yonote sync is already running")
     try:
         return await asyncio.to_thread(
+            _run_with_yonote_sync_lock,
             apply_yonote_sync,
             _kb_seed_path(),
             get_settings(),
@@ -1180,6 +1261,14 @@ def _require_admin_writable() -> None:
             status_code=403,
             detail="Admin mutations are disabled in this runtime",
         )
+
+
+def _require_yonote_sync_enabled() -> None:
+    settings = get_settings()
+    if not bool(getattr(settings, "yonote_sync_enabled", False)):
+        raise HTTPException(status_code=503, detail="Yonote sync is disabled")
+    if not _setting_text(settings, "yonote_api_token"):
+        raise HTTPException(status_code=503, detail="YONOTE_API_TOKEN is not configured")
 
 
 def _make_admin_session_cookie(secret: str) -> str:

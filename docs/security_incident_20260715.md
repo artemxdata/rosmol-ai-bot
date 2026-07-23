@@ -110,8 +110,9 @@ persisted cache. Полная индексация также не может о
 
 Новый runtime собирается только из чистого vendor image и проверенного Git commit. Для
 воспроизводимости frozen RC Qdrant пересоздаётся строго из versioned published seed этого commit,
-без свежего Yonote Apply. Yonote preview/sync является отдельным последующим content/KB change с
-validation, regression и новым handoff.
+без свежего Yonote Apply. Read-only Yonote Preview является только evidence и не меняет frozen KB;
+Apply/promotion — отдельный последующий versioned content/KB release с review, validation,
+regression, controlled reindex, rollback evidence и новым handoff.
 
 ### Созданные до обнаружения инцидента резервные копии
 

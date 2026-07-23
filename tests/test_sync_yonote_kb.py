@@ -111,6 +111,45 @@ def test_yonote_client_wraps_terminal_transport_error(
         client.close()
 
 
+def test_yonote_client_reads_every_paginated_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=0,
+        min_request_interval_seconds=0,
+    )
+    offsets: list[int] = []
+
+    def fake_request(
+        _method: str,
+        _path: str,
+        **kwargs: object,
+    ) -> httpx.Response:
+        params = kwargs["params"]
+        assert isinstance(params, dict)
+        offset = int(params["offset"])
+        offsets.append(offset)
+        page_size = 100 if offset == 0 else 1
+        request = httpx.Request("GET", "https://example.test/api/collections.list")
+        return httpx.Response(
+            200,
+            request=request,
+            json={"data": [{"id": f"item-{offset + index}"} for index in range(page_size)]},
+        )
+
+    monkeypatch.setattr(client._client, "request", fake_request)
+    try:
+        records = client._get_paginated("/api/collections.list")
+    finally:
+        client.close()
+
+    assert len(records) == 101
+    assert offsets == [0, 100]
+
+
 def test_split_collection_selectors_keeps_commas_inside_collection_names() -> None:
     selectors = split_collection_selectors(
         "Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия"
@@ -144,6 +183,93 @@ def test_match_collections_by_name_id_or_url_id() -> None:
     )
 
     assert [collection.id for collection in matched] == ["first-id", "second-id"]
+
+
+def test_load_yonote_documents_rejects_partially_matched_collection_set() -> None:
+    class FakeClient:
+        def collections(self) -> list[YonoteCollection]:
+            return [
+                YonoteCollection(
+                    id="first-id",
+                    name="First collection",
+                    url="/collection/first",
+                    url_id="first",
+                )
+            ]
+
+    with pytest.raises(
+        YonoteApiError,
+        match="Yonote collections not found: Missing collection",
+    ):
+        sync_yonote_kb.load_yonote_documents(
+            FakeClient(),  # type: ignore[arg-type]
+            ("First collection", "Missing collection"),
+        )
+
+
+def test_load_yonote_documents_rejects_empty_collection_selector_set() -> None:
+    class FakeClient:
+        def collections(self) -> list[YonoteCollection]:
+            raise AssertionError("provider must not be called without collection selectors")
+
+    with pytest.raises(
+        YonoteApiError,
+        match="No Yonote collection selectors are configured",
+    ):
+        sync_yonote_kb.load_yonote_documents(
+            FakeClient(),  # type: ignore[arg-type]
+            (),
+        )
+
+
+def test_load_yonote_documents_reads_every_selected_collection_without_limit() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.requested_collections: list[str] = []
+
+        def collections(self) -> list[YonoteCollection]:
+            return [
+                YonoteCollection(
+                    id="first-id",
+                    name="First collection",
+                    url="/collection/first",
+                    url_id="first",
+                ),
+                YonoteCollection(
+                    id="second-id",
+                    name="Second collection",
+                    url="/collection/second",
+                    url_id="second",
+                ),
+            ]
+
+        def documents(self, collection_id: str) -> list[dict[str, object]]:
+            self.requested_collections.append(collection_id)
+            return [
+                {
+                    "id": f"doc-{collection_id}",
+                    "title": collection_id,
+                }
+            ]
+
+        def document_info(self, document_id: str) -> dict[str, object]:
+            return {
+                "id": document_id,
+                "title": document_id,
+                "text": f"Published content for {document_id}",
+            }
+
+    client = FakeClient()
+    documents = sync_yonote_kb.load_yonote_documents(
+        client,  # type: ignore[arg-type]
+        ("First collection", "Second collection"),
+    )
+
+    assert client.requested_collections == ["first-id", "second-id"]
+    assert [document.id for document in documents] == [
+        "doc-first-id",
+        "doc-second-id",
+    ]
 
 
 def test_build_document_path_uses_parent_chain() -> None:

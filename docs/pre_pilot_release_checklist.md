@@ -2,8 +2,9 @@
 
 Этот чеклист нужен перед демонстрацией и тестовым подключением HDE/VK. Массовые проверки выполняются локально через `/ask`; HDE трогаем только тестовым каналом и короткими smoke-сценариями.
 
-> **Текущий статус 23 июля 2026:** `NO GO / INFRASTRUCTURE CORRECTION PENDING` до завершения
-> clean-runtime acceptance. Серверные команды в разделах 2 и 5 сохранены только как исторический
+> **Текущий статус 23 июля 2026:** clean runtime и limited HDE/VK smoke работают; финальный
+> handoff и новый admin/Yonote-preview candidate ещё pending. Серверные команды в разделах 2 и 5
+> сохранены только как исторический
 > pre-incident checklist и **не должны выполняться**: они используют старый порядок, старый Compose
 > stack и migration baseline. Разделы 3–4 задают только критерии, а не standalone-команды.
 > Единственная актуальная исполнимая инструкция для нового HDE/VK test-production:
@@ -135,6 +136,11 @@ PY
   internal `data` к `http://app-ml:8000/ask`; наружу production token и PostgreSQL не выносятся.
 - После suite exact-HTTPS gate повторно сканирует runtime/Nginx/relay logs за всё окно quality.
 - HDE/VK не используются для batch/eval-трафика.
+- Yonote capability по умолчанию выключена. При отдельном enable новый read-only token получает
+  только `app-ml`, а generated egress policy добавляет только exact `rossmol.yonote.ru:443`.
+- Аутентифицированный production Preview читает полный configured collection set, но Apply
+  возвращает `403`; до и после Preview совпадают tracked-seed hash и Qdrant counts, reindex не
+  запускается.
 
 Точные fail-closed команды, SHA/provenance checks и output paths находятся только в Gate 4B и
 «Финальный acceptance, привязанный к commit» файла

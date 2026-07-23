@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from src.admin import ui
 from src.main import _admin_reindex_record
 from src.main import app as fastapi_app
 
@@ -294,6 +297,107 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert "Сохранение не подтверждено" in enabled.text
     assert "Текст сохранён, но RAG-индекс не обновлён" in enabled.text
     assert "Операция не завершилась за" in enabled.text
+    assert "const adminReadOnly = false;" in enabled.text
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_page_disables_mutation_ui_in_read_only_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            admin_read_only=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get("/admin/kb")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert "const adminReadOnly = true;" in response.text
+    assert "const yonoteSyncEnabled = true;" in response.text
+    assert "read-only-yonote-token" not in response.text
+    assert "Production работает только для просмотра" in response.text
+    assert "adminReadOnly || isBusy" in response.text
+    assert 'document.getElementById("textClean").readOnly = adminReadOnly;' in response.text
+    assert 'document.getElementById("textClean").disabled = false;' in response.text
+    assert 'document.getElementById("saveChunkButton").disabled = adminReadOnly;' in response.text
+    assert 'document.getElementById("reindexButton").disabled = adminReadOnly;' in response.text
+    assert "if (!requireWritableAdmin()) return;" in response.text
+    assert "Применение изменений к базе бота отключено" in response.text
+
+
+@pytest.mark.parametrize("admin_read_only", [False, True])
+@pytest.mark.parametrize("yonote_sync_enabled", [False, True])
+def test_admin_kb_html_renders_runtime_capabilities_without_placeholders(
+    admin_read_only: bool,
+    yonote_sync_enabled: bool,
+) -> None:
+    html = ui.render_admin_kb_html(
+        admin_read_only=admin_read_only,
+        yonote_sync_enabled=yonote_sync_enabled,
+    )
+
+    assert "__ADMIN_READ_ONLY__" not in html
+    assert "__YONOTE_SYNC_ENABLED__" not in html
+    assert f"const adminReadOnly = {str(admin_read_only).lower()};" in html
+    assert f"const yonoteSyncEnabled = {str(yonote_sync_enabled).lower()};" in html
+
+
+@pytest.mark.asyncio
+async def test_admin_read_only_mode_survives_login_reload_and_logout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            admin_read_only=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        login = await client.post("/admin/kb/login", json={"token": "admin-secret"})
+        first_page = await client.get("/admin/kb")
+        reloaded_page = await client.get("/admin/kb")
+        chunk = await client.get("/admin/kb/chunks/travel")
+        patch = await client.patch(
+            "/admin/kb/chunks/travel",
+            json={"text_clean": "updated"},
+        )
+        reindex = await client.post("/admin/kb/chunks/travel/reindex")
+        apply = await client.post("/admin/kb/yonote/apply", json={})
+        logout = await client.post("/admin/kb/logout", json={})
+        after_logout = await client.get("/admin/kb/chunks")
+
+    assert login.status_code == 200
+    for page in (first_page, reloaded_page):
+        assert page.status_code == 200
+        assert page.headers["cache-control"] == "no-store"
+        assert "const adminReadOnly = true;" in page.text
+    assert chunk.status_code == 200
+    for response in (patch, reindex, apply):
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Admin mutations are disabled in this runtime"
+    assert logout.status_code == 200
+    assert after_logout.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -307,6 +411,8 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
         "src.main.get_settings",
         lambda: SimpleNamespace(
             admin_auth_token="admin-secret",
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
             kb_seed_path=str(seed_path),
         ),
     )
@@ -364,6 +470,179 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_api_rejects_yonote_pull_when_runtime_capability_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            yonote_sync_enabled=False,
+            yonote_api_token="",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        page = await client.get("/admin/kb")
+        preview = await client.post(
+            "/admin/kb/yonote/preview",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert page.status_code == 200
+    assert "const yonoteSyncEnabled = false;" in page.text
+    assert preview.status_code == 503
+    assert preview.json()["detail"] == "Yonote sync is disabled"
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_rejects_partial_yonote_preview_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    preview_called = False
+
+    def fake_preview(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal preview_called
+        preview_called = True
+        return {}
+
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            app_env="production",
+            admin_auth_token="admin-secret",
+            admin_read_only=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    monkeypatch.setattr("src.main.preview_yonote_sync", fake_preview)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.post(
+            "/admin/kb/yonote/preview",
+            json={"limit_documents": 3},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "limit_documents is not allowed for production Yonote preview"
+    )
+    assert preview_called is False
+
+
+@pytest.mark.asyncio
+async def test_read_only_admin_yonote_preview_is_full_and_does_not_mutate_seed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    original_seed = seed_path.read_bytes()
+
+    def fake_load(_settings: object, *, limit_documents: int | None):
+        assert limit_documents is None
+        return [object()], []
+
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            app_env="production",
+            admin_auth_token="admin-secret",
+            admin_read_only=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    monkeypatch.setattr(
+        "src.admin.yonote_sync._load_fresh_yonote_records",
+        fake_load,
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.post(
+            "/admin/kb/yonote/preview",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is False
+    assert response.json()["index_required"] is False
+    assert seed_path.read_bytes() == original_seed
+
+
+@pytest.mark.asyncio
+async def test_admin_yonote_preview_rejects_concurrent_pull(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    started = threading.Event()
+    release = threading.Event()
+    call_count = 0
+
+    def slow_preview(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        assert release.wait(timeout=5)
+        return {"ok": True, "applied": False, "index_required": False}
+
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            app_env="production",
+            admin_auth_token="admin-secret",
+            admin_read_only=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    monkeypatch.setattr("src.main.preview_yonote_sync", slow_preview)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        first_task = asyncio.create_task(
+            client.post(
+                "/admin/kb/yonote/preview",
+                json={},
+                headers={"X-Admin-Token": "admin-secret"},
+            )
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        second = await client.post(
+            "/admin/kb/yonote/preview",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        release.set()
+        first = await first_task
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"] == "Yonote sync is already running"
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_mutations_are_explicitly_forbidden_in_read_only_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -375,6 +654,8 @@ async def test_admin_kb_mutations_are_explicitly_forbidden_in_read_only_runtime(
         lambda: SimpleNamespace(
             admin_auth_token="admin-secret",
             admin_read_only=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
             kb_seed_path=str(seed_path),
         ),
     )

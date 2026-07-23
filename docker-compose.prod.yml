@@ -268,6 +268,14 @@ services:
       HTTPS_PROXY: http://runtime-egress-proxy:3128
       ALL_PROXY: ""
       NO_PROXY: 127.0.0.1,localhost,postgres,redis,qdrant,app,app-ml
+      YONOTE_SYNC_ENABLED: ${YONOTE_SYNC_ENABLED:-false}
+      YONOTE_SYNC_MODE: ${YONOTE_SYNC_MODE:-manual}
+      YONOTE_API_TOKEN: ${YONOTE_API_TOKEN:-}
+      YONOTE_BASE_URL: ${YONOTE_BASE_URL:-https://rossmol.yonote.ru}
+      YONOTE_COLLECTION_NAMES: "${YONOTE_COLLECTION_NAMES:-Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия}"
+      YONOTE_REQUEST_TIMEOUT_SECONDS: ${YONOTE_REQUEST_TIMEOUT_SECONDS:-30}
+      YONOTE_MAX_RETRIES: ${YONOTE_MAX_RETRIES:-2}
+      YONOTE_MIN_REQUEST_INTERVAL_SECONDS: ${YONOTE_MIN_REQUEST_INTERVAL_SECONDS:-0.15}
     ports: !override []
     volumes: !override
       - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro

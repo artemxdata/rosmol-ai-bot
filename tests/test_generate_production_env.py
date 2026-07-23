@@ -31,6 +31,11 @@ HDE_API_EMAIL=replace-with-email
 HDE_API_KEY=replace-with-key
 CLOUD_RU_API_KEY=replace-with-key
 CLOUD_RU_CHAT_COMPLETIONS_URL=https://foundation-models.api.cloud.ru/v1/chat/completions
+YONOTE_SYNC_ENABLED=false
+YONOTE_SYNC_MODE=manual
+YONOTE_API_TOKEN=
+YONOTE_BASE_URL=https://rossmol.yonote.ru
+YONOTE_COLLECTION_NAMES=Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия
 ADMIN_PUBLIC_HOST=bot.example.test
 CERTBOT_EMAIL=operations@example.test
 """
@@ -246,6 +251,112 @@ def test_render_egress_proxy_uses_only_validated_endpoint_hosts(
             ]
         )
         == 2
+    )
+
+
+def test_enabled_yonote_pull_adds_only_reviewed_host_to_egress_allowlist(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    template = tmp_path / "template.env"
+    env_file = tmp_path / ".env.production"
+    proxy_config = tmp_path / "runtime-egress" / "squid.conf"
+    _write_template(template)
+    generate_production_env.initialize_env(template, env_file)
+    _complete_provider_fields(env_file)
+    content = env_file.read_text(encoding="utf-8")
+    content = content.replace(
+        "YONOTE_SYNC_ENABLED=false",
+        "YONOTE_SYNC_ENABLED=true",
+    ).replace(
+        "YONOTE_API_TOKEN=",
+        "YONOTE_API_TOKEN=" + "y" * 48,
+    )
+    env_file.write_text(content, encoding="utf-8")
+    if os.name == "posix":
+        env_file.chmod(0o600)
+
+    assert generate_production_env.validate_env(env_file) == []
+    assert (
+        generate_production_env.main(
+            [
+                "render-egress-proxy",
+                "--env-file",
+                str(env_file),
+                "--output",
+                str(proxy_config),
+            ]
+        )
+        == 0
+    )
+
+    config = proxy_config.read_text(encoding="utf-8")
+    assert (
+        "acl runtime_destinations dstdomain foundation-models.api.cloud.ru "
+        "rosmolodezh.helpdeskeddy.com rossmol.yonote.ru"
+    ) in config
+    assert "y" * 48 not in config
+    captured = capsys.readouterr()
+    assert "Allowed HTTPS destination count: 3" in captured.out
+    assert "y" * 48 not in captured.out + captured.err
+
+
+def test_yonote_pull_requires_token_manual_mode_and_reviewed_endpoint(
+    tmp_path: Path,
+) -> None:
+    template = tmp_path / "template.env"
+    output = tmp_path / ".env.production"
+    _write_template(template)
+    generate_production_env.initialize_env(template, output)
+    _complete_provider_fields(output)
+    content = output.read_text(encoding="utf-8").replace(
+        "YONOTE_SYNC_ENABLED=false",
+        "YONOTE_SYNC_ENABLED=true",
+    )
+    output.write_text(content, encoding="utf-8")
+    if os.name == "posix":
+        output.chmod(0o600)
+
+    assert "YONOTE_API_TOKEN: missing_or_placeholder" in (
+        generate_production_env.validate_env(output)
+    )
+
+    output.write_text(
+        content.replace("YONOTE_API_TOKEN=", "YONOTE_API_TOKEN=" + "y" * 48)
+        .replace("YONOTE_SYNC_MODE=manual", "YONOTE_SYNC_MODE=scheduled")
+        .replace("https://rossmol.yonote.ru", "https://attacker.example.org"),
+        encoding="utf-8",
+    )
+    if os.name == "posix":
+        output.chmod(0o600)
+    errors = generate_production_env.validate_env(output)
+
+    assert "YONOTE_SYNC_MODE: must_equal_manual" in errors
+    assert "YONOTE_BASE_URL: must_match_reviewed_yonote_endpoint" in errors
+
+
+def test_yonote_pull_requires_nonempty_collection_scope(tmp_path: Path) -> None:
+    template = tmp_path / "template.env"
+    output = tmp_path / ".env.production"
+    _write_template(template)
+    generate_production_env.initialize_env(template, output)
+    _complete_provider_fields(output)
+    content = (
+        output.read_text(encoding="utf-8")
+        .replace("YONOTE_SYNC_ENABLED=false", "YONOTE_SYNC_ENABLED=true")
+        .replace("YONOTE_API_TOKEN=", "YONOTE_API_TOKEN=" + "y" * 48)
+        .replace(
+            "YONOTE_COLLECTION_NAMES=Росмолодёжь: общее, структура, направления;"
+            "Росмолодёжь: мероприятия",
+            "YONOTE_COLLECTION_NAMES=;",
+        )
+    )
+    output.write_text(content, encoding="utf-8")
+    if os.name == "posix":
+        output.chmod(0o600)
+
+    assert "YONOTE_COLLECTION_NAMES: missing" in (
+        generate_production_env.validate_env(output)
     )
 
 

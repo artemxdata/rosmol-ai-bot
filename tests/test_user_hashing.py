@@ -177,6 +177,56 @@ def test_production_runtime_requires_read_only_admin() -> None:
         _validate_runtime_security(settings)
 
 
+def test_production_ml_runtime_allows_only_scoped_manual_yonote_pull() -> None:
+    settings = _production_settings()
+    _enable_ml_transport(settings)
+    _enable_yonote_sync(settings)
+
+    _validate_runtime_security(settings)
+
+    settings.yonote_sync_mode = "scheduled"
+    with pytest.raises(RuntimeError, match="YONOTE_SYNC_MODE"):
+        _validate_runtime_security(settings)
+
+
+def test_production_ml_runtime_requires_yonote_token_when_pull_is_enabled() -> None:
+    settings = _production_settings()
+    _enable_ml_transport(settings)
+    _enable_yonote_sync(settings)
+    settings.yonote_api_token = ""
+
+    with pytest.raises(RuntimeError, match="YONOTE_API_TOKEN"):
+        _validate_runtime_security(settings)
+
+
+def test_production_ml_runtime_requires_yonote_collection_scope() -> None:
+    settings = _production_settings()
+    _enable_ml_transport(settings)
+    _enable_yonote_sync(settings)
+    settings.yonote_collection_names = ";"
+
+    with pytest.raises(RuntimeError, match="YONOTE_COLLECTION_NAMES"):
+        _validate_runtime_security(settings)
+
+
+def test_production_ml_runtime_pins_yonote_to_reviewed_endpoint() -> None:
+    settings = _production_settings()
+    _enable_ml_transport(settings)
+    _enable_yonote_sync(settings)
+    settings.yonote_base_url = "https://attacker.example.org"
+
+    with pytest.raises(RuntimeError, match="YONOTE_BASE_URL"):
+        _validate_runtime_security(settings)
+
+
+def test_production_api_runtime_rejects_yonote_credential() -> None:
+    settings = _production_settings()
+    settings.yonote_api_token = "read-only-provider-token"
+
+    with pytest.raises(RuntimeError, match="must not be configured"):
+        _validate_runtime_security(settings)
+
+
 @pytest.mark.parametrize("value", ["", "0" * 40, "A" * 40, "abc123"])
 def test_production_runtime_requires_trusted_release_git_sha(value: str) -> None:
     settings = _production_settings()
@@ -263,6 +313,8 @@ def _production_settings() -> SimpleNamespace:
         postgres_dsn="postgresql://bot:strong-password@postgres:5432/bot",
         ml_prewarm_on_startup=False,
         yonote_sync_enabled=False,
+        yonote_sync_mode="manual",
+        yonote_collection_names="First collection;Second collection",
         yonote_api_token="",
         yonote_base_url="https://yonote.vendor.ru",
         hde_transport_enabled=False,
@@ -288,3 +340,10 @@ def _enable_ml_transport(settings: SimpleNamespace) -> None:
     settings.hde_api_email = "bot@vendor.ru"
     settings.hde_api_key = "provider-hde-key"
     settings.https_proxy = "http://runtime-egress-proxy:3128"
+
+
+def _enable_yonote_sync(settings: SimpleNamespace) -> None:
+    settings.yonote_sync_enabled = True
+    settings.yonote_sync_mode = "manual"
+    settings.yonote_api_token = "read-only-provider-token"
+    settings.yonote_base_url = "https://rossmol.yonote.ru"

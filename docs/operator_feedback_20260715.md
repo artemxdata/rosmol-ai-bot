@@ -210,6 +210,44 @@ Legacy XLSX-чанк `xlsx_category_r0080_vremya_zaezda_i_vyezda` также с�
 7. Разделить свежие кейсы на calibration и новый sealed holdout до любых правок; не использовать
    эти же три кейса как доказательство обобщающей способности после исправления.
 
+## Воспроизведение на clean runtime 23 июля 2026
+
+На exact release `6241a3ffe7795efd01a5a52d4bbc6ca6e102c1e1` три сценария воспроизведены
+server-local через `/ask`, без HDE/VK-трафика:
+
+- `Начать` вернул короткое `Чем я могу быть полезен?` из legacy XLSX source chunk, а не
+  детерминированный `GREETING_RESPONSE`;
+- продолжение `Даты` вернуло приемлемую просьбу назвать мероприятие, но такой результат пока не
+  закреплён детерминированным route и regression-тестом;
+- вопрос `Хочу попасть на форум Машук, когда он проводится?` снова выбрал application-first ответ,
+  legacy XLSX application/date chunks и не вывел точные опубликованные Yonote-даты в начало.
+
+Root cause подтверждён read-only аудитом. `Начать` и нормализованный `/start` отсутствуют в
+`greeting_phrases`; для короткого `Даты` нет отдельного deterministic clarification guard. В
+«Машуке» слабый маркер `хочу попасть` одновременно создаёт application-topic, а strict metadata
+lookup останавливается на legacy date-topic: Yonote topics точных смен отсутствуют в date aliases
+retrieval и equivalence rerank. Поэтому «Машук» нельзя честно исправить только prompt-правкой или
+одним локальным условием — нужен согласованный taxonomy patch после content verdict.
+
+По явному решению владельца эти изменения отложены до отдельной задачи после подключения
+ограниченного тестового HDE/VK-контура. Это известный P1 backlog, а будущий test-channel smoke не
+должен называться финальным quality handoff или новым sealed cohort.
+
+## Дополнительный P1 по HDE/VK smoke 23 июля 2026
+
+В тестовом VK/HDE-интерфейсе grounded-вопрос получил ровно один публичный ответ, а follow-up был
+доставлен. При этом sourced-ответ на вопрос о дате «Правды» не содержал точной даты. Это
+answer-completeness/date-selection defect, а не delivery failure или дубль ответа.
+
+Два контрольных сценария в отдельных новых заявках визуально прошли по политике:
+
+- `Позови оператора` → ровно `Передаю обращение специалисту.`;
+- `Какая погода завтра в Москве?` → ровно один scope-note без передачи оператору.
+
+Кейс «Правды» добавлен в P1 calibration/regression backlog. Во время текущего smoke код, routing,
+prompts, thresholds и KB не меняются. Перед исправлением нужен trace/source audit и точный
+expected answer; этот кейс после правки будет regression evidence, но не новым sealed holdout.
+
 ## Как продолжать в новом чате
 
 Новый чат должен:

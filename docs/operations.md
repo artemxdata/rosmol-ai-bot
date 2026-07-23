@@ -157,22 +157,39 @@ Yonote is read-only for the bot. We never create, edit, or delete Yonote
 documents from this project. The bot only reads selected collections and
 updates its own normalized RAG seed.
 
-Required local/server `.env` values:
+The default production state remains disabled and needs no Yonote credential:
 
 ```env
-YONOTE_API_TOKEN=<read-only-token>
+YONOTE_SYNC_ENABLED=false
+YONOTE_API_TOKEN=
+```
+
+An approved manual production preview uses:
+
+```env
+YONOTE_SYNC_ENABLED=true
+YONOTE_SYNC_MODE=manual
+YONOTE_API_TOKEN=<new-dedicated-read-only-token>
 YONOTE_BASE_URL=https://rossmol.yonote.ru
 YONOTE_COLLECTION_NAMES=Росмолодёжь: общее, структура, направления;Росмолодёжь: мероприятия
 YONOTE_REQUEST_TIMEOUT_SECONDS=30
 YONOTE_MAX_RETRIES=2
 YONOTE_MIN_REQUEST_INTERVAL_SECONDS=0.15
-YONOTE_SYNC_ENABLED=false
-YONOTE_SYNC_MODE=manual
 ```
+
+The token is entered by a human from a password manager directly into the server-only
+`.env.production`; it must not appear in a command line, chat, Git, rendered Squid config or logs.
+Only `app-ml` receives it. `app` remains without the token or provider egress.
 
 The client spaces read requests and retries temporary network, `429`, and
 `5xx` failures with backoff. These settings protect Yonote from request bursts;
-they do not grant write access or change any source document.
+they do not grant write access or change any source document. Production always reads the full
+configured collection set, fails closed if even one collection cannot be matched, and rejects
+`limit_documents`. Concurrent pulls are rejected instead of running duplicate full scans.
+
+The generated Squid allowlist contains the reviewed Cloud.ru and HDE hosts while Yonote is
+disabled. When manual preview is enabled, it contains exactly one additional destination:
+`rossmol.yonote.ru:443`. No credential is written to the proxy config.
 
 Build normalized Yonote chunks from API and merge them into the published KB seed:
 
@@ -211,18 +228,26 @@ Validate before indexing:
 .venv\Scripts\python.exe scripts\index_kb.py --validate-only
 ```
 
-Admin panel flow:
-
-> Recovery freeze override: no trusted admin panel currently exists. Do not open the old URL or
-> use old credentials. The steps below become available only after clean rebuild, a new HTTPS
-> handoff and an explicitly approved batch quality change; until then stop before any mutation.
+Production admin panel flow:
 
 1. Open `/admin/kb`.
 2. Click `Yonote`.
-3. Review `documents`, `fresh_yonote_records`, `added`, `changed`, `removed`.
-4. If the preview looks correct, click `Apply to KB`.
-5. The button only updates this project's `data/knowledge_base_seed.json`; it never writes to Yonote.
-6. After applying, run full Qdrant indexing before relying on the updated answers.
+3. Wait for the full pull of both configured collections.
+4. Review or download `documents`, `fresh_yonote_records`, `added`, `changed` and `removed`.
+
+This production operation is preview-only. It computes a diff in memory and changes neither
+Yonote, the tracked seed, Qdrant, semantic cache nor bot answers. `Apply to KB`, `Save` and
+`Reindex` are hidden in the read-only UI and remain blocked by backend `403`. The downloaded report
+can contain internal KB text; keep it only as private evidence, never in Git, chat or public logs.
+
+Publishing reviewed Yonote changes is a separate release-engineering operation: preserve the
+reviewed snapshot, create a versioned seed change in Git, review its diff, run validation and
+regression, build a clean candidate, perform a controlled full index with rollback evidence, clear
+cache, restart the runtime and repeat readiness/security/smoke gates. Never mutate the trusted
+production checkout or active Qdrant collection from a one-click admin action.
+
+The legacy Apply flow below is allowed only in a local/disposable writable environment after an
+explicit content review; it is not a production instruction.
 
 Rebuild the local Docker services and reindex Qdrant:
 
@@ -240,8 +265,13 @@ release. Then run smoke checks against `http://127.0.0.1:8001/ask` with `X-Bypas
 
 ## Secure Admin Access
 
-There is currently no trusted shared admin URL. The former public address, its certificate,
-SSH tunnel and admin token belong to the compromised host and must not be used.
+The clean runtime currently exposes the provisional HTTPS admin route
+`https://bot-135-106-167-124.sslip.io/admin/kb`. Its certificate and route belong to the new clean
+host. Manual login, list and read checks passed; a write attempt was correctly rejected by backend
+`403`, but revealed that the running UI still displayed writable controls. The local candidate
+fixes that UX contract; the fix is not active until the exact candidate is reviewed and deployed.
+A permanent corporate subdomain is pending. The former public address, its certificate, SSH tunnel
+and admin token belong to the compromised host and must not be used.
 
 On the new clean VM:
 
@@ -249,9 +279,18 @@ On the new clean VM:
 2. keep plaintext admin login/API disabled and rate-limit login attempts;
 3. verify `Secure`, `HttpOnly`, `SameSite=Lax` session cookies and security headers;
 4. store certificate state only on the new host and verify automatic renewal;
-5. publish the new team URL in `CURRENT_STATE.md` only after external HTTPS and `/ready` checks;
+5. record a temporary route as provisional; publish the permanent corporate team URL only after
+   external HTTPS, `/ready` and manual UI checks;
 6. use the admin in read-only mode during a new holdout: search/view, `Validate`, ops/quality
    reports and `Yonote Preview`; do not use `Save`, `Reindex` or `Apply to KB`.
+
+Enabling Yonote preview is a production configuration change. Before it, disable the HDE
+dispatchers and prove the durable queues are empty. Render a new Squid config to a separate
+candidate path (the generator intentionally refuses overwrite), parse it with the pinned Squid
+image, compare the exact three hostnames, and only then install it atomically. Recreate only
+`runtime-egress-proxy` and `app-ml`; do not reindex Qdrant. Afterward verify `/ready`, exact egress
+allow/deny, production `Apply=403`, unchanged tracked-seed hash and unchanged Qdrant counts before
+reenabling the test dispatchers.
 
 Do not reuse any ACME directory, TLS private key, `.env` or tunnel command from the old host.
 
@@ -371,6 +410,20 @@ Set the trigger marker only in server `.env`, not in Git:
 HDE_TRIGGER_PREFIX=<dispatcher-start-marker>
 ```
 
+Create both dispatcher rules in the disabled state first. Use:
+
+- method `POST`;
+- URL `https://<approved-public-host>/webhook/hde`;
+- JSON request format;
+- Bearer authorization with the same server-only value as `WEBHOOK_AUTH_TOKEN`.
+
+HelpDeskEddy documents Bearer Token as a supported dispatcher webhook authorization method:
+<https://support.helpdeskeddy.com/ru/knowledge_base/art/127/cat/57/>. The application also accepts
+the equivalent `X-Webhook-Secret` header, but the token must never be placed in the URL or JSON
+body. Scope both rules to the single test department/channel and require the last-answer author
+to be the client; otherwise the bot's own public HDE post can trigger a loop. Keep the legacy bot
+and broad dispatcher rules disabled.
+
 For the HDE dispatcher rule that starts bot processing for a new ticket:
 
 ```json
@@ -410,6 +463,25 @@ For the HDE dispatcher rule that sends a user's next reply to the bot:
   }
 }
 ```
+
+Do not put `HDE_TRIGGER_PREFIX` into the second payload. It is only the start marker for the
+new-ticket rule, not webhook authentication. Both rules use Bearer authentication independently
+of the payload.
+
+### Visual HDE/VK smoke record, 23 July 2026
+
+The limited test-channel smoke visually showed one public bot reply for the grounded inbound.
+Its follow-up was delivered, but the sourced answer to the date question about «Правда» omitted
+the exact date; this is a P1 answer-completeness backlog and is not fixed during channel
+acceptance. Two separate new tickets behaved as required:
+
+- `Позови оператора` produced exactly `Передаю обращение специалисту.`;
+- `Какая погода завтра в Москве?` produced exactly one scope-note and did not escalate.
+
+This is UI evidence, not final transport acceptance. Before handoff, capture the final aggregate
+from PostgreSQL for all smoke events/traces and inbox/outbox/dead-letter state, finish the
+traffic/security review for unexpected events or loops, and manually verify login and read-only
+functions at the temporary admin route.
 
 The HDE adapter uses `chat_id` as the bot conversation id because replies must
 be bound to the ticket. The trigger prefix is stripped before the message reaches

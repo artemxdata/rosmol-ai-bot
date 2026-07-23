@@ -203,6 +203,7 @@ def _sensitive_values(values: Mapping[str, str]) -> tuple[str, ...]:
         "HDE_API_EMAIL",
         "HDE_API_KEY",
         "CLOUD_RU_API_KEY",
+        "YONOTE_API_TOKEN",
         "POSTGRES_DSN",
         "REDIS_URL",
     }
