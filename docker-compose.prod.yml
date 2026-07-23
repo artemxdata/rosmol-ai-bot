@@ -268,8 +268,7 @@ services:
       HTTPS_PROXY: http://runtime-egress-proxy:3128
       ALL_PROXY: ""
       NO_PROXY: 127.0.0.1,localhost,postgres,redis,qdrant,app,app-ml
-    ports:
-      - "127.0.0.1:${APP_ML_HOST_PORT:-8001}:8000"
+    ports: !override []
     volumes: !override
       - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
       - hf_cache:/home/app/.cache/huggingface

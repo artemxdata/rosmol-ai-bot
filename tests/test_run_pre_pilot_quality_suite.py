@@ -9,6 +9,47 @@ import pytest
 from eval import run_pre_pilot_quality_suite as suite
 
 
+def test_compact_stdout_summary_excludes_case_results() -> None:
+    compact = suite._compact_stdout_summary(
+        {
+            "passed": True,
+            "release_run_id": "quality-run",
+            "expected_git_sha": "a" * 40,
+            "completed_sections": ["forums"],
+            "llm_estimated_cost_rub": 1.25,
+            "sections": {
+                "forums": {"trace_coverage_rate": 1.0, "results": ["private"]}
+            },
+        }
+    )
+
+    assert compact["trace_coverage"] == {"forums": 1.0}
+    assert "sections" not in compact
+    assert "results" not in json.dumps(compact)
+    assert "private" not in json.dumps(compact)
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    (
+        ("http://localhost:8001/ask", True),
+        ("http://127.0.0.1:18001/ask", True),
+        ("http://[::1]:8001/ask", True),
+        ("http://app-ml:8000/ask", True),
+        ("https://app-ml:8000/ask", False),
+        ("http://app-ml:8001/ask", False),
+        ("http://user:secret@localhost:8001/ask", False),
+        ("http://public.example.test/ask", False),
+        ("http://localhost:8001/ask?copy=1", False),
+    ),
+)
+def test_quality_target_is_restricted_to_local_runtime(
+    target: str,
+    expected: bool,
+) -> None:
+    assert suite._valid_quality_target(target) is expected
+
+
 @pytest.mark.asyncio
 async def test_run_pre_pilot_quality_suite_writes_summary(
     monkeypatch: pytest.MonkeyPatch,
@@ -117,6 +158,21 @@ async def test_run_pre_pilot_quality_suite_stops_on_budget(
         }
 
     monkeypatch.setattr(suite, "run_ask_eval", fake_run_ask_eval)
+    monkeypatch.setattr(
+        suite,
+        "build_release_provenance",
+        lambda **kwargs: {
+            "release_run_id": kwargs["release_run_id"],
+            "target": kwargs["target"],
+            "git_sha": "a" * 40,
+            "expected_git_sha": kwargs.get("expected_git_sha"),
+            "git_worktree_clean": True,
+            "kb_seed": {"sha256": "b" * 64},
+            "case_files": {},
+            "complete": True,
+            "errors": [],
+        },
+    )
 
     summary = await suite.run_pre_pilot_quality_suite(
         output_dir=tmp_path / "out",
@@ -129,6 +185,46 @@ async def test_run_pre_pilot_quality_suite_stops_on_budget(
     assert summary["passed"] is False
     assert summary["completed_sections"] == ["forums"]
     assert summary["llm_budget_stopped"] is True
+
+
+@pytest.mark.asyncio
+async def test_incomplete_provenance_stops_before_network_sections(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def unexpected_eval(**kwargs):
+        pytest.fail(f"network eval must not run: {kwargs}")
+
+    monkeypatch.setattr(suite, "run_ask_eval", unexpected_eval)
+    monkeypatch.setattr(suite, "run_followup_eval", unexpected_eval)
+    monkeypatch.setattr(
+        suite,
+        "build_release_provenance",
+        lambda **kwargs: {
+            "release_run_id": kwargs["release_run_id"],
+            "target": kwargs["target"],
+            "git_sha": None,
+            "expected_git_sha": kwargs.get("expected_git_sha"),
+            "git_worktree_clean": None,
+            "kb_seed": None,
+            "case_files": {},
+            "complete": False,
+            "errors": ["git_sha_unavailable"],
+        },
+    )
+
+    summary = await suite.run_pre_pilot_quality_suite(
+        output_dir=tmp_path / "out",
+        cases_dir=tmp_path / "cases",
+        kb_seed_path=Path("data/knowledge_base_seed.json"),
+        sections=("forums",),
+        expected_git_sha="a" * 40,
+    )
+
+    assert summary["passed"] is False
+    assert summary["completed_sections"] == []
+    assert summary["provenance"]["errors"] == ["git_sha_unavailable"]
+    assert (tmp_path / "out" / "summary.json").exists()
 
 
 def test_followup_section_requires_conversation_pass_rate() -> None:

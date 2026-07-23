@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
+import socket
 import ssl
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.cookiejar import CookieJar
 from pathlib import Path
 from secrets import token_hex, token_urlsafe
@@ -33,7 +35,6 @@ from scripts.generate_production_env import (  # noqa: E402
     validate_env,
 )
 
-DEFAULT_RUNTIME_BASE_URL = "http://127.0.0.1:8001"
 DEFAULT_OUTPUT = Path("data/private/runtime/runtime-security-acceptance.json")
 DEFAULT_LOG_CONTAINERS = ("rosmol-app-ml", "rosmol-nginx", "rosmol-edge-relay")
 QUEUE_ZERO_FIELDS = (
@@ -199,6 +200,7 @@ def _ready_probe(
 
 def _sensitive_values(values: Mapping[str, str]) -> tuple[str, ...]:
     keys = set(GENERATED_SECRET_KEYS) | {
+        "HDE_API_EMAIL",
         "HDE_API_KEY",
         "CLOUD_RU_API_KEY",
         "POSTGRES_DSN",
@@ -240,14 +242,26 @@ def run_runtime_security_acceptance(
     *,
     values: Mapping[str, str],
     expected_git_sha: str,
-    runtime_base_url: str = DEFAULT_RUNTIME_BASE_URL,
+    runtime_base_url: str,
+    log_since_utc: str,
     requester: Requester = _request,
     log_reader: LogReader,
     log_containers: tuple[str, ...] = DEFAULT_LOG_CONTAINERS,
 ) -> dict[str, Any]:
+    if not _valid_log_since_utc(log_since_utc):
+        raise ValueError("invalid_log_scan_start")
     probes: list[Probe] = []
-    started_at = datetime.now(UTC)
-    since = started_at.isoformat().replace("+00:00", "Z")
+    since = log_since_utc
+    effective_log_containers = tuple(
+        dict.fromkeys((*DEFAULT_LOG_CONTAINERS, *log_containers))
+    )
+    probes.append(
+        Probe(
+            "required_log_coverage",
+            set(DEFAULT_LOG_CONTAINERS).issubset(effective_log_containers),
+            "all mandatory runtime log containers included",
+        )
+    )
     opener = _build_opener()
     host = values.get("ADMIN_PUBLIC_HOST", "").strip()
     https_base = f"https://{host}"
@@ -440,8 +454,8 @@ def run_runtime_security_acceptance(
         )
     )
 
-    forbidden_values = (*_sensitive_values(values), sentinel)
-    for container in log_containers:
+    forbidden_values = (*_sensitive_values(values), sentinel, wrong_secret)
+    for container in effective_log_containers:
         try:
             logs = log_reader(container, since)
         except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as exc:
@@ -473,6 +487,7 @@ def run_runtime_security_acceptance(
         "expected_git_sha": expected_git_sha,
         "runtime_target": runtime_base_url,
         "public_host": host,
+        "log_scan_since_utc": since,
         "passed": bool(probes) and all(probe.passed for probe in probes),
         "checks": [asdict(probe) for probe in probes],
         "limitations": [
@@ -513,29 +528,61 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--env-file", type=Path, default=Path(".env.production"))
     parser.add_argument("--expected-git-sha", required=True)
-    parser.add_argument("--runtime-base-url", default=DEFAULT_RUNTIME_BASE_URL)
+    parser.add_argument("--expected-public-ipv4", required=True)
+    parser.add_argument("--runtime-base-url", required=True)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--log-container", action="append", dest="log_containers")
+    parser.add_argument("--log-since-utc", required=True)
     parser.add_argument("--use-sudo-docker", action="store_true")
     return parser
 
 
-def _valid_loopback_base_url(value: str) -> bool:
+def _valid_runtime_base_url(value: str, *, public_host: str) -> bool:
     try:
         parsed = urlsplit(value)
         port = parsed.port
     except ValueError:
         return False
     return (
-        parsed.scheme == "http"
-        and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        bool(public_host)
+        and parsed.scheme == "https"
+        and parsed.hostname == public_host.casefold()
         and parsed.username is None
         and parsed.password is None
-        and port is not None
+        and port in {None, 443}
         and parsed.path in {"", "/"}
         and not parsed.query
         and not parsed.fragment
     )
+
+
+def _valid_log_since_utc(value: str) -> bool:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    now = datetime.now(UTC)
+    return now - timedelta(hours=24) <= parsed <= now
+
+
+def _host_resolves_only_to_reviewed_ipv4(host: str, expected_text: str) -> bool:
+    try:
+        expected = ipaddress.ip_address(expected_text)
+    except ValueError:
+        return False
+    if expected.version != 4:
+        return False
+    try:
+        answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        resolved = {
+            ipaddress.ip_address(answer[4][0].split("%", maxsplit=1)[0])
+            for answer in answers
+        }
+    except (OSError, ValueError):
+        return False
+    return resolved == {expected}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -543,9 +590,6 @@ def main(argv: list[str] | None = None) -> int:
     expected_git_sha = args.expected_git_sha.strip()
     if not FULL_GIT_SHA.fullmatch(expected_git_sha) or expected_git_sha == "0" * 40:
         print("ERROR: expected Git SHA must be a non-zero full lowercase SHA.", file=sys.stderr)
-        return 2
-    if not _valid_loopback_base_url(args.runtime_base_url):
-        print("ERROR: runtime base URL must be an explicit loopback HTTP URL.", file=sys.stderr)
         return 2
     if args.env_file.is_symlink():
         print("ERROR: production env must not be a symlink.", file=sys.stderr)
@@ -560,6 +604,31 @@ def main(argv: list[str] | None = None) -> int:
     if parse_errors:
         print("ERROR: production env parsing failed.", file=sys.stderr)
         return 2
+    if not _valid_runtime_base_url(
+        args.runtime_base_url,
+        public_host=values.get("ADMIN_PUBLIC_HOST", "").casefold(),
+    ):
+        print(
+            "ERROR: runtime base URL must be the exact production HTTPS host.",
+            file=sys.stderr,
+        )
+        return 2
+    if not _host_resolves_only_to_reviewed_ipv4(
+        values.get("ADMIN_PUBLIC_HOST", ""),
+        args.expected_public_ipv4,
+    ):
+        print(
+            "ERROR: production host DNS must resolve only to the reviewed server IPv4.",
+            file=sys.stderr,
+        )
+        return 2
+    log_since_utc = args.log_since_utc.strip()
+    if not _valid_log_since_utc(log_since_utc):
+        print(
+            "ERROR: log scan start must be a recent UTC timestamp ending in Z.",
+            file=sys.stderr,
+        )
+        return 2
     if values.get("RELEASE_GIT_SHA") != expected_git_sha:
         print("ERROR: production env release SHA mismatch.", file=sys.stderr)
         return 2
@@ -571,13 +640,16 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: runtime authentication values must be distinct.", file=sys.stderr)
         return 2
 
-    log_containers = tuple(args.log_containers or DEFAULT_LOG_CONTAINERS)
+    log_containers = tuple(
+        dict.fromkeys((*DEFAULT_LOG_CONTAINERS, *(args.log_containers or ())))
+    )
     report = run_runtime_security_acceptance(
         values=values,
         expected_git_sha=expected_git_sha,
         runtime_base_url=args.runtime_base_url,
         log_reader=_docker_log_reader(use_sudo=args.use_sudo_docker),
         log_containers=log_containers,
+        log_since_utc=log_since_utc,
     )
     try:
         _write_private_report(args.output, report)

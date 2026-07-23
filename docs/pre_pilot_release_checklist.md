@@ -2,10 +2,11 @@
 
 Этот чеклист нужен перед демонстрацией и тестовым подключением HDE/VK. Массовые проверки выполняются локально через `/ask`; HDE трогаем только тестовым каналом и короткими smoke-сценариями.
 
-> **Текущий статус 20 июля 2026:** `NO GO / SECURITY HOLD` до завершения clean-runtime
-> acceptance. Серверные команды в разделах 2–5 ниже сохранены только как исторический pre-incident
-> checklist и **не должны выполняться**: они используют старый порядок, старый Compose stack и
-> migration baseline. Единственная актуальная инструкция для нового HDE/VK test-production:
+> **Текущий статус 23 июля 2026:** `NO GO / INFRASTRUCTURE CORRECTION PENDING` до завершения
+> clean-runtime acceptance. Серверные команды в разделах 2 и 5 сохранены только как исторический
+> pre-incident checklist и **не должны выполняться**: они используют старый порядок, старый Compose
+> stack и migration baseline. Разделы 3–4 задают только критерии, а не standalone-команды.
+> Единственная актуальная исполнимая инструкция для нового HDE/VK test-production:
 > `docs/recovery_test_production_runbook_20260720.md`. Старая VM, IP, webhook, admin URL и любые
 > её artifacts запрещены.
 
@@ -123,58 +124,21 @@ PY
 `knowledge_base = 2152`, `response_cache = 0`. Новый count сверяется также с текущим trusted seed;
 если migration, validation, index или count не совпали, runtime не отдавать операторам.
 
-## 3. Серверные smoke-проверки
+## 3. Серверные критерии acceptance
 
-```bash
-python3 - <<'PY'
-from urllib.request import urlopen
+- `app`, `app-ml`, PostgreSQL, Redis и Qdrant не публикуют host ports; `8001` существует только в
+  local/dev Compose.
+- До TLS строгий ML `/ready` проверяется внутри `app-ml`, без host relay и SSH tunnel.
+- После появления рабочего DNS и публично доверенного TLS runtime/security ingress gate обращается
+  только к точному `https://ADMIN_PUBLIC_HOST`.
+- Полный quality suite выполняется отдельным server-local `quality-acceptance` контейнером по
+  internal `data` к `http://app-ml:8000/ask`; наружу production token и PostgreSQL не выносятся.
+- После suite exact-HTTPS gate повторно сканирует runtime/Nginx/relay logs за всё окно quality.
+- HDE/VK не используются для batch/eval-трафика.
 
-for url in [
-    "http://127.0.0.1/ready",
-    "http://127.0.0.1:8001/ready",
-    "http://127.0.0.1/admin/kb",
-]:
-    r = urlopen(url, timeout=60)
-    body = r.read(120).decode("utf-8", errors="ignore")
-    print(url, r.status, body)
-PY
-```
-
-Проверка `/ask` через ML-контур:
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-from urllib.request import Request, urlopen
-
-env = {}
-for line in Path(".env").read_text(encoding="utf-8").splitlines():
-    if line and not line.startswith("#") and "=" in line:
-        k, v = line.split("=", 1)
-        env[k] = v
-
-payload = {
-    "user_id": "server-smoke",
-    "channel": "api",
-    "text": "Как зарегистрироваться на форум?",
-}
-headers = {
-    "Content-Type": "application/json; charset=utf-8",
-    "X-Bypass-Cache": "true",
-}
-if env.get("API_AUTH_TOKEN"):
-    headers["Authorization"] = "Bearer " + env["API_AUTH_TOKEN"]
-
-req = Request(
-    "http://127.0.0.1:8001/ask",
-    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-    headers=headers,
-    method="POST",
-)
-print(urlopen(req, timeout=240).read().decode("utf-8"))
-PY
-```
+Точные fail-closed команды, SHA/provenance checks и output paths находятся только в Gate 4B и
+«Финальный acceptance, привязанный к commit» файла
+`docs/recovery_test_production_runbook_20260720.md`.
 
 ## 4. HDE/VK test contour
 

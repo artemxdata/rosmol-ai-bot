@@ -1,0 +1,46 @@
+services:
+  quality-acceptance:
+    profiles: ["acceptance"]
+    image: rosmol-ai-bot-ml:${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    user: app
+    working_dir: /workspace
+    entrypoint: ["python", "-m", "eval.run_pre_pilot_quality_suite"]
+    command: ["--help"]
+    environment:
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?API_AUTH_TOKEN is required}
+      ASK_EVAL_POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+      PRE_PILOT_TRACE_REQUIRED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: app-ml,postgres,127.0.0.1,localhost
+    volumes:
+      - type: bind
+        source: ${ACCEPTANCE_SOURCE_DIR:?ACCEPTANCE_SOURCE_DIR is required}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${ACCEPTANCE_OUTPUT_DIR:?ACCEPTANCE_OUTPUT_DIR is required}
+        target: /evidence
+      - type: bind
+        source: ${ACCEPTANCE_PROVENANCE_DIR:?ACCEPTANCE_PROVENANCE_DIR is required}
+        target: /provenance
+        read_only: true
+    networks: [data]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+          pids: 256

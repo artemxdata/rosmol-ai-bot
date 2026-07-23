@@ -258,7 +258,8 @@ def test_recovery_runbook_uses_supported_no_pull_runtime_commands() -> None:
     assert "run --rm --no-build" not in runbook
     assert "run --rm --pull never migrate" in runbook
     assert "run --rm --no-deps --pull never model-prefetch" in runbook
-    assert "up -d --no-build app app-ml nginx edge-relay" in runbook
+    assert "up -d --no-build --wait --wait-timeout 480 \\" in runbook
+    assert "app app-ml nginx edge-relay" in runbook
     assert "from src.config import get_settings" in runbook
     assert "settings = get_settings()" in runbook
     assert runbook.count('print("hde_transport_sql_prepare=passed")') == 2
@@ -266,6 +267,82 @@ def test_recovery_runbook_uses_supported_no_pull_runtime_commands() -> None:
     assert "-X POST -H 'Content-Type: application/json'" in runbook
     assert ".dockerignore Dockerfile requirements deploy/huggingface_models.lock.json" in runbook
     assert re.search(r'"\$\{(?:dc|old_dc)\[@\]\}"(?! --profile ml)', runbook) is None
+
+
+def test_recovery_runbook_keeps_production_ml_off_host_ports() -> None:
+    runbook = _read("docs/recovery_test_production_runbook_20260720.md")
+
+    assert "http://127.0.0.1:8001" not in runbook
+    assert "-L 18001" not in runbook
+    assert 'test -z "$(sudo docker port "$app_ml_id" 2>/dev/null)"' in runbook
+    assert '--runtime-base-url "$RUNTIME_BASE_URL"' in runbook
+    assert "docker-compose.acceptance.yml" in runbook
+    assert "quality-acceptance" in runbook
+    assert "--target http://app-ml:8000/ask" in runbook
+    assert "--provenance-file /provenance/source-provenance.json" in runbook
+    assert (
+        "--sections yonote,forums,safety,off_topic,pii,adversarial,followup"
+        in runbook
+    )
+    assert (
+        '.requested_sections ==\n'
+        '    ["yonote", "forums", "safety", "off_topic", "pii", "adversarial", '
+        '"followup"]'
+    ) in runbook
+    assert (
+        '.completed_sections ==\n'
+        '    ["yonote", "forums", "safety", "off_topic", "pii", "adversarial", '
+        '"followup"]'
+    ) in runbook
+    assert (
+        '(.case_files | keys) ==\n'
+        '    ["adversarial", "followup", "forums", "off_topic", "pii", "safety", '
+        '"yonote"]'
+    ) in runbook
+    assert '--log-since-utc "$QUALITY_STARTED_AT"' in runbook
+    assert "ACCEPTANCE_SOURCE_SNAPSHOT" in runbook
+    assert "archive --format=tar" in runbook
+    assert "run_acceptance.py" not in runbook
+    assert runbook.index("### Gate 4B") < runbook.index("### Финальный acceptance")
+    assert runbook.index("### Финальный acceptance") < runbook.index("## Gate 5")
+
+
+def test_recovery_correction_skips_reindex_when_inputs_are_unchanged() -> None:
+    runbook = _read("docs/recovery_test_production_runbook_20260720.md")
+
+    assert "git diff --quiet \\" in runbook
+    assert (
+        '"$PRELIMINARY_GIT_SHA" "$CORRECTION_GIT_SHA" -- "${index_inputs[@]}"'
+        in runbook
+    )
+    assert "index_inputs_unchanged=PASS reindex=SKIPPED" in runbook
+    assert "index_inputs_changed=PASS reindex=COMPLETED" in runbook
+    assert "|| index_diff_rc=$?" in runbook
+    assert "case \"$index_diff_rc\" in" in runbook
+    assert "STOP=index_input_diff_failed" in runbook
+    assert 'exit "$index_diff_rc"' in runbook
+
+
+def test_recovery_dns_and_ready_checks_fail_closed_on_incomplete_state() -> None:
+    runbook = _read("docs/recovery_test_production_runbook_20260720.md")
+
+    assert "if resolved != {expected}:" in runbook
+    assert "if str(expected) not in resolved:" not in runbook
+    assert 'ipaddress.ip_address(item[4][0].split("%", maxsplit=1)[0])' in runbook
+    assert (
+        '(.checks | keys) ==\n'
+        '    ["config", "hde_transport", "knowledge_base", "ml_prewarm", '
+        '"postgres", "redis"]'
+    ) in runbook
+    for field in (
+        "inbox_backlog",
+        "inbox_processing",
+        "inbox_dead_letter",
+        "outbox_backlog",
+        "outbox_sending",
+        "outbox_dead_letter",
+    ):
+        assert f".hde_transport_counts.{field}" in runbook
 
 
 def test_recovery_secretless_build_preserves_only_the_public_release_sha() -> None:

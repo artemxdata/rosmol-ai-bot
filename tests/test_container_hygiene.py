@@ -128,8 +128,9 @@ def test_production_overlay_is_fail_closed_and_uses_minimal_app_mounts() -> None
     assert compose.count("urllib.request.urlopen('http://127.0.0.1:8000/ready'") == 2
 
 
-def test_production_compose_exposes_only_edge_and_loopback_ml_ports() -> None:
+def test_production_compose_exposes_only_edge_ports() -> None:
     compose = (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+    production_env = (ROOT / ".env.production.example").read_text(encoding="utf-8")
 
     for service in (
         "postgres",
@@ -154,8 +155,9 @@ def test_production_compose_exposes_only_edge_and_loopback_ml_ports() -> None:
         assert "ports: !override []" in block
 
     app_ml = _compose_service_block(compose, "app-ml")
-    assert '"127.0.0.1:${APP_ML_HOST_PORT:-8001}:8000"' in app_ml
-    assert '"0.0.0.0:' not in app_ml
+    assert "ports: !override []" in app_ml
+    assert "APP_ML_HOST_PORT" not in app_ml
+    assert "APP_ML_HOST_PORT" not in production_env
 
     nginx = _compose_service_block(compose, "nginx")
     assert "networks: [edge]" in nginx
@@ -211,6 +213,34 @@ def test_production_compose_exposes_only_edge_and_loopback_ml_ports() -> None:
     model_prefetch = _compose_service_block(compose, "model-prefetch")
     assert "network_mode: none" in model_prefetch
     assert "networks: [egress]" not in model_prefetch
+
+
+def test_quality_acceptance_is_internal_minimal_and_secret_scoped() -> None:
+    compose = (ROOT / "docker-compose.acceptance.yml").read_text(encoding="utf-8")
+    service = _compose_service_block(compose, "quality-acceptance")
+
+    assert 'profiles: ["acceptance"]' in service
+    assert "networks: [data]" in service
+    assert "ports:" not in service
+    assert "read_only: true" in service
+    assert "cap_drop: [ALL]" in service
+    assert "no-new-privileges:true" in service
+    assert "PRE_PILOT_TRACE_REQUIRED: \"1\"" in service
+    assert "API_AUTH_TOKEN:" in service
+    assert "ASK_EVAL_POSTGRES_DSN:" in service
+    assert "CLOUD_RU_API_KEY" not in service
+    assert "HDE_API_KEY" not in service
+    assert "WEBHOOK_AUTH_TOKEN" not in service
+    assert "ADMIN_AUTH_TOKEN" not in service
+    assert "ACCEPTANCE_SOURCE_DIR" in service
+    assert "ACCEPTANCE_OUTPUT_DIR" in service
+    assert "ACCEPTANCE_PROVENANCE_DIR" in service
+    assert "target: /workspace" in service
+    assert "target: /evidence" in service
+    assert "target: /provenance" in service
+    assert 'HTTP_PROXY: ""' in service
+    assert 'HTTPS_PROXY: ""' in service
+    assert 'ALL_PROXY: ""' in service
 
 
 def test_production_env_is_ignored_but_reviewed_examples_are_tracked() -> None:
@@ -272,7 +302,8 @@ def _all_keys(value: Any) -> list[str]:
 
 def _compose_service_block(compose: str, service: str) -> str:
     match = re.search(
-        rf"(?ms)^  {re.escape(service)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|^networks:\n)",
+        rf"(?ms)^  {re.escape(service)}:\n"
+        rf"(?P<body>.*?)(?=^  [a-z0-9-]+:\n|^networks:\n|\Z)",
         compose,
     )
     assert match is not None, service

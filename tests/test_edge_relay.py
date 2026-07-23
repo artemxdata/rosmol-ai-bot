@@ -17,3 +17,5 @@ def test_edge_relay_is_layer_four_only_and_keeps_tls_inside_nginx() -> None:
     assert "ssl crt" not in config
     assert "http-request" not in config
     assert "capture" not in config
+    assert config.count("bind ") == 2
+    assert config.count("server nginx ") == 2

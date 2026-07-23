@@ -82,3 +82,49 @@ def test_expected_git_sha_must_match_clean_head(
     assert mismatch["errors"] == ["expected_git_sha_mismatch"]
     assert invalid["complete"] is False
     assert invalid["errors"] == ["expected_git_sha_invalid"]
+
+
+def test_host_git_attestation_is_rechecked_against_visible_files(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    kb_seed = tmp_path / "seed.json"
+    cases = tmp_path / "cases.json"
+    kb_seed.write_bytes(b"seed")
+    cases.write_bytes(b"cases")
+    monkeypatch.setattr(release_provenance, "_git_state", lambda: ("a" * 40, True))
+    attestation = release_provenance.build_release_provenance(
+        release_run_id="release-test",
+        target="http://app-ml:8000/ask",
+        kb_seed_path=kb_seed,
+        case_paths={"safety": cases},
+        expected_git_sha="a" * 40,
+    )
+
+    validated = release_provenance.validate_release_provenance_attestation(
+        attestation,
+        release_run_id="release-test",
+        target="http://app-ml:8000/ask",
+        kb_seed_path=kb_seed,
+        case_paths={"safety": cases},
+        expected_git_sha="a" * 40,
+    )
+
+    assert validated["complete"] is True
+    assert (
+        validated["verification_mode"]
+        == "host_git_attestation_with_local_hash_verification"
+    )
+
+    cases.write_bytes(b"changed")
+    mismatch = release_provenance.validate_release_provenance_attestation(
+        attestation,
+        release_run_id="release-test",
+        target="http://app-ml:8000/ask",
+        kb_seed_path=kb_seed,
+        case_paths={"safety": cases},
+        expected_git_sha="a" * 40,
+    )
+
+    assert mismatch["complete"] is False
+    assert mismatch["errors"] == ["attestation_case_mismatch:safety"]

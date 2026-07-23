@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 from uuid import uuid4
 
@@ -21,6 +23,7 @@ from eval.release_provenance import build_release_provenance, valid_git_sha
 DEFAULT_OUTPUT_DIR = Path("reports/final_acceptance")
 DEFAULT_QUALITY_OUTPUT_DIR = Path("reports/pre_pilot_quality_suite")
 DEFAULT_KB_SEED_PATH = Path("data/knowledge_base_seed.json")
+DEFAULT_TARGET = "http://localhost:8001/ask"
 DEFAULT_READY_URLS = (
     "http://localhost:8080/ready",
     "http://localhost:8001/ready",
@@ -30,6 +33,33 @@ DEFAULT_PYTEST_TIMEOUT_SEC = 240
 DEFAULT_KB_TIMEOUT_SEC = 120
 DEFAULT_READY_TIMEOUT_SEC = 30
 DEFAULT_QUALITY_TIMEOUT_SEC = 900
+SENSITIVE_ENV_MARKERS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "API_KEY",
+    "DATABASE_URL",
+    "_DSN",
+    "REDIS_URL",
+)
+SENSITIVE_ENV_PREFIXES = (
+    "ADMIN_",
+    "CERTBOT_",
+    "CLOUD_RU_",
+    "HDE_",
+    "QDRANT_",
+    "REDIS_",
+    "WEBHOOK_",
+    "YONOTE_",
+)
+PROXY_ENV_NAMES = frozenset(
+    {
+        "ALL_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+    }
+)
 
 
 @dataclass
@@ -44,13 +74,52 @@ class StepResult:
     skipped: bool = False
 
 
+def _resolve_endpoints(
+    *,
+    target: str | None,
+    ready_urls: tuple[str, ...],
+) -> tuple[str, tuple[str, ...]]:
+    resolved_target = target or DEFAULT_TARGET
+    resolved_ready_urls = ready_urls or DEFAULT_READY_URLS
+    if not _valid_loopback_http_endpoint(resolved_target, expected_path="/ask"):
+        raise ValueError(
+            "non-production --target must be an explicit loopback HTTP /ask endpoint"
+        )
+    if not all(
+        _valid_loopback_http_endpoint(url, expected_path="/ready")
+        for url in resolved_ready_urls
+    ):
+        raise ValueError(
+            "non-production --ready-url values must be explicit loopback HTTP /ready endpoints"
+        )
+    return resolved_target, tuple(resolved_ready_urls)
+
+
+def _valid_loopback_http_endpoint(value: str, *, expected_path: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        and parsed.username is None
+        and parsed.password is None
+        and port is not None
+        and parsed.path == expected_path
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the local pre-pilot acceptance gate and write a compact report.",
     )
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--quality-output-dir", default=str(DEFAULT_QUALITY_OUTPUT_DIR))
-    parser.add_argument("--target", default="http://localhost:8001/ask")
+    parser.add_argument("--target")
     parser.add_argument("--kb-seed", default=str(DEFAULT_KB_SEED_PATH))
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--max-llm-cost-rub", type=float, default=80.0)
@@ -66,18 +135,31 @@ def main() -> None:
     parser.add_argument("--skip-quality", action="store_true")
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        target, ready_urls = _resolve_endpoints(
+            target=args.target,
+            ready_urls=tuple(args.ready_urls or ()),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    expected_git_sha = args.expected_git_sha.strip()
+    if not valid_git_sha(expected_git_sha):
+        parser.error("--expected-git-sha must be a full lowercase 40-character Git SHA")
+
     kb_seed_path = Path(args.kb_seed)
     release_run_id = f"acceptance-{uuid4()}"
-    expected_git_sha = args.expected_git_sha.strip()
-    expected_git_sha_valid = valid_git_sha(expected_git_sha)
+    expected_git_sha_valid = True
     provenance = build_release_provenance(
         release_run_id=release_run_id,
-        target=args.target,
+        target=target,
         kb_seed_path=kb_seed_path,
         expected_git_sha=expected_git_sha or None,
     )
+    if provenance.get("complete") is not True or provenance.get("git_sha") != expected_git_sha:
+        parser.error("release provenance must be clean, complete, and match --expected-git-sha")
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     steps: list[StepResult] = []
     if args.skip_ruff:
@@ -114,7 +196,6 @@ def main() -> None:
     if args.skip_ready:
         steps.append(_skipped_step("readiness"))
     else:
-        ready_urls = tuple(args.ready_urls or DEFAULT_READY_URLS)
         steps.append(
             _check_ready(
                 ready_urls,
@@ -133,7 +214,7 @@ def main() -> None:
             "-m",
             "eval.run_pre_pilot_quality_suite",
             "--target",
-            args.target,
+            target,
             "--output-dir",
             str(quality_output_dir),
             "--max-llm-cost-rub",
@@ -158,7 +239,7 @@ def main() -> None:
     quality_provenance_match, quality_provenance_errors = _quality_provenance_matches(
         quality_summary,
         release_run_id=release_run_id,
-        target=args.target,
+        target=target,
         provenance=provenance,
         expected_git_sha=expected_git_sha,
     )
@@ -176,7 +257,8 @@ def main() -> None:
         and quality_summary.get("passed") is True
         and quality_provenance_match
         and provenance.get("complete") is True,
-        "target": args.target,
+        "target": target,
+        "endpoint_mode": "local_loopback",
         "provenance": provenance,
         "skipped_steps": skipped_steps,
         "quality_provenance_match": quality_provenance_match,
@@ -271,9 +353,37 @@ def _valid_sha256(value: Any) -> bool:
     return len(text) == 64 and all(character in "0123456789abcdef" for character in text)
 
 
+def _subprocess_environment(*, include_acceptance_secrets: bool) -> dict[str, str]:
+    source = os.environ
+    environment = {
+        key: value
+        for key, value in source.items()
+        if key.upper() not in PROXY_ENV_NAMES
+        and not any(marker in key.upper() for marker in SENSITIVE_ENV_MARKERS)
+        and not key.upper().startswith(SENSITIVE_ENV_PREFIXES)
+    }
+    if include_acceptance_secrets:
+        for key in ("API_AUTH_TOKEN", "ASK_EVAL_POSTGRES_DSN"):
+            if source.get(key):
+                environment[key] = source[key]
+        environment["PRE_PILOT_TRACE_REQUIRED"] = "1"
+        environment["NO_PROXY"] = "127.0.0.1,localhost,::1,app-ml,postgres"
+    return environment
+
+
+def _redact_acceptance_secrets(value: str) -> str:
+    redacted = value
+    for key in ("API_AUTH_TOKEN", "ASK_EVAL_POSTGRES_DSN"):
+        secret = os.getenv(key) or ""
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
 def _run_command(name: str, command: list[str], *, timeout_sec: int) -> StepResult:
     started = perf_counter()
     try:
+        include_acceptance_secrets = name == "pre_pilot_quality_suite"
         completed = subprocess.run(
             command,
             check=False,
@@ -282,14 +392,17 @@ def _run_command(name: str, command: list[str], *, timeout_sec: int) -> StepResu
             encoding="utf-8",
             errors="replace",
             timeout=timeout_sec,
+            env=_subprocess_environment(
+                include_acceptance_secrets=include_acceptance_secrets,
+            ),
         )
         return StepResult(
             name=name,
             ok=completed.returncode == 0,
             elapsed_sec=round(perf_counter() - started, 3),
             command=command,
-            stdout_tail=_tail(completed.stdout),
-            stderr_tail=_tail(completed.stderr),
+            stdout_tail=_tail(_redact_acceptance_secrets(completed.stdout)),
+            stderr_tail=_tail(_redact_acceptance_secrets(completed.stderr)),
             error="" if completed.returncode == 0 else f"exit_code={completed.returncode}",
         )
     except Exception as exc:
@@ -355,6 +468,7 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Expected Git SHA: `{report.get('expected_git_sha')}`",
         f"- Git SHA: `{(report.get('provenance') or {}).get('git_sha')}`",
         f"- Target: `{report['target']}`",
+        f"- Endpoint mode: `{report.get('endpoint_mode')}`",
         f"- Passed: `{report['passed']}`",
         f"- Skipped steps: `{', '.join(report.get('skipped_steps') or []) or '-'}`",
         f"- Quality provenance match: `{report.get('quality_provenance_match')}`",
@@ -411,6 +525,7 @@ def _compact_report(
         "release_run_id": report.get("release_run_id"),
         "expected_git_sha": report.get("expected_git_sha"),
         "expected_git_sha_valid": report.get("expected_git_sha_valid"),
+        "endpoint_mode": report.get("endpoint_mode"),
         "steps": {step["name"]: step["ok"] for step in report["steps"]},
         "skipped_steps": report.get("skipped_steps"),
         "quality_provenance_match": report.get("quality_provenance_match"),

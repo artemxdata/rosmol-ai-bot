@@ -112,17 +112,115 @@ jobs:
           set -Eeuo pipefail
           test ! -e .env
           test ! -e .env.production
+          production_compose="$RUNNER_TEMP/production-compose.json"
+          acceptance_compose="$RUNNER_TEMP/acceptance-compose.json"
+          compose_release_sha="0000000000000000000000000000000000000000"
+          mkdir -p \
+            "$RUNNER_TEMP/acceptance-source" \
+            "$RUNNER_TEMP/acceptance-output" \
+            "$RUNNER_TEMP/acceptance-provenance"
+          printf '{}\n' > "$RUNNER_TEMP/acceptance-provenance/source-provenance.json"
+          RELEASE_GIT_SHA="$compose_release_sha" \
           docker compose --env-file .env.production.example \
             -f docker-compose.yml \
             -f docker-compose.ml.yml \
             -f docker-compose.prod.yml \
-            --profile ml config --quiet
+            --profile ml \
+            config --format json > "$production_compose"
+          ACCEPTANCE_SOURCE_DIR="$RUNNER_TEMP/acceptance-source" \
+          ACCEPTANCE_OUTPUT_DIR="$RUNNER_TEMP/acceptance-output" \
+          ACCEPTANCE_PROVENANCE_DIR="$RUNNER_TEMP/acceptance-provenance" \
+          RELEASE_GIT_SHA="$compose_release_sha" \
           docker compose --env-file .env.production.example \
             -f docker-compose.yml \
             -f docker-compose.ml.yml \
             -f docker-compose.prod.yml \
             -f docker-compose.admin-tls.yml \
-            --profile ml --profile tls config --quiet
+            -f docker-compose.acceptance.yml \
+            --profile ml --profile tls --profile acceptance \
+            config --format json > "$acceptance_compose"
+          python - "$production_compose" "$acceptance_compose" "$compose_release_sha" <<'PY'
+          import json
+          import sys
+
+          expected_release_sha = sys.argv[3]
+          for compose_index, compose_path in enumerate(sys.argv[1:3]):
+              payload = json.loads(open(compose_path, encoding="utf-8").read())
+              services = payload["services"]
+              networks = payload["networks"]
+              app_ml = services["app-ml"]
+              assert not app_ml.get("ports")
+              assert set(app_ml["networks"]) == {"edge", "data", "runtime_egress"}
+              assert all(networks[name]["internal"] is True for name in app_ml["networks"])
+              published = {
+                  name: service["ports"]
+                  for name, service in services.items()
+                  if service.get("ports")
+              }
+              assert set(published) == {"edge-relay"}
+              edge_ports = sorted(
+                  (
+                      port["host_ip"],
+                      str(port["published"]),
+                      port["target"],
+                      port["protocol"],
+                  )
+                  for port in published["edge-relay"]
+              )
+              assert edge_ports == [
+                  ("0.0.0.0", "443", 8443, "tcp"),
+                  ("0.0.0.0", "80", 8080, "tcp"),
+              ]
+              quality = services.get("quality-acceptance")
+              if compose_index == 0:
+                  assert quality is None
+                  continue
+              assert quality is not None
+              assert not quality.get("ports")
+              assert set(quality["networks"]) == {"data"}
+              assert networks["data"]["internal"] is True
+              assert quality["profiles"] == ["acceptance"]
+              assert quality["user"] == "app"
+              assert quality["read_only"] is True
+              assert quality["restart"] == "no"
+              assert quality["cap_drop"] == ["ALL"]
+              assert quality["security_opt"] == ["no-new-privileges:true"]
+              assert quality["tmpfs"] == [
+                  "/tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777"
+              ]
+              environment = quality["environment"]
+              assert set(environment) == {
+                  "ALL_PROXY",
+                  "API_AUTH_TOKEN",
+                  "ASK_EVAL_POSTGRES_DSN",
+                  "HTTP_PROXY",
+                  "HTTPS_PROXY",
+                  "NO_PROXY",
+                  "PRE_PILOT_TRACE_REQUIRED",
+                  "PYTHONDONTWRITEBYTECODE",
+                  "PYTHONUNBUFFERED",
+              }
+              assert environment["PRE_PILOT_TRACE_REQUIRED"] == "1"
+              assert all(
+                  environment[name] == ""
+                  for name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY")
+              )
+              assert environment["NO_PROXY"] == "app-ml,postgres,127.0.0.1,localhost"
+              expected_image = f"rosmol-ai-bot-ml:{expected_release_sha}"
+              assert quality["image"] == expected_image
+              assert app_ml["image"] == expected_image
+              mounts = {
+                  volume["target"]: volume
+                  for volume in quality["volumes"]
+              }
+              assert set(mounts) == {"/workspace", "/evidence", "/provenance"}
+              assert mounts["/workspace"]["type"] == "bind"
+              assert mounts["/workspace"]["read_only"] is True
+              assert mounts["/provenance"]["type"] == "bind"
+              assert mounts["/provenance"]["read_only"] is True
+              assert mounts["/evidence"]["type"] == "bind"
+              assert mounts["/evidence"].get("read_only") is not True
+          PY
 
       - name: Confirm the checkout stayed clean
         shell: bash

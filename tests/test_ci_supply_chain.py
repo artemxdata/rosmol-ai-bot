@@ -85,6 +85,12 @@ def test_ci_is_secretless_and_runs_the_release_gate() -> None:
         _normalized_shell(workflow)
     )
     assert "docker-compose.prod.yml" in workflow
+    assert "assert quality is None" in workflow
+    assert "assert quality is not None" in workflow
+    assert 'assert quality["read_only"] is True' in workflow
+    assert 'assert quality["cap_drop"] == ["ALL"]' in workflow
+    assert 'assert set(mounts) == {"/workspace", "/evidence", "/provenance"}' in workflow
+    assert 'expected_image = f"rosmol-ai-bot-ml:{expected_release_sha}"' in workflow
 
 
 def test_actions_cannot_deploy_or_open_a_remote_shell() -> None:

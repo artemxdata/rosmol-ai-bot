@@ -554,9 +554,25 @@ PY
 "${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
   'python scripts/init_qdrant.py && python scripts/index_kb.py \
    --path data/knowledge_base_seed.json --prune-stale'
-"${dc[@]}" --profile ml up -d --no-build app app-ml
+RUNTIME_STARTED_AT_FILE="data/private/runtime/runtime-started-at-${TRUSTED_GIT_SHA}.txt"
+test ! -e "$RUNTIME_STARTED_AT_FILE"
+umask 077
+date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNTIME_STARTED_AT_FILE"
+"${dc[@]}" --profile ml up -d --no-build --wait --wait-timeout 480 app app-ml
 "${dc[@]}" --profile ml ps
-ready_json="$(curl -fsS --max-time 20 http://127.0.0.1:8001/ready)"
+app_ml_id="$("${dc[@]}" --profile ml ps -q app-ml)"
+test -n "$app_ml_id"
+sudo docker inspect "$app_ml_id" --format '{{json .HostConfig.PortBindings}}' \
+  | jq -e 'length == 0' >/dev/null
+test -z "$(sudo docker port "$app_ml_id" 2>/dev/null)"
+test "$(ss -H -ltn 'sport = :8001' | wc -l | tr -d ' ')" = 0
+ready_json="$("${dc[@]}" --profile ml exec -T app-ml python - <<'PY'
+import urllib.request
+
+with urllib.request.urlopen("http://127.0.0.1:8000/ready", timeout=20) as response:
+    print(response.read().decode("utf-8"))
+PY
+)"
 jq -e --arg sha "$TRUSTED_GIT_SHA" '
   .status == "ready" and
   .release_git_sha == $sha and
@@ -601,7 +617,7 @@ PY
 )"
 jq -e '.knowledge_base == 2152 and .response_cache == 0' \
   <<<"$collection_counts" >/dev/null
-unset ready_json collection_counts
+unset app_ml_id ready_json collection_counts
 ```
 
 До dispatcher отдельно доказывается фактическая network policy. Проверка не передаёт provider
@@ -687,6 +703,41 @@ Nginx сначала поднимается только в HTTP bootstrap polic
 
 ```bash
 set -Eeuo pipefail
+ADMIN_PUBLIC_HOST="$(python3 -c '
+from pathlib import Path
+for line in Path(".env.production").read_text(encoding="utf-8").splitlines():
+    if line.startswith("ADMIN_PUBLIC_HOST="):
+        print(line.split("=", 1)[1].strip())
+        break
+')"
+EXPECTED_PUBLIC_IPV4='<NEW_SERVER_PUBLIC_IPV4>'
+python3 - "$ADMIN_PUBLIC_HOST" "$EXPECTED_PUBLIC_IPV4" <<'PY'
+import ipaddress
+import socket
+import sys
+
+host, expected_text = sys.argv[1:]
+if not host or expected_text.startswith("<"):
+    raise SystemExit("set the reviewed DNS host and new server IPv4 before ACME")
+try:
+    ipaddress.ip_address(host)
+except ValueError:
+    pass
+else:
+    raise SystemExit("ADMIN_PUBLIC_HOST must be a DNS name, not an IP literal")
+expected = ipaddress.ip_address(expected_text)
+if expected.version != 4:
+    raise SystemExit("expected server address must be IPv4")
+resolved = {
+    ipaddress.ip_address(item[4][0].split("%", maxsplit=1)[0])
+    for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+}
+if resolved != {expected}:
+    raise SystemExit(
+        "ADMIN_PUBLIC_HOST IP records must exactly match the reviewed new server IPv4"
+    )
+print("public_dns_preflight=PASS")
+PY
 "${dc[@]}" --profile ml up -d --no-build nginx edge-relay
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/health)" = 200
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1/ask)" = 426
@@ -718,6 +769,7 @@ if "${dc[@]}" --profile ml exec -T nginx wget -q -T 3 -O /dev/null http://169.25
 fi
 unset nginx_id relay_id
 sudo env -u ADMIN_PUBLIC_HOST -u CERTBOT_EMAIL bash scripts/provision_admin_https.sh
+unset ADMIN_PUBLIC_HOST EXPECTED_PUBLIC_IPV4
 ```
 
 Пустые shell overrides выше заставляют provisioning script прочитать host/email из защищённого
@@ -781,9 +833,10 @@ if (-not (Test-Path "data/private/runtime/gate4-offline-$trustedGitSha.xml")) {
 }
 ```
 
-Gate 4A выполняется в clean local/CI checkout до deploy; `run_acceptance.py` ниже затем повторно
-запускает полный `pytest`. Локальную `.venv` нельзя переносить на server, заменять этот gate
-тестами внутри runtime image или устанавливать dev dependencies в production image.
+Gate 4A выполняется в clean local/CI checkout до deploy и не повторяется production image.
+Локальную `.venv` нельзя переносить на server, заменять этот gate тестами внутри runtime image
+или устанавливать dev dependencies в production image. Server-local quality gate ниже запускает
+только release eval cases и trace verification.
 
 ### Gate 4B — safe live runtime probes
 
@@ -809,22 +862,41 @@ cd /opt/rosmol-ai-bot
 sudo -v
 RUNTIME_SECURITY_REPORT="data/private/runtime/runtime-security-${TRUSTED_GIT_SHA}.json"
 test ! -e "$RUNTIME_SECURITY_REPORT"
+RUNTIME_STARTED_AT_FILE="data/private/runtime/runtime-started-at-${TRUSTED_GIT_SHA}.txt"
+test -f "$RUNTIME_STARTED_AT_FILE"
+test ! -L "$RUNTIME_STARTED_AT_FILE"
+test "$(stat -c '%a' "$RUNTIME_STARTED_AT_FILE")" = 600
+RUNTIME_STARTED_AT="$(cat "$RUNTIME_STARTED_AT_FILE")"
+EXPECTED_PUBLIC_IPV4='<NEW_SERVER_PUBLIC_IPV4>'
+ADMIN_PUBLIC_HOST="$(python3 -c '
+from pathlib import Path
+for line in Path(".env.production").read_text(encoding="utf-8").splitlines():
+    if line.startswith("ADMIN_PUBLIC_HOST="):
+        print(line.split("=", 1)[1].strip())
+        break
+')"
+test -n "$ADMIN_PUBLIC_HOST"
+RUNTIME_BASE_URL="https://${ADMIN_PUBLIC_HOST}"
 python3 scripts/run_runtime_security_acceptance.py \
   --env-file .env.production \
   --expected-git-sha "$TRUSTED_GIT_SHA" \
-  --runtime-base-url http://127.0.0.1:8001 \
+  --expected-public-ipv4 "$EXPECTED_PUBLIC_IPV4" \
+  --runtime-base-url "$RUNTIME_BASE_URL" \
+  --log-since-utc "$RUNTIME_STARTED_AT" \
   --log-container rosmol-app-ml \
   --log-container rosmol-nginx \
   --log-container rosmol-edge-relay \
   --use-sudo-docker \
   --output "$RUNTIME_SECURITY_REPORT"
-jq -e --arg sha "$TRUSTED_GIT_SHA" \
+jq -e --arg sha "$TRUSTED_GIT_SHA" --arg since "$RUNTIME_STARTED_AT" \
   '.passed == true and .expected_git_sha == $sha and
+   .log_scan_since_utc == $since and
    ([.checks[] | select(.passed != true)] | length) == 0' \
   "$RUNTIME_SECURITY_REPORT" >/dev/null
 test "$(stat -c '%a' "$RUNTIME_SECURITY_REPORT")" = 600
 git check-ignore -q "$RUNTIME_SECURITY_REPORT"
-unset RUNTIME_SECURITY_REPORT
+unset ADMIN_PUBLIC_HOST EXPECTED_PUBLIC_IPV4 RUNTIME_BASE_URL RUNTIME_SECURITY_REPORT \
+  RUNTIME_STARTED_AT RUNTIME_STARTED_AT_FILE
 ```
 
 Любой skipped/недоступный log scan, неожиданный status, непустая очередь, SHA mismatch или
@@ -832,39 +904,218 @@ unset RUNTIME_SECURITY_REPORT
 
 ### Финальный acceptance, привязанный к commit
 
-`run_acceptance.py` намеренно не может пройти без явно заданного trusted SHA, при dirty worktree,
-пропущенном шаге, неполном trace coverage или stale quality report. Запускать его удобно с
-доверенного локального checkout через SSH tunnel к loopback `app-ml` нового сервера. Так eval не
-идёт через HDE/VK и порт `8001` не публикуется наружу. Passing report считается финальным только
-для SHA, прошедшего обязательный correction re-release ниже; preliminary report старого SHA
-сохраняется как evidence, но не разрешает dispatcher.
+Полный quality suite требует прямого trace lookup в PostgreSQL. Поэтому production credentials не
+переносятся на локальную машину и database host port не открывается. Eval запускается на сервере
+одноразовым `quality-acceptance` контейнером: он получает только `API_AUTH_TOKEN` и внутренний
+`POSTGRES_DSN`, подключён только к internal `data`, не имеет provider secrets/egress/host ports,
+читает read-only `git archive` snapshot exact commit без `.git`/`.env` и удаляется после выполнения.
+API-запросы идут прямо к `app-ml` внутри Docker; TLS/Nginx policy независимо доказывается Gate 4B.
+Минимальный runtime image не обязан содержать `git`: host сначала создаёт из clean checkout
+отдельную direct-Git аттестацию, а one-shot повторно сверяет её SHA и все KB/case fingerprints с
+файлами неизменяемого snapshot.
 
-В первом локальном терминале:
+```bash
+set -Eeuo pipefail
+cd /opt/rosmol-ai-bot
+test "$(git rev-parse HEAD)" = "$TRUSTED_GIT_SHA"
+test -z "$(git status --porcelain --untracked-files=normal)"
+CLEAN_ACCEPTANCE_SOURCE="/var/lib/rosmol/release-source/${TRUSTED_GIT_SHA}"
+test "$(sudo -u "$DEPLOY_USER" git -C "$CLEAN_ACCEPTANCE_SOURCE" rev-parse HEAD)" \
+  = "$TRUSTED_GIT_SHA"
+test -z "$(sudo -u "$DEPLOY_USER" git -C "$CLEAN_ACCEPTANCE_SOURCE" \
+  status --porcelain --untracked-files=normal)"
+test ! -e "$CLEAN_ACCEPTANCE_SOURCE/.env"
+test ! -e "$CLEAN_ACCEPTANCE_SOURCE/.env.production"
 
-```powershell
-ssh -N -L 18001:127.0.0.1:8001 <NEW_DEPLOY_USER>@<NEW_HOST>
+ACCEPTANCE_RUN_ID="quality-${TRUSTED_GIT_SHA}-$(date -u +%Y%m%dT%H%M%SZ)"
+QUALITY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+QUALITY_EVIDENCE_DIR="/var/lib/rosmol/acceptance/${ACCEPTANCE_RUN_ID}"
+QUALITY_ATTESTATION_DIR="/var/lib/rosmol/acceptance-attestations/${ACCEPTANCE_RUN_ID}"
+QUALITY_ATTESTATION_FILE="$QUALITY_ATTESTATION_DIR/source-provenance.json"
+ACCEPTANCE_SOURCE_SNAPSHOT="/var/lib/rosmol/acceptance-source/${ACCEPTANCE_RUN_ID}"
+test ! -e "$QUALITY_EVIDENCE_DIR"
+test ! -e "$QUALITY_ATTESTATION_DIR"
+test ! -e "$ACCEPTANCE_SOURCE_SNAPSHOT"
+sudo install -d -m 0700 -o 10001 -g 10001 "$QUALITY_EVIDENCE_DIR"
+sudo install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" \
+  "$QUALITY_ATTESTATION_DIR"
+sudo -u "$DEPLOY_USER" env \
+  CLEAN_ACCEPTANCE_SOURCE="$CLEAN_ACCEPTANCE_SOURCE" \
+  QUALITY_ATTESTATION_FILE="$QUALITY_ATTESTATION_FILE" \
+  ACCEPTANCE_RUN_ID="$ACCEPTANCE_RUN_ID" \
+  TRUSTED_GIT_SHA="$TRUSTED_GIT_SHA" \
+  python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+source_root = Path(os.environ["CLEAN_ACCEPTANCE_SOURCE"]).resolve()
+sys.path.insert(0, str(source_root))
+os.chdir(source_root)
+
+from eval.release_provenance import build_release_provenance
+
+case_paths = {
+    "yonote": Path("eval/cases/pre_pilot_yonote.json"),
+    "forums": Path("eval/cases/pre_pilot_forums.json"),
+    "safety": Path("eval/cases/pre_pilot_safety.json"),
+    "off_topic": Path("eval/cases/pre_pilot_off_topic.json"),
+    "pii": Path("eval/cases/pre_pilot_pii.json"),
+    "adversarial": Path("eval/cases/pre_pilot_adversarial.json"),
+    "followup": Path("eval/cases/pre_pilot_followup.json"),
+}
+payload = build_release_provenance(
+    release_run_id=os.environ["ACCEPTANCE_RUN_ID"],
+    target="http://app-ml:8000/ask",
+    kb_seed_path=Path("data/knowledge_base_seed.json"),
+    case_paths=case_paths,
+    expected_git_sha=os.environ["TRUSTED_GIT_SHA"],
+)
+if payload.get("complete") is not True:
+    raise SystemExit("clean source provenance is incomplete")
+path = Path(os.environ["QUALITY_ATTESTATION_FILE"])
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+fd = os.open(path, flags, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as stream:
+    json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+sudo jq -e --arg sha "$TRUSTED_GIT_SHA" --arg run "$ACCEPTANCE_RUN_ID" '
+  .complete == true and
+  .verification_mode == "direct_git" and
+  .release_run_id == $run and
+  .git_sha == $sha and
+  .expected_git_sha == $sha and
+  .git_worktree_clean == true and
+  (.case_files | keys) ==
+    ["adversarial", "followup", "forums", "off_topic", "pii", "safety", "yonote"]
+' "$QUALITY_ATTESTATION_FILE" >/dev/null
+sudo chown root:root "$QUALITY_ATTESTATION_DIR" "$QUALITY_ATTESTATION_FILE"
+sudo chmod 0711 "$QUALITY_ATTESTATION_DIR"
+sudo chmod 0444 "$QUALITY_ATTESTATION_FILE"
+if sudo -u "$DEPLOY_USER" git -C "$CLEAN_ACCEPTANCE_SOURCE" ls-files -s \
+  | awk '$1 == "120000" { found=1 } END { exit(found ? 0 : 1) }'; then
+  echo 'STOP: symlink is not allowed in the acceptance source snapshot'
+  exit 1
+fi
+sudo install -d -m 0550 -o 10001 -g 10001 "$ACCEPTANCE_SOURCE_SNAPSHOT"
+sudo -u "$DEPLOY_USER" git -C "$CLEAN_ACCEPTANCE_SOURCE" \
+  archive --format=tar "$TRUSTED_GIT_SHA" \
+  | sudo tar -xf - -C "$ACCEPTANCE_SOURCE_SNAPSHOT" --no-same-owner
+sudo chown -R 10001:10001 "$ACCEPTANCE_SOURCE_SNAPSHOT"
+sudo find "$ACCEPTANCE_SOURCE_SNAPSHOT" -type d -exec chmod 0550 {} +
+sudo find "$ACCEPTANCE_SOURCE_SNAPSHOT" -type f -exec chmod 0440 {} +
+test ! -e "$ACCEPTANCE_SOURCE_SNAPSHOT/.env"
+test ! -e "$ACCEPTANCE_SOURCE_SNAPSHOT/.env.production"
+acceptance_dc=(sudo env \
+  ACCEPTANCE_SOURCE_DIR="$ACCEPTANCE_SOURCE_SNAPSHOT" \
+  ACCEPTANCE_OUTPUT_DIR="$QUALITY_EVIDENCE_DIR" \
+  ACCEPTANCE_PROVENANCE_DIR="$QUALITY_ATTESTATION_DIR" \
+  docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml \
+  -f docker-compose.acceptance.yml)
+"${acceptance_dc[@]}" --profile ml --profile acceptance config --quiet
+"${acceptance_dc[@]}" --profile ml --profile acceptance run \
+  --rm --no-deps --pull never quality-acceptance --help >/dev/null
+echo 'quality_acceptance_import_preflight=PASS'
+"${acceptance_dc[@]}" --profile ml --profile acceptance run \
+  --rm --no-deps --pull never quality-acceptance \
+  --output-dir /evidence \
+  --target http://app-ml:8000/ask \
+  --max-llm-cost-rub 80 \
+  --release-run-id "$ACCEPTANCE_RUN_ID" \
+  --expected-git-sha "$TRUSTED_GIT_SHA" \
+  --provenance-file /provenance/source-provenance.json \
+  --sections yonote,forums,safety,off_topic,pii,adversarial,followup \
+  --summary-only
+
+sudo jq -e --arg sha "$TRUSTED_GIT_SHA" --arg run "$ACCEPTANCE_RUN_ID" '
+  .passed == true and
+  .release_run_id == $run and
+  .expected_git_sha == $sha and
+  .target == "http://app-ml:8000/ask" and
+  .provenance.complete == true and
+  .provenance.verification_mode ==
+    "host_git_attestation_with_local_hash_verification" and
+  .provenance.git_sha == $sha and
+  .provenance.git_worktree_clean == true and
+  .requested_sections ==
+    ["yonote", "forums", "safety", "off_topic", "pii", "adversarial", "followup"] and
+  .completed_sections ==
+    ["yonote", "forums", "safety", "off_topic", "pii", "adversarial", "followup"] and
+  (.sections | keys) ==
+    ["adversarial", "followup", "forums", "off_topic", "pii", "safety", "yonote"] and
+  ([.sections[] | .trace_coverage_rate] | all(. == 1))
+' "$QUALITY_EVIDENCE_DIR/summary.json" >/dev/null
+test -z "$("${acceptance_dc[@]}" --profile ml --profile acceptance \
+  ps -q quality-acceptance)"
+test "$(sudo -u "$DEPLOY_USER" git -C "$CLEAN_ACCEPTANCE_SOURCE" rev-parse HEAD)" \
+  = "$TRUSTED_GIT_SHA"
+test -z "$(sudo -u "$DEPLOY_USER" git -C "$CLEAN_ACCEPTANCE_SOURCE" \
+  status --porcelain --untracked-files=normal)"
+test -z "$(sudo find "$ACCEPTANCE_SOURCE_SNAPSHOT" -type f -perm /022 -print -quit)"
+sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" "$QUALITY_EVIDENCE_DIR"
+sudo find "$QUALITY_EVIDENCE_DIR" -type d -exec chmod 0700 {} +
+sudo find "$QUALITY_EVIDENCE_DIR" -type f -exec chmod 0600 {} +
+sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" "$QUALITY_ATTESTATION_DIR"
+sudo chmod 0700 "$QUALITY_ATTESTATION_DIR"
+sudo chmod 0600 "$QUALITY_ATTESTATION_FILE"
+echo 'server_local_quality_acceptance=PASS'
 ```
 
-Во втором локальном терминале новый `API_AUTH_TOKEN` загружается в process environment через
-secret manager/защищённый prompt, а не как literal в command line. Затем из clean checkout того
-же commit:
+`QUALITY_STARTED_AT` сохраняется до post-quality log scan. Passing summary содержит exact SHA,
+clean-worktree provenance, KB/case hashes, все семь секций и `trace_coverage_rate=1`. Evidence
+остаётся только на сервере; в handoff переносятся агрегаты и безопасные hashes. Для SHA после
+обязательного correction re-release ниже этот gate выполняется заново; preliminary evidence старого
+SHA не разрешает dispatcher.
 
-```powershell
-$trustedGitSha = '<40_LOWERCASE_HEX_SHA>'
-if ((git rev-parse HEAD) -ne $trustedGitSha) { throw 'trusted SHA mismatch' }
-if (git status --porcelain --untracked-files=normal) { throw 'worktree is dirty' }
-.venv\Scripts\python.exe scripts\run_acceptance.py `
-  --expected-git-sha $trustedGitSha `
-  --target http://127.0.0.1:18001/ask `
-  --ready-url http://127.0.0.1:18001/ready `
-  --output-dir reports/final_acceptance_recovery `
-  --quality-output-dir reports/pre_pilot_quality_suite_recovery
-Remove-Item Env:API_AUTH_TOKEN -ErrorAction SilentlyContinue
+Сразу после suite повторяется HTTPS security gate, но log window начинается до первого
+авторизованного quality-запроса. Так проверка ищет в runtime/Nginx/relay logs значения credentials,
+secret header names и probe markers за весь suite, не печатая сами логи:
+
+```bash
+set -Eeuo pipefail
+cd /opt/rosmol-ai-bot
+POST_QUALITY_SECURITY_REPORT="data/private/runtime/post-quality-security-${TRUSTED_GIT_SHA}.json"
+test ! -e "$POST_QUALITY_SECURITY_REPORT"
+EXPECTED_PUBLIC_IPV4='<NEW_SERVER_PUBLIC_IPV4>'
+ADMIN_PUBLIC_HOST="$(python3 -c '
+from pathlib import Path
+for line in Path(".env.production").read_text(encoding="utf-8").splitlines():
+    if line.startswith("ADMIN_PUBLIC_HOST="):
+        print(line.split("=", 1)[1].strip())
+        break
+')"
+test -n "$ADMIN_PUBLIC_HOST"
+python3 scripts/run_runtime_security_acceptance.py \
+  --env-file .env.production \
+  --expected-git-sha "$TRUSTED_GIT_SHA" \
+  --expected-public-ipv4 "$EXPECTED_PUBLIC_IPV4" \
+  --runtime-base-url "https://${ADMIN_PUBLIC_HOST}" \
+  --log-since-utc "$QUALITY_STARTED_AT" \
+  --log-container rosmol-app-ml \
+  --log-container rosmol-nginx \
+  --log-container rosmol-edge-relay \
+  --use-sudo-docker \
+  --output "$POST_QUALITY_SECURITY_REPORT"
+jq -e --arg sha "$TRUSTED_GIT_SHA" --arg since "$QUALITY_STARTED_AT" '
+  .passed == true and
+  .expected_git_sha == $sha and
+  .log_scan_since_utc == $since and
+  ([.checks[] | select(.passed != true)] | length) == 0
+' "$POST_QUALITY_SECURITY_REPORT" >/dev/null
+test "$(stat -c '%a' "$POST_QUALITY_SECURITY_REPORT")" = 600
+git check-ignore -q "$POST_QUALITY_SECURITY_REPORT"
+unset ACCEPTANCE_RUN_ID ACCEPTANCE_SOURCE_SNAPSHOT ADMIN_PUBLIC_HOST \
+  CLEAN_ACCEPTANCE_SOURCE \
+  EXPECTED_PUBLIC_IPV4 POST_QUALITY_SECURITY_REPORT \
+  QUALITY_ATTESTATION_DIR QUALITY_ATTESTATION_FILE \
+  QUALITY_EVIDENCE_DIR QUALITY_STARTED_AT acceptance_dc
+echo 'post_quality_runtime_security=PASS'
 ```
-
-Passing report должен содержать тот же `release_run_id`, expected/current Git SHA, KB hash и
-hashes всех case files. Сам report остаётся локальным ignored artifact; в handoff переносятся
-только агрегаты и безопасные hashes.
 
 ## Gate 5 — ограниченный HDE/VK smoke
 
@@ -920,7 +1171,8 @@ if ! sudo -u "$DEPLOY_USER" git -C "$CLEAN_RELEASE_SOURCE" diff --quiet \
   "$PRELIMINARY_GIT_SHA" "$CORRECTION_GIT_SHA" -- \
   .dockerignore Dockerfile requirements deploy/huggingface_models.lock.json \
   docker-compose.yml docker-compose.ml.yml \
-  docker-compose.prod.yml docker-compose.admin-tls.yml haproxy nginx security; then
+  docker-compose.prod.yml docker-compose.admin-tls.yml docker-compose.acceptance.yml \
+  haproxy nginx security; then
   echo 'STOP: build/infra/security inputs changed; repeat full Gate 3, including every image scan'
   exit 1
 fi
@@ -1012,8 +1264,11 @@ unset GITLEAKS_IMAGE TRIVY_IMAGE RESCAN_DIR TRIVY_EXCEPTION_REVIEW_DEADLINE safe
 ```
 
 Только после зелёного rescan production env атомарно получает новый SHA; остальные secrets
-сохраняются byte-for-byte и не выводятся. Затем выполняются миграция, обязательный reindex frozen
-seed с очисткой stale response cache, offline ML check и запуск строго из новых tags:
+сохраняются byte-for-byte и не выводятся. Затем выполняются миграция, условный reindex frozen
+seed только при изменении его входов, offline ML check и запуск строго из новых tags. Если seed,
+индексатор, retrieval/embedding code, model lock и ML dependency lock byte-for-byte не менялись,
+существующая freshly-built коллекция сохраняется и вместо дорогостоящего reindex выполняется
+строгая проверка baseline count/cache:
 
 ```bash
 set -Eeuo pipefail
@@ -1056,18 +1311,113 @@ async def main() -> None:
 asyncio.run(main())
 print("hde_transport_sql_prepare=passed")
 PY
-"${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
-  'python scripts/init_qdrant.py && python scripts/index_kb.py \
-   --path data/knowledge_base_seed.json --prune-stale'
+index_inputs=(
+  data/knowledge_base_seed.json
+  data/forums_registry.json
+  scripts/index_kb.py
+  scripts/init_qdrant.py
+  src/config.py
+  src/kb
+  src/rag
+  deploy/huggingface_models.lock.json
+  requirements/ml.lock
+)
+index_diff_rc=0
+sudo -u "$DEPLOY_USER" git diff --quiet \
+  "$PRELIMINARY_GIT_SHA" "$CORRECTION_GIT_SHA" -- "${index_inputs[@]}" \
+  || index_diff_rc=$?
+case "$index_diff_rc" in
+  0)
+    echo 'index_inputs_unchanged=PASS reindex=SKIPPED'
+    ;;
+  1)
+    "${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
+      'python scripts/init_qdrant.py && python scripts/index_kb.py \
+       --path data/knowledge_base_seed.json --prune-stale'
+    echo 'index_inputs_changed=PASS reindex=COMPLETED'
+    ;;
+  *)
+    printf 'STOP=index_input_diff_failed exit=%s\n' "$index_diff_rc" >&2
+    exit "$index_diff_rc"
+    ;;
+esac
+unset index_diff_rc
 "${dc[@]}" --profile ml run --rm --pull never ml-check --load-models
-"${dc[@]}" --profile ml up -d --no-build app app-ml nginx edge-relay
+RUNTIME_STARTED_AT_FILE="data/private/runtime/runtime-started-at-${TRUSTED_GIT_SHA}.txt"
+test ! -e "$RUNTIME_STARTED_AT_FILE"
+umask 077
+date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNTIME_STARTED_AT_FILE"
+"${dc[@]}" --profile ml up -d --no-build --wait --wait-timeout 480 \
+  app app-ml nginx edge-relay
+correction_ready_json="$("${dc[@]}" --profile ml exec -T app-ml python - <<'PY'
+import urllib.request
+
+with urllib.request.urlopen("http://127.0.0.1:8000/ready", timeout=20) as response:
+    print(response.read().decode("utf-8"))
+PY
+)"
+jq -e --arg sha "$TRUSTED_GIT_SHA" '
+  .status == "ready" and
+  .release_git_sha == $sha and
+  (.checks | keys) ==
+    ["config", "hde_transport", "knowledge_base", "ml_prewarm", "postgres", "redis"] and
+  ([.checks[]] | all(. == "ok")) and
+  ([
+    .hde_transport_counts.inbox_backlog,
+    .hde_transport_counts.inbox_processing,
+    .hde_transport_counts.inbox_dead_letter,
+    .hde_transport_counts.outbox_backlog,
+    .hde_transport_counts.outbox_sending,
+    .hde_transport_counts.outbox_dead_letter
+  ] | all(. == 0))
+' <<<"$correction_ready_json" >/dev/null
+correction_collection_counts="$("${dc[@]}" --profile ml exec -T app-ml python - <<'PY'
+import asyncio
+import json
+
+from qdrant_client import AsyncQdrantClient
+
+from src.config import get_settings
+
+
+async def main() -> None:
+    settings = get_settings()
+    client = AsyncQdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key or None,
+        timeout=10,
+    )
+    try:
+        knowledge = await client.get_collection(settings.qdrant_knowledge_collection)
+        response_cache = await client.get_collection("response_cache")
+        print(
+            json.dumps(
+                {
+                    "knowledge_base": int(knowledge.points_count or 0),
+                    "response_cache": int(response_cache.points_count or 0),
+                },
+                sort_keys=True,
+            )
+        )
+    finally:
+        await client.close()
+
+
+asyncio.run(main())
+PY
+)"
+jq -e '.knowledge_base == 2152 and .response_cache == 0' \
+  <<<"$correction_collection_counts" >/dev/null
 sudo env -u ADMIN_PUBLIC_HOST -u CERTBOT_EMAIL bash scripts/provision_admin_https.sh
+unset RUNTIME_STARTED_AT_FILE correction_collection_counts correction_ready_json \
+  index_inputs
 ```
 
-Для нового SHA с нуля повторяются Gate 3 readiness/egress assertions, Gate 4B live report и
-`run_acceptance.py`; output directories включают `CORRECTION_GIT_SHA`. Старые отчёты не
-перезаписываются и не объединяются. Только новый полный green chain разрешает переход к HDE
-smoke; при любой ошибке остаются `dispatcher OFF` и `NO GO`.
+Для нового SHA с нуля повторяются Gate 3 readiness/egress assertions, Gate 4B exact-HTTPS report,
+server-local `quality-acceptance` и post-quality HTTPS/log gate; идентификаторы и output directories
+содержат `CORRECTION_GIT_SHA`. Старые отчёты не перезаписываются и не объединяются. Только новый
+полный green chain разрешает переход к HDE smoke; при любой ошибке остаются `dispatcher OFF` и
+`NO GO`.
 
 Dispatcher сначала создаётся выключенным. До его включения в отдельном терминале запускается
 наблюдатель из Gate 6; первый HDE scenario запрещён, пока наблюдатель не пишет свежие samples.
@@ -1136,8 +1486,8 @@ sudo ss -lntup
 unset TRAFFIC_LOG
 ```
 
-Наружу ожидаются только `22` из trusted CIDR и `80/443`; `8001` должен слушать только
-`127.0.0.1`, а `5432/6379/6333/6334` не должны быть host listeners. Наблюдаемый application
+Наружу ожидаются только `22` из trusted CIDR и `80/443`; `8001`, `5432/6379/6333/6334`
+не должны быть host listeners вообще. Наблюдаемый application
 egress во время smoke сопоставляется с согласованными HDE/Cloud.ru endpoints; model/package
 downloads к этому моменту уже завершены.
 

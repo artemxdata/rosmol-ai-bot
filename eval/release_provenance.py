@@ -48,9 +48,85 @@ def build_release_provenance(
         "git_worktree_clean": git_worktree_clean,
         "kb_seed": kb_seed,
         "case_files": cases,
+        "verification_mode": "direct_git",
         "complete": not errors,
         "errors": errors,
     }
+
+
+def validate_release_provenance_attestation(
+    attestation: Mapping[str, Any],
+    *,
+    release_run_id: str,
+    target: str,
+    kb_seed_path: Path,
+    case_paths: Mapping[str, Path],
+    expected_git_sha: str,
+) -> dict[str, Any]:
+    """Validate a host-created Git attestation against files visible to the caller."""
+
+    errors: list[str] = []
+    if attestation.get("verification_mode") != "direct_git":
+        errors.append("attestation_not_direct_git")
+    if attestation.get("complete") is not True or attestation.get("errors") not in ([], ()):
+        errors.append("attestation_incomplete")
+    if attestation.get("release_run_id") != release_run_id:
+        errors.append("attestation_release_run_id_mismatch")
+    if attestation.get("target") != target:
+        errors.append("attestation_target_mismatch")
+    if not valid_git_sha(expected_git_sha):
+        errors.append("expected_git_sha_invalid")
+    if attestation.get("git_sha") != expected_git_sha:
+        errors.append("attestation_git_sha_mismatch")
+    if attestation.get("expected_git_sha") != expected_git_sha:
+        errors.append("attestation_expected_git_sha_mismatch")
+    if attestation.get("git_worktree_clean") is not True:
+        errors.append("attestation_worktree_not_clean")
+
+    fingerprint_errors: list[str] = []
+    kb_seed = _fingerprint_file(
+        kb_seed_path,
+        errors=fingerprint_errors,
+        label="kb_seed",
+    )
+    cases = {
+        name: _fingerprint_file(
+            path,
+            errors=fingerprint_errors,
+            label=f"case:{name}",
+        )
+        for name, path in case_paths.items()
+    }
+    errors.extend(fingerprint_errors)
+
+    if not _fingerprint_matches(attestation.get("kb_seed"), kb_seed):
+        errors.append("attestation_kb_seed_mismatch")
+    attested_cases = attestation.get("case_files")
+    if not isinstance(attested_cases, Mapping) or set(attested_cases) != set(cases):
+        errors.append("attestation_case_set_mismatch")
+    else:
+        for name, fingerprint in cases.items():
+            if not _fingerprint_matches(attested_cases.get(name), fingerprint):
+                errors.append(f"attestation_case_mismatch:{name}")
+
+    return {
+        "release_run_id": release_run_id,
+        "target": target,
+        "git_sha": expected_git_sha if valid_git_sha(expected_git_sha) else None,
+        "expected_git_sha": expected_git_sha,
+        "git_worktree_clean": attestation.get("git_worktree_clean") is True,
+        "kb_seed": kb_seed,
+        "case_files": cases,
+        "verification_mode": "host_git_attestation_with_local_hash_verification",
+        "complete": not errors,
+        "errors": errors,
+    }
+
+
+def _fingerprint_matches(expected: Any, actual: Any) -> bool:
+    if not isinstance(expected, Mapping) or not isinstance(actual, Mapping):
+        return False
+    return all(expected.get(key) == actual.get(key) for key in ("path", "sha256", "size_bytes"))
 
 
 def _git_state() -> tuple[str | None, bool | None]:

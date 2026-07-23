@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import asyncpg
@@ -23,7 +24,10 @@ from eval.pre_pilot_cases import (
     FOLLOWUP_FILE,
     build_pre_pilot_case_sets,
 )
-from eval.release_provenance import build_release_provenance
+from eval.release_provenance import (
+    build_release_provenance,
+    validate_release_provenance_attestation,
+)
 from eval.run_ask import (
     _auth_headers,
     _fetch_trace,
@@ -49,6 +53,7 @@ DEFAULT_SECTIONS = (
 DEFAULT_MIN_SECTION_PASS_RATE = 0.9
 SAFETY_MIN_PASS_RATE = 1.0
 RELEASE_MIN_TRACE_COVERAGE_RATE = 1.0
+MAX_PROVENANCE_ATTESTATION_BYTES = 64 * 1024
 
 
 async def run_pre_pilot_quality_suite(
@@ -69,8 +74,14 @@ async def run_pre_pilot_quality_suite(
     allow_unbounded_llm_cost: bool = False,
     release_run_id: str | None = None,
     expected_git_sha: str | None = None,
+    provenance_file: Path | None = None,
 ) -> dict[str, Any]:
     _validate_sections(sections)
+    if not _valid_quality_target(target):
+        raise ValueError(
+            "Quality target must be an explicit loopback HTTP /ask endpoint "
+            "or http://app-ml:8000/ask"
+        )
     release_run_id = release_run_id or f"pre-pilot-{uuid4()}"
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(cases_dir.mkdir, parents=True, exist_ok=True)
@@ -86,14 +97,42 @@ async def run_pre_pilot_quality_suite(
         sections=sections,
         followup_cases_path=followup_cases_path,
     )
-    provenance = await asyncio.to_thread(
-        build_release_provenance,
-        release_run_id=release_run_id,
-        target=target,
-        kb_seed_path=kb_seed_path,
-        case_paths=case_paths,
-        expected_git_sha=expected_git_sha,
-    )
+    if provenance_file is None:
+        provenance = await asyncio.to_thread(
+            build_release_provenance,
+            release_run_id=release_run_id,
+            target=target,
+            kb_seed_path=kb_seed_path,
+            case_paths=case_paths,
+            expected_git_sha=expected_git_sha,
+        )
+    else:
+        provenance = await asyncio.to_thread(
+            _load_and_validate_provenance_attestation,
+            provenance_file,
+            release_run_id=release_run_id,
+            target=target,
+            kb_seed_path=kb_seed_path,
+            case_paths=case_paths,
+            expected_git_sha=expected_git_sha or "",
+        )
+
+    release_bound = expected_git_sha is not None or provenance_file is not None
+    if release_bound and provenance.get("complete") is not True:
+        summary = _build_summary(
+            output_dir=output_dir,
+            cases_dir=cases_dir,
+            target=target,
+            sections=sections,
+            section_reports={},
+            max_llm_cost_rub=max_llm_cost_rub,
+            stopped_by_budget=False,
+            release_run_id=release_run_id,
+            trace_required=True,
+            provenance=provenance,
+        )
+        await _persist_summary(output_dir, summary)
+        return summary
 
     section_reports: dict[str, dict[str, Any]] = {}
     total_cost = 0.0
@@ -154,14 +193,7 @@ async def run_pre_pilot_quality_suite(
         trace_required=True,
         provenance=provenance,
     )
-    summary_path = output_dir / "summary.json"
-    summary_md_path = output_dir / "summary.md"
-    await asyncio.to_thread(
-        summary_path.write_text,
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    await asyncio.to_thread(_write_summary_markdown, summary_md_path, summary)
+    await _persist_summary(output_dir, summary)
     return summary
 
 
@@ -346,6 +378,82 @@ def _summarize_followup_results(
         ),
         "results": results,
     }
+
+
+def _valid_quality_target(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"} and port is not None
+    internal_runtime = parsed.hostname == "app-ml" and port == 8000
+    return (
+        parsed.scheme == "http"
+        and (loopback or internal_runtime)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == "/ask"
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _load_and_validate_provenance_attestation(
+    path: Path,
+    *,
+    release_run_id: str,
+    target: str,
+    kb_seed_path: Path,
+    case_paths: dict[str, Path],
+    expected_git_sha: str,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    attestation: dict[str, Any] = {}
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("attestation must be a regular file")
+        if path.stat().st_size > MAX_PROVENANCE_ATTESTATION_BYTES:
+            raise ValueError("attestation is too large")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("attestation must contain a JSON object")
+        attestation = payload
+    except (OSError, UnicodeError, ValueError) as exc:
+        errors.append(f"attestation_unavailable:{type(exc).__name__}")
+
+    if errors:
+        return {
+            "release_run_id": release_run_id,
+            "target": target,
+            "git_sha": None,
+            "expected_git_sha": expected_git_sha,
+            "git_worktree_clean": None,
+            "kb_seed": None,
+            "case_files": {},
+            "verification_mode": "host_git_attestation_with_local_hash_verification",
+            "complete": False,
+            "errors": errors,
+        }
+    return validate_release_provenance_attestation(
+        attestation,
+        release_run_id=release_run_id,
+        target=target,
+        kb_seed_path=kb_seed_path,
+        case_paths=case_paths,
+        expected_git_sha=expected_git_sha,
+    )
+
+
+async def _persist_summary(output_dir: Path, summary: dict[str, Any]) -> None:
+    summary_path = output_dir / "summary.json"
+    summary_md_path = output_dir / "summary.md"
+    await asyncio.to_thread(
+        summary_path.write_text,
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    await asyncio.to_thread(_write_summary_markdown, summary_md_path, summary)
 
 
 def _build_summary(
@@ -618,6 +726,20 @@ def _clip(value: Any, *, limit: int = 700) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def _compact_stdout_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "passed": summary.get("passed"),
+        "release_run_id": summary.get("release_run_id"),
+        "expected_git_sha": summary.get("expected_git_sha"),
+        "completed_sections": summary.get("completed_sections"),
+        "llm_estimated_cost_rub": summary.get("llm_estimated_cost_rub"),
+        "trace_coverage": {
+            name: section.get("trace_coverage_rate")
+            for name, section in (summary.get("sections") or {}).items()
+        },
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
@@ -636,7 +758,14 @@ def main() -> None:
     parser.add_argument("--allow-unbounded-llm-cost", action="store_true")
     parser.add_argument("--release-run-id", default="")
     parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--provenance-file", type=Path)
+    parser.add_argument("--summary-only", action="store_true")
     args = parser.parse_args()
+    if not _valid_quality_target(args.target):
+        parser.error(
+            "--target must be an explicit loopback HTTP /ask endpoint "
+            "or http://app-ml:8000/ask"
+        )
 
     summary = asyncio.run(
         run_pre_pilot_quality_suite(
@@ -660,9 +789,11 @@ def main() -> None:
             allow_unbounded_llm_cost=args.allow_unbounded_llm_cost,
             release_run_id=args.release_run_id or None,
             expected_git_sha=args.expected_git_sha or None,
+            provenance_file=args.provenance_file,
         )
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    stdout_payload = _compact_stdout_summary(summary) if args.summary_only else summary
+    print(json.dumps(stdout_payload, ensure_ascii=False, indent=2))
     if not summary["passed"]:
         raise SystemExit(1)
 

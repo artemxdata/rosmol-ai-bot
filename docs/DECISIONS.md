@@ -262,3 +262,27 @@ Nginx подключён только к `edge`, не публикует host po
 У relay остаётся внешний маршрут, необходимый для приёма публичных соединений. Это отдельный
 residual: в контейнере нет секретов и прикладного кода, image входит в Critical-CVE/secret/SBOM
 gate, а любой необъяснимый relay-initiated egress в provider flow logs является stop-criterion.
+
+## D-028. Production ML runtime не публикует host port
+
+**Статус:** принято для recovery test-production 22 июля 2026.
+На Docker Engine 29 желаемый loopback bind `app-ml` при подключении сервиса только к internal
+networks сохранился в `HostConfig.PortBindings`, но фактические `NetworkSettings.Ports`, host
+listener и NAT rule не появились. Это fail-closed с точки зрения внешней доступности, но делает
+`127.0.0.1:8001` ложным operational contract.
+
+Отдельный host-facing HTTP relay не принимается: runtime proof показал direct public и metadata
+egress из такого контейнера даже при попытке задать приоритет internal gateway. Поскольку relay
+между оператором и `app-ml` видел бы plaintext API tokens, prompts и ответы, расширять ему egress
+или доверять неработающему route priority запрещено.
+
+В production overlay `app-ml` теперь имеет пустой effective `ports`; `8001` остаётся только local/dev
+convention. До TLS readiness и Qdrant baseline проверяются внутри контейнера или по internal Docker
+маршруту без передачи секретов. После TLS public runtime/security gate обращается к точному
+`https://ADMIN_PUBLIC_HOST`, то есть проходит тот же Nginx policy и сертификат, что будущий HDE
+webhook. Полный quality suite выполняется server-local one-shot по internal `data` и получает только
+API auth/trace DSN; provider и HDE credentials ему не передаются. Единственный host-publishing
+service — secretless L4 `edge-relay` на `80/443`: на `443` он передаёт TLS ciphertext, а на `80`
+разрешены только несекретные ACME/health/`426` bootstrap-запросы. Relay не получает production
+env/certificates. CI проверяет effective merged Compose, точный список published ports и internal
+membership `app-ml`, а не только исходный YAML.
