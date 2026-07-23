@@ -684,6 +684,43 @@ async def test_admin_kb_mutations_are_explicitly_forbidden_in_read_only_runtime(
 
 
 @pytest.mark.asyncio
+async def test_production_admin_mutations_require_explicit_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    settings = SimpleNamespace(
+        app_env="production",
+        admin_auth_token="admin-secret",
+        admin_read_only=False,
+        admin_mutations_enabled=False,
+        yonote_sync_enabled=False,
+        kb_seed_path=str(seed_path),
+    )
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    transport = httpx.ASGITransport(app=fastapi_app)
+    headers = {"X-Admin-Token": "admin-secret"}
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        blocked = await client.patch(
+            "/admin/kb/chunks/travel",
+            json={"text_clean": "Не должно сохраниться", "reindex": False},
+            headers=headers,
+        )
+        settings.admin_mutations_enabled = True
+        allowed = await client.patch(
+            "/admin/kb/chunks/travel",
+            json={"text_clean": "Изменение тестовой базы", "reindex": False},
+            headers=headers,
+        )
+
+    assert blocked.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["record"]["text_clean"] == "Изменение тестовой базы"
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_login_sets_session_cookie(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

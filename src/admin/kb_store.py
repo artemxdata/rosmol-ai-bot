@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -77,8 +79,36 @@ def update_chunk(
         target["text_clean"] = normalized_text
 
     validate_seed_items(records)
-    path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_seed_records(path, records)
     return target
+
+
+def write_seed_records(path: Path, records: list[dict[str, Any]]) -> None:
+    if path.is_symlink():
+        raise ValueError("knowledge base seed must not be a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(temporary, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(records, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        if os.name == "posix":
+            os.chmod(path, 0o600)
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory_fd = os.open(path.parent, directory_flags)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def validate_seed(path: Path) -> dict[str, Any]:

@@ -3,18 +3,19 @@
 **Обновлено:** 23 июля 2026
 **Ветка:** `master`  
 **Текущий server runtime:**
-`6241a3ffe7795efd01a5a52d4bbc6ca6e102c1e1` (`Harden production acceptance path`). Clean checkout,
-SHA-bound app/app-ml images, `pip check`, Gitleaks, SBOM/Critical/secret scan и checksum manifest
-прошли: active Critical `0`, image secret findings `0`, Gitleaks findings `0`. Изменение относительно
-предварительного runtime не затрагивает application behavior, auth/webhook, dependencies, migration
-или KB/index inputs; production host publication `app-ml` удалена, повторная индексация не
-выполнялась.
+`27cecaf9905b703e803022e8089ca5993d419843` (`Harden read-only admin and add scoped Yonote
+preview`). Clean checkout, SHA-bound app/app-ml images, `pip check`, полный Gitleaks и scan всех
+девяти production images прошли: active Critical `0`, image secret findings `0`, Gitleaks findings
+`0`, checksum manifest подтверждён. Cutover не менял migration или index inputs; повторная
+индексация не выполнялась. После переключения оба runtime-контейнера прошли readiness и security
+acceptance, protected data services не пересоздавались.
 
 **Server:** новая чистая Ubuntu 24.04 VM прошла OS/SSH/firewall/Docker preflight; включён 8 GiB swap,
 используется отдельный read-only GitHub deploy key. Server-only `.env.production` создан человеком,
 проверен валидатором и не передавался Codex. PostgreSQL/Redis/Qdrant/Squid healthy, migration head —
-`008_hde_durable_transport`, frozen published seed — `knowledge_base=2152`,
-`response_cache=0`. `app` и `app-ml` healthy на exact SHA, restart count `0`, `oom_killed=false`;
+`008_hde_durable_transport`, frozen published seed — `knowledge_base=2152`, текущий semantic
+cache — `response_cache=1`. `app` и `app-ml` healthy на exact SHA, restart count `0`,
+`oom_killed=false`;
 строгий `/ready` подтверждает config/Redis/PostgreSQL/KB/ML/HDE transport, все HDE
 inbox/outbox/dead-letter очереди пусты. Offline ML, HTTPS egress allowlist и network membership
 прошли. Прямые Cloud.ru probes обеих моделей прошли. SQL startup blocker предыдущего запуска
@@ -33,37 +34,48 @@ timer включён. Runtime security acceptance
 `7.663317 RUB` при лимите `80 RUB`. One-shot удалён; runtime container IDs/restarts не изменились.
 Quality suite создал `25` semantic-cache records, потому что production принимает bypass-cache
 только от loopback, а acceptance шёл через internal Docker hostname. Все 25 records были доказанно
-созданы после старта suite, удалены по точным point IDs; итоговый baseline снова
-`knowledge_base=2152`, `response_cache=0`. Post-quality runtime security acceptance прошёл.
+созданы после старта suite и удалены по точным point IDs. Один текущий cache record появился позже
+в ручном воспроизведении и не относится к KB index. Post-quality runtime security acceptance
+прошёл.
 
-**Локальный infrastructure/security candidate, ещё не deployed:** текущий commit исправляет
-read-only admin UX и добавляет disabled-by-default ручной Yonote pull/preview. При включении новый
-dedicated read-only token получает только `app-ml`, а Squid условно разрешает только
-`rossmol.yonote.ru:443` третьим destination. Production Preview полностью читает обе настроенные
-коллекции, fail-closed при пустой/частичной выборке и считает diff в памяти; он не меняет Yonote,
-tracked seed, Qdrant, cache или ответы бота. Concurrent pull и `limit_documents` в production
-запрещены. Apply/Save/Reindex скрыты и остаются заблокированы backend `403`. Новый Yonote token ещё
-не выпущен, Preview не запускался, server runtime остаётся на `6241a3f`; reindex для этого candidate
-не требуется. Локально прошли Ruff, `1375 passed / 1 skipped`, KB validation
-`2186 valid / 2152 published`, KB audit `0 errors`, оба production Compose merge и JavaScript
-syntax check.
+**Yonote capability на сервере:** dedicated read-only token внесён человеком только в
+server-only `.env.production`; его значение Codex не видел. Валидатор прошёл. Generated Squid
+allowlist атомарно переключён на ровно три destination: Cloud.ru, tenant HDE и
+`rossmol.yonote.ru:443`; proxy healthy, secretless, unknown destination и direct egress
+заблокированы. `app-ml` после этого ещё не пересоздавался, поэтому token/capability в running
+application пока не активны; Yonote Preview не запускался, seed и Qdrant не менялись.
 
-**Статус релиза:** `LIMITED HDE/VK SMOKE VISUAL PASS / FINAL HANDOFF PENDING`. В тестовом
+**Локальная следующая итерация, ещё не committed/deployed:** по прямому решению владельца
+тестовому контуру нужен управляемый редактор для проверки Save -> Qdrant -> RAG. Реализуется
+explicit capability, которая доступна только `app-ml`, требует одновременно
+`ADMIN_READ_ONLY=false` и `ADMIN_MUTATIONS_ENABLED=true` и принимает только isolated working seed
+`/app/data/private/admin-kb/knowledge_base_seed.json`. `app` получает тот же файл только read-only,
+provider tokens ему не передаются. Tracked Git seed не мутируется. Записи seed выполняются
+атомарно mode `0600`, конкурентные admin mutations блокируются. Yonote API остаётся source-side
+read-only; Apply меняет только приватную рабочую копию бота. Targeted Ruff/Compose и `99` tests
+прошли. Полный local gate: Ruff — green, `1382 passed / 1 skipped`, KB validation —
+`2186 valid / 2152 published`, KB audit — `0 errors / 4 known warnings`, оба production Compose
+merge — green. GitHub CI ещё pending.
+
+**Статус релиза:** `LIMITED HDE/VK SMOKE VISUAL PASS / ADMIN-KB TEST CYCLE IN PROGRESS`. В тестовом
 VK/HDE-контуре 23 июля визуально подтверждены ровно по одному публичному ответу на grounded
 обращение и на новые заявки `Позови оператора` и `Какая погода завтра в Москве?`. Follow-up
 доставлен, но sourced-ответ на вопрос о дате «Правды» не указал точную дату; это P1 completeness
 backlog, который сейчас не исправляется. Прямая просьба об операторе получила ровно
 `Передаю обращение специалисту.`, а off-topic вопрос — ровно scope-note без эскалации. Старая VM
 остаётся `SHUTOFF`, её runtime/data/artifacts не использовались. Это не финальный handoff и не
-начало нового sealed operator cohort.
+начало нового sealed operator cohort. HDE dispatcher rules после smoke снова держатся выключенными
+на время admin/KB операций.
 
-**Точный следующий gate:** завершить локальные тесты/scan и GitHub CI нового candidate, затем
-вручную развернуть exact SHA без reindex и повторить admin read-only/security acceptance. Yonote
-Preview включается отдельно только после выпуска человеком нового read-only token, атомарной замены
-проверенного Squid config и проверок неизменности seed/Qdrant. После этого снять финальный агрегат
-PostgreSQL по всем smoke events/traces, завершить traffic/security check и зафиксировать handoff.
-Переход на постоянный корпоративный поддомен выполняется отдельной контролируемой заменой
-URL/TLS/HDE webhook; до него временный host остаётся рабочим.
+**Точный следующий gate:** завершить полный локальный gate, commit/push и GitHub CI writable-admin
+candidate. На сервере построить и просканировать exact candidate, создать приватную рабочую копию
+текущего seed с hash/owner/mode checks и переключить только `app`/`app-ml`. Затем повторить
+readiness/security/egress, открыть админку и выполнить Yonote Preview. Сначала проверяется
+неизменность seed/Qdrant; только после review разрешается тестовая локальная Apply/индексация.
+Полный reindex не запускается автоматически из публичного HTTP endpoint: он выполняется отдельным
+server-controlled шагом с backup, `--prune-stale`, cache clear, restart и rollback evidence.
+HDE остаётся выключен до завершения этого цикла. Постоянный корпоративный поддомен — отдельная
+контролируемая замена URL/TLS/webhook.
 
 ## 1. Цель
 
@@ -100,9 +112,9 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Redis хранит оперативную сессию, структурированный контекст и кэш.
 - Cloud.ru предоставляет GigaChat 10B и Max. Max используется для сложного grounded-синтеза,
   а не как источник фактов.
-- Админ-панель `/admin/kb` работает на новом временном HTTPS host. Production режим разрешает
-  поиск/просмотр, проверки, отчёты и — после отдельного включения — Yonote Preview; мутации
-  запрещены. Старый URL и credentials не использовать.
+- Админ-панель `/admin/kb` работает на новом временном HTTPS host. По умолчанию production
+  остаётся read-only. Отдельный explicit test-editor mode после deployment разрешит мутации только
+  приватной рабочей KB в `app-ml`; raw SQL/Qdrant console наружу не публикуются.
 - Yonote подключён read-only. Используются коллекции «Росмолодёжь: общее, структура,
   направления» и «Росмолодёжь: мероприятия».
 
@@ -140,8 +152,10 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
   worker обрабатывает ordered ticket jobs, а delivery проходит через durable outbox с retry,
   dead-letter, HMAC event key, encrypted payload и аудируемым ручным recovery.
 - Ограничение HDE учитывает общий лимит 300 RPM и резерв для других процессов.
-- Yonote Preview доступен как отдельная disabled-by-default read-only capability; production
-  Apply/Save/Reindex запрещены. Публикация изменений KB выполняется только versioned release flow.
+- Yonote Preview доступен как отдельная disabled-by-default read-only capability. Обычный
+  production остаётся read-only. В явно включённом тестовом editor mode Save/точечный Reindex и
+  Apply в приватную рабочую KB допустимы; Yonote не мутируется, а широкий production publish
+  по-прежнему требует versioned release flow.
 - Операционный отчёт в админке: latency, стоимость, cache, эскалации и проблемные темы.
 - Миграция `008_hde_durable_transport` применена на новой VM; свежие PostgreSQL transport tables
   пусты. Первый runtime startup обнаружил ambiguity в SQL prepare, а не дефект схемы или данных.

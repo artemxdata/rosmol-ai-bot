@@ -235,19 +235,44 @@ Production admin panel flow:
 3. Wait for the full pull of both configured collections.
 4. Review or download `documents`, `fresh_yonote_records`, `added`, `changed` and `removed`.
 
-This production operation is preview-only. It computes a diff in memory and changes neither
+The default production operation is preview-only. It computes a diff in memory and changes neither
 Yonote, the tracked seed, Qdrant, semantic cache nor bot answers. `Apply to KB`, `Save` and
-`Reindex` are hidden in the read-only UI and remain blocked by backend `403`. The downloaded report
-can contain internal KB text; keep it only as private evidence, never in Git, chat or public logs.
+`Reindex` are hidden in the default read-only UI and remain blocked by backend `403`. The
+downloaded report can contain internal KB text; keep it only as private evidence, never in Git,
+chat or public logs.
 
 Publishing reviewed Yonote changes is a separate release-engineering operation: preserve the
 reviewed snapshot, create a versioned seed change in Git, review its diff, run validation and
 regression, build a clean candidate, perform a controlled full index with rollback evidence, clear
 cache, restart the runtime and repeat readiness/security/smoke gates. Never mutate the trusted
-production checkout or active Qdrant collection from a one-click admin action.
+production checkout from a one-click admin action.
 
-The legacy Apply flow below is allowed only in a local/disposable writable environment after an
-explicit content review; it is not a production instruction.
+The limited test-production editor is a separate explicit capability, not the default. It requires:
+
+```env
+ADMIN_READ_ONLY=false
+ADMIN_MUTATIONS_ENABLED=true
+ADMIN_KB_SEED_PATH=/app/data/private/admin-kb/knowledge_base_seed.json
+```
+
+Before enabling it, create the server-only working file from the exact deployed tracked seed,
+verify equal SHA-256, owner `10001:10001` and mode `0600`, and keep a private backup. The directory
+is writable only in `app-ml`; `app` sees it read-only. Never point writable admin at
+`/app/data/knowledge_base_seed.json` or at the Git checkout.
+
+In this mode Save and per-chunk Reindex may be used for a deliberate test. Yonote Apply writes only
+the private working seed and never calls a Yonote write endpoint. It does not automatically run a
+full index. Keep HDE off and do not Apply until the Preview diff is reviewed and the operator is
+ready to execute the server-controlled full indexing gate. The public admin must not expose a raw
+SQL or Qdrant console.
+
+After an Apply that changes the published count, both runtime processes must be restarted after
+the controlled full index so their seed manifests match Qdrant. Full indexing remains a server
+operation with pre-backup/hash, `--prune-stale`, semantic-cache clear, readiness/security checks and
+RAG smoke. The working copy is test evidence; it is not promoted to the canonical Git seed without
+separate content review, regression and a versioned commit.
+
+The local/disposable Apply flow below remains useful for development after explicit content review.
 
 Rebuild the local Docker services and reindex Qdrant:
 
@@ -282,15 +307,18 @@ On the new clean VM:
 5. record a temporary route as provisional; publish the permanent corporate team URL only after
    external HTTPS, `/ready` and manual UI checks;
 6. use the admin in read-only mode during a new holdout: search/view, `Validate`, ops/quality
-   reports and `Yonote Preview`; do not use `Save`, `Reindex` or `Apply to KB`.
+   reports and `Yonote Preview`; disable the explicit test-editor capability again before the
+   sealed cohort.
 
-Enabling Yonote preview is a production configuration change. Before it, disable the HDE
-dispatchers and prove the durable queues are empty. Render a new Squid config to a separate
+Enabling Yonote preview or the test editor is a production configuration change. Before it,
+disable the HDE dispatchers and prove the durable queues are empty. Render a new Squid config to a separate
 candidate path (the generator intentionally refuses overwrite), parse it with the pinned Squid
 image, compare the exact three hostnames, and only then install it atomically. Recreate only
-`runtime-egress-proxy` and `app-ml`; do not reindex Qdrant. Afterward verify `/ready`, exact egress
-allow/deny, production `Apply=403`, unchanged tracked-seed hash and unchanged Qdrant counts before
-reenabling the test dispatchers.
+`runtime-egress-proxy` and the explicitly affected runtime services; do not reindex Qdrant merely
+to enable Preview. In default read-only mode verify `Apply=403`. In test-editor mode verify the
+isolated working path/mount directions and explicit capability flags without printing secrets.
+Always verify `/ready`, exact egress allow/deny, unchanged tracked-seed hash and expected Qdrant
+counts before reenabling the test dispatchers.
 
 Do not reuse any ACME directory, TLS private key, `.env` or tunnel command from the old host.
 

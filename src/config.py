@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     webhook_auth_token: str = ""
     admin_auth_token: str = ""
     admin_read_only: bool = False
+    admin_mutations_enabled: bool = False
     user_hash_secret: str = ""
     hde_trigger_prefix: str = ""
     hde_base_url: str = ""

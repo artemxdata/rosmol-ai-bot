@@ -168,6 +168,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Rosmol AI Bot", version="0.1.0", lifespan=lifespan)
 _YONOTE_SYNC_LOCK = Lock()
+_ADMIN_MUTATION_LOCK = Lock()
+
+PRODUCTION_ADMIN_KB_SEED_PATH = (
+    "/app/data/private/admin-kb/knowledge_base_seed.json"
+)
 
 
 def _run_with_yonote_sync_lock(
@@ -201,8 +206,31 @@ def _validate_runtime_security(settings: Any) -> None:
         errors.append("USER_HASH_SECRET is required outside local/test environments")
 
     if app_env == "production":
-        if not bool(getattr(settings, "admin_read_only", False)):
-            errors.append("ADMIN_READ_ONLY must be enabled in production")
+        admin_read_only = bool(getattr(settings, "admin_read_only", False))
+        admin_mutations_enabled = bool(
+            getattr(settings, "admin_mutations_enabled", False)
+        )
+        kb_seed_path = _setting_text(settings, "kb_seed_path")
+        if not admin_read_only:
+            if runtime_role != "ml":
+                errors.append(
+                    "production admin mutations may run only in the ML runtime"
+                )
+            if not admin_mutations_enabled:
+                errors.append(
+                    "ADMIN_MUTATIONS_ENABLED must be enabled when "
+                    "ADMIN_READ_ONLY is disabled"
+                )
+            if kb_seed_path != PRODUCTION_ADMIN_KB_SEED_PATH:
+                errors.append(
+                    "KB_SEED_PATH must use the isolated private admin workspace "
+                    "when production admin mutations are enabled"
+                )
+        elif admin_mutations_enabled:
+            errors.append(
+                "ADMIN_MUTATIONS_ENABLED must be disabled when "
+                "ADMIN_READ_ONLY is enabled"
+            )
         required_settings = [
             ("RELEASE_GIT_SHA", "release_git_sha"),
             ("API_AUTH_TOKEN", "api_auth_token"),
@@ -907,9 +935,11 @@ async def admin_apply_yonote_sync(
     _require_admin_writable()
     if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Yonote sync is already running")
+    if not _ADMIN_MUTATION_LOCK.acquire(blocking=False):
+        _YONOTE_SYNC_LOCK.release()
+        raise HTTPException(status_code=409, detail="Admin mutation is already running")
     try:
         return await asyncio.to_thread(
-            _run_with_yonote_sync_lock,
             apply_yonote_sync,
             _kb_seed_path(),
             get_settings(),
@@ -921,6 +951,9 @@ async def admin_apply_yonote_sync(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        _ADMIN_MUTATION_LOCK.release()
+        _YONOTE_SYNC_LOCK.release()
 
 
 @app.get("/admin/kb/chunks/{chunk_id}")
@@ -940,6 +973,8 @@ async def admin_update_kb_chunk(
 ) -> dict[str, Any]:
     _require_admin_secret(request)
     _require_admin_writable()
+    if not _ADMIN_MUTATION_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Admin mutation is already running")
     try:
         updated = await asyncio.to_thread(
             kb_store.update_chunk,
@@ -961,16 +996,23 @@ async def admin_update_kb_chunk(
         raise HTTPException(status_code=404, detail="Chunk not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        _ADMIN_MUTATION_LOCK.release()
 
 
 @app.post("/admin/kb/chunks/{chunk_id}/reindex")
 async def admin_reindex_kb_chunk(chunk_id: str, request: Request) -> dict[str, Any]:
     _require_admin_secret(request)
     _require_admin_writable()
-    record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="Chunk not found")
-    return await _admin_reindex_record(request, record)
+    if not _ADMIN_MUTATION_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Admin mutation is already running")
+    try:
+        record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        return await _admin_reindex_record(request, record)
+    finally:
+        _ADMIN_MUTATION_LOCK.release()
 
 
 @app.get("/admin/kb/chunks/{chunk_id}/eval-cases")
@@ -1256,7 +1298,14 @@ def _require_admin_enabled() -> str:
 
 
 def _require_admin_writable() -> None:
-    if bool(getattr(get_settings(), "admin_read_only", False)):
+    settings = get_settings()
+    admin_read_only = bool(getattr(settings, "admin_read_only", False))
+    app_env = _setting_text(settings, "app_env").casefold() or "local"
+    mutation_capability_missing = (
+        app_env == "production"
+        and not bool(getattr(settings, "admin_mutations_enabled", False))
+    )
+    if admin_read_only or mutation_capability_missing:
         raise HTTPException(
             status_code=403,
             detail="Admin mutations are disabled in this runtime",

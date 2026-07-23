@@ -2,8 +2,10 @@
 
 Этот чеклист нужен перед демонстрацией и тестовым подключением HDE/VK. Массовые проверки выполняются локально через `/ask`; HDE трогаем только тестовым каналом и короткими smoke-сценариями.
 
-> **Текущий статус 23 июля 2026:** clean runtime и limited HDE/VK smoke работают; финальный
-> handoff и новый admin/Yonote-preview candidate ещё pending. Серверные команды в разделах 2 и 5
+> **Текущий статус 23 июля 2026:** clean runtime `27cecaf` и limited HDE/VK smoke работают;
+> HDE снова выключен на время Yonote/admin-KB цикла. Yonote egress proxy уже переключён на
+> проверенные три destination, но `app-ml` capability ещё не активирована. Новый explicit
+> test-editor candidate проходит локальный gate. Серверные команды в разделах 2 и 5
 > сохранены только как исторический
 > pre-incident checklist и **не должны выполняться**: они используют старый порядок, старый Compose
 > stack и migration baseline. Разделы 3–4 задают только критерии, а не standalone-команды.
@@ -138,9 +140,13 @@ PY
 - HDE/VK не используются для batch/eval-трафика.
 - Yonote capability по умолчанию выключена. При отдельном enable новый read-only token получает
   только `app-ml`, а generated egress policy добавляет только exact `rossmol.yonote.ru:443`.
-- Аутентифицированный production Preview читает полный configured collection set, но Apply
-  возвращает `403`; до и после Preview совпадают tracked-seed hash и Qdrant counts, reindex не
-  запускается.
+- В default read-only режиме аутентифицированный Preview читает полный configured collection set,
+  но Apply возвращает `403`; до и после Preview совпадают tracked-seed hash и Qdrant counts,
+  reindex не запускается.
+- Explicit test-editor mode требует согласованную пару capability flags и exact private working
+  seed path. `app` монтирует working seed read-only, `app-ml` writable; tracked seed остаётся
+  неизменным. Full index не публикуется admin HTTP endpoint, HDE остаётся выключен до backup,
+  controlled `--prune-stale`, restart, readiness/security и RAG smoke.
 
 Точные fail-closed команды, SHA/provenance checks и output paths находятся только в Gate 4B и
 «Финальный acceptance, привязанный к commit» файла

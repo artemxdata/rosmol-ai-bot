@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.main import _validate_runtime_security
+from src.main import PRODUCTION_ADMIN_KB_SEED_PATH, _validate_runtime_security
 from src.session.memory import hash_user_id
 
 
@@ -169,11 +169,53 @@ def test_production_api_runtime_does_not_require_provider_or_transport_secrets()
     _validate_runtime_security(settings)
 
 
-def test_production_runtime_requires_read_only_admin() -> None:
+def test_production_runtime_rejects_writable_admin_without_explicit_capability() -> None:
     settings = _production_settings()
     settings.admin_read_only = False
 
-    with pytest.raises(RuntimeError, match="ADMIN_READ_ONLY"):
+    with pytest.raises(RuntimeError, match="ADMIN_MUTATIONS_ENABLED"):
+        _validate_runtime_security(settings)
+
+
+def test_production_ml_runtime_allows_isolated_test_admin_workspace() -> None:
+    settings = _production_settings()
+    _enable_ml_transport(settings)
+    settings.admin_read_only = False
+    settings.admin_mutations_enabled = True
+    settings.kb_seed_path = PRODUCTION_ADMIN_KB_SEED_PATH
+
+    _validate_runtime_security(settings)
+
+
+@pytest.mark.parametrize(
+    ("runtime_role", "seed_path", "expected"),
+    (
+        ("api", PRODUCTION_ADMIN_KB_SEED_PATH, "only in the ML runtime"),
+        ("ml", "/app/data/knowledge_base_seed.json", "isolated private admin workspace"),
+    ),
+)
+def test_production_writable_admin_rejects_wrong_role_or_seed_path(
+    runtime_role: str,
+    seed_path: str,
+    expected: str,
+) -> None:
+    settings = _production_settings()
+    if runtime_role == "ml":
+        _enable_ml_transport(settings)
+    settings.runtime_role = runtime_role
+    settings.admin_read_only = False
+    settings.admin_mutations_enabled = True
+    settings.kb_seed_path = seed_path
+
+    with pytest.raises(RuntimeError, match=expected):
+        _validate_runtime_security(settings)
+
+
+def test_production_read_only_admin_rejects_dormant_mutation_capability() -> None:
+    settings = _production_settings()
+    settings.admin_mutations_enabled = True
+
+    with pytest.raises(RuntimeError, match="must be disabled"):
         _validate_runtime_security(settings)
 
 
@@ -296,6 +338,8 @@ def _production_settings() -> SimpleNamespace:
         runtime_role="api",
         release_git_sha="a" * 40,
         admin_read_only=True,
+        admin_mutations_enabled=False,
+        kb_seed_path="/app/data/knowledge_base_seed.json",
         api_auth_token="a" * 32,
         webhook_auth_token="w" * 32,
         admin_auth_token="m" * 32,

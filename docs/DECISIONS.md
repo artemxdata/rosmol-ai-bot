@@ -294,3 +294,25 @@ service — secretless L4 `edge-relay` на `80/443`: на `443` он перед
 разрешены только несекретные ACME/health/`426` bootstrap-запросы. Relay не получает production
 env/certificates. CI проверяет effective merged Compose, точный список published ports и internal
 membership `app-ml`, а не только исходный YAML.
+
+## D-029. Тестовый редактор KB включается отдельной capability и не меняет tracked seed
+
+**Статус:** принято 23 июля 2026 для ограниченного test-production; по умолчанию выключено.
+Обычный production сохраняет `ADMIN_READ_ONLY=true`. Для ручной проверки полного цикла
+Save -> Qdrant -> RAG владелец может явно включить только в ML runtime согласованную пару
+`ADMIN_READ_ONLY=false` и `ADMIN_MUTATIONS_ENABLED=true`. Любая неполная комбинация, API role или
+другой путь seed блокируют startup/validation.
+
+Writable runtime использует только
+`/app/data/private/admin-kb/knowledge_base_seed.json`: это server-only working copy, не tracked
+Git seed. `app-ml` монтирует каталог writable, `app` — только read-only; raw PostgreSQL/Qdrant
+console наружу не публикуется. Запись seed атомарна, сохраняет private mode `0600`, а параллельные
+admin mutations отклоняются. Admin auth, TLS-only routing, login rate limit, no-store headers и
+отсутствие host port у `app-ml` остаются обязательными.
+
+Yonote остаётся source-side read-only: клиент не создаёт, не изменяет и не удаляет документы.
+Preview не меняет рабочую KB; Apply в test-editor mode меняет только server-local working copy.
+Полный `--prune-stale` reindex намеренно не запускается публичным HTTP endpoint. После review он
+выполняется отдельным server-controlled шагом с backup/hash, HDE off, cache clear, restart,
+readiness/security/RAG smoke и доказуемым rollback. Рабочая копия тестового контура не становится
+production source of truth автоматически; широкий publish требует reviewed versioned seed release.

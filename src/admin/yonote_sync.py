@@ -18,6 +18,7 @@ from scripts.sync_yonote_kb import (
     load_yonote_documents,
     selected_collection_names,
 )
+from src.admin.kb_store import write_seed_records
 
 COMPARE_FIELDS = (
     "text_clean",
@@ -79,7 +80,7 @@ def apply_sync(
         replace_existing_yonote=True,
     )
     _validate_merged_seed(seed_path, merged_records)
-    _write_seed_records(seed_path, merged_records)
+    write_seed_records(seed_path, merged_records)
     return _build_sync_report(
         current_records=current_records,
         fresh_yonote_records=fresh_yonote_records,
@@ -292,10 +293,3 @@ def _load_seed_records(path: Path) -> list[dict[str, Any]]:
     if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
         raise ValueError("knowledge_base_seed.json must contain a JSON array of objects")
     return [dict(item) for item in payload]
-
-
-def _write_seed_records(path: Path, records: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(path)

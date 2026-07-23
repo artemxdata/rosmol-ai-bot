@@ -7,13 +7,14 @@ x-production-app-environment: &production-app-environment
   WEBHOOK_AUTH_TOKEN: ${WEBHOOK_AUTH_TOKEN:?WEBHOOK_AUTH_TOKEN is required}
   ADMIN_AUTH_TOKEN: ${ADMIN_AUTH_TOKEN:?ADMIN_AUTH_TOKEN is required}
   ADMIN_READ_ONLY: "true"
+  ADMIN_MUTATIONS_ENABLED: "false"
   USER_HASH_SECRET: ${USER_HASH_SECRET:?USER_HASH_SECRET is required}
   POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
   REDIS_URL: ${REDIS_URL:?REDIS_URL with authentication is required}
   QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
   QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
   QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
-  KB_SEED_PATH: /app/data/knowledge_base_seed.json
+  KB_SEED_PATH: ${ADMIN_KB_SEED_PATH:-/app/data/knowledge_base_seed.json}
   # Recovery release is built from the reviewed frozen seed only.
   YONOTE_SYNC_ENABLED: "false"
   YONOTE_API_TOKEN: ""
@@ -223,6 +224,7 @@ services:
     ports: !override []
     volumes: !override
       - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
+      - ./data/private/admin-kb:/app/data/private/admin-kb:ro
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
@@ -262,6 +264,8 @@ services:
     environment:
       <<: *production-ml-environment
       RUNTIME_ROLE: ml
+      ADMIN_READ_ONLY: ${ADMIN_READ_ONLY:-true}
+      ADMIN_MUTATIONS_ENABLED: ${ADMIN_MUTATIONS_ENABLED:-false}
       ML_PREWARM_ON_STARTUP: "true"
       ML_PREWARM_TIMEOUT_SECONDS: ${ML_PREWARM_TIMEOUT_SECONDS:-300}
       HTTP_PROXY: ""
@@ -279,6 +283,7 @@ services:
     ports: !override []
     volumes: !override
       - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
+      - ./data/private/admin-kb:/app/data/private/admin-kb
       - hf_cache:/home/app/.cache/huggingface
       - torch_cache:/home/app/.cache/torch
       - model_cache:/opt/models:ro

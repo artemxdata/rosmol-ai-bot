@@ -54,6 +54,9 @@ CLOUD_RU_ENDPOINT_PATH = "/v1/chat/completions"
 HDE_ENDPOINT_HOST = "rosmolodezh.helpdeskeddy.com"
 YONOTE_ENDPOINT_HOST = "rossmol.yonote.ru"
 FULL_RELEASE_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+PRODUCTION_ADMIN_KB_SEED_PATH = (
+    "/app/data/private/admin-kb/knowledge_base_seed.json"
+)
 
 
 class EnvValidationError(ValueError):
@@ -381,6 +384,31 @@ def validate_env(path: Path) -> list[str]:
 
     if values.get("APP_ENV") != "production":
         errors.append("APP_ENV: must_equal_production")
+
+    admin_read_only = values.get("ADMIN_READ_ONLY", "true").strip().casefold()
+    admin_mutations_enabled = (
+        values.get("ADMIN_MUTATIONS_ENABLED", "false").strip().casefold()
+    )
+    if admin_read_only not in {"true", "false"}:
+        errors.append("ADMIN_READ_ONLY: must_be_true_or_false")
+    if admin_mutations_enabled not in {"true", "false"}:
+        errors.append("ADMIN_MUTATIONS_ENABLED: must_be_true_or_false")
+    if admin_read_only == "false":
+        if admin_mutations_enabled != "true":
+            errors.append(
+                "ADMIN_MUTATIONS_ENABLED: must_be_true_when_admin_is_writable"
+            )
+        if (
+            values.get("ADMIN_KB_SEED_PATH", "").strip()
+            != PRODUCTION_ADMIN_KB_SEED_PATH
+        ):
+            errors.append(
+                "ADMIN_KB_SEED_PATH: must_use_isolated_private_workspace"
+            )
+    elif admin_mutations_enabled == "true":
+        errors.append(
+            "ADMIN_MUTATIONS_ENABLED: must_be_false_when_admin_is_read_only"
+        )
 
     required_generated = list(GENERATED_SECRET_KEYS)
     for key in required_generated:

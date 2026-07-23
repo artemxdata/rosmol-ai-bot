@@ -108,6 +108,14 @@ def test_production_overlay_is_fail_closed_and_uses_minimal_app_mounts() -> None
     assert compose.count(
         "./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro"
     ) == 2
+    assert (
+        "./data/private/admin-kb:/app/data/private/admin-kb:ro"
+        in _compose_service_block(compose, "app")
+    )
+    assert (
+        "./data/private/admin-kb:/app/data/private/admin-kb"
+        in _compose_service_block(compose, "app-ml")
+    )
     assert "./data:/app/data" not in compose
     assert "./data/private/runtime:/app/data/private" not in compose
     assert compose.count("read_only: true") >= 4
@@ -119,6 +127,17 @@ def test_production_overlay_is_fail_closed_and_uses_minimal_app_mounts() -> None
     assert 'HDE_TRANSPORT_ENABLED: "true"' in compose
     assert "stop_grace_period: 450s" in compose
     assert 'ADMIN_READ_ONLY: "true"' in compose
+    assert 'ADMIN_MUTATIONS_ENABLED: "false"' in compose
+    assert "ADMIN_READ_ONLY: ${ADMIN_READ_ONLY:-true}" in (
+        _compose_service_block(compose, "app-ml")
+    )
+    assert "ADMIN_MUTATIONS_ENABLED: ${ADMIN_MUTATIONS_ENABLED:-false}" in (
+        _compose_service_block(compose, "app-ml")
+    )
+    assert (
+        "KB_SEED_PATH: ${ADMIN_KB_SEED_PATH:-/app/data/knowledge_base_seed.json}"
+        in compose
+    )
     assert "QDRANT__SERVICE__API_KEY:" in compose
     assert 'QDRANT__TELEMETRY_DISABLED: "true"' in compose
     assert "--requirepass" in compose

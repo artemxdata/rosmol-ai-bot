@@ -767,7 +767,7 @@ _HTML_TEMPLATE = """
     function applyAdminMode() {
       document.getElementById("runtimeMode").textContent = adminReadOnly
         ? "production · только чтение"
-        : "production workspace";
+        : "тестовый редактор · изменения включены";
       document.getElementById("readOnlyNotice").classList.toggle("hidden", !adminReadOnly);
       document.getElementById("reindexToggle").disabled = adminReadOnly;
       document.getElementById("textClean").readOnly = adminReadOnly;

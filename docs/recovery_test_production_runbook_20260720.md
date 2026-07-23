@@ -1507,13 +1507,75 @@ egress во время smoke сопоставляется с согласова�
 ## Gate 7 — admin и handoff
 
 - Admin доступен только по новому HTTPS URL и не публикуется до TLS acceptance.
-- В recovery release admin работает read-only. После отдельного enable разрешён только полный
-  Yonote Preview с неизменными seed/Qdrant; Yonote Apply и live KB mutation не используются.
+- По умолчанию recovery admin работает read-only. После отдельного enable разрешён полный Yonote
+  Preview с неизменными seed/Qdrant.
+- Ограниченный test-editor включается только отдельным post-acceptance решением владельца. Он
+  требует private working seed, explicit capability flags и отдельный gate ниже. Это не снимает
+  запрет на изменение Yonote и не превращает рабочую копию в canonical production seed.
 - Старые presentation `100%` reports не считаются текущим release evidence.
 - Проверяются login rate limit, logout/cookie invalidation, quality/ops report без PII и корректный
   security banner.
 - В `docs/CURRENT_STATE.md` фиксируются trusted commit, clean host, rotation statuses, migration,
   KB count, gate results, HDE smoke, traffic baseline, residual risks и первая новая cohort boundary.
+
+### Отдельный gate тестового редактора KB
+
+Этот gate не является частью default production rollout. До него HDE dispatcher должен быть
+выключен, durable queues — пусты, PostgreSQL backup — подтверждён, а exact candidate — полностью
+проверен и просканирован. Никакое значение секрета в команды не передаётся.
+
+1. Создать private working seed только из exact deployed tracked seed. Не перезаписывать уже
+   существующий workspace и не хранить backup в writable mount:
+
+```bash
+set -Eeuo pipefail
+cd /opt/rosmol-ai-bot
+test "$(git rev-parse HEAD)" = "$TRUSTED_GIT_SHA"
+sudo install -d -o 10001 -g 10001 -m 0700 data/private/admin-kb
+test ! -e data/private/admin-kb/knowledge_base_seed.json
+sudo install -o 10001 -g 10001 -m 0600 \
+  data/knowledge_base_seed.json \
+  data/private/admin-kb/knowledge_base_seed.json
+cmp -s data/knowledge_base_seed.json \
+  data/private/admin-kb/knowledge_base_seed.json
+sudo install -d -o root -g root -m 0700 /var/backups/rosmol-ai-bot
+sudo install -o root -g root -m 0400 \
+  data/private/admin-kb/knowledge_base_seed.json \
+  "/var/backups/rosmol-ai-bot/admin-kb-baseline-${TRUSTED_GIT_SHA}.json"
+echo 'admin_kb_workspace_prepare=PASS'
+```
+
+2. Человек открывает server-only `.env.production` в защищённом редакторе и устанавливает ровно:
+
+```dotenv
+ADMIN_READ_ONLY=false
+ADMIN_MUTATIONS_ENABLED=true
+ADMIN_KB_SEED_PATH=/app/data/private/admin-kb/knowledge_base_seed.json
+```
+
+Затем запускаются env validator и effective Compose inspection. `app` обязан сохранить
+`ADMIN_READ_ONLY=true`, `ADMIN_MUTATIONS_ENABLED=false` и read-only mount; только `app-ml` получает
+writable capability и mount. Оба runtime используют exact private working seed path. Tracked seed
+остаётся mounted read-only.
+
+3. Без reindex пересоздаются только `app` и `app-ml`. Проверяются exact release label, health,
+restart/OOM, отсутствие published ports, неизменность PostgreSQL/Redis/Qdrant/proxy/Nginx/relay
+container IDs, равные tracked/working seed hashes и прежние Qdrant counts. Runtime security gate
+повторяется с новым уникальным private report и лог-окном.
+
+4. В UI сначала выполняется Yonote Preview. До и после обязаны совпасть working-seed hash, tracked
+seed hash и Qdrant counts. Для безопасной проверки Save -> Qdrant можно сохранить без изменения
+текста один уже открытый published чанк с включённым точечным reindex: это атомарно перепишет
+эквивалентный working seed, выполнит upsert и сбросит соответствующий cache, не меняя content.
+Затем один server-local `/ask` с bypass-cache должен вернуть grounded answer с ожидаемым source.
+
+5. Yonote Apply разрешён только после content review. Он меняет исключительно private working
+seed и не вызывает Yonote write API. Если меняется published set, HDE остаётся выключен, пока
+server-controlled полный index с `--prune-stale`, cache clear и restart обоих runtime не завершит
+readiness/security/RAG smoke. Публичного endpoint для полного reindex нет.
+
+Перед sealed cohort вернуть `ADMIN_READ_ONLY=true`, `ADMIN_MUTATIONS_ENABLED=false`,
+`ADMIN_KB_SEED_PATH=` и пересоздать `app`/`app-ml` на reviewed canonical seed release.
 
 ## Немедленный rollback/stop
 
