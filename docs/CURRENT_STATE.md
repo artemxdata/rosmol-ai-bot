@@ -1,90 +1,100 @@
 # Текущее состояние проекта
 
 **Обновлено:** 27 июля 2026
-**Ветка:** `master`  
-**Текущий server runtime:**
-`c969d6fede969b16991dbbc8240f875fe4ad3e3b` (`Enable isolated test KB editor`). Exact
-app/app-ml images, полный Gitleaks/Trivy gate, readiness и runtime security acceptance прошли;
-миграции и index inputs не менялись, повторная индексация не выполнялась. Изолированный тестовый
-KB editor проверен вручную. HDE/VK test line работает; 27 июля живой smoke выявил отдельный
-routing-дефект: короткое приветствие `Хей` ушло в controlled escalation вместо приветственного
-ответа.
 
-**Локальный кандидат, ещё не опубликован и не развёрнут:** добавлена детерминированная грамматика
-приветствий с сотнями безопасных форм, единый текст для `Начать`, `/start` и первого приветствия,
-а также защита от поглощения содержательного вопроса после приветствия. Ruff, полный pytest
-(`1405 passed / 1 skipped`) и KB validate (`2186 valid / 2152 published`) прошли. Истёкшие
-27 июля exact-PURL Trivy-waiver повторно проверены по неизменившимся exact images и официальным
-advisory; срок fail-closed review продлён до 10 августа 2026. Следующий шаг — два узких
-commit/push, GitHub CI, SHA-bound rebuild/rescan только app/app-ml и короткий HDE/VK smoke без
-reindex.
+**Ветка:** `master`
 
-**Server:** новая чистая Ubuntu 24.04 VM прошла OS/SSH/firewall/Docker preflight; включён 8 GiB swap,
-используется отдельный read-only GitHub deploy key. Server-only `.env.production` создан человеком,
-проверен валидатором и не передавался Codex. PostgreSQL/Redis/Qdrant/Squid healthy, migration head —
-`008_hde_durable_transport`, frozen published seed — `knowledge_base=2152`, текущий semantic
-cache — `response_cache=1`. `app` и `app-ml` healthy на exact SHA, restart count `0`,
-`oom_killed=false`;
-строгий `/ready` подтверждает config/Redis/PostgreSQL/KB/ML/HDE transport, все HDE
-inbox/outbox/dead-letter очереди пусты. Offline ML, HTTPS egress allowlist и network membership
-прошли. Прямые Cloud.ru probes обеих моделей прошли. SQL startup blocker предыдущего запуска
-исправлен и закрыт regression-тестом.
+**Deployed release:** `b4bc23ab890337324f8c9ef62f3a9d90c136b72e`
+(`Refresh recovery security deadline`). Server checkout, app image и app-ml image были сверены
+по полному SHA. Миграции, versioned seed и index inputs относительно предыдущего runtime не
+менялись; повторная индексация не выполнялась.
 
-**TLS и preliminary acceptance:** временный HTTPS host
-`bot-135-106-167-124.sslip.io` на новой VM имеет публично доверенный Let's Encrypt certificate;
-Nginx/HAProxy edge healthy, наружу публикуются только `80/443`, внутренние
-PostgreSQL/Redis/Qdrant/app ports не публикуются. Маршрут `/admin/kb` опубликован через этот HTTPS
-host. Ручные login/list/read прошли; попытка изменения корректно получила backend `403`, но
-выявила UX-дефект: running UI показывал активные Save/Reindex при `ADMIN_READ_ONLY=true`.
-Постоянный корпоративный поддомен ожидается; `sslip.io` остаётся временным адресом. TLS renewal
-timer включён. Runtime security acceptance
-прошёл `31/31`. Server-local quality suite на exact SHA выполнил `124` кейса во всех семи секциях:
-`passed=true`, все секции зелёные, minimum trace coverage `1.0`, оценочная стоимость
-`7.663317 RUB` при лимите `80 RUB`. One-shot удалён; runtime container IDs/restarts не изменились.
-Quality suite создал `25` semantic-cache records, потому что production принимает bypass-cache
-только от loopback, а acceptance шёл через internal Docker hostname. Все 25 records были доказанно
-созданы после старта suite и удалены по точным point IDs. Один текущий cache record появился позже
-в ручном воспроизведении и не относится к KB index. Post-quality runtime security acceptance
-прошёл.
+**Статус релиза:** `TEST-PRODUCTION CONNECTED / SECURITY + QUALITY + HDE/VK SMOKE PASS`.
+Ограниченная тестовая линия HDE/VK включена и отвечает через постоянный корпоративный endpoint.
+Это не разрешение на широкий production traffic и не независимая оценка полной конверсии, но
+инфраструктурный recovery и тестовое подключение завершены.
 
-**Yonote capability на сервере:** dedicated read-only token внесён человеком только в
-server-only `.env.production`; его значение Codex не видел. Валидатор прошёл. Generated Squid
-allowlist атомарно переключён на ровно три destination: Cloud.ru, tenant HDE и
-`rossmol.yonote.ru:443`; proxy healthy, secretless, unknown destination и direct egress
-заблокированы. `app-ml` после этого ещё не пересоздавался, поэтому token/capability в running
-application пока не активны; Yonote Preview не запускался, seed и Qdrant не менялись.
+**Новый clean runtime:** новая Ubuntu 24.04 VM построена без переноса ОС, snapshots, images,
+volumes, БД, cache, `.env`, SSH/TLS keys или иных артефактов с прежнего сервера. Старый сервер
+остаётся недоверенным и `SHUTOFF`. На новой VM прошли OS/SSH/firewall/Docker preflight; включён
+8 GiB swap, используется отдельный read-only GitHub deploy key. Server-only `.env.production`
+создан и заполнялся человеком, прошёл validation; Codex не видел значений секретов.
+Нового статуса provider incident ticket после 16 июля не получено; считать его закрытым нельзя.
+Этот организационный follow-up не меняет принятую clean-runtime границу и факт `SHUTOFF` старого
+контура.
 
-**Локальная следующая итерация, ещё не committed/deployed:** по прямому решению владельца
-тестовому контуру нужен управляемый редактор для проверки Save -> Qdrant -> RAG. Реализуется
-explicit capability, которая доступна только `app-ml`, требует одновременно
-`ADMIN_READ_ONLY=false` и `ADMIN_MUTATIONS_ENABLED=true` и принимает только isolated working seed
-`/app/data/private/admin-kb/knowledge_base_seed.json`. `app` получает тот же файл только read-only,
-provider tokens ему не передаются. Tracked Git seed не мутируется. Записи seed выполняются
-атомарно mode `0600`, конкурентные admin mutations блокируются. Yonote API остаётся source-side
-read-only; Apply меняет только приватную рабочую копию бота. Targeted Ruff/Compose и `99` tests
-прошли. Полный local gate: Ruff — green, `1382 passed / 1 skipped`, KB validation —
-`2186 valid / 2152 published`, KB audit — `0 errors / 4 known warnings`, оба production Compose
-merge — green. GitHub CI ещё pending.
+**Runtime и данные:** PostgreSQL, Redis, Qdrant, Squid, Nginx, edge-relay, `app` и `app-ml`
+healthy; app/app-ml работают на exact SHA `b4bc23a`, restart count `0`, OOM не было. Migration
+head — `008_hde_durable_transport`. Frozen published index не менялся:
+`knowledge_base=2152`; после ручных тестов `response_cache=2`. В HDE transport нет
+pending/retry/processing/sending/dead-letter записей; доставленные audit rows сохранены.
+Offline ML, network membership, HTTPS egress allow/deny, обе Cloud.ru модели и readiness прошли.
+Внутренние PostgreSQL/Redis/Qdrant/app ports не опубликованы.
 
-**Статус релиза:** `LIMITED HDE/VK SMOKE VISUAL PASS / ADMIN-KB TEST CYCLE IN PROGRESS`. В тестовом
-VK/HDE-контуре 23 июля визуально подтверждены ровно по одному публичному ответу на grounded
-обращение и на новые заявки `Позови оператора` и `Какая погода завтра в Москве?`. Follow-up
-доставлен, но sourced-ответ на вопрос о дате «Правды» не указал точную дату; это P1 completeness
-backlog, который сейчас не исправляется. Прямая просьба об операторе получила ровно
-`Передаю обращение специалисту.`, а off-topic вопрос — ровно scope-note без эскалации. Старая VM
-остаётся `SHUTOFF`, её runtime/data/artifacts не использовались. Это не финальный handoff и не
-начало нового sealed operator cohort. HDE dispatcher rules после smoke снова держатся выключенными
-на время admin/KB операций.
+**Supply chain и quality:** exact release прошёл Gitleaks по истории и worktree, свежий
+SBOM/Critical/image-secret scan всех production images (`active_critical_count=0`,
+`secret_findings=0`, `gitleaks_findings=0`) и checksum manifest. Server-local quality suite
+выполнил `124` кейса во всех семи секциях: `passed=true`, minimum trace coverage `1.0`,
+оценочная стоимость `7.663317 RUB` при лимите `80 RUB`. Его 25 test-cache records удалены по
+точным point IDs; KB не менялась. Greeting release дополнительно прошёл local/runtime regression
+для пяти форм, включая `Хей`.
 
-**Точный следующий gate:** завершить полный локальный gate, commit/push и GitHub CI writable-admin
-candidate. На сервере построить и просканировать exact candidate, создать приватную рабочую копию
-текущего seed с hash/owner/mode checks и переключить только `app`/`app-ml`. Затем повторить
-readiness/security/egress, открыть админку и выполнить Yonote Preview. Сначала проверяется
-неизменность seed/Qdrant; только после review разрешается тестовая локальная Apply/индексация.
-Полный reindex не запускается автоматически из публичного HTTP endpoint: он выполняется отдельным
-server-controlled шагом с backup, `--prune-stale`, cache clear, restart и rollback evidence.
-HDE остаётся выключен до завершения этого цикла. Постоянный корпоративный поддомен — отдельная
-контролируемая замена URL/TLS/webhook.
+**Постоянный HTTPS:** основной адрес — `https://bot.zabotus.ru`; админ-панель —
+`https://bot.zabotus.ru/admin/kb`; HDE webhook —
+`https://bot.zabotus.ru/webhook/hde`. Из application/container ingress наружу опубликованы только
+`80/443`; отдельный SSH control plane остаётся hardened. Sensitive plaintext маршруты возвращают
+`426`, `/docs` закрыт, webhook без Bearer или с неверным Bearer возвращает `401`. Let's Encrypt
+certificate содержит постоянное имя и временное rollback-имя; certificate/key match, exact SAN
+и `renew --dry-run` прошли. `rosmol-admin-tls-renew.timer` enabled/active.
+Старое rollback-имя и root-only TLS backup пока сохраняются только на стабилизационный период и
+удаляются отдельной контролируемой операцией, не сейчас.
+
+**HDE/VK acceptance:** в двух test-scoped HDE rules изменён только URL на постоянный endpoint;
+Bearer, payload, method, content type и условия не менялись. Оба правила включены. Финальный smoke
+после смены домена дал два независимых события, два processed inbox, два trace, два delivered
+outbox с HTTP `200`, без ошибок, активных очередей и dead-letter. Первое сообщение `Хей` получило
+детерминированное приветствие: pipeline `328 ms`, inbox processing `375 ms`, HDE delivery
+`709 ms`. Через 105 секунд было отправлено отдельное `Ей`; оно корректно прошло транспорт, но
+получило controlled escalation `low_confidence`. Это отдельный quality/backlog case, а не дефект
+домена или транспорта; hotfix текущего release ради него не выполняется.
+
+**Traffic и post-smoke security:** первоначальный наблюдатель собрал `135` samples за `959 s`,
+финальный domain smoke — `48` samples за `337 s`; внутренних ошибок не было. SHA-256 финального
+private traffic log:
+`47b011f924efd471b570837b542cdb95d90f8549f641e9941723b1cc66114803`.
+Runtime security acceptance до и после реального HDE traffic прошёл `31/31`; финальный private
+report — `data/private/runtime/post-domain-hde-security-b4bc23ab890337324f8c9ef62f3a9d90c136b72e.json`.
+
+**Backup:** PostgreSQL pre-ingress dump создан, зашифрован, проверен тестовой расшифровкой,
+скачан на отдельный workstation и сверён по SHA-256 без раскрытия ключа Codex. До широкого
+production traffic остаются отдельными задачами автоматическое расписание off-host backup и
+периодический restore drill.
+
+**Админка и Yonote:** контролируемый test-editor capability уже входит в deployed lineage;
+постоянный HTTPS маршрут доступен, а изолированный editor до смены домена был проверен вручную.
+Текущее сочетание runtime flags записи после domain switch отдельно не реаудировалось; перед
+следующей мутацией его нужно проверить server-side без вывода env. Yonote используется только
+на чтение, его token внесён человеком только в server-only env. Squid разрешает ровно
+согласованные Cloud.ru, HDE и Yonote destinations; неизвестный и direct egress блокируются.
+Во время смены домена Yonote Apply, Save/Reindex и полный reindex не выполнялись; tracked seed
+и Qdrant остались неизменными.
+
+**Локальная незавершённая работа, не committed и не deployed:** рабочее дерево содержит отдельную
+итерацию вкладки статистики/текстовой выгрузки БД Yonote:
+`scripts/sync_yonote_kb.py`, `src/admin/ui.py`, `src/main.py`,
+`tests/test_admin_kb_api.py`, `tests/test_sync_yonote_kb.py`,
+новые `src/admin/yonote_database.py` и `tests/test_admin_yonote_database.py`.
+Эти файлы нельзя терять, сбрасывать или смешивать с operational handoff commit; перед публикацией
+нужны отдельный review и полный local gate.
+
+**Точный следующий шаг:** оставить тестовые HDE rules включёнными и начать новую измеримую
+test-production выборку со следующего реального обращения; оба smoke-события 27 июля не включать
+в продуктовую конверсию. Параллельно, но отдельным change set, завершить и проверить локальную
+Yonote database statistics/export вкладку. Кейс `Ей -> low_confidence escalation`, неполная дата
+смены «Правда» и Mashuk content findings входят в будущий regression-first quality cycle и не
+исправляются одновременно с инфраструктурой. Через стабилизационный период отдельно убрать
+лишнюю DNS-запись/временное TLS rollback-имя и root-only TLS backup после повторной проверки
+постоянного endpoint и renewal.
 
 ## 1. Цель
 
@@ -106,14 +116,14 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 нашёл один узкий follow-up defect, исправленный в `a20ca80`; его server regression выявил отдельную
 потерю telemetry-полей, исправленную в `98de023`. Server-local качество и HDE delivery gate этого
 кандидата были доказаны до инцидента. Независимый operator holdout был начат, но прерван P0.
-Точный актуальный recovery-шаг зафиксирован в верхнем статусном блоке; исторические этапы ниже не
-переопределяют его.
+Точный актуальный post-recovery шаг зафиксирован в верхнем статусном блоке; исторические этапы
+ниже не переопределяют его.
 
 ## 2. Что представляет собой проект
 
 - FastAPI принимает `/ask` и webhook-и каналов.
-- HDE/VK снова работает в ограниченном тестовом канале на новой clean VM; финальный transport
-  aggregate и handoff ещё не закрыты.
+- HDE/VK работает в ограниченном тестовом канале на новой clean VM; финальный transport
+  aggregate, постоянный домен и post-smoke security handoff закрыты.
 - LangGraph управляет цепочкой `analyze -> retrieve -> rerank -> generate -> verify -> respond`.
 - Qdrant хранит опубликованную базу и semantic cache.
 - `bge-m3` выполняет retrieval, `bge-reranker-v2-m3` — rerank в ML-контуре `app-ml`.
@@ -121,9 +131,10 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - Redis хранит оперативную сессию, структурированный контекст и кэш.
 - Cloud.ru предоставляет GigaChat 10B и Max. Max используется для сложного grounded-синтеза,
   а не как источник фактов.
-- Админ-панель `/admin/kb` работает на новом временном HTTPS host. По умолчанию production
-  остаётся read-only. Отдельный explicit test-editor mode после deployment разрешит мутации только
-  приватной рабочей KB в `app-ml`; raw SQL/Qdrant console наружу не публикуются.
+- Админ-панель `/admin/kb` работает на постоянном HTTPS host `bot.zabotus.ru`. Развёрнутый
+  explicit test-editor mode разрешает мутации только приватной рабочей KB в `app-ml` при
+  одновременном включении двух server-side capability flags. Их текущее сочетание после domain
+  switch не реаудировалось; raw SQL/Qdrant console наружу не публикуются.
 - Yonote подключён read-only. Используются коллекции «Росмолодёжь: общее, структура,
   направления» и «Росмолодёжь: мероприятия».
 
@@ -138,7 +149,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - `docs/operations.md` — эксплуатация, Yonote, HDE, безопасность и deployment.
 - `docs/pre_pilot_release_checklist.md` — release gate.
 - `docs/quality_improvement_loop.md` — дальнейшая продуктовая калибровка.
-- `docs/security_incident_20260715.md` — текущий P0, contamination boundary и clean recovery.
+- `docs/security_incident_20260715.md` — P0 incident record, contamination boundary и правила
+  clean recovery.
 - `docs/operator_feedback_20260715.md` — тесты Наты, evidence и будущий quality backlog.
 - `docs/operator_holdout_runbook.md` — прерванный cohort, stop-criteria и правила нового старта.
 - `eval/cases/pre_pilot_*.json` — pre-pilot regression suite.
@@ -151,13 +163,14 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - RAG с metadata filters, forum/topic aliases, rerank и source-only ответами.
 - Grounded LLM synthesis и verifier.
 - PII masking, safety routing, off-topic и profanity policy.
-- Ругательства и политические/бессмысленные вопросы не нагружают оператора.
+- Ругательства и политические/off-topic вопросы штатно не нагружают оператора; известное
+  исключение для короткой реплики `Ей` зафиксировано ниже как regression backlog.
 - Прямая просьба об операторе и safety-сценарии эскалируются детерминированно.
 - Составные вопросы разбиваются на аспекты, ответ собирается из нескольких источников.
 - Постоянная память диалога: последние 20 пар в Redis, полная маскированная история и
   структурированный контекст в PostgreSQL, rolling summary старой части.
 - Фиксированного лимита уточнений нет; число ходов само по себе не вызывает эскалацию.
-- HDE webhook в recovery candidate сначала атомарно фиксируется в PostgreSQL inbox; отдельный
+- HDE webhook в deployed runtime сначала атомарно фиксируется в PostgreSQL inbox; отдельный
   worker обрабатывает ordered ticket jobs, а delivery проходит через durable outbox с retry,
   dead-letter, HMAC event key, encrypted payload и аудируемым ручным recovery.
 - Ограничение HDE учитывает общий лимит 300 RPM и резерв для других процессов.
@@ -166,8 +179,10 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
   Apply в приватную рабочую KB допустимы; Yonote не мутируется, а широкий production publish
   по-прежнему требует versioned release flow.
 - Операционный отчёт в админке: latency, стоимость, cache, эскалации и проблемные темы.
-- Миграция `008_hde_durable_transport` применена на новой VM; свежие PostgreSQL transport tables
-  пусты. Первый runtime startup обнаружил ambiguity в SQL prepare, а не дефект схемы или данных.
+- Миграция `008_hde_durable_transport` применена на новой VM. Реальные test-line записи успешно
+  прошли inbox -> trace -> outbox -> HDE delivery; активные и dead-letter очереди пусты. Первый
+  runtime startup обнаружил и затем закрыл regression-тестом ambiguity в SQL prepare, а не дефект
+  схемы или данных.
 
 ## 5. Ранние pre-pilot итерации (архив)
 
@@ -241,9 +256,9 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - validation KB — `2186` валидных seed-записей (historical lifecycle split не фиксировался);
 - KB, prompts и reranker thresholds не менялись.
 
-## 6. Текущий runtime и последняя доверенная quality baseline
+## 6. Архив recovery и последняя доверенная baseline до нового handoff
 
-### Сейчас
+### Состояние на 16–20 июля 2026 (архив)
 
 - Работающего доверенного server runtime нет. Старая VM находится в `SHUTOFF`; её точные
   provider-side identifiers хранятся вне Git вместе с private incident evidence.
@@ -353,7 +368,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 ## 7. Исторический release gate нового RC — LIMITED GO отозван
 
 Решение `LIMITED GO` было корректным для проверенного runtime до обнаружения P0. После
-компрометации оно отозвано; текущий статус — `NO GO / SECURITY HOLD`. Вся история ниже сохранена
+компрометации оно было отозвано; на период recovery статус был `NO GO / SECURITY HOLD`. Вся
+история ниже сохранена
 как regression evidence и не является инструкцией по запуску старой VM.
 
 ### Срочный pre-operator correction cycle 15 июля 2026
@@ -872,35 +888,32 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 
 ## 8. Известные ограничения и остаточные риски
 
-### Блокирующие сейчас
+### Активные ограничения сейчас
 
-- Старый сервер остаётся скомпрометированным и выключенным. Его IP, webhook, TLS state,
-  credentials, images, volumes, data и backups недоверенны и не использовались в новом контуре.
-- На новой VM runtime `91c671343bbfd936b058537e47e1c10d489f9407` healthy: exact images,
-  migration `008`, Qdrant `2152/0`, пустые HDE queues, restart/OOM `0`, offline ML,
-  egress/network gates и повторный image/security scan зелёные.
-- Infrastructure-only correction локально прошла полный gate и независимый аудит, но ещё не
-  развёрнута на сервере: runtime остаётся на `91c6713`. Correction удаляет ложный production
-  host-port contract у `app-ml`, вводит exact effective Compose policy и server-local one-shot
-  quality gate. До зелёного CI exact GitHub SHA и SHA-bound rebuild она не считается trusted.
-- Для публичного ingress пока нужен рабочий DNS name, резолвящийся на новую VM, и публично
-  доверенный TLS. До этого Nginx/TLS/edge-relay, HDE dispatcher и операторский тест остаются `OFF`.
-- Два старых тестовых HDE-канала отключены, связанные ключи удалены. Глобальный HDE API key по
-  решению владельца остаётся `retained_exception` из-за зависимых интеграций; до smoke обязательны
-  usage/audit/scope, egress/rate-limit и kill-switch controls.
-- Server-only `.env.production` создан и проверен человеком; Codex значений не видел. Полный
-  реестр credential classes и оставшиеся provider-side подтверждения ведутся только в
-  `docs/secret_rotation_20260716.md`.
-- Начатый 15 июля cohort прерван. Независимой финальной оценки полной multi-turn конверсии нет;
-  старые и новые тикеты нельзя объединять в одну метрику.
+- Старый сервер остаётся скомпрометированным и выключенным. Его credentials, images, volumes,
+  runtime, data и backups недоверенны и не использовались в новом контуре.
+- Новый test-production подключён только к ограниченной тестовой HDE/VK-линии. Широкий traffic
+  не разрешён; независимой оценки полной multi-turn конверсии ещё нет.
+- Начатый 15 июля cohort прерван и не объединяется с новой выборкой. Два domain-smoke события
+  27 июля также исключаются из продуктовой конверсии.
+- Глобальный HDE API key по решению владельца остаётся `retained_exception` из-за зависимых
+  интеграций. Его значение Codex не видел; egress, rate-limit, audit и ручной kill-switch
+  обязательны.
+- Постоянный TLS endpoint принят, но временное rollback-имя и root-only TLS backup пока
+  сохраняются на короткий стабилизационный период. Их удаление — отдельная контролируемая
+  операция после повторной проверки renewal.
+- Разовый зашифрованный off-host PostgreSQL backup подтверждён; автоматическое расписание и
+  restore drill до широкого production traffic ещё не закрыты.
+- Локальная Yonote statistics/export итерация не committed и не deployed; она не входит в
+  release `b4bc23a`.
 
-### Качество, зафиксированное до остановки
+### Качество и продуктовый backlog
 
-- Последний тест Наты выявил два локально воспроизводимых дефекта (`Начать` не маршрутизируется в
-  greeting; `Даты` после общего уточнения ошибочно трактуется как неизвестное название) и один
-  наблюдаемый Mashuk-дефект с подтверждёнными source/ranking evidence: длинный ответ пропускает
-  точные даты/смены/статус регистрации. Trace Наты отсутствует. Детали:
-  `docs/operator_feedback_20260715.md`.
+- Тест Наты выявил два локально воспроизводимых дефекта: `Начать` не маршрутизировалось в greeting,
+  а `Даты` после общего уточнения ошибочно трактовалось как неизвестное название. Первый дефект
+  уже закрыт greeting release и server smoke; второй остаётся в backlog. Наблюдаемый Mashuk-дефект
+  с подтверждёнными source/ranking evidence пропускает точные даты/смены/статус регистрации.
+  Trace Наты отсутствует. Детали: `docs/operator_feedback_20260715.md`.
 - Для «Машука» точные даты есть в Yonote, но topic-equivalence/source precedence не гарантируют
   их выбор. `registration_deadline` не извлекается из фразы `дедлайн по регистрации`; разные
   записи содержат 17 и 31 мая, а агрегированные чанки требуют content verdict. Yonote `s0009`
@@ -916,45 +929,40 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   на новом runtime. Он не даёт права обещать provider exactly-once при неоднозначном сетевом исходе;
   manual reconciliation остаётся обязательным.
 - Список админки по умолчанию показывает 50 строк, а не весь размер KB. Новый runtime подтверждает
-  `2152` published points и пустой `response_cache`.
+  `2152` published points; после ручных тестов `response_cache=2`.
 - Панель `Quality` может показывать embedded presentation-report, а не последний private suite.
   После rebuild источником release-решения должен быть новый server-local artifact и trace.
+- Отдельное сообщение `Ей` после успешного `Хей` ушло в `low_confidence` escalation. Транспорт
+  отработал корректно, но продуктовую реакцию нужно добавить в calibration/regression backlog:
+  бессодержательная или опечаточная реплика не должна автоматически создавать лишнюю нагрузку
+  оператору.
 
-## 9. Активный план восстановления и продолжения качества
+## 9. Активный план после test-production handoff
 
-Единственная исполнимая инструкция —
-`docs/recovery_test_production_runbook_20260720.md`; сокращённый порядок ниже не заменяет его.
+Recovery runbook `docs/recovery_test_production_runbook_20260720.md` остаётся источником rollback
+и повторного deployment, но clean rebuild, exact release acceptance, permanent TLS и HDE/VK smoke
+уже завершены.
 
-1. Уже завершено: clean VM, OS/Docker preflight, trusted checkout `91c6713`, secretless build,
-   offline ML, scans, server-only env, egress allowlist, migration `008`, frozen Qdrant `2152/0`
-   и healthy runtime `91c6713`. Старые snapshots/runtime/secrets не использовались.
-2. Локально завершена infrastructure-only correction: effective Compose, отсутствие
-   `app-ml` host ports, exact-HTTPS security gate и server-local one-shot quality с Git
-   attestation/read-only snapshot. Ruff, полный pytest, KB validate, Compose, Bash syntax и
-   Gitleaks history/worktree прошли.
-3. Опубликовать correction в `master`, если она ещё не опубликована, и принять exact SHA только
-   после зелёного GitHub
-   `Secretless release gate`.
-4. На VM при `dispatcher OFF` выполнить detached checkout нового SHA, secretless SHA-bound
-   app/app-ml rebuild, Gitleaks и свежий SBOM/Critical/secret rescan изменившихся images. Атомарно
-   заменить только `RELEASE_GIT_SHA`; старые secrets не выводить и не передавать build/scanner.
-5. Если index inputs между `91c6713` и новым SHA не изменились, не повторять 44-минутный reindex:
-   сохранить существующий index и строго подтвердить `knowledge_base=2152`,
-   `response_cache=0`. Затем доказать strict `/ready`, пустые HDE queues, restart/OOM `0`,
-   egress allowlist/deny и network memberships.
-6. Получить рабочий DNS name на новую VM, пройти DNS preflight, выпустить публично доверенный TLS,
-   затем выполнить Gate 4B exact-HTTPS, server-local quality one-shot и post-quality log/security
-   gate. HDE/VK не использовать как batch transport.
-7. На принятом preliminary runtime воспроизвести `Начать`, вопрос про даты и «Машук», получить
-   content verdict и выполнить ровно один согласованный regression-first correction cycle с новым
-   commit/rebuild/rescan и повтором полного acceptance.
-8. Создать HDE rules выключенными и проверить scope: только тестовый канал/visitor events,
-   корректный auth, trigger prefix только там, где он нужен; исключить bot/API-user events.
-9. Перед первым HDE событием запустить traffic observer; включить только новый тестовый dispatcher
-   и выполнить короткий smoke `upstream id -> inbox -> trace -> outbox -> delivery`. При
-   dead-letter или лишнем traffic — немедленно `OFF`.
-10. После финального admin/traffic/handoff gate начать новый sealed cohort с timestamp первого
-    реального HDE trace. Старый interrupted cohort использовать только как qualitative input.
+1. Оставить включёнными только два test-scoped HDE rule на
+   `https://bot.zabotus.ru/webhook/hde`; не расширять scope без отдельного review.
+2. Начать новую измеримую test-production выборку со следующего реального обращения. Smoke 27 июля
+   и interrupted cohort 15 июля не включать в conversion metrics.
+3. Наблюдать readiness, active/dead queues, delivery status, latency, cost и provider traffic.
+   При dead-letter, повторной доставке или неизвестном egress немедленно выключить оба правила и
+   использовать только аудируемый HDE recovery flow.
+4. Завершить локальную Yonote statistics/export вкладку отдельным change set: review, Ruff,
+   полный pytest, KB validate, Compose, Gitleaks, commit/push и GitHub CI. Не смешивать её с
+   operational handoff и не выполнять автоматический reindex.
+5. Провести отдельный regression-first quality cycle для `Ей`, точной даты «Правды» и Mashuk
+   content findings. Не менять одновременно KB, routing, thresholds и prompts.
+6. Настроить recurring encrypted off-host PostgreSQL backup и restore drill до расширения
+   трафика.
+7. После стабилизационного периода повторно проверить постоянный TLS/renewal, затем отдельной
+   операцией удалить лишнюю DNS-запись, временное rollback-имя из certificate lineage и root-only
+   TLS backup.
+8. Любой следующий release строить только из нового exact Git SHA с image rebuild/rescan,
+   readiness, Qdrant-count, post-quality security и коротким HDE smoke. Push сам по себе не
+   является deployment.
 
 ## 10. Правило продолжения в новом чате
 
@@ -965,11 +973,12 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 docs/secret_rotation_20260716.md, docs/recovery_test_production_runbook_20260720.md,
 docs/operator_feedback_20260715.md, docs/operator_holdout_runbook.md и docs/DECISIONS.md.
 Ничего не меняй и ничего не переноси со старого сервера. Сначала проверь git status,
-git log -5 и origin/master, затем кратко перескажи: цель проекта, последнюю quality baseline,
-feedback Наты, статус SHUTOFF/Selectel ticket, recovery freeze, trusted SHA и provider Gate 0.
+git log -5 и origin/master, затем кратко перескажи: цель проекта, deployed SHA, постоянный endpoint,
+последний quality/security/HDE handoff, статус старого SHUTOFF-контура, текущие локальные
+uncommitted Yonote-файлы и точный следующий gate.
 ```
 
-Точный следующий шаг: принять опубликованный infrastructure-only SHA только после зелёного GitHub
-CI, затем выполнить на сервере SHA-bound rebuild/rescan строго по recovery runbook. До этого сервер
-остаётся на healthy `91c6713`; никаких host hotfix, reindex, TLS или включения dispatcher не
-выполнять.
+Точный следующий шаг: не менять healthy deployed runtime `b4bc23a`; собирать новую тестовую
+выборку и отдельно завершить локальную Yonote statistics/export итерацию без потери текущего
+dirty worktree. Любой новый deploy — только после отдельного review, commit/push, CI,
+SHA-bound rebuild/rescan и полного server gate.
