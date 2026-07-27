@@ -1,14 +1,23 @@
 # Текущее состояние проекта
 
-**Обновлено:** 23 июля 2026
+**Обновлено:** 27 июля 2026
 **Ветка:** `master`  
 **Текущий server runtime:**
-`27cecaf9905b703e803022e8089ca5993d419843` (`Harden read-only admin and add scoped Yonote
-preview`). Clean checkout, SHA-bound app/app-ml images, `pip check`, полный Gitleaks и scan всех
-девяти production images прошли: active Critical `0`, image secret findings `0`, Gitleaks findings
-`0`, checksum manifest подтверждён. Cutover не менял migration или index inputs; повторная
-индексация не выполнялась. После переключения оба runtime-контейнера прошли readiness и security
-acceptance, protected data services не пересоздавались.
+`c969d6fede969b16991dbbc8240f875fe4ad3e3b` (`Enable isolated test KB editor`). Exact
+app/app-ml images, полный Gitleaks/Trivy gate, readiness и runtime security acceptance прошли;
+миграции и index inputs не менялись, повторная индексация не выполнялась. Изолированный тестовый
+KB editor проверен вручную. HDE/VK test line работает; 27 июля живой smoke выявил отдельный
+routing-дефект: короткое приветствие `Хей` ушло в controlled escalation вместо приветственного
+ответа.
+
+**Локальный кандидат, ещё не опубликован и не развёрнут:** добавлена детерминированная грамматика
+приветствий с сотнями безопасных форм, единый текст для `Начать`, `/start` и первого приветствия,
+а также защита от поглощения содержательного вопроса после приветствия. Ruff, полный pytest
+(`1405 passed / 1 skipped`) и KB validate (`2186 valid / 2152 published`) прошли. Истёкшие
+27 июля exact-PURL Trivy-waiver повторно проверены по неизменившимся exact images и официальным
+advisory; срок fail-closed review продлён до 10 августа 2026. Следующий шаг — два узких
+commit/push, GitHub CI, SHA-bound rebuild/rescan только app/app-ml и короткий HDE/VK smoke без
+reindex.
 
 **Server:** новая чистая Ubuntu 24.04 VM прошла OS/SSH/firewall/Docker preflight; включён 8 GiB swap,
 используется отдельный read-only GitHub deploy key. Server-only `.env.production` создан человеком,

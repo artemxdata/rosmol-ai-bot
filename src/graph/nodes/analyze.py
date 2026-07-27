@@ -26,8 +26,86 @@ BOT_CAPABILITIES_RESPONSE = (
     "специалисту."
 )
 GREETING_RESPONSE = (
-    "Привет! Я помогу разобраться с форумами и мероприятиями Росмолодёжи, "
-    "ФГАИС «Молодёжь России» и грантами. Напиши, что именно тебя интересует."
+    "Привет! 👋 Я — ЗаБотливый Бот Росмолодёжи!\n"
+    "Я помогу быстро найти ответ на любой вопрос или подскажу, к кому обратиться, "
+    "если моих ответов будет недостаточно."
+)
+GREETING_OPENERS = frozenset(
+    {
+        "начать",
+        "start",
+        "привет",
+        "приветик",
+        "приветики",
+        "приветствую",
+        "прив",
+        "приветос",
+        "здравствуй",
+        "здравствуйте",
+        "здраствуйте",
+        "здрасте",
+        "здрасьте",
+        "здарова",
+        "дарова",
+        "дратути",
+        "доброе утро",
+        "добрый день",
+        "добрый вечер",
+        "доброго утра",
+        "доброго дня",
+        "доброго вечера",
+        "доброго времени суток",
+        "салют",
+        "хай",
+        "хэй",
+        "хей",
+        "хелло",
+        "хэлло",
+        "хелоу",
+        "хэллоу",
+        "hello",
+        "hey",
+        "hi",
+        "hiya",
+        "greetings",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "йо",
+        "йоу",
+        "ку",
+        "ку-ку",
+    }
+)
+GREETING_ADDRESSEES = frozenset(
+    {
+        "бот",
+        "ботик",
+        "помощник",
+        "ассистент",
+        "друг",
+        "друзья",
+        "ребята",
+        "коллеги",
+        "всем",
+    }
+)
+GREETING_HELP_TAILS = frozenset(
+    {
+        "можешь помочь",
+        "можете помочь",
+        "поможешь",
+        "помогите",
+        "помоги",
+        "подскажешь",
+        "подскажите",
+        "подскажи",
+        "есть вопрос",
+        "у меня вопрос",
+        "можно вопрос",
+        "нужна помощь",
+        "нужен совет",
+    }
 )
 FEEDBACK_RESPONSE = (
     "Расскажи, пожалуйста, что именно хочешь оценить: ответ бота, работу сервиса, "
@@ -206,7 +284,9 @@ def _fallback_analysis(
         if is_offtopic or interaction_response
         else _ambiguous_short_request_response(original_message, session)
     )
-    if interaction_response and not category:
+    if interaction_response == GREETING_RESPONSE:
+        category = "общее"
+    elif interaction_response and not category:
         category = "общее"
     if ambiguous_response and not category:
         category = "общее"
@@ -481,16 +561,7 @@ def _bot_interaction_response(message: str) -> str | None:
     if not normalized:
         return None
 
-    greeting_phrases = {
-        "привет",
-        "здравствуйте",
-        "добрый день",
-        "добрый вечер",
-        "как дела",
-        "привет можете помочь",
-        "привет можешь помочь",
-    }
-    if normalized in greeting_phrases:
+    if _is_greeting_message(normalized) or normalized == "как дела":
         return GREETING_RESPONSE
     if normalized in {"пока", "до свидания", "до встречи"}:
         return "До встречи! Если появится вопрос по Росмолодёжи, я помогу."
@@ -541,6 +612,33 @@ def _bot_interaction_response(message: str) -> str | None:
     ):
         return FEEDBACK_RESPONSE
     return None
+
+
+def _is_greeting_message(normalized: str) -> bool:
+    candidates = {normalized}
+    for addressee in GREETING_ADDRESSEES:
+        prefix = f"{addressee} "
+        if normalized.startswith(prefix):
+            candidates.add(normalized[len(prefix) :])
+
+    for candidate in candidates:
+        if candidate in GREETING_OPENERS:
+            return True
+        for opener in GREETING_OPENERS:
+            prefix = f"{opener} "
+            if not candidate.startswith(prefix):
+                continue
+            tail = candidate[len(prefix) :]
+            if tail in GREETING_ADDRESSEES or tail in GREETING_HELP_TAILS:
+                return True
+            for addressee in GREETING_ADDRESSEES:
+                address_prefix = f"{addressee} "
+                if (
+                    tail.startswith(address_prefix)
+                    and tail[len(address_prefix) :] in GREETING_HELP_TAILS
+                ):
+                    return True
+    return False
 
 
 def _ambiguous_short_request_response(message: str, session: object | None) -> str | None:
@@ -1568,6 +1666,11 @@ def _coerce_analysis_payload(payload: dict) -> dict:
 
 
 def _apply_deterministic_forum(payload: dict, message: str) -> None:
+    normalized = message.casefold().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if _is_greeting_message(normalized):
+        return
     if _is_collaboration_request(message.casefold().replace("ё", "е")):
         return
     detected_forums = detect_forums_from_text(message)

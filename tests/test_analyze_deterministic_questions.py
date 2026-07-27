@@ -7,7 +7,11 @@ from src.graph.nodes.analyze import (
     APPLICATION_SUCCESS_RESPONSE,
     BOT_CAPABILITIES_RESPONSE,
     GRANT_CONTEXT_RESPONSE,
+    GREETING_ADDRESSEES,
+    GREETING_HELP_TAILS,
+    GREETING_OPENERS,
     GREETING_RESPONSE,
+    _bot_interaction_response,
     _ensure_deterministic_questions,
     _fallback_analysis,
 )
@@ -268,6 +272,22 @@ def test_fallback_analysis_scopes_politics_abuse_and_provocations_without_operat
 @pytest.mark.parametrize(
     ("query", "expected_response"),
     [
+        ("Начать", GREETING_RESPONSE),
+        ("/start", GREETING_RESPONSE),
+        ("Хей", GREETING_RESPONSE),
+        ("Хелло!", GREETING_RESPONSE),
+        ("Hello", GREETING_RESPONSE),
+        ("Хэй, бот", GREETING_RESPONSE),
+        ("Приветик", GREETING_RESPONSE),
+        ("Здарова", GREETING_RESPONSE),
+        ("Дратути", GREETING_RESPONSE),
+        ("Доброе утро", GREETING_RESPONSE),
+        ("Доброго времени суток!", GREETING_RESPONSE),
+        ("Салют, помощник", GREETING_RESPONSE),
+        ("Йоу, можешь помочь?", GREETING_RESPONSE),
+        ("Ку-ку", GREETING_RESPONSE),
+        ("Ребята, привет", GREETING_RESPONSE),
+        ("Привет, бот, у меня вопрос", GREETING_RESPONSE),
         ("Как дела?", GREETING_RESPONSE),
         ("Ты нейросеть?", BOT_CAPABILITIES_RESPONSE),
         ("Что ты вообще умеешь?", BOT_CAPABILITIES_RESPONSE),
@@ -289,6 +309,37 @@ def test_fallback_analysis_answers_bot_meta_questions_deterministically(
     assert analysis.needs_clarification is True
     assert analysis.clarification_question == expected_response
     assert analysis.should_escalate is False
+
+
+def test_greeting_prefix_does_not_hide_a_substantive_question() -> None:
+    query = "Привет, когда проходит форум Машук?"
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.clarification_question != GREETING_RESPONSE
+    assert analysis.should_escalate is False
+
+
+def test_greeting_grammar_covers_hundreds_of_safe_surface_forms() -> None:
+    variants = {
+        opener
+        for opener in GREETING_OPENERS
+    } | {
+        f"{opener} {tail}"
+        for opener in GREETING_OPENERS
+        for tail in GREETING_ADDRESSEES | GREETING_HELP_TAILS
+    } | {
+        f"{opener} {addressee} {tail}"
+        for opener in GREETING_OPENERS
+        for addressee in GREETING_ADDRESSEES
+        for tail in GREETING_HELP_TAILS
+    }
+
+    assert len(variants) >= 300
+    assert all(
+        _bot_interaction_response(variant) == GREETING_RESPONSE
+        for variant in variants
+    )
 
 
 @pytest.mark.parametrize(
