@@ -3,7 +3,7 @@ vulnerabilities:
   - id: CVE-2025-68121
     purls:
       - "pkg:golang/stdlib@v1.24.6"
-    expired_at: 2026-07-27
+    expired_at: 2026-08-10
     statement: >-
       Not affected: the advisory applies only to crypto/tls session resumption.
       gosu is a local uid/gid switch-and-exec utility whose reviewed source has

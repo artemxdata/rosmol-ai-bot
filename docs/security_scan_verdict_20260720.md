@@ -1,4 +1,4 @@
-# Security scan verdict — 20 July 2026; fail-closed re-review 22 July 2026
+# Security scan verdict — 20 July 2026; fail-closed re-review 27 July 2026
 
 The first part of this verdict is deliberately narrow. It applies only to the
 `app` and `app-ml` images built for `linux/amd64` from
@@ -48,6 +48,19 @@ Raw Trivy JSON and SBOM remain in the ignored private security-scan directory;
 they are not committed because package paths can disclose unnecessary runtime
 detail.
 
+The fail-closed re-review on 27 July confirmed that the exact pinned image
+digests, Debian package PURL, architecture and runtime entrypoints covered by
+this verdict are unchanged. Fresh offline exact-image inspection again found
+`Archive::Tar` and `Storable` absent, zero Perl shebangs in the application and
+virtual environment, no Node/npm/npx executable or runtime `node_modules/tar`
+path in Qdrant, and only the known Web UI SPDX inventory record. The pinned
+PostgreSQL image still contains `gosu 1.19` built with Go 1.24.6; upstream
+`gosu` 1.19 source remains a local uid/gid switch-and-exec utility without a
+TLS session-resumption path. Debian, node-tar and Go authoritative advisories
+still describe the same affected conditions. The exact PURL-bound policies
+are therefore renewed through 10 August 2026; any image, package, architecture
+or entrypoint change invalidates this renewal.
+
 ## Scoped decisions
 
 1. `CVE-2026-8376` is not applicable to this `amd64` build: the upstream issue
@@ -83,7 +96,7 @@ Authoritative references:
 ## Fail-closed boundary
 
 `security/trivy-app-ignore.yaml` scopes every application exception to the exact
-package PURL and expires it on **2026-07-27**. Trivy receives this file only for
+package PURL and expires it on **2026-08-10**. Trivy receives this file only for
 `app` and `app-ml`. An expired entry, changed architecture, Debian release,
 `perl-base` version, or changed PURL becomes an unsuppressed blocker
 automatically.
@@ -112,7 +125,7 @@ inspection confirms that Storable and Archive::Tar are not loadable, no Perl
 entrypoint exists, and the service starts its Rust binary directly. The later
 `CVE-2026-59873` record is confined to the embedded Web UI SPDX inventory:
 Node/npm/npx and executable node-tar files are absent. The Qdrant policy scopes
-all five records to their exact PURLs until 27 July; a digest, inventory,
+all five records to their exact PURLs until 10 August; a digest, inventory,
 runtime-tool or entrypoint change invalidates the corresponding decision. The
 zero-active verdict remains pending until a new fresh full scan records these
 findings as suppressed. A real isolated smoke proved qdrant-client `1.11.3`
@@ -122,7 +135,7 @@ The refreshed PostgreSQL image has one scanner finding in the Go standard
 library embedded in `gosu`: `CVE-2025-68121`. The authoritative Go advisory
 limits the affected symbols to `crypto/tls` session resumption, while gosu's
 reviewed source is a local uid/gid switch-and-exec program with no network/TLS
-path. `security/trivy-postgres-ignore.yaml` scopes this exact PURL until 27 July.
+path. `security/trivy-postgres-ignore.yaml` scopes this exact PURL until 10 August.
 Reference: <https://pkg.go.dev/vuln/GO-2026-4337>.
 
 The Qdrant/PostgreSQL scoped ignore policies are passed only to their corresponding image
