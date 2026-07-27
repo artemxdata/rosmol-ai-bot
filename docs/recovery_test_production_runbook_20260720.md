@@ -361,7 +361,7 @@ EDGE_RELAY_IMAGE='haproxy:3.4.2-alpine@sha256:0878b11eb64c433be1b0f578a584b8aca1
 APP_IMAGE="rosmol-ai-bot-app:${TRUSTED_GIT_SHA}"
 ML_IMAGE="rosmol-ai-bot-ml:${TRUSTED_GIT_SHA}"
 SCAN_DIR="/var/lib/rosmol/security-scan/${TRUSTED_GIT_SHA}"
-TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-07-27'
+TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-08-10'
 [[ "$(date -u +%F)" < "$TRIVY_EXCEPTION_REVIEW_DEADLINE" ]] || {
   echo 'STOP: scoped Trivy exception expired; re-review before continuing'
   exit 1
@@ -442,14 +442,14 @@ Redis/Nginx/Certbot/Squid/HAProxy сканируются без исключен
 `perl-base=5.40.1-6` PURL app/app-ml и Qdrant: уязвимый модуль Storable в этих runtime images
 отсутствует, а entrypoints не используют Perl. Это решение не разрешает продолжить старый
 прерванный scan: нужен новый Git SHA, новые SHA-bound app/app-ml images и fresh `SCAN_DIR`; срок
-повторного review остаётся `2026-07-27`.
+повторного review после fail-closed перепроверки 27 июля установлен на `2026-08-10`.
 
 Следующий fresh scan SHA `15f3c2aae3891a7e064a48f1fff3f21c1956296d` также штатно остановился до
 credentials на `CVE-2026-59873` (`pkg:npm/tar@7.5.16`) в pinned Qdrant digest. Exact-image
 inspection показал, что запись существует только в embedded
 `/qdrant/static/qdrant-web-ui.spdx.json`: `node`, `npm`, `npx` и файлы `node_modules/tar`
 отсутствуют, а entrypoint запускает Rust Qdrant. Уязвимый parse/extract path недостижим, поэтому
-короткоживущее исключение применяется только к этому PURL и digest до `2026-07-27`. Partial scan
+короткоживущее исключение применяется только к этому PURL и digest до `2026-08-10`. Partial scan
 не продолжается: после policy patch снова обязательны новый trusted SHA, новые SHA-bound app/ML
 images и fresh полный scan всех девяти images.
 
@@ -1229,7 +1229,7 @@ cd "$CLEAN_RELEASE_SOURCE"
 GITLEAKS_IMAGE='zricethezav/gitleaks:v8.28.0@sha256:bf00b5e039f0fad4b32935dc5ec1e358f227ccd097bcb64b971f0331072fe2ae'
 TRIVY_IMAGE='aquasec/trivy:0.64.1@sha256:de90a656e79b175a294abe85cb8b99670fab83ebf339cccd163e6f584846809a'
 RESCAN_DIR="/var/lib/rosmol/security-scan/${CORRECTION_GIT_SHA}"
-TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-07-27'
+TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-08-10'
 [[ "$(date -u +%F)" < "$TRIVY_EXCEPTION_REVIEW_DEADLINE" ]] || {
   echo 'STOP: scoped application Trivy exception expired; re-review before continuing'
   exit 1

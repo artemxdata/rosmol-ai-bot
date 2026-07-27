@@ -270,7 +270,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
   `--vex`, хотя это формат Trivy `--ignorefile`. Контракт исправлен и повторно доказан для нового
   ML image: Trivy `0.64.1`, DB `UpdatedAt=2026-07-20T07:44:03Z`, Critical `0`, image-secret `0`,
   Gitleaks `0`, SBOM `244` components. Scoped exact-PURL ignore policies app/PostgreSQL/Qdrant
-  истекают `2026-07-27`; все девять exact production images всё равно сканируются заново на VM.
+  после fail-closed перепроверки 27 июля действуют до `2026-08-10`; все девять exact production
+  images всё равно сканируются заново на VM.
 - Финальный локальный gate 20 июля: `ruff check .` — успешно; `pytest` — `1313 passed`; KB
   validate — `2186 valid`, из них `2152 published`; KB audit — `0 errors`, `4` известных warning;
   production Compose merge/no-pull assertions и Git Bash syntax — успешно.

@@ -237,7 +237,7 @@ def test_recovery_runbook_pins_history_secret_sbom_and_cve_scanners() -> None:
     assert "--ignorefile /repo/security/trivy-app-ignore.yaml --show-suppressed" in runbook
     assert "--ignorefile /repo/security/trivy-postgres-ignore.yaml --show-suppressed" in runbook
     assert "--ignorefile /repo/security/trivy-qdrant-ignore.yaml --show-suppressed" in runbook
-    assert "TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-07-27'" in runbook
+    assert runbook.count("TRIVY_EXCEPTION_REVIEW_DEADLINE='2026-08-10'") == 2
     assert "render-egress-proxy --env-file .env.production" in runbook
     assert '"$RUNTIME_EGRESS_PROXY_IMAGE" -k parse' in runbook
     assert '"$EDGE_RELAY_IMAGE" -c -f' in runbook
