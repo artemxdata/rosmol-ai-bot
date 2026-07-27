@@ -10,7 +10,13 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from scripts.sync_yonote_kb import (
+    YonoteApiError,
+    YonoteDataTooLarge,
+    YonoteOperationTimeout,
+)
 from src.admin import ui
+from src.admin.yonote_database import YonoteDatabaseExportTooLarge
 from src.main import _admin_reindex_record
 from src.main import app as fastapi_app
 
@@ -285,9 +291,14 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert 'id="qualityDashboard"' in enabled.text
     assert 'id="yonoteButton"' in enabled.text
     assert 'id="yonoteDashboard"' in enabled.text
+    assert 'id="yonoteDatabaseButton"' in enabled.text
+    assert 'id="yonoteDatabaseDashboard"' in enabled.text
     assert "/admin/kb/ops-report?days=7" in enabled.text
     assert "/admin/kb/yonote/preview" in enabled.text
     assert "/admin/kb/yonote/apply" in enabled.text
+    assert "/admin/kb/yonote/database-statistics" in enabled.text
+    assert "/admin/kb/yonote/database-export" in enabled.text
+    assert "Подсчёт БД Yonote" in enabled.text
     assert "Работа бота" in enabled.text
     assert "Проблемные темы" in enabled.text
     assert "ожидаемые эскалации" in enabled.text
@@ -297,6 +308,15 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert "Сохранение не подтверждено" in enabled.text
     assert "Текст сохранён, но RAG-индекс не обновлён" in enabled.text
     assert "Операция не завершилась за" in enabled.text
+    assert "текстовых секций (оценка)" in enabled.text
+    assert "может включать чувствительные данные" in enabled.text
+    assert "не добавляй в Git" in enabled.text
+    assert 'let activeWorkspace = "knowledge";' in enabled.text
+    assert "lastYonoteDatabaseReport = data;" in enabled.text
+    assert "Подсчёт Yonote ещё не выполнен" in enabled.text
+    assert "const errorText = await response.text();" in enabled.text
+    assert "const payload = JSON.parse(errorText);" in enabled.text
+    assert "Чтение Yonote отключено или не настроено" in enabled.text
     assert "const adminReadOnly = false;" in enabled.text
 
 
@@ -352,6 +372,236 @@ def test_admin_kb_html_renders_runtime_capabilities_without_placeholders(
     assert "__YONOTE_SYNC_ENABLED__" not in html
     assert f"const adminReadOnly = {str(admin_read_only).lower()};" in html
     assert f"const yonoteSyncEnabled = {str(yonote_sync_enabled).lower()};" in html
+
+
+@pytest.mark.asyncio
+async def test_read_only_admin_counts_and_exports_live_yonote_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    original_seed = seed_path.read_bytes()
+    settings = SimpleNamespace(
+        app_env="production",
+        admin_auth_token="admin-secret",
+        admin_read_only=True,
+        yonote_sync_enabled=True,
+        yonote_api_token="read-only-yonote-token",
+        kb_seed_path=str(seed_path),
+    )
+    report = {
+        "ok": True,
+        "source": "yonote_live_api",
+        "read_only": True,
+        "documents_total": 42,
+        "sections_total": 84,
+        "characters_with_spaces": 12345,
+    }
+    calls: list[str] = []
+
+    def fake_count(received_settings: object) -> dict[str, object]:
+        assert received_settings is settings
+        calls.append("count")
+        return report
+
+    def fake_export(received_settings: object) -> str:
+        assert received_settings is settings
+        calls.append("export")
+        return "ВЫГРУЗКА БАЗЫ ЗНАНИЙ YONOTE\n\nБез секретов."
+
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    monkeypatch.setattr("src.main.count_yonote_database", fake_count)
+    monkeypatch.setattr("src.main.export_yonote_database", fake_export)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        unauthorized = await client.post(
+            "/admin/kb/yonote/database-statistics",
+            json={},
+        )
+        counted = await client.post(
+            "/admin/kb/yonote/database-statistics",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        exported = await client.post(
+            "/admin/kb/yonote/database-export",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert counted.status_code == 200
+    assert counted.json() == report
+    assert exported.status_code == 200
+    assert exported.text.startswith("ВЫГРУЗКА БАЗЫ ЗНАНИЙ YONOTE")
+    assert exported.headers["content-type"].startswith("text/plain")
+    assert exported.headers["cache-control"] == "no-store"
+    assert exported.headers["pragma"] == "no-cache"
+    assert exported.headers["x-content-type-options"] == "nosniff"
+    assert exported.headers["content-disposition"].startswith(
+        'attachment; filename="yonote-database-'
+    )
+    assert exported.headers["content-disposition"].endswith('.txt"')
+    assert "read-only-yonote-token" not in exported.text
+    assert calls == ["count", "export"]
+    assert seed_path.read_bytes() == original_seed
+
+
+@pytest.mark.asyncio
+async def test_admin_yonote_database_sanitizes_provider_errors_and_releases_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    original_seed = seed_path.read_bytes()
+    secret_marker = "read-only-yonote-token"
+    settings = SimpleNamespace(
+        admin_auth_token="admin-secret",
+        yonote_sync_enabled=True,
+        yonote_api_token=secret_marker,
+        kb_seed_path=str(seed_path),
+    )
+    results: list[Exception | dict[str, object]] = [
+        YonoteApiError(f"provider echoed {secret_marker}"),
+        YonoteOperationTimeout(f"deadline contained {secret_marker}"),
+        YonoteDataTooLarge(f"oversized payload contained {secret_marker}"),
+        {"ok": True, "documents_total": 1},
+    ]
+
+    def fake_count(_settings: object) -> dict[str, object]:
+        result = results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    monkeypatch.setattr("src.main.count_yonote_database", fake_count)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        responses = [
+            await client.post(
+                "/admin/kb/yonote/database-statistics",
+                json={},
+                headers={"X-Admin-Token": "admin-secret"},
+            )
+            for _ in range(4)
+        ]
+
+    assert [response.status_code for response in responses] == [502, 504, 413, 200]
+    assert secret_marker not in responses[0].text
+    assert secret_marker not in responses[1].text
+    assert secret_marker not in responses[2].text
+    assert responses[3].json()["documents_total"] == 1
+    assert seed_path.read_bytes() == original_seed
+
+
+@pytest.mark.asyncio
+async def test_admin_yonote_oversized_export_releases_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    settings = SimpleNamespace(
+        admin_auth_token="admin-secret",
+        yonote_sync_enabled=True,
+        yonote_api_token="read-only-yonote-token",
+        kb_seed_path=str(seed_path),
+    )
+
+    def fail_export(_settings: object) -> str:
+        raise YonoteDatabaseExportTooLarge(
+            "provider echoed read-only-yonote-token"
+        )
+
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    monkeypatch.setattr("src.main.export_yonote_database", fail_export)
+    monkeypatch.setattr(
+        "src.main.count_yonote_database",
+        lambda _settings: {"ok": True, "documents_total": 1},
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        oversized = await client.post(
+            "/admin/kb/yonote/database-export",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        counted = await client.post(
+            "/admin/kb/yonote/database-statistics",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert oversized.status_code == 413
+    assert "безопасный лимит размера" in oversized.json()["detail"]
+    assert "read-only-yonote-token" not in oversized.text
+    assert counted.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_yonote_database_operations_share_one_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    started = threading.Event()
+    release = threading.Event()
+    export_calls = 0
+    settings = SimpleNamespace(
+        admin_auth_token="admin-secret",
+        yonote_sync_enabled=True,
+        yonote_api_token="read-only-yonote-token",
+        kb_seed_path=str(seed_path),
+    )
+
+    def slow_count(_settings: object) -> dict[str, object]:
+        started.set()
+        assert release.wait(timeout=5)
+        return {"ok": True, "documents_total": 1}
+
+    def fake_export(_settings: object) -> str:
+        nonlocal export_calls
+        export_calls += 1
+        return "ВЫГРУЗКА ДОСТУПНОГО СОДЕРЖИМОГО YONOTE"
+
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    monkeypatch.setattr("src.main.count_yonote_database", slow_count)
+    monkeypatch.setattr("src.main.export_yonote_database", fake_export)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        count_task = asyncio.create_task(
+            client.post(
+                "/admin/kb/yonote/database-statistics",
+                json={},
+                headers={"X-Admin-Token": "admin-secret"},
+            )
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        blocked_export = await client.post(
+            "/admin/kb/yonote/database-export",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        release.set()
+        counted = await count_task
+        successful_export = await client.post(
+            "/admin/kb/yonote/database-export",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert blocked_export.status_code == 409
+    assert counted.status_code == 200
+    assert successful_export.status_code == 200
+    assert export_calls == 1
 
 
 @pytest.mark.asyncio
@@ -494,11 +744,22 @@ async def test_admin_kb_api_rejects_yonote_pull_when_runtime_capability_is_disab
             json={},
             headers={"X-Admin-Token": "admin-secret"},
         )
+        statistics = await client.post(
+            "/admin/kb/yonote/database-statistics",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        exported = await client.post(
+            "/admin/kb/yonote/database-export",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
 
     assert page.status_code == 200
     assert "const yonoteSyncEnabled = false;" in page.text
-    assert preview.status_code == 503
-    assert preview.json()["detail"] == "Yonote sync is disabled"
+    for response in (preview, statistics, exported):
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Yonote sync is disabled"
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,72 @@ import pytest
 from src.admin import yonote_sync
 
 
+def test_common_reader_uses_only_passed_settings_and_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    expected_documents = [object()]
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client_kwargs"] = kwargs
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            captured["closed"] = True
+
+    def fake_load(
+        client: object,
+        selectors: tuple[str, ...],
+        *,
+        limit_documents: int | None,
+        include_empty: bool,
+        max_total_text_bytes: int | None,
+    ) -> list[object]:
+        assert isinstance(client, FakeClient)
+        captured["selectors"] = selectors
+        captured["limit_documents"] = limit_documents
+        captured["include_empty"] = include_empty
+        captured["max_total_text_bytes"] = max_total_text_bytes
+        return expected_documents
+
+    monkeypatch.setattr(yonote_sync, "YonoteClient", FakeClient)
+    monkeypatch.setattr(yonote_sync, "load_yonote_documents", fake_load)
+    settings = SimpleNamespace(
+        yonote_base_url="https://yonote.example",
+        yonote_api_token="placeholder-token",
+        yonote_collection_names="Первая коллекция;Вторая коллекция",
+        yonote_request_timeout_seconds=17,
+        yonote_max_retries=4,
+        yonote_min_request_interval_seconds=0.25,
+    )
+
+    result = yonote_sync.load_yonote_documents_from_settings(
+        settings,
+        limit_documents=7,
+        include_empty=True,
+        max_duration_seconds=240,
+        max_total_text_bytes=1024,
+    )
+
+    assert result is expected_documents
+    assert captured["selectors"] == ("Первая коллекция", "Вторая коллекция")
+    assert captured["limit_documents"] == 7
+    assert captured["include_empty"] is True
+    assert captured["max_total_text_bytes"] == 1024
+    assert captured["closed"] is True
+    assert captured["client_kwargs"] == {
+        "base_url": "https://yonote.example",
+        "api_token": "placeholder-token",
+        "timeout_seconds": 17.0,
+        "max_retries": 4,
+        "min_request_interval_seconds": 0.25,
+        "max_duration_seconds": 240,
+    }
+
+
 def _write_seed(path: Path) -> None:
     records = [
         {

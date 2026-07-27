@@ -13,10 +13,12 @@ from scripts.index_kb import (
     validate_semantic_seed_items,
 )
 from scripts.sync_yonote_kb import (
+    DEFAULT_COLLECTION_NAMES,
     YonoteClient,
+    YonoteDocument,
     build_records_from_api_documents,
     load_yonote_documents,
-    selected_collection_names,
+    split_collection_selectors,
 )
 from src.admin.kb_store import write_seed_records
 
@@ -96,6 +98,28 @@ def _load_fresh_yonote_records(
     *,
     limit_documents: int | None,
 ) -> tuple[list[Any], list[dict[str, Any]]]:
+    documents = load_yonote_documents_from_settings(
+        settings,
+        limit_documents=limit_documents,
+    )
+    base_url = str(getattr(settings, "yonote_base_url", "") or "").strip()
+    records = build_records_from_api_documents(
+        documents,
+        base_url=base_url,
+        extraction_date=date.today(),
+    )
+    validate_seed_items(records)
+    return documents, records
+
+
+def load_yonote_documents_from_settings(
+    settings: Any,
+    *,
+    limit_documents: int | None = None,
+    include_empty: bool = False,
+    max_duration_seconds: float | None = None,
+    max_total_text_bytes: int | None = None,
+) -> list[YonoteDocument]:
     base_url = str(getattr(settings, "yonote_base_url", "") or "").strip()
     api_token = str(getattr(settings, "yonote_api_token", "") or "").strip()
     timeout_seconds = float(getattr(settings, "yonote_request_timeout_seconds", 30.0))
@@ -108,6 +132,14 @@ def _load_fresh_yonote_records(
         raise YonoteSyncConfigError("YONOTE_BASE_URL is not configured")
     if not api_token:
         raise YonoteSyncConfigError("YONOTE_API_TOKEN is not configured")
+    configured_collections = str(
+        getattr(settings, "yonote_collection_names", "") or ""
+    ).strip()
+    collection_selectors = (
+        split_collection_selectors(configured_collections)
+        if configured_collections
+        else DEFAULT_COLLECTION_NAMES
+    )
 
     with YonoteClient(
         base_url=base_url,
@@ -115,20 +147,15 @@ def _load_fresh_yonote_records(
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
         min_request_interval_seconds=min_request_interval_seconds,
+        max_duration_seconds=max_duration_seconds,
     ) as client:
-        documents = load_yonote_documents(
+        return load_yonote_documents(
             client,
-            selected_collection_names(),
+            collection_selectors,
             limit_documents=limit_documents,
+            include_empty=include_empty,
+            max_total_text_bytes=max_total_text_bytes,
         )
-
-    records = build_records_from_api_documents(
-        documents,
-        base_url=base_url,
-        extraction_date=date.today(),
-    )
-    validate_seed_items(records)
-    return documents, records
 
 
 def _validate_merged_seed(seed_path: Path, records: list[dict[str, Any]]) -> None:

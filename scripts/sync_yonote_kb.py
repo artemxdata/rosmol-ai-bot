@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import unicodedata
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -40,6 +41,8 @@ DEFAULT_COLLECTION_NAMES = (
     "Росмолодёжь: мероприятия",
 )
 TRANSIENT_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+DEFAULT_MAX_YONOTE_RESPONSE_BYTES = 32 * 1024 * 1024
+_UTF8_SIZE_CHUNK_CHARACTERS = 64 * 1024
 ROOT_TITLES = {
     "росмолодёжь: общее, структура, направления",
     "росмолодёжь: мероприятия",
@@ -89,6 +92,48 @@ class YonoteApiError(RuntimeError):
     pass
 
 
+class YonoteOperationTimeout(YonoteApiError):
+    pass
+
+
+class YonoteDataTooLarge(YonoteApiError):
+    pass
+
+
+class _YonoteResponseStreamGuard(httpx.SyncByteStream):
+    def __init__(
+        self,
+        stream: httpx.SyncByteStream,
+        *,
+        max_bytes: int,
+        ensure_operation_active: Callable[[], None],
+    ) -> None:
+        self._stream = stream
+        self._max_bytes = max_bytes
+        self._ensure_operation_active = ensure_operation_active
+        self._received_bytes = 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        iterator = iter(self._stream)
+        while True:
+            self._ensure_operation_active()
+            try:
+                chunk = next(iterator)
+            except StopIteration:
+                self._ensure_operation_active()
+                return
+            self._ensure_operation_active()
+            self._received_bytes += len(chunk)
+            if self._received_bytes > self._max_bytes:
+                raise YonoteDataTooLarge(
+                    "Yonote API response exceeded the configured size limit"
+                )
+            yield chunk
+
+    def close(self) -> None:
+        self._stream.close()
+
+
 class YonoteClient:
     def __init__(
         self,
@@ -98,25 +143,43 @@ class YonoteClient:
         timeout_seconds: float,
         max_retries: int = 2,
         min_request_interval_seconds: float = 0.15,
+        max_duration_seconds: float | None = None,
+        max_response_bytes: int = DEFAULT_MAX_YONOTE_RESPONSE_BYTES,
     ) -> None:
         if not api_token.strip():
             raise YonoteApiError("YONOTE_API_TOKEN is required")
         self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = float(timeout_seconds)
         self.max_retries = max(0, int(max_retries))
         self.min_request_interval_seconds = max(
             0.0,
             float(min_request_interval_seconds),
         )
+        if max_duration_seconds is not None and max_duration_seconds <= 0:
+            raise ValueError("max_duration_seconds must be positive")
+        if max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        self.max_response_bytes = int(max_response_bytes)
+        self._operation_deadline = (
+            time.monotonic() + float(max_duration_seconds)
+            if max_duration_seconds is not None
+            else None
+        )
         self._last_request_at = 0.0
         self._client = httpx.Client(
             base_url=self.base_url,
-            timeout=httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10.0)),
+            timeout=httpx.Timeout(
+                self.timeout_seconds,
+                connect=min(self.timeout_seconds, 10.0),
+            ),
             headers={
                 "Authorization": f"Bearer {api_token}",
                 "Accept": "application/json",
+                "Accept-Encoding": "identity",
                 "Content-Type": "application/json",
                 "User-Agent": "rosmol-ai-bot/yonote-sync",
             },
+            event_hooks={"response": [self._install_response_guard]},
         )
 
     def close(self) -> None:
@@ -153,8 +216,9 @@ class YonoteClient:
             "/api/documents.info",
             json={"id": document_id, "apiVersion": 2},
         )
-        payload = response.json()
-        document = (payload.get("data") or {}).get("document")
+        payload = self._json_object(response, "/api/documents.info")
+        data = payload.get("data")
+        document = data.get("document") if isinstance(data, dict) else None
         if not isinstance(document, dict):
             raise YonoteApiError(f"Malformed documents.info response for {document_id}")
         return document
@@ -172,11 +236,13 @@ class YonoteClient:
         while True:
             request_params = {**params, "limit": limit, "offset": offset}
             response = self._request("GET", path, params=request_params)
-            payload = response.json()
-            data = payload.get("data") or []
+            payload = self._json_object(response, path)
+            data = payload.get("data")
             if not isinstance(data, list):
                 raise YonoteApiError(f"Malformed paginated response from {path}")
-            records.extend(item for item in data if isinstance(item, dict))
+            if any(not isinstance(item, dict) for item in data):
+                raise YonoteApiError(f"Malformed paginated response from {path}")
+            records.extend(data)
             if len(data) < limit:
                 break
             offset += limit
@@ -185,26 +251,84 @@ class YonoteClient:
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         attempts = self.max_retries + 1
         for attempt in range(attempts):
+            self._ensure_operation_active()
             self._wait_for_request_slot()
+            remaining_seconds = self._remaining_operation_seconds()
+            if remaining_seconds is not None:
+                kwargs["timeout"] = min(self.timeout_seconds, remaining_seconds)
             try:
                 response = self._client.request(method, path, **kwargs)
+                self._finish_response(response)
             except httpx.TransportError as exc:
                 self._last_request_at = time.monotonic()
+                self._ensure_operation_active()
                 if attempt >= self.max_retries:
                     raise YonoteApiError(
                         f"Yonote API {path} temporarily unavailable after {attempts} attempts"
                     ) from exc
-                time.sleep(self._retry_delay(attempt))
+                self._sleep_with_operation_deadline(self._retry_delay(attempt))
                 continue
 
             self._last_request_at = time.monotonic()
+            self._ensure_operation_active()
             if response.status_code in TRANSIENT_STATUS_CODES and attempt < self.max_retries:
-                time.sleep(self._retry_delay(attempt, response))
+                self._sleep_with_operation_deadline(
+                    self._retry_delay(attempt, response)
+                )
                 continue
             self._raise_for_error(response, path)
             return response
 
         raise YonoteApiError(f"Yonote API {path} request failed")
+
+    def _install_response_guard(self, response: httpx.Response) -> None:
+        self._ensure_operation_active()
+        self._validate_response_headers(response)
+        if response.is_stream_consumed:
+            self._validate_buffered_response(response)
+            return
+        if not isinstance(response.stream, httpx.SyncByteStream):
+            raise YonoteApiError("Yonote API returned an invalid response stream")
+        if not isinstance(response.stream, _YonoteResponseStreamGuard):
+            response.stream = _YonoteResponseStreamGuard(
+                response.stream,
+                max_bytes=self.max_response_bytes,
+                ensure_operation_active=self._ensure_operation_active,
+            )
+
+    def _finish_response(self, response: httpx.Response) -> None:
+        try:
+            if not response.is_stream_consumed:
+                self._install_response_guard(response)
+                response.read()
+            self._ensure_operation_active()
+            self._validate_response_headers(response)
+            self._validate_buffered_response(response)
+        except BaseException:
+            response.close()
+            raise
+
+    def _validate_response_headers(self, response: httpx.Response) -> None:
+        content_encoding = response.headers.get("Content-Encoding", "").strip().lower()
+        if content_encoding not in {"", "identity"}:
+            raise YonoteApiError(
+                "Yonote API returned unsupported compressed content"
+            )
+        content_length = response.headers.get("Content-Length", "").strip()
+        try:
+            declared_bytes = int(content_length)
+        except ValueError:
+            return
+        if declared_bytes > self.max_response_bytes:
+            raise YonoteDataTooLarge(
+                "Yonote API response exceeded the configured size limit"
+            )
+
+    def _validate_buffered_response(self, response: httpx.Response) -> None:
+        if len(response.content) > self.max_response_bytes:
+            raise YonoteDataTooLarge(
+                "Yonote API response exceeded the configured size limit"
+            )
 
     def _wait_for_request_slot(self) -> None:
         if self.min_request_interval_seconds <= 0 or self._last_request_at <= 0:
@@ -212,7 +336,28 @@ class YonoteClient:
         elapsed = time.monotonic() - self._last_request_at
         remaining = self.min_request_interval_seconds - elapsed
         if remaining > 0:
-            time.sleep(remaining)
+            self._sleep_with_operation_deadline(remaining)
+
+    def _remaining_operation_seconds(self) -> float | None:
+        if self._operation_deadline is None:
+            return None
+        remaining = self._operation_deadline - time.monotonic()
+        if remaining <= 0:
+            raise YonoteOperationTimeout(
+                "Yonote read exceeded the configured operation deadline"
+            )
+        return remaining
+
+    def _ensure_operation_active(self) -> None:
+        self._remaining_operation_seconds()
+
+    def _sleep_with_operation_deadline(self, delay_seconds: float) -> None:
+        remaining = self._remaining_operation_seconds()
+        if remaining is None:
+            time.sleep(delay_seconds)
+            return
+        time.sleep(min(delay_seconds, remaining))
+        self._ensure_operation_active()
 
     @staticmethod
     def _retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
@@ -228,13 +373,23 @@ class YonoteClient:
     def _raise_for_error(response: httpx.Response, path: str) -> None:
         if response.status_code < 400:
             return
-        detail = ""
+        raise YonoteApiError(
+            f"Yonote API {path} failed with HTTP {response.status_code}"
+        )
+
+    @staticmethod
+    def _json_object(response: httpx.Response, path: str) -> dict[str, Any]:
         try:
             payload = response.json()
-            detail = str(payload.get("message") or payload.get("error") or "")
-        except ValueError:
-            detail = response.text[:200]
-        raise YonoteApiError(f"Yonote API {path} failed: {response.status_code} {detail}")
+        except ValueError as exc:
+            raise YonoteApiError(
+                f"Yonote API {path} returned malformed JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise YonoteApiError(
+                f"Yonote API {path} returned malformed JSON"
+            )
+        return payload
 
 
 def selected_collection_names() -> tuple[str, ...]:
@@ -258,9 +413,13 @@ def load_yonote_documents(
     collection_selectors: tuple[str, ...],
     *,
     limit_documents: int | None = None,
+    include_empty: bool = False,
+    max_total_text_bytes: int | None = None,
 ) -> list[YonoteDocument]:
     if not collection_selectors:
         raise YonoteApiError("No Yonote collection selectors are configured")
+    if max_total_text_bytes is not None and max_total_text_bytes <= 0:
+        raise ValueError("max_total_text_bytes must be positive")
     collections = client.collections()
     selected = match_collections(collections, collection_selectors)
     unmatched_selectors = [
@@ -277,6 +436,7 @@ def load_yonote_documents(
         )
 
     documents: list[YonoteDocument] = []
+    total_text_bytes = 0
     for collection in selected:
         document_refs = client.documents(collection.id)
         by_id = {str(item["id"]): item for item in document_refs if item.get("id")}
@@ -288,8 +448,16 @@ def load_yonote_documents(
                 continue
             details = client.document_info(document_id)
             text = str(details.get("text") or "").strip()
-            if not text:
+            if not text and not include_empty:
                 continue
+            if max_total_text_bytes is not None:
+                remaining_text_bytes = max_total_text_bytes - total_text_bytes
+                text_bytes = _bounded_utf8_size(text, remaining_text_bytes)
+                if text_bytes > remaining_text_bytes:
+                    raise YonoteDataTooLarge(
+                        "Yonote text exceeded the configured aggregate size limit"
+                    )
+                total_text_bytes += text_bytes
             documents.append(
                 YonoteDocument(
                     id=document_id,
@@ -308,6 +476,17 @@ def load_yonote_documents(
                 )
             )
     return documents
+
+
+def _bounded_utf8_size(value: str, limit: int) -> int:
+    total = 0
+    for start in range(0, len(value), _UTF8_SIZE_CHUNK_CHARACTERS):
+        total += len(
+            value[start : start + _UTF8_SIZE_CHUNK_CHARACTERS].encode("utf-8")
+        )
+        if total > limit:
+            return total
+    return total
 
 
 def match_collections(

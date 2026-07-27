@@ -6,12 +6,13 @@ import hmac
 import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
 from threading import Lock
 from time import perf_counter, time
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -23,8 +24,21 @@ from pydantic import BaseModel, Field, field_validator
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
-from scripts.sync_yonote_kb import YonoteApiError
+from scripts.sync_yonote_kb import (
+    YonoteApiError,
+    YonoteDataTooLarge,
+    YonoteOperationTimeout,
+)
 from src.admin import kb_index, kb_store, ui
+from src.admin.yonote_database import (
+    YonoteDatabaseExportTooLarge,
+)
+from src.admin.yonote_database import (
+    count_database as count_yonote_database,
+)
+from src.admin.yonote_database import (
+    export_database as export_yonote_database,
+)
 from src.admin.yonote_sync import (
     YonoteSyncConfigError,
 )
@@ -173,13 +187,14 @@ _ADMIN_MUTATION_LOCK = Lock()
 PRODUCTION_ADMIN_KB_SEED_PATH = (
     "/app/data/private/admin-kb/knowledge_base_seed.json"
 )
+_T = TypeVar("_T")
 
 
 def _run_with_yonote_sync_lock(
-    operation: Callable[..., dict[str, Any]],
+    operation: Callable[..., _T],
     *args: Any,
     **kwargs: Any,
-) -> dict[str, Any]:
+) -> _T:
     try:
         return operation(*args, **kwargs)
     finally:
@@ -919,8 +934,30 @@ async def admin_preview_yonote_sync(
         )
     except YonoteSyncConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YonoteOperationTimeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Чтение Yonote не завершилось в безопасный срок. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteDataTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Объём данных Yonote превышает безопасный лимит чтения. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
     except YonoteApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Не удалось прочитать данные Yonote. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -947,13 +984,137 @@ async def admin_apply_yonote_sync(
         )
     except YonoteSyncConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YonoteOperationTimeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Чтение Yonote не завершилось в безопасный срок. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteDataTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Объём данных Yonote превышает безопасный лимит чтения. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
     except YonoteApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Не удалось прочитать данные Yonote. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         _ADMIN_MUTATION_LOCK.release()
         _YONOTE_SYNC_LOCK.release()
+
+
+@app.post("/admin/kb/yonote/database-statistics")
+async def admin_count_yonote_database(request: Request) -> dict[str, Any]:
+    _require_admin_secret(request)
+    _require_yonote_sync_enabled()
+    if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Yonote sync is already running")
+    try:
+        return await asyncio.to_thread(
+            _run_with_yonote_sync_lock,
+            count_yonote_database,
+            get_settings(),
+        )
+    except YonoteSyncConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YonoteOperationTimeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Чтение Yonote не завершилось в безопасный срок. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteDataTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Объём данных Yonote превышает безопасный лимит чтения. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteApiError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Не удалось прочитать данные Yonote. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+
+
+@app.post("/admin/kb/yonote/database-export")
+async def admin_export_yonote_database(request: Request) -> Response:
+    _require_admin_secret(request)
+    _require_yonote_sync_enabled()
+    if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Yonote sync is already running")
+    try:
+        rendered = await asyncio.to_thread(
+            _run_with_yonote_sync_lock,
+            export_yonote_database,
+            get_settings(),
+        )
+    except YonoteSyncConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YonoteOperationTimeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Чтение Yonote не завершилось в безопасный срок. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteDataTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Объём данных Yonote превышает безопасный лимит чтения. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteApiError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Не удалось прочитать данные Yonote. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+    except YonoteDatabaseExportTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Текстовая выгрузка Yonote превышает безопасный лимит размера. "
+                "База бота и индекс не изменялись."
+            ),
+        ) from exc
+
+    stamp = datetime.now(UTC).strftime("%Y%m%d")
+    return Response(
+        content=rendered,
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": (
+                f'attachment; filename="yonote-database-{stamp}.txt"'
+            ),
+        },
+    )
 
 
 @app.get("/admin/kb/chunks/{chunk_id}")

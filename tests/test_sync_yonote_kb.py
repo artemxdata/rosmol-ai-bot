@@ -11,7 +11,9 @@ from scripts.sync_yonote_kb import (
     YonoteApiError,
     YonoteClient,
     YonoteCollection,
+    YonoteDataTooLarge,
     YonoteDocument,
+    YonoteOperationTimeout,
     build_document_path,
     build_records_from_api_documents,
     infer_category,
@@ -19,6 +21,208 @@ from scripts.sync_yonote_kb import (
     match_collections,
     split_collection_selectors,
 )
+
+
+def test_yonote_client_stops_stream_after_response_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed = False
+
+    class ChunkStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"data":'
+            yield b"[]}"
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=0,
+        min_request_interval_seconds=0,
+        max_response_bytes=8,
+    )
+    request = httpx.Request("GET", "https://example.test/api/collections.list")
+    monkeypatch.setattr(
+        client._client,
+        "request",
+        lambda *_args, **_kwargs: httpx.Response(
+            200,
+            request=request,
+            stream=ChunkStream(),
+        ),
+    )
+    try:
+        with pytest.raises(YonoteDataTooLarge, match="size limit"):
+            client.collections()
+    finally:
+        client.close()
+
+    assert closed is True
+
+
+def test_yonote_client_checks_deadline_between_response_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    closed = False
+    monkeypatch.setattr(sync_yonote_kb.time, "monotonic", lambda: clock[0])
+
+    class TimedStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"data":'
+            clock[0] = 106.0
+            yield b"[]}"
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=30,
+        max_retries=0,
+        min_request_interval_seconds=0,
+        max_duration_seconds=5,
+    )
+    request = httpx.Request("GET", "https://example.test/api/collections.list")
+    monkeypatch.setattr(
+        client._client,
+        "request",
+        lambda *_args, **_kwargs: httpx.Response(
+            200,
+            request=request,
+            stream=TimedStream(),
+        ),
+    )
+    try:
+        with pytest.raises(YonoteOperationTimeout, match="operation deadline"):
+            client.collections()
+    finally:
+        client.close()
+
+    assert closed is True
+
+
+def test_yonote_client_stops_before_request_after_operation_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(sync_yonote_kb.time, "monotonic", lambda: clock[0])
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=30,
+        max_retries=2,
+        min_request_interval_seconds=0,
+        max_duration_seconds=5,
+    )
+    provider_called = False
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("provider request must not start after the deadline")
+
+    monkeypatch.setattr(client._client, "request", fail_if_called)
+    clock[0] = 106.0
+    try:
+        with pytest.raises(YonoteOperationTimeout, match="operation deadline"):
+            client.collections()
+    finally:
+        client.close()
+
+    assert provider_called is False
+
+
+def test_yonote_client_rejects_malformed_json_without_echoing_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_marker = "read-only-yonote-token"
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=0,
+        min_request_interval_seconds=0,
+    )
+    request = httpx.Request("GET", "https://example.test/api/collections.list")
+    monkeypatch.setattr(
+        client._client,
+        "request",
+        lambda *_args, **_kwargs: httpx.Response(
+            200,
+            request=request,
+            content=f"not-json {secret_marker}".encode(),
+        ),
+    )
+    try:
+        with pytest.raises(YonoteApiError, match="malformed JSON") as exc_info:
+            client.collections()
+    finally:
+        client.close()
+
+    assert secret_marker not in str(exc_info.value)
+
+
+def test_yonote_client_rejects_success_payload_without_data_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=0,
+        min_request_interval_seconds=0,
+    )
+    request = httpx.Request("GET", "https://example.test/api/collections.list")
+    monkeypatch.setattr(
+        client._client,
+        "request",
+        lambda *_args, **_kwargs: httpx.Response(200, request=request, json={}),
+    )
+    try:
+        with pytest.raises(YonoteApiError, match="Malformed paginated response"):
+            client.collections()
+    finally:
+        client.close()
+
+
+def test_yonote_client_rejects_non_object_page_item_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_marker = "read-only-yonote-token"
+    client = YonoteClient(
+        base_url="https://example.test",
+        api_token="test-token",
+        timeout_seconds=5,
+        max_retries=0,
+        min_request_interval_seconds=0,
+    )
+    request = httpx.Request("GET", "https://example.test/api/collections.list")
+    monkeypatch.setattr(
+        client._client,
+        "request",
+        lambda *_args, **_kwargs: httpx.Response(
+            200,
+            request=request,
+            json={"data": [{"id": "valid"}, secret_marker]},
+        ),
+    )
+    try:
+        with pytest.raises(
+            YonoteApiError,
+            match="Malformed paginated response",
+        ) as exc_info:
+            client.collections()
+    finally:
+        client.close()
+
+    assert secret_marker not in str(exc_info.value)
 
 
 def test_yonote_client_retries_transient_transport_error(
@@ -270,6 +474,75 @@ def test_load_yonote_documents_reads_every_selected_collection_without_limit() -
         "doc-first-id",
         "doc-second-id",
     ]
+
+
+def test_load_yonote_documents_can_include_empty_pages_for_inventory() -> None:
+    class FakeClient:
+        def collections(self) -> list[YonoteCollection]:
+            return [
+                YonoteCollection(
+                    id="collection-id",
+                    name="Collection",
+                    url="/collection",
+                    url_id="collection",
+                )
+            ]
+
+        def documents(self, _collection_id: str) -> list[dict[str, object]]:
+            return [
+                {"id": "empty", "title": "Empty"},
+                {"id": "filled", "title": "Filled"},
+            ]
+
+        def document_info(self, document_id: str) -> dict[str, object]:
+            return {
+                "id": document_id,
+                "title": document_id.title(),
+                "text": "" if document_id == "empty" else "Published content",
+            }
+
+    default_documents = sync_yonote_kb.load_yonote_documents(
+        FakeClient(),  # type: ignore[arg-type]
+        ("Collection",),
+    )
+    inventory_documents = sync_yonote_kb.load_yonote_documents(
+        FakeClient(),  # type: ignore[arg-type]
+        ("Collection",),
+        include_empty=True,
+    )
+
+    assert [document.id for document in default_documents] == ["filled"]
+    assert [document.id for document in inventory_documents] == ["empty", "filled"]
+
+
+def test_load_yonote_documents_stops_at_aggregate_utf8_text_limit() -> None:
+    class FakeClient:
+        def collections(self) -> list[YonoteCollection]:
+            return [
+                YonoteCollection(
+                    id="collection-id",
+                    name="Collection",
+                    url="/collection",
+                    url_id="collection",
+                )
+            ]
+
+        def documents(self, _collection_id: str) -> list[dict[str, object]]:
+            return [{"id": "filled", "title": "Filled"}]
+
+        def document_info(self, document_id: str) -> dict[str, object]:
+            return {
+                "id": document_id,
+                "title": "Filled",
+                "text": "аб",
+            }
+
+    with pytest.raises(YonoteDataTooLarge, match="aggregate size limit"):
+        sync_yonote_kb.load_yonote_documents(
+            FakeClient(),  # type: ignore[arg-type]
+            ("Collection",),
+            max_total_text_bytes=3,
+        )
 
 
 def test_build_document_path_uses_parent_chain() -> None:

@@ -567,6 +567,10 @@ _HTML_TEMPLATE = """
           <svg class="icon"><use href="#icon-refresh"></use></svg>
           <span>Синхронизация Yonote</span>
         </button>
+        <button id="yonoteDatabaseButton" class="nav-item" type="button" title="Подсчёт БД Yonote">
+          <svg class="icon"><use href="#icon-chart"></use></svg>
+          <span>Подсчёт БД Yonote</span>
+        </button>
       </div>
       <div class="nav-spacer"></div>
       <div class="nav-foot">
@@ -717,6 +721,7 @@ _HTML_TEMPLATE = """
             <div id="qualityDashboard" class="quality-dashboard hidden"></div>
             <div id="opsDashboard" class="ops-dashboard hidden"></div>
             <div id="yonoteDashboard" class="quality-dashboard hidden"></div>
+            <div id="yonoteDatabaseDashboard" class="quality-dashboard hidden"></div>
             <div id="casesDashboard" class="quality-dashboard hidden"></div>
             <details id="rawReportDetails" class="raw-report">
               <summary>Технические данные ответа API</summary>
@@ -735,6 +740,8 @@ _HTML_TEMPLATE = """
     let editorOriginalStatus = "";
     let editorDirty = false;
     let lastYonoteReport = null;
+    let lastYonoteDatabaseReport = null;
+    let activeWorkspace = "knowledge";
     const adminReadOnly = __ADMIN_READ_ONLY__;
     const yonoteSyncEnabled = __YONOTE_SYNC_ENABLED__;
 
@@ -757,6 +764,7 @@ _HTML_TEMPLATE = """
       });
     }
     function setWorkspaceMode(mode, title) {
+      activeWorkspace = mode;
       const editorPanel = document.getElementById("editorPanel");
       editorPanel.classList.toggle("report-mode", mode !== "knowledge");
       document.getElementById("editorPanelTitle").textContent = title;
@@ -776,6 +784,11 @@ _HTML_TEMPLATE = """
       yonoteButton.title = yonoteSyncEnabled
         ? "Получить актуальные данные из Yonote и показать изменения"
         : "Yonote pull отключён в конфигурации runtime";
+      const yonoteDatabaseButton = document.getElementById("yonoteDatabaseButton");
+      yonoteDatabaseButton.disabled = !yonoteSyncEnabled;
+      yonoteDatabaseButton.title = yonoteSyncEnabled
+        ? "Посчитать доступное содержимое Yonote и выгрузить его в текстовый документ"
+        : "Чтение Yonote отключено в конфигурации runtime";
       document.getElementById("navHint").innerHTML = adminReadOnly
         ? "Только просмотр<br>/ — поиск по базе"
         : "Ctrl + S — сохранить<br>/ — поиск по базе";
@@ -820,6 +833,37 @@ _HTML_TEMPLATE = """
     function adminErrorMessage(status, detail) {
       const raw = String(detail || "").trim();
       const normalized = raw.toLowerCase();
+      const isYonoteRead = normalized.includes("yonote");
+      if (status === 409 && isYonoteRead) {
+        return (
+          "Сейчас уже выполняется чтение Yonote. Дождись его завершения и повтори действие. " +
+          "База бота и индекс не изменялись."
+        );
+      }
+      if (status === 413 && isYonoteRead) {
+        return (
+          "Объём данных Yonote превышает безопасный лимит чтения или выгрузки. " +
+          "База бота и индекс не изменялись."
+        );
+      }
+      if (status === 502 && isYonoteRead) {
+        return (
+          "Yonote временно не вернул корректные данные. Повтори чтение позже. " +
+          "База бота и индекс не изменялись."
+        );
+      }
+      if (status === 504 && isYonoteRead) {
+        return (
+          "Чтение Yonote не завершилось за отведённое время. Повтори действие позже. " +
+          "База бота и индекс не изменялись."
+        );
+      }
+      if (status === 503 && isYonoteRead) {
+        return (
+          "Чтение Yonote отключено или не настроено в текущем runtime. " +
+          "База бота и индекс не изменялись."
+        );
+      }
       if (status === 503) {
         if (
           normalized.includes("service unavailable") ||
@@ -842,9 +886,16 @@ _HTML_TEMPLATE = """
       }
       return raw || "Неизвестная ошибка";
     }
-    function transportErrorMessage(error, timeoutMs) {
+    function transportErrorMessage(error, timeoutMs, context = "") {
+      const isYonoteRead = context === "yonote-read";
       if (error.name === "AbortError") {
         const seconds = Math.round(timeoutMs / 1000);
+        if (isYonoteRead) {
+          return (
+            `Чтение Yonote не завершилось за ${seconds} сек. ` +
+            "База бота и индекс не изменялись. Повтори действие позже."
+          );
+        }
         return (
           `Операция не завершилась за ${seconds} сек. ` +
           "Проверь статус сервисов и повтори действие. " +
@@ -860,6 +911,12 @@ _HTML_TEMPLATE = """
         normalized.includes("service unavailable") ||
         normalized.includes("load failed")
       ) {
+        if (isYonoteRead) {
+          return (
+            "Админка временно не получила ответ при чтении Yonote. " +
+            "База бота и индекс не изменялись. Проверь /ready и повтори действие."
+          );
+        }
         return (
           "Админка временно не получила ответ от сервиса. " +
           "Проверь /ready и app-ml, затем обнови страницу или повтори действие."
@@ -878,20 +935,25 @@ _HTML_TEMPLATE = """
       document.getElementById("chunkStatus").disabled = adminReadOnly || isBusy;
     }
     async function requestJson(path, options = {}) {
-      const timeoutMs = options.timeoutMs || 240000;
+      const {
+        timeoutMs = 240000,
+        errorContext = "",
+        headers = {},
+        ...fetchOptions
+      } = options;
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(path, {
           credentials: "same-origin",
-          ...options,
+          ...fetchOptions,
           signal: controller.signal,
           headers: {
-            ...(options.body !== undefined ? {"Content-Type": "application/json"} : {}),
-            ...(options.headers || {}),
+            ...(fetchOptions.body !== undefined ? {"Content-Type": "application/json"} : {}),
+            ...headers,
           },
         }).catch((error) => {
-          throw new Error(transportErrorMessage(error, timeoutMs));
+          throw new Error(transportErrorMessage(error, timeoutMs, errorContext));
         });
         const text = await response.text();
         let payload = {};
@@ -963,6 +1025,11 @@ _HTML_TEMPLATE = """
       dashboard.classList.add("hidden");
       dashboard.innerHTML = "";
     }
+    function hideYonoteDatabaseDashboard() {
+      const dashboard = document.getElementById("yonoteDatabaseDashboard");
+      dashboard.classList.add("hidden");
+      dashboard.innerHTML = "";
+    }
     function hideCasesDashboard() {
       const dashboard = document.getElementById("casesDashboard");
       dashboard.classList.add("hidden");
@@ -972,6 +1039,7 @@ _HTML_TEMPLATE = """
       hideOpsDashboard();
       hideQualityDashboard();
       hideYonoteDashboard();
+      hideYonoteDatabaseDashboard();
       hideCasesDashboard();
     }
     function opsRows(items, fields) {
@@ -1404,6 +1472,230 @@ _HTML_TEMPLATE = """
       const applyButton = document.getElementById("applyYonoteButton");
       if (applyButton) {
         applyButton.addEventListener("click", applyYonoteSync);
+      }
+    }
+    function formatInteger(value) {
+      return new Intl.NumberFormat("ru-RU").format(Number(value || 0));
+    }
+    function renderYonoteDatabaseCollections(collections) {
+      const rows = (collections || []).map((item) => `
+        <div class="ops-item">
+          <div class="ops-line">
+            <span>${escapeHtml(item.name || "Без названия")}</span>
+            <span>${escapeHtml(formatInteger(item.documents))} документов</span>
+          </div>
+          <div class="ops-meta">
+            текстовых секций (оценка): ${escapeHtml(formatInteger(item.sections))} ·
+            символов: ${escapeHtml(formatInteger(item.characters_with_spaces))}
+          </div>
+        </div>
+      `).join("");
+      return rows || '<div class="ops-item"><span class="ops-meta">Данные ещё не рассчитаны</span></div>';
+    }
+    function renderYonoteDatabaseDashboard(data = null) {
+      const dashboard = document.getElementById("yonoteDatabaseDashboard");
+      dashboard.classList.remove("hidden");
+      const hasData = Boolean(data && data.ok);
+      dashboard.innerHTML = `
+        <div class="quality-note">
+          <b>Отдельный read-only инструмент для базы операторов.</b>
+          Он читает страницы, доступные настроенной сервисной учётной записи, только из
+          разрешённых коллекций Yonote и ничего не записывает в Yonote, локальную базу бота
+          или Qdrant.
+        </div>
+        ${hasData ? `
+          <div class="ops-kpis">
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.documents_total))}</span>
+              <span class="metric-label">статей и страниц</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.sections_total))}</span>
+              <span class="metric-label">текстовых секций (оценка)</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.characters_with_spaces))}</span>
+              <span class="metric-label">символов с пробелами</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.words_total))}</span>
+              <span class="metric-label">слов</span>
+            </div>
+          </div>
+          <div class="ops-kpis">
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.documents_with_text))}</span>
+              <span class="metric-label">страниц с текстом</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.nested_documents))}</span>
+              <span class="metric-label">вложенных страниц</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.paragraphs_total))}</span>
+              <span class="metric-label">текстовых блоков</span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">${escapeHtml(formatInteger(data.links_total))}</span>
+              <span class="metric-label">ссылок в текстах</span>
+            </div>
+          </div>
+          <section class="ops-section">
+            <h3>Разбивка по коллекциям Yonote</h3>
+            <div class="ops-list">
+              ${renderYonoteDatabaseCollections(data.collections)}
+            </div>
+          </section>
+          <div class="quality-note">
+            Пустых страниц: ${escapeHtml(formatInteger(data.documents_without_text))}.
+            Символов без пробельных знаков:
+            ${escapeHtml(formatInteger(data.characters_without_whitespace))}.
+            Последнее обновление в выборке:
+            ${escapeHtml(data.latest_updated_at || "не указано")}.
+            Секции оцениваются по заголовкам и текстовым блокам — это не число папок Yonote.
+          </div>
+        ` : `
+          <div class="quality-note">
+            Нажми «Посчитать БД Yonote». Полный подсчёт может занять некоторое время:
+            сервер последовательно читает все страницы разрешённых коллекций через API.
+          </div>
+        `}
+        <div class="report-actions">
+          <button id="countYonoteDatabaseButton" class="primary" type="button">
+            ${hasData ? "Пересчитать БД Yonote" : "Посчитать БД Yonote"}
+          </button>
+          <button id="downloadYonoteDatabaseButton" class="secondary" type="button">
+            Скачать доступное содержимое текстовым документом .txt
+          </button>
+          <span class="action-note">
+            Сервис не добавляет API-токен в экспорт намеренно. Файл содержит полные внутренние
+            тексты и может включать чувствительные данные: храни его защищённо, не отправляй
+            в чаты, не публикуй и не добавляй в Git.
+          </span>
+        </div>
+      `;
+      document.getElementById("countYonoteDatabaseButton").addEventListener(
+        "click",
+        countYonoteDatabase
+      );
+      document.getElementById("downloadYonoteDatabaseButton").addEventListener(
+        "click",
+        downloadYonoteDatabase
+      );
+    }
+    function showYonoteDatabaseWorkspace() {
+      setActiveNav("yonoteDatabaseButton");
+      setWorkspaceMode("yonote-database", "Подсчёт БД Yonote");
+      hideReportDashboards();
+      renderYonoteDatabaseDashboard(lastYonoteDatabaseReport);
+      document.getElementById("reportOutput").textContent = lastYonoteDatabaseReport
+        ? JSON.stringify(lastYonoteDatabaseReport, null, 2)
+        : "Подсчёт Yonote ещё не выполнен";
+      setStatus(
+        "detailStatus",
+        lastYonoteDatabaseReport
+          ? "Показан последний подсчёт доступного содержимого Yonote"
+          : "Готово к read-only подсчёту доступного содержимого Yonote"
+      );
+    }
+    async function countYonoteDatabase() {
+      if (!yonoteSyncEnabled) return;
+      const navButton = document.getElementById("yonoteDatabaseButton");
+      const actionButton = document.getElementById("countYonoteDatabaseButton");
+      navButton.disabled = true;
+      actionButton.disabled = true;
+      try {
+        setStatus(
+          "detailStatus",
+          "Читаю все разрешённые страницы Yonote и считаю объём базы..."
+        );
+        const data = await requestJson("/admin/kb/yonote/database-statistics", {
+          method: "POST",
+          body: "{}",
+          timeoutMs: 300000,
+          errorContext: "yonote-read",
+        });
+        lastYonoteDatabaseReport = data;
+        if (activeWorkspace === "yonote-database") {
+          document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+          renderYonoteDatabaseDashboard(data);
+          setStatus(
+            "detailStatus",
+            `Yonote посчитан: ${formatInteger(data.documents_total)} документов, ` +
+            `${formatInteger(data.sections_total)} текстовых секций (оценка), ` +
+            `${formatInteger(data.characters_with_spaces)} символов`,
+            "ok"
+          );
+        } else {
+          showToast("Подсчёт доступного содержимого Yonote завершён", "ok");
+        }
+      } catch (error) {
+        if (activeWorkspace === "yonote-database") {
+          setStatus("detailStatus", error.message, "error");
+        }
+        showToast(error.message, "error");
+      } finally {
+        navButton.disabled = !yonoteSyncEnabled;
+        if (document.body.contains(actionButton)) actionButton.disabled = false;
+      }
+    }
+    async function downloadYonoteDatabase() {
+      if (!yonoteSyncEnabled) return;
+      const button = document.getElementById("downloadYonoteDatabaseButton");
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 300000);
+      button.disabled = true;
+      try {
+        setStatus(
+          "detailStatus",
+          "Читаю живую базу Yonote и формирую текстовый документ..."
+        );
+        const response = await fetch("/admin/kb/yonote/database-export", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {"Content-Type": "application/json"},
+          body: "{}",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          if (response.status === 401) {
+            setAuthenticated(false);
+          }
+          const errorText = await response.text();
+          let detail = errorText;
+          try {
+            const payload = JSON.parse(errorText);
+            detail = payload.detail || errorText;
+          } catch {}
+          throw new Error(adminErrorMessage(response.status, detail));
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get("content-disposition") || "";
+        const filenameMatch = disposition.match(/filename="([A-Za-z0-9._-]+)"/);
+        const filename = filenameMatch
+          ? filenameMatch[1]
+          : `yonote-database-${new Date().toISOString().slice(0, 10)}.txt`;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        if (activeWorkspace === "yonote-database") {
+          setStatus("detailStatus", "Текстовая выгрузка Yonote сформирована", "ok");
+        }
+        showToast("Выгрузка Yonote скачана", "ok");
+      } catch (error) {
+        const message = transportErrorMessage(error, 300000, "yonote-read");
+        if (activeWorkspace === "yonote-database") {
+          setStatus("detailStatus", message, "error");
+        }
+        showToast(message, "error");
+      } finally {
+        window.clearTimeout(timer);
+        if (document.body.contains(button)) button.disabled = false;
       }
     }
     function expectedBehaviorLabel(value) {
@@ -1858,6 +2150,10 @@ _HTML_TEMPLATE = """
     document.getElementById("qualityButton").addEventListener("click", showQualityCheck);
     document.getElementById("opsButton").addEventListener("click", showOpsReport);
     document.getElementById("yonoteButton").addEventListener("click", previewYonoteSync);
+    document.getElementById("yonoteDatabaseButton").addEventListener(
+      "click",
+      showYonoteDatabaseWorkspace
+    );
     document.addEventListener("keydown", (event) => {
       const target = event.target;
       const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
