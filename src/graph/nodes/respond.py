@@ -4,8 +4,11 @@ import re
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.models import Complexity
+from src.response_contract import contains_emoji_like_symbols, get_response_contract
 
 SOURCE_RE = re.compile(r"[ \t]*\[src:[^\]]+\][ \t]*")
+URL_RE = re.compile(r"https?://[^\s<>()]+", flags=re.IGNORECASE)
 TRAILING_LINE_SPACE_RE = re.compile(r"[ \t]+\n")
 LEADING_LINE_SPACE_RE = re.compile(r"\n[ \t]+")
 EXCESSIVE_BLANK_LINES_RE = re.compile(r"\n{3,}")
@@ -115,6 +118,16 @@ TONE_PHRASE_REPLACEMENTS = (
         "ты хочешь",
     ),
 )
+_RESPONSE_CONTRACT = get_response_contract()
+_OPERATOR_TRANSFER_RESPONSE = _RESPONSE_CONTRACT.message(
+    "operator_transfer"
+).select_text()
+_CATALOG_EMOJI_TEXTS = frozenset(
+    text
+    for message in _RESPONSE_CONTRACT.messages
+    if message.allowed_emojis
+    for text in message.user_facing_texts
+)
 
 
 async def respond(state: BotState) -> dict:
@@ -122,6 +135,20 @@ async def respond(state: BotState) -> dict:
     tracer = state.get("trace")
     response = state.get("generated_response") or state.get("final_response") or ""
     final = normalize_final_response(response)
+    violation = _final_response_contract_violation(final, state)
+    if violation:
+        if tracer:
+            tracer.add(
+                "respond",
+                int((perf_counter() - started_at) * 1000),
+                response_guard=state.get("response_guard"),
+                contract_violation=violation,
+            )
+        return {
+            "final_response": _OPERATOR_TRANSFER_RESPONSE,
+            "should_escalate": True,
+            "escalation_reason": f"final_response_{violation}",
+        }
     if tracer:
         tracer.add(
             "respond",
@@ -129,6 +156,35 @@ async def respond(state: BotState) -> dict:
             response_guard=state.get("response_guard"),
         )
     return {"final_response": final}
+
+
+def _final_response_contract_violation(
+    response: str,
+    state: BotState,
+) -> str | None:
+    if not response:
+        return "empty"
+    if len(response) > _final_response_limit(state):
+        return "too_long"
+    if len(URL_RE.findall(response)) > _RESPONSE_CONTRACT.composition.max_source_links:
+        return "too_many_links"
+    if contains_emoji_like_symbols(response) and response not in _CATALOG_EMOJI_TEXTS:
+        clarification_template = _RESPONSE_CONTRACT.message(
+            "clarification_with_options"
+        ).template
+        clarification_prefix = str(clarification_template or "").split("{options}", 1)[0]
+        if not clarification_prefix or not response.startswith(clarification_prefix):
+            return "unapproved_emoji"
+    return None
+
+
+def _final_response_limit(state: BotState) -> int:
+    analysis = state.get("analysis")
+    complexity = getattr(analysis, "complexity", None)
+    questions = getattr(analysis, "questions", None) or []
+    if complexity == Complexity.COMPLEX or len(questions) > 1:
+        return _RESPONSE_CONTRACT.limits.compound_max_chars
+    return _RESPONSE_CONTRACT.limits.simple_max_chars
 
 
 def normalize_final_response(response: str) -> str:

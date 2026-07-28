@@ -12,10 +12,12 @@ from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_
 from src.graph.state import BotState
 from src.models import Chunk, Question, ScoredChunk
 from src.rag.errors import MLDependencyError
+from src.response_contract import get_response_contract
 
 MAX_RERANKED_CHUNKS = 8
 QUESTION_CANDIDATE_LIMIT = 3
 QUERY_CANDIDATE_LIMIT = 3
+FACTUAL_SOURCE_TYPE = get_response_contract().fact_policy.source_type
 TOKEN_PATTERN = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
 STOPWORDS = {
     "для",
@@ -42,14 +44,6 @@ CATEGORY_COMPATIBLE_CATEGORIES = {
     "общее": {"навигация", "платформа_фгаис"},
     "рекомендации": {"общее"},
     "гранты": {"платформа_фгаис"},
-}
-SAFE_CROSS_CATEGORY_ANSWER_BANK_TOPICS = {
-    "доступ_и_техническая_ошибка",
-    "контакты_и_оператор",
-    "личный_кабинет_и_профиль",
-    "письмо_и_уведомления",
-    "регистрация_и_заявка",
-    "статус_заявки",
 }
 HOUSING_COMPATIBLE_TRAVEL_TOPICS = frozenset(
     {"oplata_proezda", "oplata_proezda_palatok_i_pitaniya"}
@@ -134,7 +128,13 @@ async def rerank(state: BotState) -> dict:
 
     started_at = perf_counter()
     tracer = state.get("trace")
-    chunks = state.get("retrieved_chunks", [])
+    retrieved_chunks = state.get("retrieved_chunks", [])
+    chunks = [
+        chunk
+        for chunk in retrieved_chunks
+        if _source_type(chunk) == FACTUAL_SOURCE_TYPE
+    ]
+    rejected_source_chunks = len(retrieved_chunks) - len(chunks)
     query = (
         state.get("contextual_message")
         or state.get("message_masked")
@@ -144,6 +144,22 @@ async def rerank(state: BotState) -> dict:
     settings = get_settings()
     if _should_unload_model(settings, "ml_unload_embedder_after_use"):
         await _unload_model_owner(state.get("embedder"))
+
+    if not chunks:
+        if tracer:
+            tracer.add(
+                "rerank",
+                int((perf_counter() - started_at) * 1000),
+                max_confidence=0.0,
+                confidence_source="none",
+                rejected_non_yonote_chunks=rejected_source_chunks,
+            )
+        return {
+            "reranked_chunks": [],
+            "max_confidence": 0.0,
+            "should_escalate": True,
+            "escalation_reason": "no_relevant_chunks",
+        }
 
     try:
         reranked = await asyncio.to_thread(
@@ -189,6 +205,7 @@ async def rerank(state: BotState) -> dict:
             int((perf_counter() - started_at) * 1000),
             max_confidence=max_confidence,
             confidence_source=confidence_source,
+            rejected_non_yonote_chunks=rejected_source_chunks,
         )
     if max_confidence <= 0:
         return {
@@ -439,8 +456,7 @@ def _official_source_chunks(chunks: list[Chunk]) -> list[Chunk]:
     return [
         chunk
         for chunk in chunks
-        if str((chunk.metadata or {}).get("source_type") or "").strip()
-        in {"docx", "xlsx", "yonote"}
+        if _source_type(chunk) == FACTUAL_SOURCE_TYPE
     ]
 
 
@@ -481,44 +497,33 @@ def _official_or_same_chunk_protected_chunks(
 
 
 def _source_type_rank(chunk: Chunk) -> int:
-    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type in {"docx", "xlsx", "yonote"}:
+    source_type = _source_type(chunk)
+    if source_type == FACTUAL_SOURCE_TYPE:
         return 0
-    if source_type == "ticket_answer_bank":
-        return 2
     return 1
 
 
+def _source_type(chunk: Chunk) -> str:
+    return str((chunk.metadata or {}).get("source_type") or "").strip().casefold()
+
+
 def _source_freshness_rank(chunk: Chunk) -> int:
-    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type == "yonote":
+    source_type = _source_type(chunk)
+    if source_type == FACTUAL_SOURCE_TYPE:
         return 0
-    if source_type in {"docx", "xlsx"}:
-        return 1
-    return 2
+    return 1
 
 
 def _source_reliability_score(chunk: Chunk) -> float:
-    source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type == "yonote":
+    source_type = _source_type(chunk)
+    if source_type == FACTUAL_SOURCE_TYPE:
         return 4.0
-    if source_type in {"docx", "xlsx"}:
-        return 3.0
-    if source_type == "ticket_answer_bank":
-        return -3.0
-    return 0.0
+    return -3.0
 
 
 def _is_compatible_category(category: str | None, chunk: Chunk) -> bool:
     if not category:
         return False
-    metadata = chunk.metadata or {}
-    if (
-        metadata.get("source_type") == "ticket_answer_bank"
-        and str(metadata.get("topic") or "").strip()
-        in SAFE_CROSS_CATEGORY_ANSWER_BANK_TOPICS
-    ):
-        return True
     chunk_category = str((chunk.metadata or {}).get("category") or "").strip()
     if not chunk_category or chunk_category == category:
         return False

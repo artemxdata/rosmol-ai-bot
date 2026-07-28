@@ -3,11 +3,11 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.response_contract import get_response_contract
 
-OFFTOPIC_SCOPE_NOTE = (
-    "Я отвечаю на вопросы по мероприятиям, форумам, ФГАИС «Молодёжь России» "
-    "и грантам Росмолодёжи. Задай, пожалуйста, вопрос по этим темам."
-)
+_RESPONSE_CONTRACT = get_response_contract()
+OFFTOPIC_SCOPE_NOTE = _RESPONSE_CONTRACT.message("capabilities").select_text()
+UNKNOWN_FORUM_RESPONSE = _RESPONSE_CONTRACT.message("unknown_forum").select_text()
 
 
 async def clarify(state: BotState) -> dict:
@@ -20,7 +20,7 @@ async def clarify(state: BotState) -> dict:
         text = (
             analysis.clarification_question
             if analysis and analysis.clarification_question
-            else "Уточни, пожалуйста, название форума или тему вопроса."
+            else UNKNOWN_FORUM_RESPONSE
         )
     if tracer:
         tracer.add(

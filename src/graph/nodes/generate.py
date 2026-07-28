@@ -4,16 +4,53 @@ import re
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.nodes.respond import normalize_final_response
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
 from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
+from src.response_contract import ResponseProfileName, get_response_contract
 
+_RESPONSE_CONTRACT = get_response_contract()
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
-MAX_EXTRACTIVE_SINGLE_SOURCE_CHARS = 1200
+URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+EMOJI_RE = re.compile(
+    "["
+    "\U0001f1e6-\U0001f1ff"
+    "\U0001f300-\U0001f5ff"
+    "\U0001f600-\U0001f64f"
+    "\U0001f680-\U0001f6ff"
+    "\U0001f700-\U0001f77f"
+    "\U0001f780-\U0001f7ff"
+    "\U0001f800-\U0001f8ff"
+    "\U0001f900-\U0001f9ff"
+    "\U0001fa00-\U0001faff"
+    "\u2600-\u27bf"
+    "\ufe0f"
+    "\u200d"
+    "]+",
+)
+DATE_VALUE_RE = re.compile(
+    r"(?:"
+    r"\b\d{1,2}\s*(?:(?:[-–—]\s*|по\s+)\d{1,2})?\s+"
+    r"(?:январ[яе]|феврал[яе]|март[ае]?|апрел[яе]|ма[яе]|июн[яе]|"
+    r"июл[яе]|август[ае]?|сентябр[яе]|октябр[яе]|ноябр[яе]|декабр[яе])"
+    r"|\b(?:январ[яе]|феврал[яе]|март[ае]?|апрел[яе]|ма[яе]|июн[яе]|"
+    r"июл[яе]|август[ае]?|сентябр[яе]|октябр[яе]|ноябр[яе]|декабр[яе])\b"
+    r"|\b\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\b"
+    r"|\b20\d{2}\s+год"
+    r")",
+    flags=re.IGNORECASE,
+)
+SIMPLE_RESPONSE_MAX_CHARS = _RESPONSE_CONTRACT.limits.simple_max_chars
+COMPLEX_RESPONSE_MAX_CHARS = _RESPONSE_CONTRACT.limits.compound_max_chars
+FACTUAL_SOURCE_TYPE = _RESPONSE_CONTRACT.fact_policy.source_type
+# Kept as a public compatibility name for tests/imports. The effective limit is
+# selected per response by `_response_char_limit`.
+MAX_EXTRACTIVE_SINGLE_SOURCE_CHARS = SIMPLE_RESPONSE_MAX_CHARS
 INSUFFICIENT_SOURCE_RESPONSE_RE = re.compile(
     r"(в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:конкретной\s+)?информации|"
     r"в\s+(?:предоставленн(?:ом|ых)\s+)?источник(?:е|ах)\s+нет\s+(?:достаточных\s+)?(?:данных|сведений)|"
@@ -62,11 +99,21 @@ SAFE_CROSS_CATEGORY_ANSWER_BANK_TOPICS = {
 
 
 async def generate(state: BotState) -> dict:
+    result = await _generate_core(state)
+    return await _enforce_generation_contract(state, result)
+
+
+async def _generate_core(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     analysis = state["analysis"]
     questions = effective_questions(state, analysis)
-    chunks = state.get("reranked_chunks", [])
+    chunks = [
+        chunk
+        for chunk in state.get("reranked_chunks", [])
+        if str((chunk.metadata or {}).get("source_type") or "").strip().casefold()
+        == FACTUAL_SOURCE_TYPE
+    ]
     max_confidence = float(state.get("max_confidence") or 0)
     if not chunks:
         if tracer:
@@ -314,6 +361,88 @@ async def generate(state: BotState) -> dict:
     }
 
 
+async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
+    if result.get("should_escalate"):
+        return _without_internal_generation_markers(result)
+
+    response = str(result.get("generated_response") or "").strip()
+    if not response:
+        return _generation_contract_failure(
+            result,
+            reason="empty_generated_response",
+        )
+
+    analysis = state["analysis"]
+    questions = effective_questions(state, analysis)
+    response_limit = _response_char_limit(analysis, questions)
+    generator_model = str(result.get("generator_model") or "")
+
+    if generator_model == "source_chunk":
+        sanitized = _strip_dynamic_emoji(response)
+        if not sanitized:
+            return _generation_contract_failure(
+                result,
+                reason="source_response_contract_failed",
+            )
+        cited_ids = list(result.get("cited_sources") or [])
+        requires_synthesis = (
+            len(cited_ids) > 1
+            or _visible_response_length(sanitized) > response_limit
+            or _response_url_count(sanitized) > 1
+            or _violates_response_profile(sanitized, analysis, questions)
+        )
+        if not requires_synthesis:
+            guarded = dict(result)
+            guarded["generated_response"] = sanitized
+            return _without_internal_generation_markers(guarded)
+
+        chunks_by_id = {
+            chunk.chunk_id: chunk
+            for chunk in state.get("reranked_chunks", [])
+            if str((chunk.metadata or {}).get("source_type") or "").strip().casefold()
+            == FACTUAL_SOURCE_TYPE
+        }
+        source_chunks = [
+            chunks_by_id[chunk_id]
+            for chunk_id in cited_ids
+            if chunk_id in chunks_by_id
+        ]
+        if not source_chunks:
+            return _generation_contract_failure(
+                result,
+                reason="source_response_contract_failed",
+            )
+        return await _generate_with_llm_or_source_fallback(
+            state=state,
+            analysis=analysis,
+            questions=questions,
+            source_chunks=source_chunks,
+            started_at=perf_counter(),
+            response_limit=response_limit,
+        )
+
+    sanitized = _strip_dynamic_emoji(response)
+    if not sanitized:
+        return _generation_contract_failure(
+            result,
+            reason="llm_response_contract_failed",
+        )
+    if _visible_response_length(sanitized) > response_limit:
+        return _generation_contract_failure(
+            result,
+            reason="llm_response_too_long",
+        )
+    if _response_url_count(sanitized) > 1:
+        return _generation_contract_failure(
+            result,
+            reason="llm_response_contract_failed",
+        )
+
+    guarded = dict(result)
+    guarded["generated_response"] = sanitized
+    return _without_internal_generation_markers(guarded)
+
+
 async def _generate_with_llm_or_source_fallback(
     *,
     state: BotState,
@@ -321,54 +450,102 @@ async def _generate_with_llm_or_source_fallback(
     questions: list[Question],
     source_chunks: list[ScoredChunk],
     started_at: float,
+    response_limit: int | None = None,
 ) -> dict:
-    result = await _generate_with_llm(
-        state=state,
-        analysis=analysis,
-        questions=questions,
-        source_chunks=source_chunks,
-        started_at=started_at,
-    )
-    should_fallback_to_sources = result.get(
-        "escalation_reason"
-    ) == "llm_generation_failed" or _llm_result_misses_source_coverage(
-        result,
-        questions,
-        source_chunks,
-    ) or _response_signals_insufficient_sources(
-        str(result.get("generated_response") or ""),
-    )
-    if not should_fallback_to_sources:
-        return result
-
-    source_response = build_deterministic_source_response(source_chunks)
-    if not source_response:
-        return result
-
     tracer = state.get("trace")
-    fallback_reason = (
-        "llm_failed_source_chunk_fallback"
-        if result.get("escalation_reason") == "llm_generation_failed"
-        else (
-            "llm_insufficient_sources_source_chunk_fallback"
-            if _response_signals_insufficient_sources(
-                str(result.get("generated_response") or "")
+    last_result: dict = {}
+    for attempt in range(2):
+        result = await _generate_with_llm(
+            state=state,
+            analysis=analysis,
+            questions=questions,
+            source_chunks=source_chunks,
+            started_at=started_at,
+            response_limit=response_limit,
+        )
+        last_result = result
+        invalid_coverage = (
+            not result.get("should_escalate")
+            and (
+                _llm_result_misses_source_coverage(
+                    result,
+                    questions,
+                    source_chunks,
+                )
+                or _response_signals_insufficient_sources(
+                    str(result.get("generated_response") or ""),
+                )
             )
-            else "llm_missing_sources_source_chunk_fallback"
         )
+        if not result.get("should_escalate") and not invalid_coverage:
+            return result
+        if attempt == 0:
+            if tracer:
+                tracer.add(
+                    "generate_retry",
+                    int((perf_counter() - started_at) * 1000),
+                    reason=(
+                        str(result.get("escalation_reason") or "")
+                        or "llm_source_coverage_failed"
+                    ),
+                    chunks=len(source_chunks),
+                )
+            continue
+
+    return _generation_contract_failure(
+        last_result,
+        reason=str(last_result.get("escalation_reason") or "")
+        or "llm_response_contract_failed",
     )
-    if tracer:
-        tracer.add(
-            "generate",
-            int((perf_counter() - started_at) * 1000),
-            mode=fallback_reason,
-            chunks=len(source_chunks),
-        )
-    return {
-        "generated_response": source_response,
-        "generator_model": "source_chunk",
-        "cited_sources": [chunk.chunk_id for chunk in source_chunks],
+
+
+def _response_char_limit(
+    analysis: QueryAnalysis,
+    questions: list[Question],
+) -> int:
+    if (
+        analysis.complexity == Complexity.COMPLEX
+        or _has_multiple_distinct_questions(questions)
+    ):
+        return COMPLEX_RESPONSE_MAX_CHARS
+    return SIMPLE_RESPONSE_MAX_CHARS
+
+
+def _visible_response_length(response: str) -> int:
+    return len(normalize_final_response(response))
+
+
+def _response_url_count(response: str) -> int:
+    return len(URL_RE.findall(normalize_final_response(response)))
+
+
+def _strip_dynamic_emoji(response: str) -> str:
+    sanitized = EMOJI_RE.sub("", response)
+    sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
+    sanitized = re.sub(r"[ \t]+\n", "\n", sanitized)
+    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+    return sanitized.strip()
+
+
+def _generation_contract_failure(result: dict, *, reason: str) -> dict:
+    failed = {
+        "should_escalate": True,
+        "escalation_reason": reason,
+        "generated_response": "",
+        "generator_model": result.get("generator_model") or "source_only",
+        "cited_sources": [],
     }
+    if error := result.get("error"):
+        failed["error"] = error
+    return failed
+
+
+def _without_internal_generation_markers(result: dict) -> dict:
+    if "_llm_synthesis_attempted" not in result:
+        return result
+    cleaned = dict(result)
+    cleaned.pop("_llm_synthesis_attempted", None)
+    return cleaned
 
 
 def _response_signals_insufficient_sources(response: str) -> bool:
@@ -442,6 +619,7 @@ async def _generate_with_llm(
     questions: list[Question],
     source_chunks: list[ScoredChunk],
     started_at: float,
+    response_limit: int | None = None,
 ) -> dict:
     tracer = state.get("trace")
     generator_complexity = _generator_complexity(
@@ -450,8 +628,10 @@ async def _generate_with_llm(
         questions,
         source_chunks,
     )
+    effective_limit = response_limit or _response_char_limit(analysis, questions)
     model = select_generator_model(generator_complexity)
     try:
+        response_profile = _RESPONSE_CONTRACT.profile(analysis.response_profile)
         content = await state["llm_client"].generate(
             model=model,
             system=RESPONSE_GENERATOR_SYSTEM,
@@ -460,10 +640,13 @@ async def _generate_with_llm(
                 chunks=source_chunks,
                 session=state.get("session"),
                 params=analysis.extracted_params,
+                max_chars=effective_limit,
+                response_profile=response_profile.name.value,
+                profile_guidance=response_profile.guidance,
             ),
             response_format="text",
             temperature=0.1,
-            max_tokens=1500,
+            max_tokens=500 if effective_limit == SIMPLE_RESPONSE_MAX_CHARS else 900,
         )
     except Exception as exc:
         if tracer:
@@ -479,6 +662,27 @@ async def _generate_with_llm(
 
     content = _repair_recipient_drift(content, source_chunks)
     content = _repair_source_refs(content, source_chunks)
+    content = _strip_dynamic_emoji(content)
+    if not content:
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_response_contract_failed",
+        )
+    if _visible_response_length(content) > effective_limit:
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_response_too_long",
+        )
+    if _response_url_count(content) > 1:
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_response_contract_failed",
+        )
+    if _violates_response_profile(content, analysis, questions):
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_response_profile_failed",
+        )
     cited_sources = _known_source_refs(content, source_chunks)
     if tracer:
         tracer.add(
@@ -488,6 +692,8 @@ async def _generate_with_llm(
             model=model,
             chunks=len(source_chunks),
             cited_sources=len(cited_sources),
+            response_chars=_visible_response_length(content),
+            response_limit=effective_limit,
         )
     return {
         "generated_response": content,
@@ -572,18 +778,57 @@ def _should_synthesize_with_llm(
         return False
     if _is_contextual_synthesis_case(state):
         return True
-    if (
-        len(source_chunks) == 1
-        and len(source_chunks[0].text.strip()) > MAX_EXTRACTIVE_SINGLE_SOURCE_CHARS
+    if len(source_chunks) > 1:
+        return True
+    source_response = build_deterministic_source_response(source_chunks)
+    if not source_response:
+        return True
+    if _visible_response_length(source_response) > _response_char_limit(
+        analysis,
+        questions,
     ):
         return True
-    if _should_use_extractive_multi_source_answer(analysis, source_chunks):
-        return False
+    if _response_url_count(source_response) > 1:
+        return True
+    if _violates_response_profile(source_response, analysis, questions):
+        return True
     if _can_answer_from_single_official_source(questions, source_chunks):
         return False
     if analysis.complexity == Complexity.COMPLEX:
         return True
-    return len(source_chunks) > 1 and _has_multiple_distinct_questions(questions)
+    return False
+
+
+def _violates_response_profile(
+    response: str,
+    analysis: QueryAnalysis,
+    questions: list[Question],
+) -> bool:
+    if analysis.response_profile != ResponseProfileName.DATES:
+        return False
+    if _has_multiple_distinct_questions(questions):
+        return False
+
+    visible = SOURCE_RE.sub("", response).strip()
+    first_answer_part = re.split(r"(?:[.!?](?:\s|$)|\n)", visible, maxsplit=1)[0]
+    if not DATE_VALUE_RE.search(first_answer_part):
+        return True
+
+    question_text = _normalize(" ".join(question.text for question in questions))
+    response_text = _normalize(visible)
+    unsolicited_groups = (
+        ("регистрац", "заявк"),
+        ("куратор",),
+        ("чат",),
+        ("проезд", "дорог", "трансфер"),
+        ("прожив", "размещ"),
+        ("питан",),
+    )
+    return any(
+        any(marker in response_text for marker in group)
+        and not any(marker in question_text for marker in group)
+        for group in unsolicited_groups
+    )
 
 
 def _general_catalog_source(
@@ -1243,26 +1488,22 @@ def _official_source_chunks(chunks: list[ScoredChunk]) -> list[ScoredChunk]:
         chunk
         for chunk in chunks
         if str((chunk.metadata or {}).get("source_type") or "").strip()
-        in {"docx", "xlsx", "yonote"}
+        == FACTUAL_SOURCE_TYPE
     ]
 
 
 def _source_type_rank(chunk: ScoredChunk) -> int:
     source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type in {"docx", "xlsx", "yonote"}:
+    if source_type == FACTUAL_SOURCE_TYPE:
         return 0
-    if source_type == "ticket_answer_bank":
-        return 2
     return 1
 
 
 def _source_freshness_rank(chunk: ScoredChunk) -> int:
     source_type = str((chunk.metadata or {}).get("source_type") or "").strip()
-    if source_type == "yonote":
+    if source_type == FACTUAL_SOURCE_TYPE:
         return 0
-    if source_type in {"docx", "xlsx"}:
-        return 1
-    return 2
+    return 1
 
 
 def _rank_source_candidates_for_question(
@@ -1774,7 +2015,7 @@ def _trusted_top_official_source(
         return None
     top_chunk = chunks[0]
     metadata = top_chunk.metadata or {}
-    if metadata.get("source_type") not in {"xlsx", "docx", "yonote"}:
+    if metadata.get("source_type") != FACTUAL_SOURCE_TYPE:
         return None
     if analysis and not _chunk_matches_analysis_scope(top_chunk, analysis):
         return None
@@ -1799,7 +2040,7 @@ def _trusted_single_official_source(
         return None
     chunk = chunks[0]
     metadata = chunk.metadata or {}
-    if metadata.get("source_type") not in {"xlsx", "docx", "yonote"}:
+    if metadata.get("source_type") != FACTUAL_SOURCE_TYPE:
         return None
     if not _chunk_matches_analysis_scope(chunk, analysis):
         return None

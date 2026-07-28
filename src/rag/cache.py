@@ -12,7 +12,7 @@ from src.config import get_settings
 from src.models import QueryAnalysis
 from src.rag.embedder import Embedder
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 GLOBAL_CACHE_SCOPE = "__global__"
 
 
@@ -21,6 +21,7 @@ class CachedResponse(BaseModel):
     forum_normalized: str | None = None
     analysis: QueryAnalysis
     cited_sources: list[str] = Field(min_length=1)
+    factual_source_type: Literal["yonote"]
     generator_model: str | None = None
     verifier_triggered: bool = False
     disposition: Literal["answered"] = "answered"

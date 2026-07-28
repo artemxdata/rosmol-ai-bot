@@ -8,13 +8,13 @@ from src.graph.question_utils import build_effective_questions
 from src.graph.state import BotState
 from src.models import Question
 from src.rag.errors import MLDependencyError
+from src.response_contract import get_response_contract
 
 STRICT_RETRIEVAL_TOP_K = 10
 BROAD_RETRIEVAL_TOP_K = 30
 KEYWORD_RECALL_TOP_K = 6
 KEYWORD_RECALL_SCAN_LIMIT = 2048
-OFFICIAL_KEYWORD_SOURCE_TYPES = ("yonote", "xlsx", "docx")
-FALLBACK_KEYWORD_SOURCE_TYPES = ("ticket_answer_bank",)
+FACTUAL_SOURCE_TYPE = get_response_contract().fact_policy.source_type
 DIRECTIONAL_TOPIC_LOOKUP_ALIASES: dict[str, tuple[str, ...]] = {
     "poluchenie_i_naznachenie_bileta": (
         "bilet_ne_prishel_povtornoe_poluchenie",
@@ -145,6 +145,7 @@ async def retrieve(state: BotState) -> dict:
     filters = {
         "forum_normalized": analysis.forum_normalized,
         "category": analysis.category,
+        "source_type": FACTUAL_SOURCE_TYPE,
     }
     message = (
         state.get("contextual_message")
@@ -301,15 +302,17 @@ async def retrieve(state: BotState) -> dict:
 
 
 def _filter_attempts(filters: dict) -> list[dict]:
+    filters = {**filters, "source_type": FACTUAL_SOURCE_TYPE}
     attempts = [_compact_filter(filters)]
     forum = filters.get("forum_normalized")
     category = filters.get("category")
+    source_filter = {"source_type": FACTUAL_SOURCE_TYPE}
     if forum:
         attempts.append(_compact_filter({**filters, "category": None, "topic": None}))
     if category:
-        attempts.append(_compact_filter({"category": category}))
+        attempts.append(_compact_filter({**source_filter, "category": category}))
     if attempts[0]:
-        attempts.append({})
+        attempts.append(source_filter)
     return _dedupe_filters(attempts)
 
 
@@ -443,23 +446,19 @@ async def _keyword_recall_candidates(
     if not callable(retrieve_keyword_candidates):
         return []
 
-    source_types = list(OFFICIAL_KEYWORD_SOURCE_TYPES)
-    if attempt_index > 0 or not filters:
-        source_types.extend(FALLBACK_KEYWORD_SOURCE_TYPES)
-
+    filters = {**filters, "source_type": FACTUAL_SOURCE_TYPE}
     candidates = []
     try:
-        for source_type in source_types:
-            candidates.extend(
-                await retrieve_keyword_candidates(
-                    query,
-                    filters,
-                    top_k=KEYWORD_RECALL_TOP_K,
-                    scan_limit=KEYWORD_RECALL_SCAN_LIMIT,
-                    min_score=2.0,
-                    source_type=source_type,
-                )
+        candidates.extend(
+            await retrieve_keyword_candidates(
+                query,
+                filters,
+                top_k=KEYWORD_RECALL_TOP_K,
+                scan_limit=KEYWORD_RECALL_SCAN_LIMIT,
+                min_score=2.0,
+                source_type=FACTUAL_SOURCE_TYPE,
             )
+        )
         return candidates
     except Exception as exc:
         if tracer:

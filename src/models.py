@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from src.response_contract import ResponseProfileName
+
 
 class Channel(StrEnum):
     VK = "vk"
@@ -88,6 +90,7 @@ class QueryAnalysis(BaseModel):
     escalation_reason: str | None = None
     is_technical: bool = False
     is_offtopic: bool = False
+    response_profile: ResponseProfileName = ResponseProfileName.GENERIC
     extracted_params: dict[str, Any] = Field(default_factory=dict)
 
 

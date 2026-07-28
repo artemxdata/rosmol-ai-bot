@@ -3,16 +3,14 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.graph.state import BotState
+from src.response_contract import get_response_contract
 
-PARTIAL_COVERAGE_NOTE = (
-    "По части вопроса в базе знаний нет достаточных подтверждённых данных. "
-    "Передаю обращение специалисту, чтобы не дать неточный ответ."
-)
-AMBIGUOUS_FORUM_NOTE = (
-    "Уточни, пожалуйста, название форума или мероприятия. "
-    "По твоему вопросу найдены похожие источники по разным событиям, "
-    "и я не хочу смешать условия."
-)
+_RESPONSE_CONTRACT = get_response_contract()
+OPERATOR_TRANSFER_RESPONSE = _RESPONSE_CONTRACT.message(
+    "operator_transfer"
+).select_text()
+PARTIAL_COVERAGE_NOTE = OPERATOR_TRANSFER_RESPONSE
+AMBIGUOUS_FORUM_NOTE = OPERATOR_TRANSFER_RESPONSE
 
 
 async def escalate(state: BotState) -> dict:
@@ -29,8 +27,4 @@ async def escalate(state: BotState) -> dict:
 
 
 def _escalation_response(state: BotState, reason: str) -> str:
-    if reason == "ambiguous_forum_context":
-        return AMBIGUOUS_FORUM_NOTE
-    if reason == "partial_source_coverage":
-        return PARTIAL_COVERAGE_NOTE
-    return "Передаю обращение специалисту, чтобы не дать неточный ответ."
+    return OPERATOR_TRANSFER_RESPONSE

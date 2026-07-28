@@ -14,10 +14,13 @@ from src.llm.cascade import select_judge_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import LLM_JUDGE_SYSTEM, build_judge_user
 from src.models import Question, ScoredChunk, VerificationResult
+from src.response_contract import get_response_contract
 
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
-OFFICIAL_SOURCE_TYPES = {"xlsx", "docx", "yonote"}
+_RESPONSE_CONTRACT = get_response_contract()
+FACTUAL_SOURCE_TYPE = _RESPONSE_CONTRACT.fact_policy.source_type
+UNKNOWN_FORUM_RESPONSE = _RESPONSE_CONTRACT.message("unknown_forum").select_text()
 NO_QUESTION_RE = re.compile(
     r"(пока\s+нет\s+вопрос|задайте\s+(?:ваш\s+)?вопрос|готов\s+помочь.*задайте)",
     flags=re.IGNORECASE,
@@ -320,6 +323,53 @@ async def verify(state: BotState) -> dict:
         )
         return {"verification": result, "verifier_triggered": False}
 
+    referenced_sources = set(state.get("cited_sources") or []) | cited
+    if not referenced_sources and state.get("generator_model") in {
+        "source_chunk",
+        "source_only",
+    }:
+        referenced_sources = known
+    unknown_referenced_sources = referenced_sources - known
+    if unknown_referenced_sources:
+        result = VerificationResult(
+            has_hallucination=True,
+            confidence=0.0,
+            details=f"Unknown cited sources: {sorted(unknown_referenced_sources)}",
+        )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "unknown_source_citation",
+        }
+
+    non_yonote_sources = sorted(
+        chunk.chunk_id
+        for chunk in chunks
+        if chunk.chunk_id in referenced_sources
+        and _source_type(chunk) != FACTUAL_SOURCE_TYPE
+    )
+    if non_yonote_sources:
+        result = VerificationResult(
+            has_hallucination=True,
+            confidence=0.0,
+            details="Non-Yonote factual sources: " + ", ".join(non_yonote_sources),
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                guard=True,
+                reason="non_yonote_source",
+                rejected_sources=non_yonote_sources,
+            )
+        return {
+            "verification": result,
+            "verifier_triggered": False,
+            "should_escalate": True,
+            "escalation_reason": "non_yonote_source",
+        }
+
     confidence = float(state.get("max_confidence") or 0)
     if _signals_insufficient_source_escalation(response):
         result = VerificationResult(
@@ -395,11 +445,7 @@ async def verify(state: BotState) -> dict:
         return {
             "verification": result,
             "verifier_triggered": False,
-            "generated_response": (
-                "Уточни, пожалуйста, название форума или мероприятия. "
-                "По твоему вопросу найдены похожие источники по разным событиям, "
-                "и я не хочу смешать условия."
-            ),
+            "generated_response": UNKNOWN_FORUM_RESPONSE,
             "should_escalate": False,
             "escalation_reason": None,
         }
@@ -1050,7 +1096,7 @@ def _is_technical_support_chunk(chunk: ScoredChunk) -> bool:
         )
     )
     return (
-        _source_type(chunk) in OFFICIAL_SOURCE_TYPES
+        _source_type(chunk) == FACTUAL_SOURCE_TYPE
         and (
             "техподдерж" in haystack
             or "техническ" in haystack

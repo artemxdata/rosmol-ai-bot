@@ -60,7 +60,7 @@ COPY scripts/init_qdrant.py scripts/index_kb.py scripts/check_ml_runtime.py \
      scripts/prefetch_huggingface_models.py scripts/hde_transport_admin.py \
      scripts/purge_old_memory.py ./scripts/
 COPY data/knowledge_base_seed.json data/forums_registry.json \
-     data/kb_source_corrections.json ./data/
+     data/kb_source_corrections.json data/response_contract_v1.json ./data/
 COPY eval/cases/ ./eval/cases/
 COPY deploy/huggingface_models.lock.json ./deploy/huggingface_models.lock.json
 COPY reports/presentation_quality/presentation_quality_report.json \

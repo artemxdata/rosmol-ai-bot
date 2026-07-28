@@ -8,6 +8,14 @@ def sample_chunks():
     from src.models import Chunk
 
     return [
-        Chunk(chunk_id="ctx_1", text="Проезд на Машук участник оплачивает самостоятельно."),
-        Chunk(chunk_id="ctx_2", text="Регистрация проходит на платформе ФГАИС."),
+        Chunk(
+            chunk_id="ctx_1",
+            text="Проезд на Машук участник оплачивает самостоятельно.",
+            metadata={"source_type": "yonote"},
+        ),
+        Chunk(
+            chunk_id="ctx_2",
+            text="Регистрация проходит на платформе ФГАИС.",
+            metadata={"source_type": "yonote"},
+        ),
     ]

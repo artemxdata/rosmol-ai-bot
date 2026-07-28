@@ -7,6 +7,7 @@ from src.graph.context import (
     RECENT_CONTEXT_TURNS,
     apply_session_context,
     build_contextual_message,
+    last_forum_from_session,
 )
 from src.graph.state import BotState
 from src.kb.forum_registry import detect_forums_from_text
@@ -14,22 +15,25 @@ from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
 from src.models import Complexity, QueryAnalysis
+from src.response_contract import ResponseProfileName, get_response_contract
 from src.security.operator_request import (
     is_operator_request,
     operator_review_reason,
 )
 
-BOT_CAPABILITIES_RESPONSE = (
-    "Я ИИ-помощник Росмолодёжи. Отвечаю по подтверждённой базе знаний о форумах, "
-    "мероприятиях, ФГАИС «Молодёжь России» и грантах. Если вопрос вне этих тем, "
-    "я прямо скажу об этом, а опасную ситуацию или явный запрос оператора передам "
-    "специалисту."
-)
-GREETING_RESPONSE = (
-    "Привет! 👋 Я — ЗаБотливый Бот Росмолодёжи!\n"
-    "Я помогу быстро найти ответ на любой вопрос или подскажу, к кому обратиться, "
-    "если моих ответов будет недостаточно."
-)
+_RESPONSE_CONTRACT = get_response_contract()
+_GRATITUDE_MESSAGE = _RESPONSE_CONTRACT.message("gratitude")
+BOT_CAPABILITIES_RESPONSE = _RESPONSE_CONTRACT.message("capabilities").select_text()
+GREETING_RESPONSE = _RESPONSE_CONTRACT.message("greeting").select_text()
+FAREWELL_RESPONSE = _RESPONSE_CONTRACT.message("farewell").select_text()
+UNKNOWN_FORUM_RESPONSE = _RESPONSE_CONTRACT.message("unknown_forum").select_text()
+DATES_EVENT_CLARIFICATION_RESPONSE = _RESPONSE_CONTRACT.message(
+    "dates_event_clarification"
+).select_text()
+UNCLEAR_REQUEST_RESPONSE = _RESPONSE_CONTRACT.message("unclear_request").select_text()
+_CLARIFICATION_WITH_OPTIONS = _RESPONSE_CONTRACT.message(
+    "clarification_with_options"
+).select_text()
 GREETING_OPENERS = frozenset(
     {
         "начать",
@@ -107,29 +111,45 @@ GREETING_HELP_TAILS = frozenset(
         "нужен совет",
     }
 )
-FEEDBACK_RESPONSE = (
-    "Расскажи, пожалуйста, что именно хочешь оценить: ответ бота, работу сервиса, "
-    "мероприятие или сотрудника. Опиши ситуацию без персональных данных — я передам "
-    "обратную связь по назначению."
+GRATITUDE_PHRASES = frozenset(
+    {
+        "благодарю",
+        "большое спасибо",
+        "все понятно спасибо",
+        "всё понятно спасибо",
+        "огромное спасибо",
+        "понял спасибо",
+        "поняла спасибо",
+        "спасибо",
+        "спасибо большое",
+        "спасибо за ответ",
+        "спасибо за помощь",
+        "спасибо помог",
+        "спасибо помогло",
+        "спс",
+    }
 )
-APPLICATION_SUCCESS_RESPONSE = (
-    "Отлично, заявка подана! Если понадобится, я помогу разобраться с дальнейшими "
-    "шагами по конкретному форуму, мероприятию или грантовому конкурсу."
+FEEDBACK_RESPONSE = _CLARIFICATION_WITH_OPTIONS.format(
+    options="\n".join(
+        (
+            "1. Ответ бота",
+            "2. Работа сервиса",
+            "3. Мероприятие",
+            "4. Другое",
+        )
+    )
 )
-ACCOUNT_CHECK_RESPONSE = (
-    "Проверь вход на https://myrosmol.ru/auth/login. Если пароль не помнишь, нажми "
-    "«Восстановить пароль» и укажи электронную почту, которую мог использовать при "
-    "регистрации. Письмо для восстановления покажет, что к этой почте привязан аккаунт. "
-    "Если письма нет, проверь папку «Спам» и правильность адреса."
-)
-SOURCE_BOUNDARY_RESPONSE = (
-    "Я отвечаю только по подтверждённым данным из базы Росмолодёжи. Если уточнишь, "
-    "какие именно условия или какой шаг тебя интересует, я проверю это точнее."
-)
-GRANT_CONTEXT_RESPONSE = (
-    "Понял, речь о грантовом конкурсе Росмолодёжи. Я могу подсказать условия участия, "
-    "подачу заявки, требования к проекту, команде, смете и отчётности. Напиши, какой "
-    "именно этап тебя интересует."
+APPLICATION_SUCCESS_RESPONSE = _GRATITUDE_MESSAGE.select_text("application_success")
+SOURCE_BOUNDARY_RESPONSE = BOT_CAPABILITIES_RESPONSE
+GRANT_CONTEXT_RESPONSE = _CLARIFICATION_WITH_OPTIONS.format(
+    options="\n".join(
+        (
+            "1. Условия участия",
+            "2. Подача заявки",
+            "3. Требования к проекту",
+            "4. Результаты и отчётность",
+        )
+    )
 )
 
 
@@ -190,6 +210,7 @@ async def analyze_query(state: BotState) -> dict:
         _ensure_deterministic_questions(payload, masked_message)
         analysis = QueryAnalysis.model_validate(payload)
         analysis = apply_session_context(analysis, masked_message, state.get("session"))
+        analysis = _apply_response_profile(analysis, original_message)
         if tracer:
             tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
         result = {
@@ -294,6 +315,10 @@ def _fallback_analysis(
     if is_generic_help and not category:
         category = "общее"
     needs_forum_context = _needs_forum_context_clarification(original_message)
+    needs_dates_context = _needs_dates_context_clarification(
+        original_message,
+        session,
+    )
     if needs_forum_context and not category:
         category = "форумы"
     complexity = _complexity_from_routing_hint(routing_hint)
@@ -317,6 +342,7 @@ def _fallback_analysis(
                 is_generic_help=is_generic_help,
                 needs_application_context=needs_application_context,
                 needs_forum_context=needs_forum_context,
+                needs_dates_context=needs_dates_context,
             )
         )
     if needs_clarification:
@@ -352,6 +378,7 @@ def _fallback_analysis(
             is_generic_help=True,
             needs_application_context=False,
             needs_forum_context=False,
+            needs_dates_context=False,
         )
     payload = {
         "category": category,
@@ -370,6 +397,7 @@ def _fallback_analysis(
     _ensure_deterministic_questions(payload, original_message)
     analysis = QueryAnalysis.model_validate(payload)
     analysis = apply_session_context(analysis, masked_message, session)
+    analysis = _apply_response_profile(analysis, original_message)
     if not analysis.category and not analysis.forum_normalized:
         return None
     return analysis
@@ -563,8 +591,10 @@ def _bot_interaction_response(message: str) -> str | None:
 
     if _is_greeting_message(normalized) or normalized == "как дела":
         return GREETING_RESPONSE
-    if normalized in {"пока", "до свидания", "до встречи"}:
-        return "До встречи! Если появится вопрос по Росмолодёжи, я помогу."
+    if normalized in {"пока", "до свидания", "до встречи", "всего доброго"}:
+        return FAREWELL_RESPONSE
+    if normalized in GRATITUDE_PHRASES:
+        return _GRATITUDE_MESSAGE.select_text(normalized)
 
     bot_markers = (
         "почему не можешь помочь",
@@ -645,6 +675,12 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
     normalized = message.casefold().replace("ё", "е")
     normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    if (
+        normalized in {"дата", "даты", "когда", "срок", "сроки"}
+        and not detect_forums_from_text(message)
+        and not last_forum_from_session(session)
+    ):
+        return DATES_EVENT_CLARIFICATION_RESPONSE
     if not _has_session_context(session) and normalized in {
         "старт",
         "start",
@@ -661,8 +697,6 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
         return APPLICATION_SUCCESS_RESPONSE
     if "это не форум а грант" in normalized:
         return GRANT_CONTEXT_RESPONSE
-    if "есть ли у меня аккаунт" in normalized:
-        return ACCOUNT_CHECK_RESPONSE
     if any(
         marker in normalized
         for marker in (
@@ -695,8 +729,7 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
         for marker in ("лк на вашем сайте", "личный кабинет на вашем сайте")
     ):
         return (
-            "Уточни, пожалуйста, какой сайт открыт: ФГАИС «Молодёжь России» "
-            "(myrosmol.ru), Добро.рф или другой сервис, и на каком шаге возникает проблема."
+            "Уточни, пожалуйста, название сайта и на каком шаге возникает проблема."
         )
     if any(marker in normalized for marker in ("просто тупит", "тупит и неудоб", "просто неудоб")):
         if _session_mentions(session, ("кабинет", "личный кабинет", "лк", "сайт")):
@@ -753,10 +786,7 @@ def _ambiguous_short_request_response(message: str, session: object | None) -> s
         marker in normalized for marker in ("не поздно", "ваших программ", "участвовать")
         )
     ):
-        return (
-            "Для разных программ действуют разные возрастные ограничения. Уточни, "
-            "пожалуйста, название форума или мероприятия — я проверю точные условия."
-        )
+        return UNKNOWN_FORUM_RESPONSE
     technical_phrases = {
         "ошибка",
         "не работает",
@@ -967,23 +997,53 @@ def _build_clarification_question(
     is_generic_help: bool,
     needs_application_context: bool,
     needs_forum_context: bool,
+    needs_dates_context: bool,
 ) -> str:
+    if needs_dates_context:
+        return DATES_EVENT_CLARIFICATION_RESPONSE
     if needs_application_context:
         return (
             "Уточни, пожалуйста, о какой заявке речь: на конкретный форум/мероприятие "
             "или на грантовый конкурс?"
         )
     if needs_forum_context:
-        return (
-            "Уточни, пожалуйста, о каком форуме или мероприятии речь? "
-            "У разных событий условия могут отличаться."
-        )
+        return UNKNOWN_FORUM_RESPONSE
     if is_generic_help:
-        return (
-            "Уточни, пожалуйста, вопрос: это про форум, мероприятие, ФГАИС "
-            "«Молодёжь России» или грантовый конкурс?"
+        options = "\n".join(
+            (
+                "1. Форум или мероприятие",
+                "2. Грантовый конкурс",
+                "3. ФГАИС «Молодёжь России»",
+                "4. Другой вопрос о деятельности Росмолодёжи",
+            )
         )
-    return "Уточни, пожалуйста, речь о форуме, мероприятии или грантовом конкурсе?"
+        return _CLARIFICATION_WITH_OPTIONS.format(options=options)
+    return UNCLEAR_REQUEST_RESPONSE
+
+
+def _needs_dates_context_clarification(
+    message: str,
+    session: object | None,
+) -> bool:
+    if detect_forums_from_text(message) or last_forum_from_session(session):
+        return False
+    normalized = message.casefold().replace("ё", "е")
+    if any(
+        marker in normalized
+        for marker in ("грант", "фгаис", "росмолод", "заявк", "конкурс")
+    ):
+        return False
+    has_date_question = any(
+        marker in normalized
+        for marker in ("когда", "дат", "срок", "период проведения")
+    )
+    if not has_date_question:
+        return False
+    words = re.findall(r"[\w-]+", normalized, flags=re.UNICODE)
+    return len(words) <= 4 or any(
+        marker in normalized
+        for marker in ("форум", "мероприят", "фестивал", "событи")
+    )
 
 
 def _is_exact_fallback_intent_message(message: str) -> bool:
@@ -1162,6 +1222,22 @@ def _is_account_merge_query(normalized: str) -> bool:
         )
     )
     return has_account_context and has_transfer_context
+
+
+def _is_account_existence_query(normalized: str) -> bool:
+    if "аккаунт" not in normalized and "учетн" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "есть ли",
+            "существует ли",
+            "зарегистрирован ли",
+            "зарегистрирована ли",
+            "проверить аккаунт",
+            "найти аккаунт",
+        )
+    )
 
 
 def _needs_forum_context_clarification(message: str) -> bool:
@@ -1398,6 +1474,8 @@ def _infer_category_from_message(message: str) -> str | None:
     if _is_account_deletion_information_query(normalized):
         return "платформа_фгаис"
     if _is_account_merge_query(normalized):
+        return "платформа_фгаис"
+    if _is_account_existence_query(normalized):
         return "платформа_фгаис"
     if _is_sport_recommendation_request(normalized):
         return "платформа_фгаис"
@@ -1665,6 +1743,128 @@ def _coerce_analysis_payload(payload: dict) -> dict:
     return normalized
 
 
+def _apply_response_profile(
+    analysis: QueryAnalysis,
+    message: str,
+) -> QueryAnalysis:
+    profile = _infer_response_profile(analysis, message)
+    if analysis.response_profile == profile:
+        return analysis
+    return analysis.model_copy(update={"response_profile": profile})
+
+
+def _infer_response_profile(
+    analysis: QueryAnalysis,
+    message: str,
+) -> ResponseProfileName:
+    category = str(analysis.category or "").casefold().replace("ё", "е")
+    evidence_parts = [
+        message,
+        *analysis.topics,
+        *(question.text for question in analysis.questions),
+        *(question.topic or "" for question in analysis.questions),
+    ]
+    evidence = " ".join(evidence_parts).casefold().replace("ё", "е")
+
+    if analysis.is_technical or category == "техподдержка" or any(
+        marker in evidence
+        for marker in (
+            "ошиб",
+            "не работает",
+            "не могу войти",
+            "не получается",
+            "техподдерж",
+        )
+    ):
+        return ResponseProfileName.TECHNICAL
+    if any(
+        marker in evidence
+        for marker in (
+            "когда",
+            "дата",
+            "даты",
+            "срок",
+            "период проведения",
+        )
+    ):
+        return ResponseProfileName.DATES
+    if any(
+        marker in evidence
+        for marker in (
+            "статус заяв",
+            "результат",
+            "прошел отбор",
+            "прошёл отбор",
+            "прошла отбор",
+            "одобрен",
+            "отклонен",
+            "отклонён",
+            "отбор",
+        )
+    ):
+        return ResponseProfileName.SELECTION_STATUS
+    if any(
+        marker in evidence
+        for marker in (
+            "документ",
+            "справк",
+            "сертификат",
+            "положение",
+            "письмо-вызов",
+            "письмо вызов",
+        )
+    ):
+        return ResponseProfileName.DOCUMENTS
+    if any(
+        marker in evidence
+        for marker in (
+            "возраст",
+            "кто может",
+            "кто может участвовать",
+            "условия участия",
+            "требования к участник",
+            "подхожу ли",
+        )
+    ):
+        return ResponseProfileName.ELIGIBILITY
+    if any(
+        marker in evidence
+        for marker in ("проезд", "дорог", "трансфер", "маршрут", "билет")
+    ):
+        return ResponseProfileName.TRAVEL
+    if any(
+        marker in evidence
+        for marker in ("прожив", "размещен", "размещён", "общежит", "гостиниц")
+    ):
+        return ResponseProfileName.ACCOMMODATION
+    if any(marker in evidence for marker in ("питан", "еда", "корм")):
+        return ResponseProfileName.FOOD
+    if any(
+        marker in evidence
+        for marker in (
+            "доступн",
+            "инвалид",
+            "овз",
+            "маломобиль",
+            "сопровождающ",
+        )
+    ):
+        return ResponseProfileName.ACCESSIBILITY
+    if any(
+        marker in evidence
+        for marker in ("подать заяв", "подача заяв", "регистрац", "зарегистр")
+    ):
+        return ResponseProfileName.APPLICATION
+    if any(
+        marker in evidence
+        for marker in ("программ", "расписан", "афиш", "кто выступ")
+    ):
+        return ResponseProfileName.PROGRAM
+    if category == "гранты" or "грант" in evidence:
+        return ResponseProfileName.GRANTS
+    return ResponseProfileName.GENERIC
+
+
 def _apply_deterministic_forum(payload: dict, message: str) -> None:
     normalized = message.casefold().replace("ё", "е")
     normalized = re.sub(r"[^\w\s-]+", " ", normalized, flags=re.UNICODE)
@@ -1842,6 +2042,15 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             {
                 "text": "Как объединить старый и новый аккаунты ФГАИС?",
                 "topic": "obedinenie_akkauntov",
+                "category": "платформа_фгаис",
+                "forum_normalized": None,
+            }
+        ]
+    if _is_account_existence_query(normalized):
+        return [
+            {
+                "text": "Как проверить, существует ли аккаунт пользователя во ФГАИС?",
+                "topic": "proverka_suschestvovaniya_akkaunta",
                 "category": "платформа_фгаис",
                 "forum_normalized": None,
             }

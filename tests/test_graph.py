@@ -16,9 +16,9 @@ from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE, clarify
 from src.graph.nodes.escalate import PARTIAL_COVERAGE_NOTE, escalate
 from src.graph.nodes.generate import build_deterministic_source_response, generate
 from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
-from src.graph.nodes.respond import respond
+from src.graph.nodes.respond import normalize_final_response, respond
 from src.graph.nodes.retrieve import retrieve
-from src.graph.nodes.verify import verify
+from src.graph.nodes.verify import UNKNOWN_FORUM_RESPONSE, verify
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import build_effective_questions
 from src.models import (
@@ -27,10 +27,26 @@ from src.models import (
     Complexity,
     QueryAnalysis,
     Question,
-    ScoredChunk,
     Session,
     VerificationResult,
 )
+from src.models import (
+    ScoredChunk as ModelScoredChunk,
+)
+
+
+def ScoredChunk(**kwargs) -> ModelScoredChunk:
+    """Build a factual generation fixture with Yonote provenance by default."""
+    metadata = dict(kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("source_type", "yonote")
+    return ModelScoredChunk(metadata=metadata, **kwargs)
+
+
+def YonoteChunk(**kwargs) -> Chunk:
+    """Build a factual reranker fixture with the active Yonote provenance."""
+    metadata = dict(kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("source_type", "yonote")
+    return Chunk(metadata=metadata, **kwargs)
 
 
 class FailingLLM:
@@ -95,26 +111,17 @@ class KeywordRecallRetriever(CapturingRetriever):
         source_type: str,
     ):
         self.keyword_calls.append((query, filters, top_k, scan_limit, min_score, source_type))
-        if source_type == "xlsx" and filters == {"category": "grants"}:
+        if source_type == "yonote" and filters == {
+            "category": "grants",
+            "source_type": "yonote",
+        }:
             return [
                 Chunk(
-                    chunk_id="xlsx_exact",
+                    chunk_id="yonote_exact",
                     text="Exact official source.",
                     metadata={
-                        "chunk_id": "xlsx_exact",
-                        "source_type": "xlsx",
-                    },
-                    score=1.0,
-                )
-            ]
-        if source_type == "ticket_answer_bank" and filters == {}:
-            return [
-                Chunk(
-                    chunk_id="ticket_answer_bank_exact",
-                    text="Exact private answer-bank source.",
-                    metadata={
-                        "chunk_id": "ticket_answer_bank_exact",
-                        "source_type": "ticket_answer_bank",
+                        "chunk_id": "yonote_exact",
+                        "source_type": "yonote",
                     },
                     score=1.0,
                 )
@@ -128,7 +135,10 @@ class ForumFallbackRetriever:
 
     async def retrieve(self, query: str, filters: dict, top_k: int):
         self.calls.append((query, filters, top_k))
-        if filters == {"forum_normalized": "Российский Север"}:
+        if filters == {
+            "forum_normalized": "Российский Север",
+            "source_type": "yonote",
+        }:
             return [
                 Chunk(
                     chunk_id="north_docs",
@@ -146,7 +156,11 @@ class BroadeningRetriever:
 
     async def retrieve(self, query: str, filters: dict, top_k: int):
         self.calls.append((query, filters, top_k))
-        if filters == {"forum_normalized": "Forum A", "category": "forums"}:
+        if filters == {
+            "forum_normalized": "Forum A",
+            "category": "forums",
+            "source_type": "yonote",
+        }:
             return [
                 Chunk(
                     chunk_id="strict_generic",
@@ -155,7 +169,7 @@ class BroadeningRetriever:
                     score=0.4,
                 )
             ]
-        if filters == {"forum_normalized": "Forum A"}:
+        if filters == {"forum_normalized": "Forum A", "source_type": "yonote"}:
             return [
                 Chunk(
                     chunk_id="forum_specific",
@@ -173,7 +187,11 @@ class ExactForumDenseRetriever:
 
     async def retrieve(self, query: str, filters: dict, top_k: int):
         self.calls.append((query, filters, top_k))
-        if filters == {"forum_normalized": "Forum A", "category": "forums"}:
+        if filters == {
+            "forum_normalized": "Forum A",
+            "category": "forums",
+            "source_type": "yonote",
+        }:
             return [
                 Chunk(
                     chunk_id=f"forum_exact_{index}",
@@ -193,7 +211,11 @@ class ExactForumDenseRetriever:
 class MultiAspectDenseForumRetriever(ExactForumDenseRetriever):
     async def retrieve(self, query: str, filters: dict, top_k: int):
         self.calls.append((query, filters, top_k))
-        if filters == {"forum_normalized": "Forum A", "category": "forums"}:
+        if filters == {
+            "forum_normalized": "Forum A",
+            "category": "forums",
+            "source_type": "yonote",
+        }:
             return [
                 Chunk(
                     chunk_id=f"forum_exact_{index}",
@@ -207,7 +229,7 @@ class MultiAspectDenseForumRetriever(ExactForumDenseRetriever):
                 )
                 for index in range(3)
             ]
-        if filters == {"forum_normalized": "Forum A"}:
+        if filters == {"forum_normalized": "Forum A", "source_type": "yonote"}:
             return [
                 Chunk(
                     chunk_id="forum_broad_multi_aspect",
@@ -393,7 +415,7 @@ async def test_verify_allows_source_supported_confirmation_instruction() -> None
     chunk = ScoredChunk(
         chunk_id="confirmation",
         text="Обязательно нужно подтвердить своё участие через личный кабинет.",
-        metadata={"chunk_id": "confirmation", "source_type": "xlsx"},
+        metadata={"chunk_id": "confirmation", "source_type": "yonote"},
         score=0.8,
         reranker_score=0.8,
     )
@@ -419,7 +441,7 @@ async def test_verify_allows_source_supported_email_instruction() -> None:
     chunk = ScoredChunk(
         chunk_id="docs",
         text="Полный список рекомендаций будет отправлен участникам на электронную почту.",
-        metadata={"chunk_id": "docs", "source_type": "xlsx"},
+        metadata={"chunk_id": "docs", "source_type": "yonote"},
         score=0.8,
         reranker_score=0.8,
     )
@@ -445,7 +467,7 @@ async def test_verify_allows_source_supported_plain_email_wording() -> None:
     chunk = ScoredChunk(
         chunk_id="results",
         text="Тебе придёт письмо с результатами отбора на почту, указанную при регистрации.",
-        metadata={"chunk_id": "results", "source_type": "xlsx"},
+        metadata={"chunk_id": "results", "source_type": "yonote"},
         score=0.8,
         reranker_score=0.8,
     )
@@ -473,7 +495,7 @@ async def test_verify_blocks_unanchored_specific_forum_source_for_fgaas_query() 
         text="Подать заявку на форум Полюс можно в карточке события.",
         metadata={
             "chunk_id": "polus_application",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Полюс",
         },
         score=0.8,
@@ -493,8 +515,7 @@ async def test_verify_blocks_unanchored_specific_forum_source_for_fgaas_query() 
     )
 
     assert result["should_escalate"] is False
-    assert "Уточни" in result["generated_response"]
-    assert "не хочу смешать условия" in result["generated_response"]
+    assert result["generated_response"] == UNKNOWN_FORUM_RESPONSE
 
 
 @pytest.mark.asyncio
@@ -504,7 +525,7 @@ async def test_verify_allows_specific_forum_source_with_explicit_context() -> No
         text="Подать заявку на форум Полюс можно в карточке события.",
         metadata={
             "chunk_id": "polus_application",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Полюс",
         },
         score=0.8,
@@ -595,19 +616,14 @@ async def test_respond_normalizes_ty_verbs_and_sentence_spacing() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_respond_preserves_links_email_and_time_spacing() -> None:
-    result = await respond(
-        {
-            "generated_response": (
-                "Напишите на reportgrant2024@fadm.gov.ru с 09:00 до 18:00."
-                "Профиль: https://myrosmol.ru/profile?section=accounts."
-                "События: events.myrosmol.ru/forumy/. [src:contacts]"
-            ),
-        }
+def test_normalize_final_response_preserves_links_email_and_time_spacing() -> None:
+    final = normalize_final_response(
+        "Напишите на reportgrant2024@fadm.gov.ru с 09:00 до 18:00."
+        "Профиль: https://myrosmol.ru/profile?section=accounts."
+        "События: events.myrosmol.ru/forumy/. [src:contacts]"
     )
 
-    assert result["final_response"] == (
+    assert final == (
         "Напиши на reportgrant2024@fadm.gov.ru с 09:00 до 18:00. "
         "Профиль: https://myrosmol.ru/profile?section=accounts. "
         "События: https://events.myrosmol.ru/forumy/."
@@ -632,24 +648,56 @@ async def test_respond_repairs_llm_spacing_inside_structured_tokens() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_respond_makes_bare_source_domains_clickable_without_breaking_urls_or_email() -> None:
-    result = await respond(
-        {
-            "generated_response": (
-                "Сайт деньмолодёжи.рф, события events.myrosmol.ru/forumy/. "
-                "Telegram t.me/rostovforum. Профиль https://myrosmol.ru/profile "
-                "и почта help@example.org. "
-                "[src:contacts]"
-            ),
-        }
+def test_normalize_final_response_makes_bare_source_domains_clickable() -> None:
+    final = normalize_final_response(
+        "Сайт деньмолодёжи.рф, события events.myrosmol.ru/forumy/. "
+        "Telegram t.me/rostovforum. Профиль https://myrosmol.ru/profile "
+        "и почта help@example.org. "
+        "[src:contacts]"
     )
 
-    assert result["final_response"] == (
+    assert final == (
         "Сайт https://деньмолодёжи.рф, события https://events.myrosmol.ru/forumy/. "
         "Telegram https://t.me/rostovforum. Профиль https://myrosmol.ru/profile "
         "и почта help@example.org."
     )
+
+
+@pytest.mark.asyncio
+async def test_respond_rejects_multiple_links_created_by_normalization() -> None:
+    result = await respond(
+        {
+            "generated_response": (
+                "Материалы: example.ru и events.myrosmol.ru. [src:contacts]"
+            ),
+        }
+    )
+
+    assert result["final_response"] == "Перевожу на оператора. Пожалуйста, ожидай."
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "final_response_too_many_links"
+
+
+@pytest.mark.asyncio
+async def test_respond_rejects_length_growth_created_by_normalization() -> None:
+    result = await respond(
+        {
+            "generated_response": f"{'А' * 439} example.ru",
+        }
+    )
+
+    assert result["final_response"] == "Перевожу на оператора. Пожалуйста, ожидай."
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "final_response_too_long"
+
+
+@pytest.mark.asyncio
+async def test_respond_rejects_post_generation_emoji() -> None:
+    result = await respond({"generated_response": "Подтверждённый ответ ✅"})
+
+    assert result["final_response"] == "Перевожу на оператора. Пожалуйста, ожидай."
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "final_response_unapproved_emoji"
 
 
 @pytest.mark.asyncio
@@ -685,7 +733,7 @@ async def test_escalate_returns_only_safe_note_for_partial_source_coverage() -> 
     assert result["final_response"] == PARTIAL_COVERAGE_NOTE
     assert "Подтверждённая часть ответа" not in result["final_response"]
     assert "[src:" not in result["final_response"]
-    assert "нет достаточных подтверждённых данных" in result["final_response"]
+    assert result["final_response"] == "Перевожу на оператора. Пожалуйста, ожидай."
 
 
 @pytest.mark.asyncio
@@ -703,7 +751,7 @@ async def test_escalate_drops_generated_claims_for_partial_source_coverage() -> 
     assert result["final_response"] == PARTIAL_COVERAGE_NOTE
     assert "Подтверждённая часть ответа." not in result["final_response"]
     assert "Источники полностью покрывают" not in result["final_response"]
-    assert "нет достаточных подтверждённых данных" in result["final_response"]
+    assert result["final_response"] == "Перевожу на оператора. Пожалуйста, ожидай."
 
 
 @pytest.mark.asyncio
@@ -712,8 +760,7 @@ async def test_escalate_asks_for_forum_when_context_is_ambiguous() -> None:
 
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "ambiguous_forum_context"
-    assert "Уточни" in result["final_response"]
-    assert "название форума" in result["final_response"]
+    assert result["final_response"] == "Перевожу на оператора. Пожалуйста, ожидай."
 
 
 def test_coerce_analysis_payload_accepts_topic_objects() -> None:
@@ -1346,8 +1393,7 @@ def test_session_context_clears_forum_clarification_when_forum_is_known() -> Non
         category="форумы",
         needs_clarification=True,
         clarification_question=(
-            "Уточни, пожалуйста, о каком форуме или мероприятии речь? "
-            "У разных событий условия могут отличаться."
+            "Уточни, пожалуйста, название форума, о котором спрашиваешь."
         ),
     )
 
@@ -2317,7 +2363,7 @@ async def test_analyze_clarifies_unclear_query_on_llm_outage() -> None:
     assert result["analyzer_fallback"] is True
     assert result["analysis"].needs_clarification is True
     assert result["analysis"].category == "общее"
-    assert "Уточни" in result["analysis"].clarification_question
+    assert "уточни" in result["analysis"].clarification_question.casefold()
 
 
 @pytest.mark.asyncio
@@ -2335,22 +2381,22 @@ async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> 
     assert retriever.calls == [
         (
             "Как подать заявку или зарегистрироваться?",
-            {"category": "гранты"},
+            {"category": "гранты", "source_type": "yonote"},
             10,
         ),
         (
             "Как подать заявку или зарегистрироваться?",
-            {},
+            {"source_type": "yonote"},
             30,
         ),
         (
             "Гранты для физических лиц Подать заявку на участие",
-            {"category": "гранты"},
+            {"category": "гранты", "source_type": "yonote"},
             10,
         ),
         (
             "Гранты для физических лиц Подать заявку на участие",
-            {},
+            {"source_type": "yonote"},
             30,
         ),
     ]
@@ -2369,18 +2415,23 @@ async def test_retrieve_adds_keyword_recall_candidates_on_broad_attempt() -> Non
         }
     )
 
-    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
-        "xlsx_exact",
-        "ticket_answer_bank_exact"
-    ]
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == ["yonote_exact"]
     assert retriever.calls == [
-        ("Can I upload a grant report after correction?", {"category": "grants"}, 10),
-        ("Can I upload a grant report after correction?", {}, 30),
+        (
+            "Can I upload a grant report after correction?",
+            {"category": "grants", "source_type": "yonote"},
+            10,
+        ),
+        (
+            "Can I upload a grant report after correction?",
+            {"source_type": "yonote"},
+            30,
+        ),
     ]
     assert retriever.keyword_calls == [
         (
             "Can I upload a grant report after correction?",
-            {"category": "grants"},
+            {"category": "grants", "source_type": "yonote"},
             6,
             2048,
             2.0,
@@ -2388,52 +2439,12 @@ async def test_retrieve_adds_keyword_recall_candidates_on_broad_attempt() -> Non
         ),
         (
             "Can I upload a grant report after correction?",
-            {"category": "grants"},
-            6,
-            2048,
-            2.0,
-            "xlsx",
-        ),
-        (
-            "Can I upload a grant report after correction?",
-            {"category": "grants"},
-            6,
-            2048,
-            2.0,
-            "docx",
-        ),
-        (
-            "Can I upload a grant report after correction?",
-            {},
+            {"source_type": "yonote"},
             6,
             2048,
             2.0,
             "yonote",
         ),
-        (
-            "Can I upload a grant report after correction?",
-            {},
-            6,
-            2048,
-            2.0,
-            "xlsx",
-        ),
-        (
-            "Can I upload a grant report after correction?",
-            {},
-            6,
-            2048,
-            2.0,
-            "docx",
-        ),
-        (
-            "Can I upload a grant report after correction?",
-            {},
-            6,
-            2048,
-            2.0,
-            "ticket_answer_bank",
-        )
     ]
 
 
@@ -2455,22 +2466,26 @@ async def test_retrieve_retries_forum_without_category_when_strict_filter_is_emp
     assert retriever.calls == [
         (
             "Какие документы нужны?",
-            {"forum_normalized": "Российский Север", "category": "участие"},
+            {
+                "forum_normalized": "Российский Север",
+                "category": "участие",
+                "source_type": "yonote",
+            },
             10,
         ),
         (
             "Какие документы нужны?",
-            {"forum_normalized": "Российский Север"},
+            {"forum_normalized": "Российский Север", "source_type": "yonote"},
             30,
         ),
         (
             "Какие документы нужны?",
-            {"category": "участие"},
+            {"category": "участие", "source_type": "yonote"},
             30,
         ),
         (
             "Какие документы нужны?",
-            {},
+            {"source_type": "yonote"},
             30,
         ),
     ]
@@ -2495,10 +2510,26 @@ async def test_retrieve_adds_one_broader_candidate_layer_after_strict_hit() -> N
         "forum_specific",
     ]
     assert retriever.calls == [
-        ("Where is the schedule?", {"forum_normalized": "Forum A", "category": "forums"}, 10),
-        ("Where is the schedule?", {"forum_normalized": "Forum A"}, 30),
-        ("Where is the schedule?", {"category": "forums"}, 30),
-        ("Where is the schedule?", {}, 30),
+        (
+            "Where is the schedule?",
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "source_type": "yonote",
+            },
+            10,
+        ),
+        (
+            "Where is the schedule?",
+            {"forum_normalized": "Forum A", "source_type": "yonote"},
+            30,
+        ),
+        (
+            "Where is the schedule?",
+            {"category": "forums", "source_type": "yonote"},
+            30,
+        ),
+        ("Where is the schedule?", {"source_type": "yonote"}, 30),
     ]
 
 
@@ -2522,7 +2553,15 @@ async def test_retrieve_stops_after_dense_strict_forum_hit() -> None:
         "forum_exact_2",
     ]
     assert retriever.calls == [
-        ("Where is the schedule?", {"forum_normalized": "Forum A", "category": "forums"}, 10)
+        (
+            "Where is the schedule?",
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "source_type": "yonote",
+            },
+            10,
+        )
     ]
 
 
@@ -2546,8 +2585,16 @@ async def test_retrieve_keeps_broad_attempts_for_multi_aspect_forum_hit() -> Non
     assert "forum_broad_multi_aspect" in [
         chunk.chunk_id for chunk in result["retrieved_chunks"]
     ]
-    assert ("Where is the schedule?", {"forum_normalized": "Forum A"}, 30) in retriever.calls
-    assert ("Which documents are needed?", {"forum_normalized": "Forum A"}, 30) in retriever.calls
+    assert (
+        "Where is the schedule?",
+        {"forum_normalized": "Forum A", "source_type": "yonote"},
+        30,
+    ) in retriever.calls
+    assert (
+        "Which documents are needed?",
+        {"forum_normalized": "Forum A", "source_type": "yonote"},
+        30,
+    ) in retriever.calls
 
 
 @pytest.mark.asyncio
@@ -2562,6 +2609,7 @@ async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> No
                 "forum_normalized": "Forum A",
                 "category": "forums",
                 "topic": "schedule",
+                "source_type": "yonote",
             }:
                 return [
                     Chunk(
@@ -2575,6 +2623,7 @@ async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> No
                 "forum_normalized": "Forum A",
                 "category": "forums",
                 "topic": "documents",
+                "source_type": "yonote",
             }:
                 return [
                     Chunk(
@@ -2584,7 +2633,7 @@ async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> No
                         score=0.9,
                     )
                 ]
-            if filters == {"forum_normalized": "Forum A"}:
+            if filters == {"forum_normalized": "Forum A", "source_type": "yonote"}:
                 return [
                     Chunk(
                         chunk_id="broad_extra",
@@ -2618,12 +2667,22 @@ async def test_retrieve_stops_exact_topic_attempts_in_multi_aspect_query() -> No
     assert retriever.calls == [
         (
             "Where is the schedule?",
-            {"forum_normalized": "Forum A", "category": "forums", "topic": "schedule"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "schedule",
+                "source_type": "yonote",
+            },
             10,
         ),
         (
             "Which documents are needed?",
-            {"forum_normalized": "Forum A", "category": "forums", "topic": "documents"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "documents",
+                "source_type": "yonote",
+            },
             10,
         ),
     ]
@@ -2674,11 +2733,21 @@ async def test_retrieve_uses_metadata_lookup_for_exact_topic_attempts() -> None:
     assert retriever.semantic_calls == []
     assert retriever.metadata_calls == [
         (
-            {"forum_normalized": "Forum A", "category": "forums", "topic": "schedule"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "schedule",
+                "source_type": "yonote",
+            },
             10,
         ),
         (
-            {"forum_normalized": "Forum A", "category": "forums", "topic": "documents"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "documents",
+                "source_type": "yonote",
+            },
             10,
         ),
     ]
@@ -2733,10 +2802,21 @@ async def test_retrieve_stops_after_exact_non_forum_metadata_match() -> None:
     ]
     assert retriever.semantic_calls == []
     assert retriever.metadata_calls == [
-        ({"category": "grants", "topic": "proverka_otcheta"}, 10)
+        (
+            {
+                "category": "grants",
+                "topic": "proverka_otcheta",
+                "source_type": "yonote",
+            },
+            10,
+        )
     ]
     assert result["retrieval_filter_attempts"] == [
-        {"category": "grants", "topic": "proverka_otcheta"}
+        {
+            "category": "grants",
+            "topic": "proverka_otcheta",
+            "source_type": "yonote",
+        }
     ]
 
 
@@ -3034,7 +3114,7 @@ async def test_retrieve_runs_shared_broad_fallback_once_for_missing_topics() -> 
 
         async def retrieve(self, query: str, filters: dict, top_k: int):
             self.calls.append((query, filters, top_k))
-            if filters == {"forum_normalized": "Forum A"}:
+            if filters == {"forum_normalized": "Forum A", "source_type": "yonote"}:
                 return [
                     Chunk(
                         chunk_id="shared_broad_source",
@@ -3068,22 +3148,48 @@ async def test_retrieve_runs_shared_broad_fallback_once_for_missing_topics() -> 
     assert retriever.calls == [
         (
             "Where is the schedule?",
-            {"forum_normalized": "Forum A", "category": "forums", "topic": "schedule"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "schedule",
+                "source_type": "yonote",
+            },
             10,
         ),
         (
             "Which documents are needed?",
-            {"forum_normalized": "Forum A", "category": "forums", "topic": "documents"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "topic": "documents",
+                "source_type": "yonote",
+            },
             10,
         ),
         (
             "Forum A: schedule and documents.",
-            {"forum_normalized": "Forum A", "category": "forums"},
+            {
+                "forum_normalized": "Forum A",
+                "category": "forums",
+                "source_type": "yonote",
+            },
             30,
         ),
-        ("Forum A: schedule and documents.", {"forum_normalized": "Forum A"}, 30),
-        ("Forum A: schedule and documents.", {"category": "forums"}, 30),
-        ("Forum A: schedule and documents.", {}, 30),
+        (
+            "Forum A: schedule and documents.",
+            {"forum_normalized": "Forum A", "source_type": "yonote"},
+            30,
+        ),
+        (
+            "Forum A: schedule and documents.",
+            {"category": "forums", "source_type": "yonote"},
+            30,
+        ),
+        (
+            "Forum A: schedule and documents.",
+            {"source_type": "yonote"},
+            30,
+        ),
     ]
 
 
@@ -3107,7 +3213,7 @@ async def test_retrieve_keeps_broad_attempts_for_collapsed_multi_aspect_message(
     ]
     assert (
         "What is known from the source?",
-        {"forum_normalized": "Forum A"},
+        {"forum_normalized": "Forum A", "source_type": "yonote"},
         30,
     ) in retriever.calls
 
@@ -3143,11 +3249,19 @@ async def test_retrieve_expands_multi_forum_fallback_questions() -> None:
     ]
     assert (
         "Машук: Как подать заявку или зарегистрироваться?",
-        {"forum_normalized": "Машук", "category": "форумы"},
+        {
+            "forum_normalized": "Машук",
+            "category": "форумы",
+            "source_type": "yonote",
+        },
     ) in strict_calls
     assert (
         "Территория смыслов: Кто оплачивает проезд?",
-        {"forum_normalized": "Территория смыслов", "category": "форумы"},
+        {
+            "forum_normalized": "Территория смыслов",
+            "category": "форумы",
+            "source_type": "yonote",
+        },
     ) in strict_calls
 
 
@@ -3164,19 +3278,19 @@ async def test_rerank_preserves_sources_for_each_question(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="docs",
             text="Паспорт и справка.",
             metadata={"intent_name": "Документы"},
             score=0.2,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="age",
             text="От 14 до 35 лет.",
             metadata={"intent_name": "Возрастные ограничения"},
             score=0.2,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="travel",
             text="Есть трансфер.",
             metadata={"intent_name": "Трансфер"},
@@ -3215,7 +3329,7 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="amur_docs",
             text="Документы для форума Амур.",
             metadata={
@@ -3225,7 +3339,7 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
             },
             score=0.96,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="amur_transfer",
             text="Трансфер для форума Амур.",
             metadata={
@@ -3235,7 +3349,7 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
             },
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="amur_age",
             text="Возраст участников форума Амур.",
             metadata={
@@ -3300,7 +3414,7 @@ async def test_rerank_does_not_use_forum_fast_path_without_topic_or_lexical_sign
 
     semantic_reranker = HousingSemanticReranker()
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="wrong_docs",
             text="Возьми паспорт и медицинскую справку.",
             metadata={
@@ -3312,7 +3426,7 @@ async def test_rerank_does_not_use_forum_fast_path_without_topic_or_lexical_sign
             },
             score=0.99,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="right_housing",
             text="Участников разместят в гостинице.",
             metadata={
@@ -3355,34 +3469,34 @@ async def test_rerank_uses_exact_topic_fast_path_for_trusted_non_forum_analysis(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="fgais_registration",
             text="Пройти регистрацию в ФГАИС можно на странице регистрации.",
             metadata={
                 "category": "платформа_фгаис",
                 "topic": "kak_zaregistrirovatsya_na_fgais",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.08,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_registration",
             text="Подать заявку на конкретный форум можно после открытия регистрации.",
             metadata={
                 "category": "форумы",
                 "forum_normalized": "Амур",
                 "topic": "kak_zaregistrirovatsya_na_fgais",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.7,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="unrelated",
             text="Другой текст.",
             metadata={
                 "category": "платформа_фгаис",
                 "topic": "drugoy_vopros",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.9,
         ),
@@ -3427,7 +3541,7 @@ async def test_rerank_uses_exact_yonote_grant_topic_without_cross_encoder(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_report_review",
             text="Статус «Отчёт на проверке» может занимать до 30 рабочих дней.",
             metadata={
@@ -3438,13 +3552,13 @@ async def test_rerank_uses_exact_yonote_grant_topic_without_cross_encoder(
             },
             score=0.64,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_report_submission",
             text="Отчёт необходимо отправить в течение 60 рабочих дней.",
             metadata={
                 "category": "гранты",
                 "topic": "vopros_po_otchetnosti",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.75,
         ),
@@ -3488,7 +3602,7 @@ async def test_rerank_pins_original_exact_match_for_multi_question(
         ),
     )
     distractors = [
-        Chunk(
+        YonoteChunk(
             chunk_id=f"distractor_{index}",
             text=f"Distractor {index}",
             metadata={"intent_examples": [f"other example {index}"]},
@@ -3496,11 +3610,11 @@ async def test_rerank_pins_original_exact_match_for_multi_question(
         )
         for index in range(5)
     ]
-    exact = Chunk(
+    exact = YonoteChunk(
         chunk_id="ticket_answer_bank_exact",
         text="Exact source answer.",
         metadata={
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": ["original complex question"],
         },
         score=0.1,
@@ -3533,7 +3647,7 @@ async def test_rerank_keeps_exact_platform_registration_candidate(
         lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="platform_navigation",
             text="Можно найти мероприятия и подать заявку на подходящее событие.",
             metadata={
@@ -3542,7 +3656,7 @@ async def test_rerank_keeps_exact_platform_registration_candidate(
             },
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="fgais_registration",
             text="Пройти регистрацию в ФГАИС можно по ссылке: https://myrosmol.ru/auth/register",
             metadata={
@@ -3588,18 +3702,18 @@ async def test_rerank_pins_answer_bank_intent_example_match(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_grant",
             text="По вопросам грантового конкурса используйте личный кабинет.",
             metadata={"category": "гранты"},
             score=0.95,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="ticket_answer_bank_001",
             text="Свяжитесь с куратором грантового конкурса.",
             metadata={
                 "category": "гранты",
-                "source_type": "ticket_answer_bank",
+                "source_type": "yonote",
                 "intent_examples": ["Как получить консультацию по отчетности?"],
             },
             score=0.4,
@@ -3636,18 +3750,18 @@ async def test_rerank_keeps_answer_bank_match_across_category_scope(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="technical_profile",
             text="Если не открывается личный кабинет, очистите кэш браузера.",
             metadata={"category": "техподдержка"},
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="ticket_answer_bank_002",
             text="Для консультации по грантовой отчетности обратитесь к куратору конкурса.",
             metadata={
                 "category": "гранты",
-                "source_type": "ticket_answer_bank",
+                "source_type": "yonote",
                 "intent_examples": ["К кому обратиться по грантовой отчетности?"],
             },
             score=0.3,
@@ -3683,18 +3797,18 @@ async def test_rerank_uses_original_query_for_answer_bank_priority(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_reporting",
             text="Для отчётности приложите документы, подтверждающие расходы.",
             metadata={"category": "гранты"},
             score=0.95,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="ticket_answer_bank_expenses",
             text="В отчёте по расходам приложите договор, накладную, акт и подтверждение оплаты.",
             metadata={
                 "category": "гранты",
-                "source_type": "ticket_answer_bank",
+                "source_type": "yonote",
                 "intent_examples": ["Вопрос по расходам"],
             },
             score=0.3,
@@ -3727,7 +3841,7 @@ async def test_rerank_prefers_exact_intent_example_over_broad_overlap(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="broad_rejection",
             text="Причины отклонения заявки отображаются в личном кабинете.",
             metadata={
@@ -3739,12 +3853,12 @@ async def test_rerank_prefers_exact_intent_example_over_broad_overlap(
             },
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="ticket_answer_bank_rejection",
             text="Причину отклонения грантовой заявки можно посмотреть в карточке проекта.",
             metadata={
                 "category": "гранты",
-                "source_type": "ticket_answer_bank",
+                "source_type": "yonote",
                 "intent_examples": [
                     "Прошу указать причину отклонения заявки на грантовый конкурс."
                 ],
@@ -3778,7 +3892,7 @@ async def test_rerank_prefers_forum_category_intersection(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_registration",
             text="Forum registration status answer.",
             metadata={
@@ -3788,7 +3902,7 @@ async def test_rerank_prefers_forum_category_intersection(
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="platform_registration",
             text="Platform profile registration answer.",
             metadata={
@@ -3837,7 +3951,7 @@ async def test_rerank_keeps_same_forum_different_category_candidate(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_status",
             text="Forum application status answer.",
             metadata={
@@ -3847,13 +3961,13 @@ async def test_rerank_keeps_same_forum_different_category_candidate(
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_platform_exact",
             text="Forum platform account answer.",
             metadata={
                 "forum_normalized": "Forum A",
                 "category": "платформа_фгаис",
-                "source_type": "ticket_answer_bank",
+                "source_type": "yonote",
                 "intent_examples": ["I cannot update my platform account for Forum A"],
             },
             score=0.6,
@@ -3895,7 +4009,7 @@ async def test_rerank_keeps_compatible_fallback_category_candidate(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_abilities",
             text="Я могу подсказать по форумам и грантам.",
             metadata={
@@ -3905,7 +4019,7 @@ async def test_rerank_keeps_compatible_fallback_category_candidate(
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="what_is_rosmol",
             text="Росмолодёжь поддерживает молодёжные инициативы.",
             metadata={
@@ -3944,7 +4058,7 @@ async def test_rerank_keeps_platform_status_source_for_grant_status_question(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_results",
             text="Результаты грантового конкурса публикуются после отбора.",
             metadata={
@@ -3954,7 +4068,7 @@ async def test_rerank_keeps_platform_status_source_for_grant_status_question(
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_status_location",
             text="Статус заявки можно посмотреть в личном кабинете.",
             metadata={
@@ -3993,13 +4107,13 @@ async def test_rerank_short_circuits_promotable_priority_without_cross_encoder(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_status",
             text="Статусы публикуются после отбора.",
             metadata={"category": "гранты", "topic": "rezultaty_rm"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="status_location",
             text="Статус заявки можно посмотреть в личном кабинете.",
             metadata={
@@ -4027,13 +4141,13 @@ async def test_rerank_short_circuits_promotable_priority_without_cross_encoder(
 
 def test_rerank_candidate_prefilter_prioritizes_domain_marker() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="transfer",
             text="Бесплатный трансфер по Салехарду будет организован для всех участников.",
             metadata={"intent_name": "Трансфер по городу"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="docs",
             text="Что взять обязательно из документов: паспорт и справку от врача.",
             metadata={"intent_name": "Документы, вещи и дресс-код"},
@@ -4048,13 +4162,13 @@ def test_rerank_candidate_prefilter_prioritizes_domain_marker() -> None:
 
 def test_rerank_candidate_prefilter_prioritizes_participation_action_wording() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="dates",
             text="Актуальные даты проведения форума будут объявлены позже.",
             metadata={"intent_name": "Даты начала мероприятия"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="application",
             text="Заявки принимаются до 17 июня включительно. Присоединяйся к акции.",
             metadata={"intent_name": "Подача заявки на проект"},
@@ -4069,13 +4183,13 @@ def test_rerank_candidate_prefilter_prioritizes_participation_action_wording() -
 
 def test_rerank_candidate_prefilter_prioritizes_intent_marker() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="logistics",
             text="Проживание и питание на время форума оплачивает организатор.",
             metadata={"intent_name": "Оплата проезда, проживания и чартер"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="food",
             text="На площадке будут точки питания и кулеры с питьевой водой.",
             metadata={"intent_name": "Условия питания"},
@@ -4090,13 +4204,13 @@ def test_rerank_candidate_prefilter_prioritizes_intent_marker() -> None:
 
 def test_rerank_candidate_prefilter_prioritizes_travel_to_venue_wording() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="docs",
             text="Паспорт и справка нужны при заезде.",
             metadata={"intent_name": "Документы"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="travel",
             text="Логистика: дорога до Москвы самостоятельно, далее чартер до Салехарда.",
             metadata={"intent_name": "Оплата проезда, проживания и чартер"},
@@ -4111,13 +4225,13 @@ def test_rerank_candidate_prefilter_prioritizes_travel_to_venue_wording() -> Non
 
 def test_rerank_candidate_prefilter_prioritizes_regional_invitation_letter() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="travel",
             text="Проезд и проживание оплачиваются организаторами.",
             metadata={"intent_name": "Оплата проезда"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="invitation",
             text="Письмо-вызов можно запросить через орган молодёжной политики региона.",
             metadata={"intent_name": "Письмо-вызов"},
@@ -4132,13 +4246,13 @@ def test_rerank_candidate_prefilter_prioritizes_regional_invitation_letter() -> 
 
 def test_rerank_candidate_prefilter_prioritizes_grant_return_intent() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_grant",
             text="На форуме можно подать заявку на грантовый конкурс.",
             metadata={"intent_name": "Росмолодёжь.Гранты"},
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_return",
             text="Вернуть грантовые средства можно через почту reportgrant2024@fadm.gov.ru.",
             metadata={"intent_name": "Вернуть денежные средства"},
@@ -4153,7 +4267,7 @@ def test_rerank_candidate_prefilter_prioritizes_grant_return_intent() -> None:
 
 def test_rerank_candidate_prefilter_penalizes_forum_grant_for_unscoped_grant_query() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_grant",
             text="В рамках форума будет грантовый конкурс.",
             metadata={
@@ -4167,7 +4281,7 @@ def test_rerank_candidate_prefilter_penalizes_forum_grant_for_unscoped_grant_que
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_grant_change",
             text="Чтобы внести изменения в проект, напишите на почту грантового конкурса.",
             metadata={
@@ -4192,7 +4306,7 @@ def test_rerank_candidate_prefilter_penalizes_forum_grant_for_unscoped_grant_que
 @pytest.mark.asyncio
 async def test_rerank_promotes_generic_grant_project_change_before_cross_encoder() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_grant_terms",
             text="В рамках форума будет проводиться грантовый конкурс.",
             metadata={
@@ -4200,11 +4314,11 @@ async def test_rerank_promotes_generic_grant_project_change_before_cross_encoder
                 "source_category": "Добрино",
                 "intent_name": "Условия и сроки участия_гранты",
                 "intent_examples": ["Могу ли я подать на грант свой проект?"],
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_grant_change",
             text="Нужно изменить смету? Напиши на почту grant2024@fadm.gov.ru.",
             metadata={
@@ -4212,7 +4326,7 @@ async def test_rerank_promotes_generic_grant_project_change_before_cross_encoder
                 "source_category": "Гранты для физических лиц",
                 "intent_name": "Внести изменения в проект",
                 "topic": "vnesti_izmeneniya_v_proekt",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.2,
         ),
@@ -4234,18 +4348,18 @@ async def test_rerank_promotes_generic_grant_project_change_before_cross_encoder
 @pytest.mark.asyncio
 async def test_rerank_promotes_feedback_source_before_cross_encoder() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_terms",
             text="Условия участия в грантовом конкурсе.",
             metadata={
                 "category": "гранты",
                 "source_category": "Гранты для физических лиц",
                 "intent_name": "Условия и сроки участия",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="feedback_organizer",
             text="Поделись своими впечатлениями, а я передам информацию организаторам.",
             metadata={
@@ -4253,7 +4367,7 @@ async def test_rerank_promotes_feedback_source_before_cross_encoder() -> None:
                 "source_category": "Гранты для физических лиц",
                 "intent_name": "Оставить обратную связь организаторам",
                 "topic": "ostavit_obratnuyu_svyaz_o",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.2,
         ),
@@ -4275,7 +4389,7 @@ async def test_rerank_promotes_feedback_source_before_cross_encoder() -> None:
 @pytest.mark.asyncio
 async def test_rerank_promotes_expert_feedback_before_leave_feedback() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="feedback_organizer",
             text="Поделись своими впечатлениями, а я передам информацию организаторам.",
             metadata={
@@ -4283,11 +4397,11 @@ async def test_rerank_promotes_expert_feedback_before_leave_feedback() -> None:
                 "source_category": "Гранты для физических лиц",
                 "intent_name": "Оставить обратную связь организаторам",
                 "topic": "ostavit_obratnuyu_svyaz_o",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="expert_feedback",
             text="Чтобы получить обратную связь по заявке, зайди в профиль и выбери «Мои заявки».",
             metadata={
@@ -4295,7 +4409,7 @@ async def test_rerank_promotes_expert_feedback_before_leave_feedback() -> None:
                 "source_category": "Гранты для физических лиц",
                 "intent_name": "Запрос обратной связи куратора",
                 "topic": "zapros_obratnoy_svyazi_kuratora",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.2,
         ),
@@ -4320,17 +4434,17 @@ async def test_rerank_promotes_expert_feedback_before_leave_feedback() -> None:
 @pytest.mark.asyncio
 async def test_rerank_promotes_password_recovery_before_cross_encoder() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_support",
             text="Если возникла техническая ошибка, обратитесь в поддержку.",
             metadata={
                 "category": "платформа_фгаис",
                 "topic": "tehnicheskaya_oshibka",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="password_recovery",
             text=(
                 "Чтобы восстановить пароль, перейди по ссылке входа "
@@ -4341,7 +4455,7 @@ async def test_rerank_promotes_password_recovery_before_cross_encoder() -> None:
                 "source_category": "fallback",
                 "intent_name": "Восстановить пароль",
                 "topic": "vosstanovit_parol",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.2,
         ),
@@ -4363,7 +4477,7 @@ async def test_rerank_promotes_password_recovery_before_cross_encoder() -> None:
 @pytest.mark.asyncio
 async def test_rerank_promotes_generic_grant_application_before_forum_application() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_application",
             text="Чтобы подать заявку на форум, выбери событие на сайте.",
             metadata={
@@ -4372,11 +4486,11 @@ async def test_rerank_promotes_generic_grant_application_before_forum_applicatio
                 "intent_name": "Подача заявки на проект",
                 "topic": "podacha_zayavki_na_proekt",
                 "intent_examples": ["Как подать заявку на участие в конкурсе"],
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_grant_application",
             text="Чтобы подать заявку на участие в гранте, выбери номинацию конкурса.",
             metadata={
@@ -4384,7 +4498,7 @@ async def test_rerank_promotes_generic_grant_application_before_forum_applicatio
                 "source_category": "Гранты для физических лиц",
                 "intent_name": "Подать заявку на участие",
                 "topic": "podat_zayavku_na_uchastie",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.2,
         ),
@@ -4406,7 +4520,7 @@ async def test_rerank_promotes_generic_grant_application_before_forum_applicatio
 @pytest.mark.asyncio
 async def test_rerank_promotes_forum_invitation_letter_before_cross_encoder() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="ivolga_transfer",
             text="Трансфер на форум Иволга будет организован от точки сбора.",
             metadata={
@@ -4415,11 +4529,11 @@ async def test_rerank_promotes_forum_invitation_letter_before_cross_encoder() ->
                 "source_category": "Иволга",
                 "intent_name": "Трансфер",
                 "topic": "transfer_do_mesta_provedeniya_meropriyatiya",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="ivolga_invitation",
             text="Письмо-вызов можно получить по запросу после заполнения формы.",
             metadata={
@@ -4428,7 +4542,7 @@ async def test_rerank_promotes_forum_invitation_letter_before_cross_encoder() ->
                 "source_category": "Иволга",
                 "intent_name": "Письмо-вызов",
                 "topic": "pismo_vyzov",
-                "source_type": "xlsx",
+                "source_type": "yonote",
             },
             score=0.2,
         ),
@@ -4449,7 +4563,7 @@ async def test_rerank_promotes_forum_invitation_letter_before_cross_encoder() ->
 
 def test_rerank_candidate_prefilter_prefers_same_forum_specific_topic() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_food",
             text="Food, water and cafe locations for Forum A participants.",
             metadata={
@@ -4460,7 +4574,7 @@ def test_rerank_candidate_prefilter_prefers_same_forum_specific_topic() -> None:
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_transfer",
             text="Transfer information for Forum A participants.",
             metadata={
@@ -4480,7 +4594,7 @@ def test_rerank_candidate_prefilter_prefers_same_forum_specific_topic() -> None:
 
 def test_rerank_candidate_prefilter_penalizes_generic_fallback() -> None:
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_forum",
             text="Forum A registration, transfer, food, documents and program details.",
             metadata={
@@ -4492,7 +4606,7 @@ def test_rerank_candidate_prefilter_penalizes_generic_fallback() -> None:
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="specific_transfer",
             text="Transfer details for Forum A.",
             metadata={
@@ -4520,13 +4634,13 @@ async def test_rerank_single_question_prefilter_prioritizes_selection_results(
         lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="decline",
             text="Если решишь отказаться от участия, сообщи организаторам.",
             metadata={"intent_name": "Отказ от участия"},
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="results",
             text="Результаты конкурсного отбора придут на электронную почту.",
             metadata={"intent_name": "Результаты РМ"},
@@ -4555,19 +4669,19 @@ async def test_rerank_uses_fallback_questions_when_analyzer_returns_none(
         lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="docs",
             text="Паспорт и справка.",
             metadata={"intent_name": "Документы"},
             score=0.2,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="age",
             text="От 14 до 35 лет.",
             metadata={"intent_name": "Возрастные ограничения"},
             score=0.2,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="travel",
             text="Есть трансфер.",
             metadata={"intent_name": "Трансфер"},
@@ -4634,19 +4748,19 @@ async def test_rerank_keeps_second_candidate_for_multi_aspect_question(
             ]
 
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="docs_main",
             text=f"{docs_word}: passport.",
             metadata={"intent_name": docs_word},
             score=0.8,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="docs_extra",
             text=f"{docs_word}: medical certificate.",
             metadata={"intent_name": docs_word},
             score=0.7,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="age",
             text=f"{age_word}: 14-35.",
             metadata={"intent_name": age_word},
@@ -4680,46 +4794,46 @@ async def test_rerank_pins_topic_candidates_for_forum_multi_aspect(
     )
     forum = "ГосСтарт"
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="neighbor_volunteers",
             text="Волонтёры помогают на площадке форума.",
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "volontery_foruma",
             },
             score=0.99,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="confirmation",
             text="Подтверждение участия проходит в личном кабинете.",
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "podtverzhdenie_uchastiya_i_org_momenty",
             },
             score=0.2,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="digital_week",
             text="Цифровая неделя — это онлайн-этап перед очным мероприятием.",
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "cifrovaya_nedelya",
             },
             score=0.2,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="dates",
             text="Даты начала мероприятия указаны в карточке форума.",
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "daty_nachala_meropriyatiya",
             },
             score=0.2,
@@ -4748,7 +4862,7 @@ async def test_rerank_pins_topic_candidates_for_forum_multi_aspect(
 
 
 @pytest.mark.asyncio
-async def test_rerank_prefers_fresh_yonote_source_for_equivalent_topic(
+async def test_rerank_keeps_exact_yonote_source_for_equivalent_topic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -4760,18 +4874,18 @@ async def test_rerank_prefers_fresh_yonote_source_for_equivalent_topic(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="legacy_travel",
             text="Legacy travel answer.",
             metadata={
                 "forum_normalized": "Ladoga",
                 "category": "forums",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "oplata_proezda",
             },
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="fresh_compensation",
             text="Fresh compensation answer.",
             metadata={
@@ -4805,7 +4919,7 @@ async def test_rerank_prefers_fresh_yonote_source_for_equivalent_topic(
         }
     )
 
-    assert result["reranked_chunks"][0].chunk_id == "fresh_compensation"
+    assert result["reranked_chunks"][0].chunk_id == "legacy_travel"
 
 
 @pytest.mark.asyncio
@@ -4821,7 +4935,7 @@ async def test_rerank_prefers_exact_topic_between_equally_fresh_yonote_sources(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="generic_registration",
             text="Create a new account before applying.",
             metadata={
@@ -4832,7 +4946,7 @@ async def test_rerank_prefers_exact_topic_between_equally_fresh_yonote_sources(
             },
             score=0.95,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="volunteer_application",
             text="Find a volunteer event and submit the application from its page.",
             metadata={
@@ -4872,7 +4986,7 @@ async def test_rerank_prefers_exact_topic_between_equally_fresh_yonote_sources(
 
 
 @pytest.mark.asyncio
-async def test_rerank_uses_fresh_combined_food_and_housing_source(
+async def test_rerank_keeps_exact_yonote_food_and_housing_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -4884,29 +4998,29 @@ async def test_rerank_uses_fresh_combined_food_and_housing_source(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="legacy_housing",
             text="Legacy housing answer.",
             metadata={
                 "forum_normalized": "Ladoga",
                 "category": "forums",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "usloviya_prozhivaniya",
             },
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="legacy_food",
             text="Legacy food answer.",
             metadata={
                 "forum_normalized": "Ladoga",
                 "category": "forums",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "informaciya_o_ploschadke_pitanie_pite",
             },
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="fresh_food_and_housing",
             text="Fresh three meals and проживание are covered by organizers.",
             metadata={
@@ -4947,7 +5061,8 @@ async def test_rerank_uses_fresh_combined_food_and_housing_source(
     )
 
     assert [chunk.chunk_id for chunk in result["reranked_chunks"]] == [
-        "fresh_food_and_housing"
+        "legacy_housing",
+        "legacy_food",
     ]
 
 
@@ -4964,7 +5079,7 @@ async def test_rerank_trusted_topic_fast_path_does_not_cross_categories(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="fresh_platform_registration",
             text="Create an account on the platform.",
             metadata={
@@ -4974,13 +5089,13 @@ async def test_rerank_trusted_topic_fast_path_does_not_cross_categories(
             },
             score=0.95,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_registration",
             text="Submit the grant application during the competition window.",
             metadata={
                 "category": "гранты",
                 "forum_normalized": "Гранты для физических лиц",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "registraciya",
             },
             score=0.5,
@@ -5024,7 +5139,7 @@ async def test_rerank_exact_documents_beat_fresh_equivalent_program(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="fresh_program",
             text="Актуальная программа форума опубликована в канале участников.",
             metadata={
@@ -5035,13 +5150,13 @@ async def test_rerank_exact_documents_beat_fresh_equivalent_program(
             },
             score=0.95,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="exact_documents",
             text="Документы форума доступны в карточке мероприятия.",
             metadata={
                 "forum_normalized": "Машук",
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "dokumenty_meropriyatiya",
             },
             score=0.5,
@@ -5091,7 +5206,7 @@ async def test_rerank_prefers_official_forum_source_over_answer_bank(
     category = "\u0444\u043e\u0440\u0443\u043c\u044b"
     registration = "\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f"
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="ticket_answer_bank_account",
             text=f"{registration}: account owner request.",
             metadata={
@@ -5103,13 +5218,13 @@ async def test_rerank_prefers_official_forum_source_over_answer_bank(
             },
             score=1.0,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="official_registration",
             text=f"{registration}: official festival dates.",
             metadata={
                 "forum_normalized": forum,
                 "category": category,
-                "source_type": "docx",
+                "source_type": "yonote",
                 "intent_name": registration,
             },
             score=0.2,
@@ -5149,7 +5264,7 @@ async def test_rerank_uses_retrieval_confidence_floor_for_exact_forum_hit(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="docs",
             text="Положение форума доступно в личном кабинете.",
             metadata={"forum_normalized": "Машук", "intent_name": "Документы мероприятия"},
@@ -5183,7 +5298,7 @@ async def test_rerank_uses_retrieval_confidence_floor_for_exact_category_hit(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_return",
             text="Для возврата грантовых средств напишите на почту отчётности.",
             metadata={"category": "гранты", "intent_name": "Вернуть денежные средства"},
@@ -5217,13 +5332,13 @@ async def test_rerank_scopes_candidates_to_analysis_category(
         ),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="forum_application",
             text="Подать заявку на Тавриду можно на сайте события.",
             metadata={"category": "форумы", "forum_normalized": "Таврида"},
             score=0.9,
         ),
-        Chunk(
+        YonoteChunk(
             chunk_id="grant_application",
             text="Чтобы подать заявку на грант, заполните проектную форму на ФГАИС.",
             metadata={"category": "гранты"},
@@ -5252,7 +5367,7 @@ async def test_rerank_does_not_use_retrieval_floor_without_exact_forum(
         lambda: SimpleNamespace(ml_unload_after_use=False, reranker_threshold_low=0.4),
     )
     chunks = [
-        Chunk(
+        YonoteChunk(
             chunk_id="docs",
             text="Положение форума доступно в личном кабинете.",
             metadata={"forum_normalized": "Утро", "intent_name": "Документы мероприятия"},
@@ -5283,8 +5398,8 @@ async def test_rerank_uses_batched_group_api_when_available(
     )
     reranker = BatchQuestionAwareReranker()
     chunks = [
-        Chunk(chunk_id="docs", text="Паспорт.", metadata={"intent_name": "Документы"}),
-        Chunk(chunk_id="age", text="От 14 до 35 лет.", metadata={"intent_name": "Возраст"}),
+        YonoteChunk(chunk_id="docs", text="Паспорт.", metadata={"intent_name": "Документы"}),
+        YonoteChunk(chunk_id="age", text="От 14 до 35 лет.", metadata={"intent_name": "Возраст"}),
     ]
 
     await rerank(
@@ -5465,7 +5580,7 @@ async def test_generate_synthesizes_multi_aspect_answer_from_sources(
 
 
 @pytest.mark.asyncio
-async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citation(
+async def test_generate_escalates_when_llm_omits_multi_aspect_citation_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -5479,7 +5594,7 @@ async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citati
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "transfer",
             "intent_name": "Трансфер до места проведения мероприятия",
         },
@@ -5492,7 +5607,7 @@ async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citati
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "pitanie_i_pite",
             "intent_name": "Питание и питье",
         },
@@ -5525,15 +5640,15 @@ async def test_generate_falls_back_to_sources_when_llm_omits_multi_aspect_citati
         }
     )
 
-    assert llm.calls == 1
-    assert result["generator_model"] == "source_chunk"
-    assert result["cited_sources"] == ["transfer", "food"]
-    assert "Трансфер до площадки фестиваля" in result["generated_response"]
-    assert "питание и питьевая вода" in result["generated_response"]
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_response_contract_failed"
+    assert result["generated_response"] == ""
+    assert result["cited_sources"] == []
 
 
 @pytest.mark.asyncio
-async def test_generate_falls_back_to_sources_when_llm_claims_insufficient_sources(
+async def test_generate_escalates_when_llm_claims_insufficient_sources_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -5545,7 +5660,7 @@ async def test_generate_falls_back_to_sources_when_llm_claims_insufficient_sourc
         text="Регистрация на форум закрыта, даты объявят позже.",
         metadata={
             "category": "форумы",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "podacha_zayavki_na_proekt",
         },
         score=0.8,
@@ -5556,7 +5671,7 @@ async def test_generate_falls_back_to_sources_when_llm_claims_insufficient_sourc
         text="Если не можешь поехать после подтверждения, сообщи нам.",
         metadata={
             "category": "форумы",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "otkaz_ot_uchastiya",
         },
         score=0.8,
@@ -5584,9 +5699,11 @@ async def test_generate_falls_back_to_sources_when_llm_claims_insufficient_sourc
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
-    assert result["cited_sources"] == ["application", "decline"]
-    assert "Передаю обращение" not in result["generated_response"]
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_response_contract_failed"
+    assert result["generated_response"] == ""
+    assert result["cited_sources"] == []
 
 
 @pytest.mark.asyncio
@@ -5715,7 +5832,7 @@ async def test_generate_uses_masked_message_when_analysis_has_no_questions(
         text="Официальный ответ из базы.",
         metadata={
             "chunk_id": "official_exact",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "intent_examples": ["Как создать кабинет организации?"],
         },
         score=1.0,
@@ -5750,7 +5867,7 @@ async def test_generate_trusts_high_confidence_official_source_for_single_questi
         text="Официальный ответ из утверждённой базы.",
         metadata={
             "chunk_id": "official_high_confidence",
-            "source_type": "xlsx",
+            "source_type": "yonote",
         },
         score=1.0,
         reranker_score=0.7,
@@ -5786,7 +5903,7 @@ async def test_generate_trusts_high_confidence_official_source_before_category_s
         text="Официальный fallback-ответ из Excel.",
         metadata={
             "chunk_id": "official_fallback",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "общее",
         },
         score=1.0,
@@ -5797,7 +5914,7 @@ async def test_generate_trusts_high_confidence_official_source_before_category_s
         text="Общий ответ по платформе.",
         metadata={
             "chunk_id": "platform_generic",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "платформа_фгаис",
         },
         score=0.2,
@@ -5840,7 +5957,7 @@ async def test_generate_uses_answer_bank_intent_examples_for_source_coverage(
         text="Свяжитесь с куратором грантового конкурса.",
         metadata={
             "chunk_id": "ticket_answer_bank_001",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": ["Как получить консультацию по отчетности?"],
         },
         score=0.9,
@@ -5886,7 +6003,7 @@ async def test_generate_uses_original_query_for_answer_bank_source_coverage(
         metadata={
             "chunk_id": "ticket_answer_bank_expenses",
             "category": "гранты",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": ["Вопрос по расходам"],
         },
         score=0.7,
@@ -5936,7 +6053,7 @@ async def test_generate_prefers_exact_intent_example_source(
         metadata={
             "chunk_id": "ticket_answer_bank_rejection",
             "category": "гранты",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": [
                 "Прошу указать причину отклонения заявки на грантовый конкурс."
             ],
@@ -5990,6 +6107,7 @@ async def test_generate_prefers_specific_topic_source_over_same_forum_neighbor(
             "topic": "transfer_to_venue",
             "intent_name": "Transfer to venue",
             "source_category": "Forum A",
+            "intent_examples": ["How do I get transfer to the venue?"],
         },
         score=0.7,
         reranker_score=0.7,
@@ -6006,6 +6124,7 @@ async def test_generate_prefers_specific_topic_source_over_same_forum_neighbor(
                         text="How do I get transfer to the venue?",
                         category="forum",
                         forum_normalized="Forum A",
+                        topic="transfer_to_venue",
                     )
                 ],
             ),
@@ -6052,6 +6171,7 @@ async def test_generate_prefers_specific_source_over_generic_fallback(
             "intent_name": "Transfer to venue",
             "source_category": "Forum A",
             "is_generic": False,
+            "intent_examples": ["How do I get transfer to the venue?"],
         },
         score=0.6,
         reranker_score=0.7,
@@ -6068,6 +6188,7 @@ async def test_generate_prefers_specific_source_over_generic_fallback(
                         text="How do I get transfer to the venue?",
                         category="forum",
                         forum_normalized="Forum A",
+                        topic="transfer_to_venue",
                     )
                 ],
             ),
@@ -6138,7 +6259,7 @@ async def test_generate_prefers_forum_category_intersection_source(
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_same_forum_answer_bank_despite_category_mismatch(
+async def test_generate_keeps_same_category_yonote_scope_over_legacy_cross_category_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -6150,7 +6271,7 @@ async def test_generate_uses_same_forum_answer_bank_despite_category_mismatch(
         text="Forum application status answer.",
         metadata={
             "chunk_id": "forum_status",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "status",
@@ -6164,9 +6285,10 @@ async def test_generate_uses_same_forum_answer_bank_despite_category_mismatch(
         text="Forum platform account answer.",
         metadata={
             "chunk_id": "forum_platform_exact",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "платформа_фгаис",
+            "topic": "platform_account_update",
             "intent_examples": ["I cannot update my platform account for Forum A"],
         },
         score=0.6,
@@ -6184,6 +6306,7 @@ async def test_generate_uses_same_forum_answer_bank_despite_category_mismatch(
                         text="I cannot update my platform account for Forum A",
                         category="форумы",
                         forum_normalized="Forum A",
+                        topic="platform_account_update",
                     )
                 ],
             ),
@@ -6194,11 +6317,11 @@ async def test_generate_uses_same_forum_answer_bank_despite_category_mismatch(
     )
 
     assert result["generator_model"] == "source_chunk"
-    assert result["cited_sources"] == ["forum_platform_exact"]
+    assert result["cited_sources"] == ["forum_status"]
 
 
 @pytest.mark.asyncio
-async def test_generate_trusts_top_same_forum_compatible_answer_bank(
+async def test_generate_keeps_primary_forum_yonote_scope_over_legacy_compatible_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -6210,10 +6333,12 @@ async def test_generate_trusts_top_same_forum_compatible_answer_bank(
         text="Forum-specific curator contact answer.",
         metadata={
             "chunk_id": "forum_navigation_ticket",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "навигация",
+            "topic": "curator_contact",
             "is_generic": False,
+            "intent_examples": ["Need curator contact for Forum A"],
         },
         score=0.8,
         reranker_score=0.9,
@@ -6223,7 +6348,7 @@ async def test_generate_trusts_top_same_forum_compatible_answer_bank(
         text="Forum application status answer.",
         metadata={
             "chunk_id": "forum_status",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "status",
@@ -6243,6 +6368,7 @@ async def test_generate_trusts_top_same_forum_compatible_answer_bank(
                         text="Need curator contact for Forum A",
                         category="форумы",
                         forum_normalized="Forum A",
+                        topic="curator_contact",
                     )
                 ],
             ),
@@ -6253,7 +6379,7 @@ async def test_generate_trusts_top_same_forum_compatible_answer_bank(
     )
 
     assert result["generator_model"] == "source_chunk"
-    assert result["cited_sources"] == ["forum_navigation_ticket"]
+    assert result["cited_sources"] == ["forum_status"]
 
 
 @pytest.mark.asyncio
@@ -6269,7 +6395,7 @@ async def test_generate_does_not_use_same_forum_grant_answer_bank_for_forum_ques
         text="Grant application answer for the same forum.",
         metadata={
             "chunk_id": "forum_grant_ticket",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "гранты",
             "intent_examples": ["How do I submit a grant application for Forum A?"],
@@ -6282,7 +6408,7 @@ async def test_generate_does_not_use_same_forum_grant_answer_bank_for_forum_ques
         text="Official Forum A programme answer.",
         metadata={
             "chunk_id": "forum_programme",
-            "source_type": "docx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "programme",
@@ -6317,7 +6443,7 @@ async def test_generate_does_not_use_same_forum_grant_answer_bank_for_forum_ques
 
 
 @pytest.mark.asyncio
-async def test_generate_trusts_exact_top_answer_bank_with_safe_category_mismatch(
+async def test_generate_keeps_forum_yonote_scope_over_legacy_grant_category_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -6329,7 +6455,7 @@ async def test_generate_trusts_exact_top_answer_bank_with_safe_category_mismatch
         text="Forum-specific account recovery answer.",
         metadata={
             "chunk_id": "forum_grant_technical_ticket",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "гранты",
             "topic": "доступ_и_техническая_ошибка",
@@ -6343,7 +6469,7 @@ async def test_generate_trusts_exact_top_answer_bank_with_safe_category_mismatch
         text="Official reserve-list answer.",
         metadata={
             "chunk_id": "forum_reserve_list",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "reserve_list",
@@ -6363,6 +6489,7 @@ async def test_generate_trusts_exact_top_answer_bank_with_safe_category_mismatch
                         text="I cannot access my Forum A application",
                         category="форумы",
                         forum_normalized="Forum A",
+                        topic="доступ_и_техническая_ошибка",
                     )
                 ],
             ),
@@ -6373,7 +6500,7 @@ async def test_generate_trusts_exact_top_answer_bank_with_safe_category_mismatch
     )
 
     assert result["generator_model"] == "source_chunk"
-    assert result["cited_sources"] == ["forum_grant_technical_ticket"]
+    assert result["cited_sources"] == ["forum_reserve_list"]
 
 
 @pytest.mark.asyncio
@@ -6389,7 +6516,7 @@ async def test_generate_does_not_trust_offscope_top_official_source(
         text="Requirements for another forum.",
         metadata={
             "chunk_id": "other_forum_requirements",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Other Forum",
             "category": "forums",
             "topic": "requirements",
@@ -6402,7 +6529,7 @@ async def test_generate_does_not_trust_offscope_top_official_source(
         text="Age requirements for Target Forum.",
         metadata={
             "chunk_id": "target_forum_age",
-            "source_type": "docx",
+            "source_type": "yonote",
             "forum_normalized": "Target Forum",
             "category": "forums",
             "topic": "age_requirements",
@@ -6449,7 +6576,7 @@ async def test_generate_does_not_trust_offscope_exact_answer_bank_source(
         text="Answer bank source for another forum.",
         metadata={
             "chunk_id": "other_forum_ticket",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "forum_normalized": "Other Forum",
             "category": "forums",
             "intent_examples": ["How do I get an invitation letter?"],
@@ -6462,7 +6589,7 @@ async def test_generate_does_not_trust_offscope_exact_answer_bank_source(
         text="Invitation letter source for Target Forum.",
         metadata={
             "chunk_id": "target_forum_letter",
-            "source_type": "docx",
+            "source_type": "yonote",
             "forum_normalized": "Target Forum",
             "category": "forums",
             "topic": "invitation_letter",
@@ -6509,23 +6636,23 @@ async def test_rerank_promotes_safe_answer_bank_topic_across_category(
             ml_unload_reranker_after_use=False,
         ),
     )
-    forum_neighbor = Chunk(
+    forum_neighbor = YonoteChunk(
         chunk_id="forum_registration",
         text="Forum registration answer.",
         metadata={
             "chunk_id": "forum_registration",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "category": "форумы",
             "topic": "регистрация_и_заявка",
         },
         score=0.9,
     )
-    operator_answer = Chunk(
+    operator_answer = YonoteChunk(
         chunk_id="operator_contact",
         text="Operator contact answer.",
         metadata={
             "chunk_id": "operator_contact",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "category": "навигация",
             "topic": "контакты_и_оператор",
         },
@@ -6560,24 +6687,24 @@ async def test_rerank_prefers_specific_answer_bank_topic_over_misc(
             ml_unload_reranker_after_use=False,
         ),
     )
-    misc = Chunk(
+    misc = YonoteChunk(
         chunk_id="misc_answer",
         text="Misc answer.",
         metadata={
             "chunk_id": "misc_answer",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "category": "форумы",
             "topic": "прочее",
             "intent_examples": ["Вопрос по премии Время молодых"],
         },
         score=1.0,
     )
-    specific = Chunk(
+    specific = YonoteChunk(
         chunk_id="specific_answer",
         text="Specific registration answer.",
         metadata={
             "chunk_id": "specific_answer",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "category": "платформа_фгаис",
             "topic": "регистрация_и_заявка",
             "intent_examples": ["Вопрос по премии Время молодых"],
@@ -6620,12 +6747,12 @@ async def test_rerank_does_not_protect_exact_match_from_other_forum(
             ml_unload_reranker_after_use=False,
         ),
     )
-    off_forum_exact = Chunk(
+    off_forum_exact = YonoteChunk(
         chunk_id="other_forum_arrival",
         text="Other forum arrival answer.",
         metadata={
             "chunk_id": "other_forum_arrival",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Other Forum",
             "category": "форумы",
             "topic": "vremya_zaezda_i_vyezda",
@@ -6633,12 +6760,12 @@ async def test_rerank_does_not_protect_exact_match_from_other_forum(
         },
         score=1.0,
     )
-    target_forum_source = Chunk(
+    target_forum_source = YonoteChunk(
         chunk_id="target_forum_arrival",
         text="Target forum arrival answer.",
         metadata={
             "chunk_id": "target_forum_arrival",
-            "source_type": "docx",
+            "source_type": "yonote",
             "forum_normalized": "Target Forum",
             "category": "форумы",
             "topic": "vremya_zaezda_i_vyezda",
@@ -6681,7 +6808,7 @@ async def test_rerank_promotes_specific_technical_fallback_over_generic_error(
             ml_unload_reranker_after_use=False,
         ),
     )
-    generic_error = Chunk(
+    generic_error = YonoteChunk(
         chunk_id="generic_error",
         text="Generic technical error answer.",
         metadata={
@@ -6693,7 +6820,7 @@ async def test_rerank_promotes_specific_technical_fallback_over_generic_error(
         },
         score=1.0,
     )
-    language_settings = Chunk(
+    language_settings = YonoteChunk(
         chunk_id="language_settings",
         text="Language settings answer.",
         metadata={
@@ -6731,7 +6858,7 @@ async def test_generate_prefers_transfer_topic_over_travel_payment_neighbor(
         text="Travel payment answer.",
         metadata={
             "chunk_id": "travel_payment",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "oplata_proezda",
@@ -6745,7 +6872,7 @@ async def test_generate_prefers_transfer_topic_over_travel_payment_neighbor(
         text="Transfer answer.",
         metadata={
             "chunk_id": "transfer",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "transfer_do_mesta_provedeniya_meropriyatiya",
@@ -6792,7 +6919,7 @@ async def test_generate_prefers_specific_answer_bank_topic_over_misc(
         text="Misc answer.",
         metadata={
             "chunk_id": "misc_answer",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "category": "форумы",
             "topic": "прочее",
             "intent_examples": ["Вопрос по премии Время молодых"],
@@ -6805,7 +6932,7 @@ async def test_generate_prefers_specific_answer_bank_topic_over_misc(
         text="Specific registration answer.",
         metadata={
             "chunk_id": "specific_answer",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "category": "платформа_фгаис",
             "topic": "регистрация_и_заявка",
             "intent_examples": ["Вопрос по премии Время молодых"],
@@ -6905,7 +7032,7 @@ async def test_generate_prefers_arrival_departure_over_general_dates(
         text="General event dates answer.",
         metadata={
             "chunk_id": "general_dates",
-            "source_type": "docx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "mesto_i_daty_provedeniya_meropriyatiya",
@@ -6919,7 +7046,7 @@ async def test_generate_prefers_arrival_departure_over_general_dates(
         text="Arrival and departure answer.",
         metadata={
             "chunk_id": "arrival_departure",
-            "source_type": "docx",
+            "source_type": "yonote",
             "forum_normalized": "Forum A",
             "category": "форумы",
             "topic": "vremya_zaezda_i_vyezda",
@@ -6967,7 +7094,9 @@ async def test_generate_trusts_top_answer_bank_source(
         metadata={
             "chunk_id": "ticket_answer_bank_application",
             "category": "гранты",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
+            "topic": "podat_zayavku_na_uchastie",
+            "intent_examples": ["Как подать заявку?"],
         },
         score=0.7,
         reranker_score=0.7,
@@ -6983,7 +7112,16 @@ async def test_generate_trusts_top_answer_bank_source(
     result = await generate(
         {
             "message_masked": "Как подать заявку?",
-            "analysis": QueryAnalysis(category="гранты"),
+            "analysis": QueryAnalysis(
+                category="гранты",
+                questions=[
+                    Question(
+                        text="Как подать заявку?",
+                        category="гранты",
+                        topic="podat_zayavku_na_uchastie",
+                    )
+                ],
+            ),
             "reranked_chunks": [answer_bank_chunk, broad_chunk],
             "max_confidence": 0.95,
             "llm_client": FailingLLM(),
@@ -7011,7 +7149,7 @@ async def test_generate_prefers_original_exact_answer_bank_over_neighbor(
         metadata={
             "chunk_id": "ticket_answer_bank_neighbor",
             "category": "grants",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": ["Where is my application status?"],
         },
         score=0.99,
@@ -7023,7 +7161,7 @@ async def test_generate_prefers_original_exact_answer_bank_over_neighbor(
         metadata={
             "chunk_id": "ticket_answer_bank_exact",
             "category": "grants",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": ["Why was my grant application rejected?"],
         },
         score=0.8,
@@ -7058,7 +7196,7 @@ async def test_generate_trusts_exact_top_answer_bank_before_category_scope(
         metadata={
             "chunk_id": "ticket_answer_bank_profile",
             "category": "гранты",
-            "source_type": "ticket_answer_bank",
+            "source_type": "yonote",
             "intent_examples": ["Не могу обновить данные профиля для гранта"],
         },
         score=0.8,
@@ -7100,7 +7238,10 @@ async def test_generate_does_not_return_source_chunk_when_only_metadata_matches(
     chunk = ScoredChunk(
         chunk_id="docs",
         text="Итоговая программа будет направлена в чат участников.",
-        metadata={"intent_name": "Документы мероприятия"},
+        metadata={
+            "source_type": "legacy_unknown",
+            "intent_name": "Документы мероприятия",
+        },
         score=1.0,
         reranker_score=0.95,
     )
@@ -7120,7 +7261,7 @@ async def test_generate_does_not_return_source_chunk_when_only_metadata_matches(
 
     assert llm.calls == 0
     assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "insufficient_sources"
+    assert result["escalation_reason"] == "no_sources_for_generation"
     assert result["generator_model"] == "source_only"
 
 
@@ -7137,7 +7278,7 @@ async def test_generate_covers_compatible_fallback_metadata_question(
         text="Росмолодёжь поддерживает молодёжные инициативы.",
         metadata={
             "chunk_id": "what_is_rosmol",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "source_category": "fallback",
             "category": "платформа_фгаис",
             "topic": "chto_takoe_rosmolodezh",
@@ -7191,9 +7332,8 @@ async def test_generate_uses_max_for_single_covered_complex_question(
         }
     )
 
-    assert llm.calls == 1
-    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
-    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert llm.calls == 0
+    assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["travel"]
 
 
@@ -7209,7 +7349,7 @@ async def test_generate_uses_source_chunk_for_single_official_complex_forum_ques
         chunk_id="ivolga_memo",
         text="Список всего необходимого будет перечислен в памятке участника форума.",
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "форумы",
             "forum_normalized": "Иволга",
             "topic": "pamyatka_uchastnika_foruma",
@@ -7251,7 +7391,7 @@ async def test_generate_treats_event_documents_as_program_source(
         chunk_id="ivolga_program_document",
         text="The forum program is published in the official participant channel every day.",
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "forums",
             "forum_normalized": "Ivolga",
             "topic": "dokumenty_meropriyatiya",
@@ -7303,7 +7443,7 @@ async def test_generate_accepts_travel_source_when_it_explicitly_covers_housing(
             "by organizers."
         ),
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "forums",
             "forum_normalized": "Ivolga",
             "topic": "oplata_proezda",
@@ -7422,7 +7562,7 @@ async def test_generate_exact_documents_beat_fresh_equivalent_program(
         chunk_id="exact_documents",
         text="Документы форума доступны в карточке мероприятия.",
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "форумы",
             "forum_normalized": "Машук",
             "topic": "dokumenty_meropriyatiya",
@@ -7472,7 +7612,7 @@ async def test_generate_uses_source_chunk_for_single_official_complex_topic_matc
             "сторона или участник самостоятельно."
         ),
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "форумы",
             "forum_normalized": "Студенческий спецназ",
             "topic": "oplata_proezda",
@@ -7519,7 +7659,7 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
             chunk_id="registration",
             text="Регистрация проходит через чат-бот MAX.",
             metadata={
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "category": "форумы",
                 "forum_normalized": "День молодёжи",
                 "topic": "registraciya_na_meropriyatie",
@@ -7531,7 +7671,7 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
             chunk_id="children",
             text="Дети до 13 лет могут посетить событие с родителями.",
             metadata={
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "category": "форумы",
                 "forum_normalized": "День молодёжи",
                 "topic": "poseschenie_festivalya_s_detmi",
@@ -7543,10 +7683,11 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
             chunk_id="program",
             text="Программа появится в билете после регистрации ближе к дате события.",
             metadata={
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "category": "форумы",
                 "forum_normalized": "День молодёжи",
                 "topic": "programma_i_artisty",
+                "intent_examples": ["Где посмотреть программу?"],
             },
             score=1.0,
             reranker_score=0.7,
@@ -7555,7 +7696,7 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
             chunk_id="date",
             text="27 июня 2026 года по всей стране пройдёт День молодёжи.",
             metadata={
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "category": "форумы",
                 "forum_normalized": "День молодёжи",
                 "topic": "sut_festivalya_i_data",
@@ -7564,6 +7705,12 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
             reranker_score=0.7,
         ),
     ]
+    llm = CapturingLLM(
+        "Регистрация проходит через MAX. [src:registration]\n\n"
+        "Дети до 13 лет могут прийти с родителями. [src:children]\n\n"
+        "Программа появится ближе к событию. [src:program]\n\n"
+        "День молодёжи пройдёт 27 июня 2026 года. [src:date]"
+    )
 
     result = await generate(
         {
@@ -7604,13 +7751,13 @@ async def test_generate_treats_topic_alias_chunks_as_complex_source_coverage(
                 "День молодёжи: как зарегистрироваться, когда проходит событие, "
                 "где посмотреть программу и можно ли прийти с ребёнком?"
             ),
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["registration", "children", "program", "date"]
-    assert "Передаю обращение" not in result["generated_response"]
 
 
 @pytest.mark.asyncio
@@ -7629,7 +7776,7 @@ async def test_generate_covers_documents_and_location_for_forum_question(
                 "Возьми паспорт, личные документы и справку от врача."
             ),
             metadata={
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "category": "форумы",
                 "forum_normalized": "Российский Север",
                 "topic": "dokumenty_meropriyatiya",
@@ -7644,7 +7791,7 @@ async def test_generate_covers_documents_and_location_for_forum_question(
                 "Ямало-Ненецкий автономный округ, с 17 по 20 ноября 2026 года."
             ),
             metadata={
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "category": "форумы",
                 "forum_normalized": "Российский Север",
                 "topic": "mesto_i_daty_provedeniya_meropriyatiya",
@@ -7653,6 +7800,12 @@ async def test_generate_covers_documents_and_location_for_forum_question(
             reranker_score=0.7,
         ),
     ]
+    llm = CapturingLLM(
+        "Возьми паспорт, личные документы и справку от врача. "
+        "[src:russian_north_documents]\n\n"
+        "Форум пройдёт в Салехарде с 17 по 20 ноября 2026 года. "
+        "[src:russian_north_dates_place]"
+    )
 
     result = await generate(
         {
@@ -7681,17 +7834,17 @@ async def test_generate_covers_documents_and_location_for_forum_question(
                 "Российский Север: какие документы нужны участнику "
                 "и где будет проходить форум?"
             ),
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == [
         "russian_north_documents",
         "russian_north_dates_place",
     ]
     assert "Салехард" in result["generated_response"]
-    assert "Передаю обращение" not in result["generated_response"]
 
 
 @pytest.mark.asyncio
@@ -7709,7 +7862,7 @@ async def test_generate_prefers_event_overview_source_for_forum_summary_question
             "Главная тема — креативные индустрии и сохранение культурного наследия."
         ),
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "форумы",
             "forum_normalized": "Российский Север",
             "topic": "o_meropriyatii",
@@ -7722,7 +7875,7 @@ async def test_generate_prefers_event_overview_source_for_forum_summary_question
         chunk_id="russian_north_programme",
         text="Подробная сетка расписания со всеми лекциями откроется за день до начала форума.",
         metadata={
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "category": "форумы",
             "forum_normalized": "Российский Север",
             "topic": "programma_foruma",
@@ -7806,14 +7959,14 @@ async def test_generate_prioritizes_exact_fallback_sources(
     competing_chunk = ScoredChunk(
         chunk_id="competing",
         text="Мы всегда рады получить обратную связь по мероприятию.",
-        metadata={"source_type": "xlsx", "category": category, "topic": "generic"},
+        metadata={"source_type": "yonote", "category": category, "topic": "generic"},
         score=1.0,
         reranker_score=0.95,
     )
     expected_chunk = ScoredChunk(
         chunk_id=expected_chunk_id,
         text=answer,
-        metadata={"source_type": "xlsx", "category": category, "topic": topic},
+        metadata={"source_type": "yonote", "category": category, "topic": topic},
         score=0.5,
         reranker_score=0.5,
     )
@@ -8033,7 +8186,7 @@ async def test_generate_prefers_grant_project_change_over_grant_terms(
             "source_category": "Гранты для физических лиц",
             "intent_name": "Внести изменения в проект",
             "topic": "vnesti_izmeneniya_v_proekt",
-            "source_type": "xlsx",
+            "source_type": "yonote",
         },
         score=1.0,
         reranker_score=0.7,
@@ -8049,7 +8202,7 @@ async def test_generate_prefers_grant_project_change_over_grant_terms(
             "source_category": "Гранты для физических лиц",
             "intent_name": "Условия и сроки участия",
             "topic": "usloviya_i_sroki_uchastiya",
-            "source_type": "xlsx",
+            "source_type": "yonote",
         },
         score=0.9,
         reranker_score=0.7,
@@ -8085,7 +8238,7 @@ async def test_generate_uses_source_chunk_for_complex_single_official_source(
     grant_agreement = ScoredChunk(
         chunk_id="grant_agreement",
         text="По вопросам грантового соглашения нужно обратиться к куратору конкурса.",
-        metadata={"category": "гранты", "source_type": "xlsx"},
+        metadata={"category": "гранты", "source_type": "yonote"},
         score=0.9,
         reranker_score=0.85,
     )
@@ -8363,6 +8516,7 @@ async def test_generate_prefers_forum_invitation_letter(
             "forum_normalized": "Иволга",
             "intent_name": "Письмо-вызов",
             "topic": "pismo_vyzov",
+            "intent_examples": ["Иволга Письмо-вызов"],
         },
         score=0.7,
         reranker_score=0.72,
@@ -8374,7 +8528,13 @@ async def test_generate_prefers_forum_invitation_letter(
                 complexity=Complexity.SIMPLE,
                 category="форумы",
                 forum_normalized="Иволга",
-                questions=[Question(text="Иволга Письмо-вызов", category="форумы")],
+                questions=[
+                    Question(
+                        text="Иволга Письмо-вызов",
+                        category="форумы",
+                        topic="pismo_vyzov",
+                    )
+                ],
             ),
             "message_masked": "Иволга Письмо-вызов",
             "reranked_chunks": [transfer, invitation],
@@ -8597,7 +8757,7 @@ async def test_generate_repairs_known_source_ref_transliteration_typo(
         metadata={
             "category": "форумы",
             "forum_normalized": "Амур",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "podacha_zayavki_na_proekt",
         },
         score=0.9,
@@ -8638,7 +8798,7 @@ async def test_generate_repairs_known_source_ref_transliteration_typo(
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
+async def test_generate_synthesizes_official_forum_multi_aspect_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -8653,7 +8813,7 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "docx",
+                "source_type": "yonote",
                 "intent_name": "registraciya",
                 "topic": "sroki_registracii_i_rezultaty_otbora",
             },
@@ -8666,7 +8826,7 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "docx",
+                "source_type": "yonote",
                 "intent_name": "vozrast",
                 "topic": "vozrastnye_ogranicheniya",
             },
@@ -8679,7 +8839,7 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "docx",
+                "source_type": "yonote",
                 "intent_name": "oplata_proezda_i_prozhivaniya",
                 "topic": "oplata_proezda_i_prozhivaniya",
             },
@@ -8687,7 +8847,11 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
             reranker_score=0.8,
         ),
     ]
-    llm = FailingLLM()
+    llm = CapturingLLM(
+        "Регистрация открыта до 11 июля включительно. [src:registration]\n\n"
+        "Возрастная маркировка — 0+. [src:age]\n\n"
+        "Победителям оплачивают проезд, питание и проживание. [src:travel]"
+    )
 
     result = await generate(
         {
@@ -8710,15 +8874,16 @@ async def test_generate_uses_extractive_answer_for_official_forum_multi_aspect(
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["registration", "age", "travel"]
-    assert "Регистрация на фестивальный день открыта" in result["generated_response"]
+    assert "Регистрация открыта до 11 июля" in result["generated_response"]
     assert "Возрастная маркировка" in result["generated_response"]
     assert "Победителям оплачивают проезд" in result["generated_response"]
 
 
 @pytest.mark.asyncio
-async def test_generate_skips_llm_for_exact_official_topic_coverage(
+async def test_generate_synthesizes_exact_official_multi_topic_coverage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -8733,8 +8898,9 @@ async def test_generate_skips_llm_for_exact_official_topic_coverage(
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "registraciya_na_meropriyatie",
+                "intent_examples": ["Как зарегистрироваться?"],
             },
             score=0.9,
             reranker_score=0.8,
@@ -8745,13 +8911,18 @@ async def test_generate_skips_llm_for_exact_official_topic_coverage(
             metadata={
                 "forum_normalized": forum,
                 "category": "форумы",
-                "source_type": "xlsx",
+                "source_type": "yonote",
                 "topic": "programma_i_artisty",
+                "intent_examples": ["Где посмотреть программу?"],
             },
             score=0.9,
             reranker_score=0.8,
         ),
     ]
+    llm = CapturingLLM(
+        "Зарегистрируйся через чат-бот в MAX. [src:registration]\n\n"
+        "Программа будет опубликована ближе к событию. [src:program]"
+    )
 
     result = await generate(
         {
@@ -8780,11 +8951,12 @@ async def test_generate_skips_llm_for_exact_official_topic_coverage(
             ),
             "reranked_chunks": chunks,
             "max_confidence": 0.8,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["registration", "program"]
     assert "MAX" in result["generated_response"]
     assert "Программа" in result["generated_response"]
@@ -8805,7 +8977,7 @@ async def test_generate_selects_source_for_each_multi_aspect_question(
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "podacha_zayavki_na_proekt",
             "intent_name": "Подача заявки на проект",
             "intent_examples": ["Как подать заявку на форум?"],
@@ -8819,12 +8991,16 @@ async def test_generate_selects_source_for_each_multi_aspect_question(
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "oplata_proezda",
             "intent_name": "Оплата проезда",
         },
         score=0.72,
         reranker_score=0.7,
+    )
+    llm = CapturingLLM(
+        "Регистрация на форум «Амур» закрыта. [src:amur_application]\n\n"
+        "Обычно оплата проезда — за счёт направляющей стороны. [src:amur_travel]"
     )
 
     result = await generate(
@@ -8841,13 +9017,14 @@ async def test_generate_selects_source_for_each_multi_aspect_question(
             "message_masked": "Амур: как подать заявку, оплачивается ли проезд?",
             "reranked_chunks": [application, travel],
             "max_confidence": 0.95,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["amur_application", "amur_travel"]
-    assert "регистрация на форум «Амур» закрыта" in result["generated_response"]
+    assert "Регистрация на форум «Амур» закрыта" in result["generated_response"]
     assert "оплата проезда" in result["generated_response"]
 
 
@@ -8870,7 +9047,7 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "podacha_zayavki_na_proekt",
             "intent_name": "Подача заявки на проект",
         },
@@ -8886,7 +9063,7 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "rezultaty_rm",
             "intent_name": "Результаты РМ",
         },
@@ -8902,7 +9079,7 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "daty_nachala_meropriyatiya",
             "intent_name": "Даты начала мероприятия",
         },
@@ -8940,6 +9117,10 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
             0.95,
         )
     ] == ["amur_application"]
+    llm = CapturingLLM(
+        "Регистрация закрыта; сроки результатов объявят позднее. "
+        "[src:amur_application]"
+    )
 
     result = await generate(
         {
@@ -8947,13 +9128,14 @@ async def test_generate_skips_redundant_source_chunk_when_selected_chunk_covers_
             "message_masked": "Амур: как подать заявку и когда будут известны сроки отбора?",
             "reranked_chunks": [application, results, dates],
             "max_confidence": 0.95,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["amur_application"]
-    assert "результатах отбора" in result["generated_response"]
+    assert "сроки результатов" in result["generated_response"]
     assert "amur_results" not in result["generated_response"]
     assert "amur_dates" not in result["generated_response"]
 
@@ -8973,7 +9155,7 @@ async def test_generate_selects_application_and_decline_sources(
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "podacha_zayavki_na_proekt",
         },
         score=0.9,
@@ -8985,7 +9167,7 @@ async def test_generate_selects_application_and_decline_sources(
         metadata={
             "category": "форумы",
             "forum_normalized": forum,
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "otkaz_ot_uchastiya",
         },
         score=1.0,
@@ -9047,7 +9229,7 @@ def test_source_chunk_response_deduplicates_repeated_paragraphs_and_links() -> N
                 "❗️ Сейчас регистрация на мероприятие закрыта.\n"
                 "Пожалуйста, ожидай обновлений на платформе https://events.myrosmol.ru/"
             ),
-            metadata={"source_type": "xlsx"},
+            metadata={"source_type": "yonote"},
             score=0.8,
             reranker_score=0.8,
         ),
@@ -9058,7 +9240,7 @@ def test_source_chunk_response_deduplicates_repeated_paragraphs_and_links() -> N
                 "❗️ Сейчас регистрация на мероприятие закрыта.\n"
                 "Пожалуйста, ожидай обновлений на платформе https://events.myrosmol.ru/"
             ),
-            metadata={"source_type": "xlsx"},
+            metadata={"source_type": "yonote"},
             score=0.8,
             reranker_score=0.8,
         ),
@@ -9087,7 +9269,7 @@ async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
         metadata={
             "category": "форумы",
             "forum_normalized": "Амур",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "oplata_proezda",
             "intent_name": "Оплата проезда",
         },
@@ -9103,7 +9285,7 @@ async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
         metadata={
             "category": "форумы",
             "forum_normalized": "Амур",
-            "source_type": "xlsx",
+            "source_type": "yonote",
             "topic": "otkaz_ot_uchastiya",
             "intent_name": "Отказ от участия",
             "intent_examples": [
@@ -9114,6 +9296,10 @@ async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
         },
         score=0.72,
         reranker_score=0.7,
+    )
+    llm = CapturingLLM(
+        "Если уже подтвердил участие, но не можешь поехать, сообщи нам. "
+        "[src:amur_decline]"
     )
 
     result = await generate(
@@ -9132,14 +9318,15 @@ async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
             ),
             "reranked_chunks": [travel, decline],
             "max_confidence": 0.95,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["amur_decline"]
-    assert "отказаться от участия" in result["generated_response"]
-    assert "Проезд участников" not in result["generated_response"]
+    assert "не можешь поехать" in result["generated_response"]
+    assert "amur_travel" not in llm.kwargs[0]["user"]
 
 
 @pytest.mark.asyncio
@@ -9249,7 +9436,7 @@ async def test_generate_escalates_for_uncovered_complex_question(
     chunk = ScoredChunk(
         chunk_id="ctx_1",
         text="Исходный ответ из базы.",
-        metadata={"chunk_id": "ctx_1"},
+        metadata={"chunk_id": "ctx_1", "source_type": "legacy_unknown"},
         score=0.9,
         reranker_score=0.91,
     )
@@ -9268,7 +9455,7 @@ async def test_generate_escalates_for_uncovered_complex_question(
 
     assert llm.calls == 0
     assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "insufficient_sources"
+    assert result["escalation_reason"] == "no_sources_for_generation"
     assert result["generator_model"] == "source_only"
 
 

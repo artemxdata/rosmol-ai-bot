@@ -3,7 +3,15 @@ from __future__ import annotations
 import pytest
 
 from src.graph.nodes.verify import _allows_partial_source_response, verify
-from src.models import QueryAnalysis, Question, ScoredChunk
+from src.models import QueryAnalysis, Question
+from src.models import ScoredChunk as ModelScoredChunk
+
+
+def ScoredChunk(**kwargs) -> ModelScoredChunk:
+    """Build a factual verifier fixture with the active Yonote provenance."""
+    metadata = dict(kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("source_type", "yonote")
+    return ModelScoredChunk(metadata=metadata, **kwargs)
 
 
 class JudgeLLM:
@@ -350,7 +358,7 @@ async def test_verifier_skips_judge_for_low_confidence_official_technical_fallba
                     metadata={
                         "category": "техподдержка",
                         "topic": "tehnicheskaya_oshibka",
-                        "source_type": "xlsx",
+                        "source_type": "yonote",
                         "intent_examples": [
                             "Не получается выбрать направление",
                             "При подаче заявки возникает ошибка",
@@ -403,7 +411,7 @@ async def test_verifier_escalates_unanchored_forum_call_letter_source() -> None:
 
 
 @pytest.mark.asyncio
-async def test_verifier_uses_answer_bank_intent_examples_for_coverage() -> None:
+async def test_verifier_uses_yonote_intent_examples_for_coverage() -> None:
     result = await verify(
         {
             "message_masked": "Как получить консультацию по отчетности?",
@@ -411,16 +419,16 @@ async def test_verifier_uses_answer_bank_intent_examples_for_coverage() -> None:
                 questions=[Question(text="Как получить консультацию по отчетности?")]
             ),
             "generated_response": (
-                "Свяжитесь с куратором грантового конкурса. [src:ticket_answer_bank_001]"
+                "Свяжитесь с куратором грантового конкурса. [src:yonote_grant_reporting]"
             ),
             "generator_model": "source_chunk",
-            "cited_sources": ["ticket_answer_bank_001"],
+            "cited_sources": ["yonote_grant_reporting"],
             "reranked_chunks": [
                 ScoredChunk(
-                    chunk_id="ticket_answer_bank_001",
+                    chunk_id="yonote_grant_reporting",
                     text="Свяжитесь с куратором грантового конкурса.",
                     metadata={
-                        "source_type": "ticket_answer_bank",
+                        "source_type": "yonote",
                         "intent_examples": ["Как получить консультацию по отчетности?"],
                     },
                     reranker_score=0.9,
@@ -470,7 +478,7 @@ async def test_verifier_judges_high_confidence_official_llm_answer() -> None:
                 ScoredChunk(
                     chunk_id="ctx_1",
                     text="Официальный источник.",
-                    metadata={"source_type": "xlsx"},
+                    metadata={"source_type": "yonote"},
                     reranker_score=0.9,
                 )
             ],
@@ -1044,7 +1052,7 @@ async def test_verifier_allows_date_marker_coverage_from_topic_alias() -> None:
                     chunk_id="date",
                     text="27 июня 2026 года по всей стране пройдёт День молодёжи.",
                     metadata={
-                        "source_type": "xlsx",
+                        "source_type": "yonote",
                         "category": "форумы",
                         "forum_normalized": "День молодёжи",
                         "topic": "sut_festivalya_i_data",
@@ -1078,7 +1086,7 @@ async def test_verifier_allows_overview_marker_coverage_from_topic_alias() -> No
                     chunk_id="overview",
                     text="Форум посвящён развитию молодых специалистов Севера.",
                     metadata={
-                        "source_type": "xlsx",
+                        "source_type": "yonote",
                         "category": "форумы",
                         "forum_normalized": "Российский Север",
                         "topic": "o_meropriyatii",
@@ -1493,7 +1501,7 @@ async def test_verifier_allows_passport_as_event_document() -> None:
                     chunk_id="docs",
                     text="Возьми с собой паспорт и медицинскую справку.",
                     metadata={
-                        "source_type": "xlsx",
+                        "source_type": "yonote",
                         "category": "форумы",
                         "forum_normalized": "Амур",
                     },

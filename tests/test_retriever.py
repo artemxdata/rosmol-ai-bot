@@ -138,7 +138,7 @@ class FakeScrollQdrant(FakeQdrant):
                     "generic",
                     {
                         "chunk_id": "generic",
-                        "source_type": "ticket_answer_bank",
+                        "source_type": "yonote",
                         "category": "гранты",
                         "text_clean": "Generic grant reporting answer.",
                         "intent_examples": ["How to submit a report?"],
@@ -148,7 +148,7 @@ class FakeScrollQdrant(FakeQdrant):
                     "exact",
                     {
                         "chunk_id": "exact",
-                        "source_type": "ticket_answer_bank",
+                        "source_type": "yonote",
                         "category": "гранты",
                         "text_clean": "Use the personal account for the exact report case.",
                         "intent_examples": ["Can I upload a grant report after correction?"],
@@ -321,6 +321,12 @@ async def test_retriever_keyword_candidates_prioritize_exact_intent_examples() -
         if hasattr(condition, "key")
     ]
     assert "source_type" in field_keys
+    source_condition = next(
+        condition
+        for condition in qdrant.scroll_kwargs["scroll_filter"].must
+        if getattr(condition, "key", None) == "source_type"
+    )
+    assert source_condition.match.value == "yonote"
 
 
 @pytest.mark.asyncio
@@ -336,7 +342,7 @@ async def test_retriever_invalidates_keyword_payload_cache_by_source_type() -> N
     await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
     assert len(qdrant.scroll_calls) == 1
 
-    retriever.invalidate_keyword_cache("ticket_answer_bank")
+    retriever.invalidate_keyword_cache("yonote")
     await retriever.retrieve_keyword_candidates("grant report", scan_limit=512)
 
     assert len(qdrant.scroll_calls) == 2

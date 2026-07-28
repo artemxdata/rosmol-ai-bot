@@ -43,7 +43,8 @@ def _entry(*, forum: str | None = "Амур") -> CachedResponse:
             category="форумы",
             topics=["oplata_proezda"],
         ),
-        cited_sources=["xlsx_amur_travel"],
+        cited_sources=["yonote_amur_travel"],
+        factual_source_type="yonote",
         generator_model="source_chunk",
     )
 
@@ -64,7 +65,8 @@ async def test_semantic_cache_round_trips_structured_grounded_response(
     payload = qdrant.upsert_kwargs["points"][0].payload
     assert payload["cache_schema_version"] == CACHE_SCHEMA_VERSION
     assert payload["scope_key"] == "Амур"
-    assert payload["cited_sources"] == ["xlsx_amur_travel"]
+    assert payload["cited_sources"] == ["yonote_amur_travel"]
+    assert payload["factual_source_type"] == "yonote"
     assert payload["analysis"]["topics"] == ["oplata_proezda"]
 
     qdrant.payload = payload
@@ -106,6 +108,22 @@ async def test_semantic_cache_rejects_legacy_text_only_payload(
     cache = SemanticCache(qdrant, FakeEmbedder())  # type: ignore[arg-type]
 
     assert await cache.check("Вопрос", None) is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_rejects_non_yonote_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.rag.cache.get_settings",
+        lambda: SimpleNamespace(cache_ttl_hours=24, cache_similarity_threshold=0.95),
+    )
+    payload = _entry().model_dump(mode="json")
+    payload["factual_source_type"] = "xlsx"
+    qdrant = FakeQdrant(payload=payload)
+    cache = SemanticCache(qdrant, FakeEmbedder())  # type: ignore[arg-type]
+
+    assert await cache.check("Вопрос", "Амур") is None
 
 
 @pytest.mark.asyncio

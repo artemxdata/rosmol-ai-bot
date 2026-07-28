@@ -79,6 +79,7 @@ from src.rag.embedder import Embedder
 from src.rag.errors import MLDependencyError
 from src.rag.reranker import Reranker
 from src.rag.retriever import Retriever
+from src.response_contract import get_response_contract
 from src.security import profanity, safety
 from src.security.operator_request import is_operator_request
 from src.security.pii_masker import PIIMasker, PIIMaskingUnavailable
@@ -86,10 +87,11 @@ from src.security.rate_limiter import RateLimiter
 from src.session.manager import SessionManager
 from src.session.memory import UserMemory, hash_user_id
 
-ATTACHMENT_ONLY_RESPONSE = (
-    "Передаю обращение специалисту: сейчас я не могу надёжно разобрать скриншот "
-    "или вложение без текстового описания."
-)
+_RESPONSE_CONTRACT = get_response_contract()
+OPERATOR_TRANSFER_RESPONSE = _RESPONSE_CONTRACT.message(
+    "operator_transfer"
+).select_text()
+ATTACHMENT_ONLY_RESPONSE = OPERATOR_TRANSFER_RESPONSE
 ATTACHMENT_ONLY_REASON = "attachment_only"
 _ATTACHMENT_FILE_RE = re.compile(
     r"\b[\w.-]+\.(?:png|jpe?g|gif|webp|heic|pdf|docx?|xlsx?)\b",
@@ -1640,7 +1642,7 @@ async def _process_message_unlocked(
         return response
 
     if not is_safe:
-        response = "Передаю обращение специалисту."
+        response = OPERATOR_TRANSFER_RESPONSE
         await fastapi_app.state.sessions.append_turn(session, masked_text, response)
         await _safe_log(
             fastapi_app,
@@ -1687,7 +1689,7 @@ async def _process_message_unlocked(
         return response
 
     if operator_requested:
-        response = "Передаю обращение специалисту."
+        response = OPERATOR_TRANSFER_RESPONSE
         session = await _clear_pending_clarification(fastapi_app, session)
         await fastapi_app.state.sessions.append_turn(session, masked_text, response)
         await _safe_log(
@@ -1796,7 +1798,7 @@ async def _process_message_unlocked(
         return response
 
     if not settings.cloud_ru_api_key:
-        response = "Передаю обращение специалисту, потому что LLM-доступ ещё не настроен."
+        response = OPERATOR_TRANSFER_RESPONSE
         state.update(
             {
                 "final_response": response,
@@ -1818,7 +1820,7 @@ async def _process_message_unlocked(
     except TimeoutError:
         result = {
             **state,
-            "final_response": "Передаю обращение специалисту, чтобы не задерживать ответ.",
+            "final_response": OPERATOR_TRANSFER_RESPONSE,
             "should_escalate": True,
             "escalation_reason": "request_timeout",
             "error": "request_timeout",
@@ -1826,7 +1828,7 @@ async def _process_message_unlocked(
     finally:
         reset_llm_usage_collection(llm_usage_token)
     result.update(summarize_llm_usage(llm_usage_events))
-    response = result.get("final_response") or "Передаю обращение специалисту."
+    response = result.get("final_response") or OPERATOR_TRANSFER_RESPONSE
     session, response = await _update_dialog_session(
         fastapi_app,
         session,
@@ -2148,6 +2150,8 @@ async def _save_cache(
     cited_sources = [str(item) for item in state.get("cited_sources") or [] if item]
     if not cited_sources:
         return
+    if not _has_only_yonote_cited_sources(state, cited_sources):
+        return
     if _has_temporally_bounded_cited_source(state, cited_sources):
         return
     verification = state.get("verification")
@@ -2158,6 +2162,7 @@ async def _save_cache(
         forum_normalized=analysis.forum_normalized,
         analysis=analysis,
         cited_sources=cited_sources,
+        factual_source_type=_RESPONSE_CONTRACT.fact_policy.source_type,
         generator_model=str(state.get("generator_model") or "") or None,
         verifier_triggered=bool(state.get("verifier_triggered")),
     )
@@ -2165,6 +2170,26 @@ async def _save_cache(
         await fastapi_app.state.semantic_cache.save(query, cached_response)
     except Exception as exc:
         logger.warning("semantic_cache_save_failed", error=str(exc))
+
+
+def _has_only_yonote_cited_sources(
+    state: dict[str, Any],
+    cited_sources: list[str],
+) -> bool:
+    cited_ids = set(cited_sources)
+    source_types: dict[str, str] = {}
+    for chunk in state.get("reranked_chunks") or []:
+        chunk_id = str(getattr(chunk, "chunk_id", "") or "")
+        if chunk_id not in cited_ids:
+            continue
+        metadata = getattr(chunk, "metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+        source_types[chunk_id] = str(metadata.get("source_type") or "").strip().casefold()
+    return set(source_types) == cited_ids and all(
+        source_type == _RESPONSE_CONTRACT.fact_policy.source_type
+        for source_type in source_types.values()
+    )
 
 
 def _has_temporally_bounded_cited_source(

@@ -61,6 +61,7 @@ def test_runtime_image_explicitly_copies_only_reviewed_admin_report() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "COPY reports/presentation_quality/presentation_quality_report.json" in dockerfile
+    assert "data/response_contract_v1.json ./data/" in dockerfile
     assert ADMIN_REPORT.is_file()
 
 

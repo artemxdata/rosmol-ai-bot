@@ -160,7 +160,7 @@ class Retriever:
         top_k: int = 6,
         scan_limit: int = 512,
         min_score: float = 2.0,
-        source_type: str = "ticket_answer_bank",
+        source_type: str = "yonote",
     ) -> list[Chunk]:
         query_tokens = _keyword_tokens(query)
         if not query_tokens:

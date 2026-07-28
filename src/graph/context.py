@@ -133,7 +133,10 @@ def apply_session_context(
             clears_forum_clarification = (
                 analysis.needs_clarification
                 and analysis.clarification_question is not None
-                and "о каком форуме" in analysis.clarification_question.casefold()
+                and any(
+                    marker in analysis.clarification_question.casefold()
+                    for marker in ("о каком форуме", "название форума")
+                )
             )
             return analysis.model_copy(
                 update={

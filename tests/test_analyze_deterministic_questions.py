@@ -3,19 +3,24 @@ from __future__ import annotations
 import pytest
 
 from src.graph.nodes.analyze import (
-    ACCOUNT_CHECK_RESPONSE,
     APPLICATION_SUCCESS_RESPONSE,
     BOT_CAPABILITIES_RESPONSE,
+    DATES_EVENT_CLARIFICATION_RESPONSE,
+    FAREWELL_RESPONSE,
+    FEEDBACK_RESPONSE,
     GRANT_CONTEXT_RESPONSE,
     GREETING_ADDRESSEES,
     GREETING_HELP_TAILS,
     GREETING_OPENERS,
     GREETING_RESPONSE,
+    UNKNOWN_FORUM_RESPONSE,
     _bot_interaction_response,
     _ensure_deterministic_questions,
     _fallback_analysis,
+    _infer_response_profile,
 )
-from src.models import Channel, Session
+from src.models import Channel, QueryAnalysis, Session
+from src.response_contract import ResponseProfileName, get_response_contract
 
 
 def test_fallback_analysis_clarifies_generic_application_request() -> None:
@@ -342,6 +347,87 @@ def test_greeting_grammar_covers_hundreds_of_safe_surface_forms() -> None:
     )
 
 
+def test_approved_gratitude_and_farewell_copy_is_deterministic() -> None:
+    contract = get_response_contract()
+    gratitude = _bot_interaction_response("Спасибо большое")
+
+    assert gratitude in contract.message("gratitude").variants
+    assert _bot_interaction_response("Спасибо большое") == gratitude
+    assert _bot_interaction_response("До встречи") == FAREWELL_RESPONSE
+
+
+def test_generic_clarification_uses_numbered_text_options() -> None:
+    analysis = _fallback_analysis(
+        "Помогите",
+        "Помогите",
+        {"complexity": "simple"},
+        None,
+    )
+
+    assert analysis is not None
+    assert analysis.clarification_question is not None
+    assert analysis.clarification_question.startswith(
+        "Пожалуйста, уточни свой вопрос 👇\n"
+    )
+    assert "\n1. Форум или мероприятие" in analysis.clarification_question
+    assert "\n4. Другой вопрос о деятельности Росмолодёжи" in (
+        analysis.clarification_question
+    )
+    assert "{buttons}" not in analysis.clarification_question
+
+
+def test_start_then_dates_returns_one_canonical_clarification() -> None:
+    session = Session(
+        user_id="nata-regression",
+        channel=Channel.API,
+        user_id_hash="nata-regression-hash",
+        last_messages=[{"user": "Начать", "bot": GREETING_RESPONSE}],
+    )
+
+    analysis = _fallback_analysis(
+        "Даты",
+        "Даты",
+        {"complexity": "simple"},
+        session,
+    )
+
+    assert analysis is not None
+    assert analysis.needs_clarification is True
+    assert analysis.should_escalate is False
+    assert analysis.clarification_question == DATES_EVENT_CLARIFICATION_RESPONSE
+    assert analysis.response_profile == ResponseProfileName.DATES
+
+
+@pytest.mark.parametrize(
+    ("analysis", "query", "expected"),
+    [
+        (QueryAnalysis(category="форумы"), "Когда проходит Машук?", "dates"),
+        (QueryAnalysis(category="форумы"), "Как подать заявку?", "application"),
+        (QueryAnalysis(category="форумы"), "Кто может участвовать?", "eligibility"),
+        (QueryAnalysis(category="форумы"), "Какие документы нужны?", "documents"),
+        (QueryAnalysis(category="форумы"), "Какой статус заявки?", "selection_status"),
+        (QueryAnalysis(category="форумы"), "Какая программа форума?", "program"),
+        (QueryAnalysis(category="форумы"), "Кто оплачивает проезд?", "travel"),
+        (QueryAnalysis(category="форумы"), "Как организовано проживание?", "accommodation"),
+        (QueryAnalysis(category="форумы"), "Предусмотрено ли питание?", "food"),
+        (QueryAnalysis(category="форумы"), "Есть ли условия для ОВЗ?", "accessibility"),
+        (QueryAnalysis(category="гранты"), "Расскажи про гранты", "grants"),
+        (
+            QueryAnalysis(category="техподдержка", is_technical=True),
+            "Не работает личный кабинет",
+            "technical",
+        ),
+        (QueryAnalysis(category="общее"), "Расскажи о Росмолодёжи", "generic"),
+    ],
+)
+def test_response_profile_is_inferred_for_every_contract_profile(
+    analysis: QueryAnalysis,
+    query: str,
+    expected: str,
+) -> None:
+    assert _infer_response_profile(analysis, query) == ResponseProfileName(expected)
+
+
 @pytest.mark.parametrize(
     "query",
     ["Ошибка", "Не работает", "Не пускает", "Не прикрепляется", "Что делать?"],
@@ -456,7 +542,7 @@ def test_fallback_analysis_clarifies_colloquial_action_without_event(query: str)
     assert analysis.category == "форумы"
     assert analysis.needs_clarification is True
     assert analysis.clarification_question is not None
-    assert "форуме или мероприятии" in analysis.clarification_question
+    assert analysis.clarification_question == UNKNOWN_FORUM_RESPONSE
 
 
 def test_fallback_analysis_clarifies_forum_specific_question_without_forum() -> None:
@@ -471,7 +557,7 @@ def test_fallback_analysis_clarifies_forum_specific_question_without_forum() -> 
     assert analysis.needs_clarification is True
     assert analysis.category == "форумы"
     assert analysis.clarification_question is not None
-    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.clarification_question == UNKNOWN_FORUM_RESPONSE
     assert analysis.questions == []
 
 
@@ -491,7 +577,7 @@ def test_fallback_analysis_clarifies_unanchored_event_conditions(query: str) -> 
     assert analysis.needs_clarification is True
     assert analysis.category == "форумы"
     assert analysis.clarification_question is not None
-    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.clarification_question == UNKNOWN_FORUM_RESPONSE
     assert analysis.questions == []
 
 
@@ -527,7 +613,7 @@ def test_fallback_analysis_clarifies_generic_participant_next_step_without_forum
     assert analysis.needs_clarification is True
     assert analysis.category == "форумы"
     assert analysis.clarification_question is not None
-    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.clarification_question == UNKNOWN_FORUM_RESPONSE
     assert analysis.questions == []
 
 
@@ -543,7 +629,7 @@ def test_fallback_analysis_clarifies_cancel_participation_without_forum() -> Non
     assert analysis.needs_clarification is True
     assert analysis.category == "форумы"
     assert analysis.clarification_question is not None
-    assert "о каком форуме" in analysis.clarification_question
+    assert analysis.clarification_question == UNKNOWN_FORUM_RESPONSE
     assert analysis.questions == []
 
 
@@ -1090,8 +1176,7 @@ def test_fallback_analysis_asks_for_feedback_details_without_operator() -> None:
     assert analysis is not None
     assert analysis.needs_clarification is True
     assert analysis.should_escalate is False
-    assert analysis.clarification_question is not None
-    assert "что именно хочешь оценить" in analysis.clarification_question
+    assert analysis.clarification_question == FEEDBACK_RESPONSE
 
 
 @pytest.mark.parametrize(
@@ -1191,7 +1276,7 @@ def _session_with_turn(user: str, bot: str) -> Session:
         ("а это не на грант заявка", "предыдущая тема не подходит"),
         ("а где там про условия?", "какие условия тебя интересуют"),
         ("нет, это от вас письмо", "тему письма"),
-        ("я про лк на вашем сайте", "какой сайт открыт"),
+        ("я про лк на вашем сайте", "название сайта"),
     ],
 )
 def test_explicit_followup_correction_wins_over_session_context(
@@ -1229,7 +1314,7 @@ def test_application_success_is_acknowledged_without_reopening_clarification() -
     assert analysis.should_escalate is False
 
 
-def test_account_existence_followup_returns_grounded_self_check() -> None:
+def test_account_existence_followup_routes_to_grounded_yonote_lookup() -> None:
     session = _session_with_turn(
         "Не могу восстановить пароль",
         "Открой форму восстановления пароля.",
@@ -1243,7 +1328,12 @@ def test_account_existence_followup_returns_grounded_self_check() -> None:
     )
 
     assert analysis is not None
-    assert analysis.clarification_question == ACCOUNT_CHECK_RESPONSE
+    assert analysis.category == "платформа_фгаис"
+    assert analysis.needs_clarification is False
+    assert analysis.clarification_question is None
+    assert [question.topic for question in analysis.questions] == [
+        "proverka_suschestvovaniya_akkaunta"
+    ]
     assert analysis.should_escalate is False
 
 
@@ -1392,22 +1482,30 @@ def test_no_travel_opportunity_request_routes_to_catalog() -> None:
 
 
 @pytest.mark.parametrize(
-    "query",
+    ("query", "expected_response"),
     [
-        "Афиша на Великий Новгород",
-        "Какие исполнители будут выступать в Армавире?",
-        "Выступление блогеров 27 июня на площади Ленина будет?",
-        "Когда будет мероприятие?",
+        ("Афиша на Великий Новгород", UNKNOWN_FORUM_RESPONSE),
+        (
+            "Какие исполнители будут выступать в Армавире?",
+            UNKNOWN_FORUM_RESPONSE,
+        ),
+        (
+            "Выступление блогеров 27 июня на площади Ленина будет?",
+            UNKNOWN_FORUM_RESPONSE,
+        ),
+        ("Когда будет мероприятие?", DATES_EVENT_CLARIFICATION_RESPONSE),
     ],
 )
-def test_event_details_without_event_name_require_clarification(query: str) -> None:
+def test_event_details_without_event_name_require_clarification(
+    query: str,
+    expected_response: str,
+) -> None:
     analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
 
     assert analysis is not None
     assert analysis.needs_clarification is True
     assert analysis.should_escalate is False
-    assert analysis.clarification_question is not None
-    assert "о каком форуме или мероприятии" in analysis.clarification_question
+    assert analysis.clarification_question == expected_response
 
 
 def test_travel_payment_without_event_name_requires_clarification() -> None:

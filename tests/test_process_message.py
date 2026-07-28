@@ -105,6 +105,7 @@ class FakeSemanticCache:
                     category="форумы" if forum else "общее",
                 ),
                 cited_sources=["cached_source"],
+                factual_source_type="yonote",
                 generator_model="source_chunk",
             )
         return self.response
@@ -161,7 +162,7 @@ class FakeRetriever:
                     "category": "форумы",
                     "forum_normalized": "Машук",
                     "topic": "oplata_proezda",
-                    "source_type": "xlsx",
+                    "source_type": "yonote",
                 },
                 score=0.9,
             )
@@ -183,7 +184,7 @@ class TicketRetriever:
                     "category": "форумы",
                     "forum_normalized": "День молодёжи",
                     "topic": "bilet_ne_prishel_povtornoe_poluchenie",
-                    "source_type": "xlsx",
+                    "source_type": "yonote",
                 },
                 score=0.95,
             )
@@ -196,7 +197,7 @@ class UnscopedFakeRetriever:
             Chunk(
                 chunk_id="ctx_travel",
                 text="Проезд участник оплачивает самостоятельно.",
-                metadata={"chunk_id": "ctx_travel"},
+                metadata={"chunk_id": "ctx_travel", "source_type": "yonote"},
                 score=0.9,
             )
         ]
@@ -314,7 +315,7 @@ async def test_process_message_safety_escalates_before_graph(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert "Передаю обращение специалисту" in response
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "safety_bullying"
     assert captured_logs[0]["message_masked"] == "Меня травят в чате форума"
@@ -340,7 +341,7 @@ async def test_process_message_abuse_safety_escalates_before_graph(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert response == "Передаю обращение специалисту."
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "safety_abuse"
     assert captured_logs[0]["message_masked"] == text
@@ -363,7 +364,7 @@ async def test_process_message_attachment_only_escalates_before_graph(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert "не могу надёжно разобрать скриншот" in response
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "attachment_only"
     assert captured_logs[0]["message_masked"] == "[attachment_only]"
@@ -385,7 +386,7 @@ async def test_process_message_attachment_placeholder_escalates_before_graph(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert "Передаю обращение специалисту" in response
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "attachment_only"
     assert captured_logs[0]["message_masked"] == "image-12345.png"
@@ -411,7 +412,7 @@ async def test_process_message_operator_request_escalates_before_cache_and_graph
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert response == "Передаю обращение специалисту."
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert app.state.semantic_cache.check_calls == []
     assert app.state.semantic_cache.save_calls == []
     assert app.state.sessions.appended == [("Позови оператора", response)]
@@ -451,7 +452,8 @@ async def test_process_message_cache_hit_restores_forum_and_topic_context(
             category="форумы",
             topics=["oplata_proezda"],
         ),
-        cited_sources=["xlsx_amur_travel"],
+        cited_sources=["yonote_amur_travel"],
+        factual_source_type="yonote",
         generator_model="source_chunk",
     )
     app = _app(cached_response=cached)
@@ -468,7 +470,7 @@ async def test_process_message_cache_hit_restores_forum_and_topic_context(
     assert app.state.sessions.session.extracted_entities["last_topics"] == [
         "oplata_proezda"
     ]
-    assert captured_logs[0]["cited_sources"] == ["xlsx_amur_travel"]
+    assert captured_logs[0]["cited_sources"] == ["yonote_amur_travel"]
 
 
 @pytest.mark.asyncio
@@ -481,6 +483,12 @@ async def test_save_cache_persists_only_complete_grounded_answers() -> None:
         category="форумы",
         topics=["oplata_proezda"],
     )
+    chunk = ScoredChunk(
+        chunk_id="yonote_amur_travel",
+        text="Проезд участник оплачивает самостоятельно.",
+        metadata={"source_type": "yonote"},
+        reranker_score=0.99,
+    )
 
     await _save_cache(
         app,  # type: ignore[arg-type]
@@ -488,7 +496,8 @@ async def test_save_cache_persists_only_complete_grounded_answers() -> None:
         "Проезд участник оплачивает самостоятельно.",
         {
             "analysis": analysis,
-            "cited_sources": ["xlsx_amur_travel"],
+            "cited_sources": [chunk.chunk_id],
+            "reranked_chunks": [chunk],
             "generator_model": "source_chunk",
             "verifier_triggered": False,
         },
@@ -498,7 +507,8 @@ async def test_save_cache_persists_only_complete_grounded_answers() -> None:
     query, cached = cache.save_calls[0]
     assert query == "Амур: кто платит за дорогу?"
     assert cached.analysis == analysis
-    assert cached.cited_sources == ["xlsx_amur_travel"]
+    assert cached.cited_sources == ["yonote_amur_travel"]
+    assert cached.factual_source_type == "yonote"
 
 
 @pytest.mark.asyncio
@@ -545,7 +555,7 @@ async def test_save_cache_rejects_temporally_bounded_sources() -> None:
     chunk = ScoredChunk(
         chunk_id="rostov_registration",
         text="Регистрация завершилась.",
-        metadata={"valid_to": "2026-07-06"},
+        metadata={"source_type": "yonote", "valid_to": "2026-07-06"},
         reranker_score=0.99,
     )
 
@@ -724,7 +734,7 @@ async def test_process_message_escalates_when_llm_is_not_configured(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert "LLM-доступ ещё не настроен" in response
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "llm_not_configured"
 
@@ -817,7 +827,7 @@ async def test_process_message_low_confidence_graph_path_escalates(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert "Передаю обращение специалисту" in response
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "low_confidence"
 
@@ -951,7 +961,7 @@ async def test_process_message_explicit_operator_request_wins_over_profanity(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert response == "Передаю обращение специалисту."
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "operator_requested"
 
@@ -973,10 +983,10 @@ async def test_process_message_detects_operator_request_before_pii_masking(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert response == "Передаю обращение специалисту."
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert app.state.semantic_cache.check_calls == []
     assert app.state.sessions.appended == [
-        ("[ИМЯ] уже, блять, оператора", "Передаю обращение специалисту.")
+        ("[ИМЯ] уже, блять, оператора", "Перевожу на оператора. Пожалуйста, ожидай.")
     ]
     assert captured_logs[0]["message_masked"] == "[ИМЯ] уже, блять, оператора"
     assert captured_logs[0]["should_escalate"] is True
@@ -1056,13 +1066,13 @@ async def test_process_message_routes_colloquial_fgais_loading_failure_to_suppor
             self.metadata_calls.append((filters, top_k))
             return [
                 Chunk(
-                    chunk_id="xlsx_fallback_r0014_tehnicheskaya_oshibka",
+                    chunk_id="yonote_tehnicheskaya_oshibka",
                     text=support_text,
                     metadata={
-                        "chunk_id": "xlsx_fallback_r0014_tehnicheskaya_oshibka",
+                        "chunk_id": "yonote_tehnicheskaya_oshibka",
                         "category": "техподдержка",
                         "topic": "tehnicheskaya_oshibka",
-                        "source_type": "xlsx",
+                        "source_type": "yonote",
                         "is_generic": True,
                     },
                     score=0.9,
@@ -1099,6 +1109,7 @@ async def test_process_message_routes_colloquial_fgais_loading_failure_to_suppor
             {
                 "category": "техподдержка",
                 "topic": "tehnicheskaya_oshibka",
+                "source_type": "yonote",
             },
             10,
         )
@@ -1106,15 +1117,11 @@ async def test_process_message_routes_colloquial_fgais_loading_failure_to_suppor
     assert captured_logs[0]["analysis"].category == "техподдержка"
     assert captured_logs[0]["analysis"].is_technical is True
     assert captured_logs[0]["analysis"].questions[0].topic == "tehnicheskaya_oshibka"
-    assert captured_logs[0]["reranked_chunks"][0].chunk_id == (
-        "xlsx_fallback_r0014_tehnicheskaya_oshibka"
-    )
+    assert captured_logs[0]["reranked_chunks"][0].chunk_id == "yonote_tehnicheskaya_oshibka"
     assert captured_logs[0]["max_confidence"] >= 0.7
     assert captured_logs[0].get("should_escalate") is not True
     assert captured_logs[0].get("escalation_reason") is None
-    assert captured_logs[0]["cited_sources"] == [
-        "xlsx_fallback_r0014_tehnicheskaya_oshibka"
-    ]
+    assert captured_logs[0]["cited_sources"] == ["yonote_tehnicheskaya_oshibka"]
 
 
 @pytest.mark.asyncio
@@ -1173,7 +1180,7 @@ async def test_process_message_escalates_on_request_timeout(
 
     response = await process_message(message, app)  # type: ignore[arg-type]
 
-    assert "Передаю обращение специалисту" in response
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert app.state.sessions.appended
     assert captured_logs[0]["should_escalate"] is True
     assert captured_logs[0]["escalation_reason"] == "request_timeout"
@@ -1305,7 +1312,7 @@ async def test_process_message_resolves_ticket_after_forum_clarification(
         IncomingMessage(user_id="dialog-user", channel=Channel.API, text="Где мой билет?"),
         app,  # type: ignore[arg-type]
     )
-    assert "о каком форуме или мероприятии" in first
+    assert first == "Уточни, пожалуйста, название форума, о котором спрашиваешь."
     assert app.state.sessions.session.pending_clarification == "Где мой билет?"
     assert app.state.sessions.session.clarification_attempts == 1
 
@@ -1372,7 +1379,7 @@ async def test_process_message_known_forum_ticket_does_not_use_neighbor_sources(
         bypass_cache=True,
     )
 
-    assert response == "Передаю обращение специалисту, чтобы не дать неточный ответ."
+    assert response == "Перевожу на оператора. Пожалуйста, ожидай."
     assert captured_logs[-1]["escalation_reason"] == "no_relevant_chunks"
     assert captured_logs[-1].get("cited_sources", []) == []
     assert retriever.metadata_calls
