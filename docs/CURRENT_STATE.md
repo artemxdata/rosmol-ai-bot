@@ -1,6 +1,6 @@
 # Текущее состояние проекта
 
-**Обновлено:** 27 июля 2026
+**Обновлено:** 28 июля 2026
 
 **Ветка:** `master`
 
@@ -8,6 +8,11 @@
 (`Refresh recovery security deadline`). Server checkout, app image и app-ml image были сверены
 по полному SHA. Миграции, versioned seed и index inputs относительно предыдущего runtime не
 менялись; повторная индексация не выполнялась.
+
+**Repository release, не deployed:** `4f786594281412845dbac9b080133b3881433d63`
+(`Add read-only Yonote database inventory`) находится в `origin/master`. Он добавляет
+read-only inventory/TXT export Yonote и не меняет seed/index inputs. Это не означает deployment:
+healthy runtime продолжает работать на `b4bc23a`.
 
 **Статус релиза:** `TEST-PRODUCTION CONNECTED / SECURITY + QUALITY + HDE/VK SMOKE PASS`.
 Ограниченная тестовая линия HDE/VK включена и отвечает через постоянный корпоративный endpoint.
@@ -79,22 +84,25 @@ production traffic остаются отдельными задачами авт
 Во время смены домена Yonote Apply, Save/Reindex и полный reindex не выполнялись; tracked seed
 и Qdrant остались неизменными.
 
-**Локальная незавершённая работа, не committed и не deployed:** рабочее дерево содержит отдельную
-итерацию вкладки статистики/текстовой выгрузки БД Yonote:
-`scripts/sync_yonote_kb.py`, `src/admin/ui.py`, `src/main.py`,
-`tests/test_admin_kb_api.py`, `tests/test_sync_yonote_kb.py`,
-новые `src/admin/yonote_database.py` и `tests/test_admin_yonote_database.py`.
-Эти файлы нельзя терять, сбрасывать или смешивать с operational handoff commit; перед публикацией
-нужны отдельный review и полный local gate.
+**Связь с публичной дорожной картой:** этот репозиторий представляет контур нового
+grounded AI-помощника. Бот-анализатор и действующий ChatMe-бот — внешние соседние контуры; их
+метрики не доказывают качество этого runtime. Переход с ChatMe выполняется только по измеримым
+критериям на одной выборке содержательных тикетов, а не по календарной дате. Human-governed
+knowledge loop, build-vs-buy и границы исходящих коммуникаций зафиксированы в
+`docs/new_ai_bot_contour_roadmap_20260728.md` и D-030–D-033.
 
-**Точный следующий шаг:** оставить тестовые HDE rules включёнными и начать новую измеримую
-test-production выборку со следующего реального обращения; оба smoke-события 27 июля не включать
-в продуктовую конверсию. Параллельно, но отдельным change set, завершить и проверить локальную
-Yonote database statistics/export вкладку. Кейс `Ей -> low_confidence escalation`, неполная дата
-смены «Правда» и Mashuk content findings входят в будущий regression-first quality cycle и не
-исправляются одновременно с инфраструктурой. Через стабилизационный период отдельно убрать
-лишнюю DNS-запись/временное TLS rollback-имя и root-only TLS backup после повторной проверки
-постоянного endpoint и renewal.
+**Yonote inventory change set завершён, но не deployed:** commit `4f78659` опубликован в
+`origin/master`; local gate перед commit прошёл Ruff, `1418 passed, 1 skipped` и KB validation
+`2186/2152`. Seed/index inputs не менялись, поэтому reindex не выполнялся. Любой deployment этого
+commit остаётся отдельной ручной SHA-bound операцией с повторным image/security/runtime gate.
+
+**Точный следующий шаг:** не менять healthy deployed runtime `b4bc23a`; оставить тестовые HDE
+rules включёнными и вести новую измеримую test-production выборку со следующего реального
+обращения. Оба smoke-события 27 июля не включать в продуктовую конверсию. Deployment `4f78659`,
+если будет отдельно согласован, выполнять только по SHA-bound rebuild/rescan и полному server
+gate без автоматического reindex. Кейс `Ей -> low_confidence escalation`, неполная дата смены
+«Правда» и Mashuk content findings входят в отдельный regression-first quality cycle. Пункты
+публичной roadmap являются направлением, а не разрешением менять runtime, KB или широкий traffic.
 
 ## 1. Цель
 
@@ -149,6 +157,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - `docs/operations.md` — эксплуатация, Yonote, HDE, безопасность и deployment.
 - `docs/pre_pilot_release_checklist.md` — release gate.
 - `docs/quality_improvement_loop.md` — дальнейшая продуктовая калибровка.
+- `docs/new_ai_bot_contour_roadmap_20260728.md` — границы контуров, критерии перехода и
+  human-governed roadmap нового AI-помощника.
 - `docs/security_incident_20260715.md` — P0 incident record, contamination boundary и правила
   clean recovery.
 - `docs/operator_feedback_20260715.md` — тесты Наты, evidence и будущий quality backlog.

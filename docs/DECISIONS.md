@@ -316,3 +316,49 @@ Preview не меняет рабочую KB; Apply в test-editor mode меня�
 выполняется отдельным server-controlled шагом с backup/hash, HDE off, cache clear, restart,
 readiness/security/RAG smoke и доказуемым rollback. Рабочая копия тестового контура не становится
 production source of truth автоматически; широкий publish требует reviewed versioned seed release.
+
+## D-030. Анализатор, ChatMe и новый AI-помощник — разные контуры
+
+**Статус:** принято 28 июля 2026.
+Бот-анализатор, действующий ChatMe-бот и новый AI-помощник имеют разные назначения, evidence и
+метрики. Этот репозиторий реализует только новый grounded AI-помощник; внешние показатели
+анализатора и ChatMe не являются результатами его тестов.
+
+Переход выполняется не по дате, а после сравнения на одной заранее определённой выборке реальных
+содержательных тикетов: ticket-level conversion не ниже согласованного baseline, ноль
+неподтверждённых фактов в проверенной выборке, устойчивая delivery и предсказуемая justified
+escalation при отсутствии данных. До этого ChatMe остаётся рабочим контуром. Трафик переключается
+поэтапно со stop-criteria и проверяемым возвратом; старая скомпрометированная VM никогда не является
+rollback target.
+
+## D-031. Knowledge loop управляется человеком и versioned release gate
+
+**Статус:** принято 28 июля 2026; уточняет D-003, D-004, D-024 и D-029.
+Trace, операторские исправления и данные анализатора используются для gap analysis и измерения
+эффекта, но не индексируются автоматически как факты. Новое знание проходит content verdict
+человека, публикацию в Yonote, полный diff, versioned seed change, validation/regression,
+контролируемый reindex и проверяемый rollback.
+
+Yonote является целевым human-controlled content authority, а production отвечает по проверенному
+release snapshot. Live Yonote остаётся read-only и не меняет production KB напрямую. Будущий
+«managed update в одно действие» может только оркестрировать все обязательные gate; он не означает
+автономную запись в Yonote, прямой production Apply или обход review.
+
+## D-032. Build-vs-buy остаётся измеряемым ADR, а не решением о миграции
+
+**Статус:** принято 28 июля 2026.
+Текущее LangGraph-ядро остаётся действующей реализацией. Возможные self-hosted
+Dify/Flowise/RAGFlow сравниваются с ним на одной KB и одной обезличенной выборке по качеству,
+управляемости retrieval, PII-before-egress, HDE/VK integration, trace/eval/holdout, data residency,
+rollback и полной стоимости сопровождения.
+
+Переход на платформу запрещён без отдельного ADR, regression и release gate. Доменные компоненты
+PII masking, HDE/VK adapters и model cascade сохраняются переносимыми независимо от ядра.
+
+## D-033. Исходящие коммуникации не входят в release scope AI-помощника
+
+**Статус:** принято 28 июля 2026.
+MAX-рассылки и другие исходящие кампании являются отдельной инициативой. До реализации нужны
+проверенные provider rules и отдельный privacy/legal design: явное согласие и отзыв, сегментация,
+retention, opt-out и audit trail. Оценки тарифов, лимитов и правовой модели из публичной дорожной
+карты не считаются технически подтверждёнными и не разрешают production-запуск.

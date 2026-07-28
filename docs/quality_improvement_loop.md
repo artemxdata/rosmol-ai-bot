@@ -2,23 +2,26 @@
 
 ## Принцип
 
-Качество бота повышается не бесконечной настройкой модели, а управляемым циклом: реальные вопросы пользователей превращаются в пробелы базы знаний, пробелы закрываются в Yonote/KB, затем RAG переиндексируется и проверяется eval-набором.
+Качество бота повышается не бесконечной настройкой модели, а управляемым циклом: реальные вопросы
+пользователей превращаются в подтверждённые пробелы, человек закрывает их в Yonote/KB, затем
+versioned RAG release проходит validation, regression и контролируемую индексацию. Система
+обучается на подтверждённых knowledge gaps, а не на ПДн, сырых тикетах или автоматически принятых
+ответах операторов.
 
-## Текущий режим: limited clean test-production до улучшений
+## Текущий режим: limited clean test-production
 
 Операторский тест, начатый 15 июля 2026, прерван P0-компрометацией старого сервера. Новый clean
-runtime и ограниченный HDE/VK smoke уже работают, но финальный handoff и новая cohort boundary ещё
-не закрыты. Ротация/принятые исключения и contamination boundary остаются обязательными. Детали:
+runtime, постоянный endpoint и ограниченный HDE/VK handoff завершены. Новая измеримая cohort
+boundary начинается с первого реального обращения после handoff; smoke и прерванный cohort в неё
+не входят. Ротация/принятые исключения и contamination boundary остаются обязательными. Детали:
 `docs/CURRENT_STATE.md`, `docs/security_incident_20260715.md` и
 `docs/operator_holdout_runbook.md`.
 
-До нового handoff действует freeze кода ответов, routing, prompts, thresholds, cache policy и KB.
+Healthy deployed runtime не меняется вне отдельно согласованных change set и release gate.
 Последние тесты Наты зафиксированы в `docs/operator_feedback_20260715.md` как будущий
 calibration/regression backlog; они не исправляются по одному и не являются финальной оценкой
-конверсии. После preliminary acceptance чистого runtime feedback Наты закрывается одним
-regression-first calibration cycle; только затем выполняются финальный gate/HDE smoke и новый
-cohort с новой границей. Автоматический ops-report остаётся containment proxy, а окончательный
-verdict даёт оператор по полному тикету.
+конверсии. Автоматический ops-report остаётся containment proxy, а окончательный verdict даёт
+оператор по полному тикету.
 
 ## Источники данных
 
@@ -30,7 +33,9 @@ verdict даёт оператор по полному тикету.
 ## Еженедельный цикл
 
 1. Зафиксировать начало/конец cohort и экспортировать деперсонализированные полные тикеты за период.
-2. Совместить trace outcomes с ручными operator verdicts и сгруппировать причины незакрытия.
+2. Совместить trace outcomes с ручными operator verdicts и присвоить root cause незакрытия:
+   `content_missing`, `content_stale`, `retrieval_miss`, `routing_or_generation_failure`,
+   `delivery_failure` или `operator_only`.
 3. Найти топ-20 пробелов, которые чаще всего ведут к оператору.
 4. Для каждого пробела определить решение:
    - улучшить query normalization или alias;
@@ -45,6 +50,8 @@ verdict даёт оператор по полному тикету.
    KB.
 8. Прогнать smoke, типовые, нетиповые, safety, off-topic, PII и follow-up.
 9. Проверить calibration, затем один раз sealed holdout; зафиксировать метрики и изменения.
+10. Связать версию KB с cohort/trace и после релиза измерить эффект на сопоставимой выборке.
+    Улучшение на calibration не выдавать за независимый эффект.
 
 ## Метрики
 
@@ -75,11 +82,15 @@ verdict даёт оператор по полному тикету.
 Для каждого gap-а нужен короткий тикет:
 
 - пользовательский вопрос;
-- почему бот не закрыл его;
+- формализованный root cause и evidence, почему бот не закрыл его;
 - какой форум/тема;
-- какой источник нужен;
-- пример желаемого ответа;
-- приоритет по частоте обращений.
+- частота и какой подтверждённый факт/раздел Yonote нужен;
+- контрольные вопросы и критерии приёмки;
+- owner и статус:
+  `gap_found -> content_approved -> published -> released -> verified_on_real_questions`.
+
+Freshness и сезонная подготовка создают alerts/content tasks, но не изменяют Yonote или
+production KB автономно.
 
 ## Что не автоматизируем сейчас
 
