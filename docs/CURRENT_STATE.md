@@ -9,8 +9,9 @@
 по полному SHA. Миграции, versioned seed и index inputs относительно предыдущего runtime не
 менялись; повторная индексация не выполнялась.
 
-**Repository candidate, не deployed:** `913b0f9` (`Enforce Yonote-only response contract`) поверх
-`d1b295a` (`Add versioned NLU response contract`). Первый commit фиксирует точные сервисные
+**Repository candidate, не deployed:** `b612635`; runtime behavior задан commit `913b0f9`
+(`Enforce Yonote-only response contract`) поверх `d1b295a` (`Add versioned NLU response
+contract`), а `b612635` обновляет только handoff. Первый commit фиксирует точные сервисные
 реплики, 13 `response_profile` и безопасную migration matrix для 42 NLU-контуров / 762 ответных
 узлов. Второй подключает copy-контракт к runtime, ограничивает factual pipeline
 `source_type=yonote`, переводит cache на schema v3 и ставит fail-closed guards длины, ссылок,
@@ -25,7 +26,14 @@ environment-level loop/socket limit, а оставшиеся 147 тестов о
 Yonote-only audit проверил `1429` опубликованных записей: `0 errors / 4 warnings`. До release
 нужен content/taxonomy verdict по предупреждениям: 14 registry-форумов без canonical published
 Yonote chunks, 79 Yonote forum values вне registry, 223 grant records с forum taxonomy и
-58 duplicate-text groups.
+58 duplicate-text records в 26 группах.
+
+Read-only разбор предупреждений и реальных seed-кейсов завершён 28 июля и зафиксирован в
+`docs/yonote_release_content_gate_20260728.md`. Candidate получил **NO GO**: опубликованные факты
+дат «Машука» не достигают date composer через текущие topics, а у смены «Правда» название и дата
+разорваны между чанками без parent/metadata-связи. Дополнительно broad grant pseudo-forum
+эвристика удаляет campaign scope у 44 специфичных Yonote-записей. Существующий date-first тест
+проверяет синтетический composer-state и не является seed-integrated regression.
 
 **Статус релиза:** `TEST-PRODUCTION CONNECTED / SECURITY + QUALITY + HDE/VK SMOKE PASS`.
 Ограниченная тестовая линия HDE/VK включена и отвечает через постоянный корпоративный endpoint.
@@ -109,14 +117,16 @@ knowledge loop, build-vs-buy и границы исходящих коммуни
 `2186/2152`. Seed/index inputs не менялись, поэтому reindex не выполнялся. Любой deployment этого
 commit остаётся отдельной ручной SHA-bound операцией с повторным image/security/runtime gate.
 
-**Точный следующий шаг:** не менять healthy deployed runtime `b4bc23a`. Сначала вручную
-разобрать Yonote-only coverage/taxonomy warnings, получить content verdict по «Правде» и
-«Машуку» и при необходимости опубликовать исправления через versioned snapshot. Затем повторить
-Ruff, полный pytest, KB/Yonote audit и release quality suite. Deployment candidate `913b0f9`
-допустим только отдельной SHA-bound операцией с image/security/runtime gate; после неё нужен
-короткий HDE/VK smoke и новая cohort boundary. Seed в этих commits не менялся, поэтому
-автоматический reindex не разрешён и не требуется. Оба smoke-события 27 июля не включать в
-продуктовую конверсию; пункты публичной roadmap не разрешают широкий traffic или изменение KB.
+**Точный следующий шаг:** не менять healthy deployed runtime `b4bc23a`. Content owner должен
+сначала опубликовать в Yonote явную связь `Правда → 26–30 июля 2026`, заполнить основной
+date-раздел «Машука» и разрешить конфликты его возрастных интервалов/дедлайнов. После этого:
+получить и проверить versioned snapshot diff; выполнить один regression-first cycle с реальными
+chunk IDs для дат и specific grant scopes; прогнать Ruff, полный pytest, KB/Yonote audit и
+release quality suite. Изменение snapshot/metadata требует отдельного clean reindex. Deployment
+текущего candidate запрещён до снятия NO GO; последующий release выполняется только как
+SHA-bound операция с image/security/runtime gate, коротким HDE/VK smoke и новой cohort boundary.
+Оба smoke-события 27 июля не включать в продуктовую конверсию; пункты публичной roadmap не
+разрешают широкий traffic или изменение KB.
 
 ## 1. Цель
 
