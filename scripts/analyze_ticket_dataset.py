@@ -16,6 +16,9 @@ from typing import Any
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.kb.source_extractors import read_xlsx_sheets  # noqa: E402
+from src.graph.response_profiles import infer_response_profile  # noqa: E402
+from src.models import QueryAnalysis  # noqa: E402
+from src.response_contract import ResponseProfileName  # noqa: E402
 
 
 DEFAULT_INPUT = Path("data/private/tickets/RAG_Dataset.xlsx")
@@ -25,6 +28,15 @@ DEFAULT_FORUMS = Path("data/forums_registry.json")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?<!\d)(?:\+7|8)[\s\-()]?\d{3}[\s\-()]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)")
 PASSPORT_RE = re.compile(r"(?<!\d)\d{4}\s?\d{6}(?!\d)")
+SNILS_RE = re.compile(r"(?<!\d)\d{3}[-\s]\d{3}[-\s]\d{3}\s?\d{2}(?!\d)")
+VK_ID_RE = re.compile(r"(?<!\w)(?:vk[_\s-]?id|id)\s*[:=]?\s*\d{4,}(?!\w)", re.IGNORECASE)
+HANDLE_RE = re.compile(r"(?<![\w@])@[a-zа-яё0-9_][a-zа-яё0-9_.-]{2,}", re.IGNORECASE)
+LONG_ID_RE = re.compile(r"(?<!\d)\d{11,20}(?!\d)")
+FIO_CONTEXT_RE = re.compile(
+    r"\b(?:фио|ф\.?\s*и\.?\s*о\.?|меня зовут)\s*[:=-]?\s*"
+    r"[А-ЯЁ][а-яё-]+(?:\s+[А-ЯЁ][а-яё-]+){1,2}",
+    re.IGNORECASE,
+)
 DATE_RE = re.compile(r"(?<!\d)(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4})(?!\d)")
 URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
@@ -32,6 +44,7 @@ WHITESPACE_RE = re.compile(r"\s+")
 BOILERPLATE_PHRASES = [
     "заботливый бот росмолодёжи",
     "заботливый бот росмолодежи",
+    "заботливый бот создан",
     "чем я могу быть полезен",
     "перевожу на оператора",
     "пожалуйста, ожидайте",
@@ -39,6 +52,35 @@ BOILERPLATE_PHRASES = [
     "присоединюсь к диалогу",
     "благодарим за обращение в службу заботы",
     "если у вас есть к нам вопросы",
+    "для оценки качества обслуживания",
+    "мы уже занимаемся вашим вопросом",
+    "вернемся с ответом в течение 15 минут",
+    "вернёмся с ответом в течение 15 минут",
+    "выбери, что тебя интересует",
+    "все мероприятия росмолодёжи собраны",
+    "все мероприятия росмолодежи собраны",
+    "надеюсь, мне удалось помочь",
+    "я люблю быть полезным",
+    "ваше сообщение не доставлено",
+    "недоставленное сообщение",
+    "mail failure",
+    "recent login from a new device",
+    "вход с нового устройства",
+    "код проверки для двухфакторной авторизации",
+    "ответ на форму",
+    "ваш запрос направлен в службу заботы",
+    "мы рады, что вопрос решён",
+    "мы рады, что вопрос решен",
+    "приветствуем вас и благодарим за обратную связь",
+    "в списке нет нужного мероприятия? мы поможем",
+    "я помощник росмолодёжи",
+    "я помощник росмолодежи",
+    "я не совсем понял вопрос",
+    "вот актуальные контакты",
+    "служба заботы всегда рядом",
+    "кто-то входит в ваш аккаунт",
+    "2 new comments in",
+    "[support] null",
 ]
 
 SUPPORT_ANSWER_MARKERS = [
@@ -83,6 +125,8 @@ USER_REQUEST_MARKERS = [
     " мой ",
     " моя ",
     " мои ",
+    " моего ",
+    " моему ",
     "прошу",
     "подскажите",
     "помогите",
@@ -135,6 +179,15 @@ LOW_SIGNAL_TITLE_MARKERS = [
     "re:",
     "fw:",
     "fwd:",
+    "ответ на форму",
+    "ваше сообщение не доставлено",
+    "недоставленное сообщение",
+    "mail failure",
+    "recent login from a new device",
+    "вход с нового устройства",
+    "код проверки",
+    "двухфакторной авторизации",
+    "request from",
 ]
 
 PROFANITY_MARKERS = [
@@ -264,6 +317,7 @@ def analyze_dataset(
     top_questions = build_top_questions(normalized)
     golden = build_golden_candidates(normalized, max_items=max_golden)
     pairs = build_reranker_pairs(golden, normalized, max_pairs=max_pairs)
+    product_splits, product_split_summary = build_product_eval_splits(normalized)
     gap_report = build_gap_report(profile, taxonomy_rows, top_questions)
 
     write_json(output_dir / "dataset_profile.json", profile)
@@ -272,6 +326,9 @@ def analyze_dataset(
     write_markdown(output_dir / "top_questions.md", top_questions_to_markdown(top_questions))
     write_json(output_dir / "golden_set_candidates.json", golden)
     write_jsonl(output_dir / "reranker_calibration_pairs.jsonl", pairs)
+    for split_name, cases in product_splits.items():
+        write_jsonl(output_dir / f"product_{split_name}_cases.jsonl", cases)
+    write_json(output_dir / "product_split_summary.json", product_split_summary)
     (output_dir / "kb_gap_report.md").write_text(gap_report, encoding="utf-8")
     (output_dir / "analysis_summary.md").write_text(
         build_summary(profile, golden, pairs, output_dir),
@@ -284,6 +341,8 @@ def analyze_dataset(
         "tickets_total": profile["tickets_total"],
         "golden_candidates": len(golden),
         "reranker_pairs": len(pairs),
+        "product_eval_candidates": product_split_summary["total"],
+        "product_split_counts": product_split_summary["split_counts"],
         "top_categories": profile["category_counts"],
         "top_escalation_reasons": profile["escalation_reason_counts"],
     }
@@ -301,15 +360,41 @@ def load_ticket_rows(path: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for source_row in first_sheet[1:]:
         row = {header: source_row.cell(index) for index, header in enumerate(headers)}
-        if any(value for value in row.values()):
-            rows.append(row)
+        if not any(value for value in row.values()):
+            continue
+        if rows and _is_ticket_continuation(row, rows[-1]):
+            rows[-1]["messages"] = _join_message_parts(
+                rows[-1].get("messages") or "",
+                row.get("messages") or "",
+            )
+            continue
+        rows.append(row)
     return rows
 
 
+def _is_ticket_continuation(row: dict[str, str], previous: dict[str, str]) -> bool:
+    ticket_id = str(row.get("id") or "").strip()
+    if not ticket_id or ticket_id != str(previous.get("id") or "").strip():
+        return False
+    if str(row.get("unique_id") or "").strip():
+        return False
+    return not any(
+        str(value or "").strip()
+        for key, value in row.items()
+        if key not in {"id", "messages"}
+    )
+
+
+def _join_message_parts(left: str, right: str) -> str:
+    parts = [str(part or "").strip() for part in (left, right)]
+    return "\n".join(part for part in parts if part)
+
+
 def normalize_ticket(row: dict[str, str], forums: list[ForumAlias]) -> dict[str, Any]:
-    ticket_id = row.get("id") or row.get("unique_id") or ""
+    ticket_id_raw = row.get("id") or row.get("unique_id") or ""
     title_raw = compact_text(row.get("title") or "")
     messages_raw = compact_text(row.get("messages") or "")
+    ticket_hash = private_id_hash(ticket_id_raw or messages_raw or title_raw)
     segments = split_message_segments(messages_raw)
     meaningful_segments = [segment for segment in segments if not is_boilerplate(segment)]
     text_for_classification = " ".join([title_raw, *meaningful_segments[:8]])
@@ -323,6 +408,23 @@ def normalize_ticket(row: dict[str, str], forums: list[ForumAlias]) -> dict[str,
 
     category = classify_category(text_for_classification)
     topic = classify_topic(text_for_classification)
+    query_category = classify_category(question_candidate)
+    query_topic = classify_topic(question_candidate)
+    query_forum = detect_forum(question_candidate, forums)
+    query_escalation_reason = classify_escalation(question_candidate, {})
+    query_should_escalate = query_escalation_reason is not None
+    query_needs_clarification = needs_clarification(question_candidate)
+    response_profile = (
+        infer_response_profile(
+            QueryAnalysis(
+                category=query_category,
+                is_technical=query_category == "техподдержка",
+            ),
+            question_candidate,
+        ).value
+        if question_candidate
+        else "unresolved"
+    )
     forum = detect_forum(text_for_classification, forums)
     escalation_reason = classify_escalation(text_for_classification, row)
     should_escalate = escalation_reason is not None
@@ -332,6 +434,8 @@ def normalize_ticket(row: dict[str, str], forums: list[ForumAlias]) -> dict[str,
         should_escalate=should_escalate,
     )
     answerable_by_kb = (
+        bool(question_candidate)
+        and
         bool(answer_candidate)
         and not should_escalate
         and category in {"форумы", "гранты", "платформа_фгаис", "навигация"}
@@ -339,9 +443,13 @@ def normalize_ticket(row: dict[str, str], forums: list[ForumAlias]) -> dict[str,
 
     pii_types = sorted(set(title_pii + messages_pii + question_pii + answer_pii))
     return {
-        "ticket_id": ticket_id,
-        "ticket_hash": sha1_short(ticket_id or messages_raw or title_raw),
-        "unique_id": row.get("unique_id") or "",
+        "ticket_id": f"ticket::{ticket_hash}",
+        "ticket_hash": ticket_hash,
+        "unique_id": (
+            f"ticket::{private_id_hash(row['unique_id'])}"
+            if row.get("unique_id")
+            else ""
+        ),
         "created_at": row.get("date_created") or "",
         "updated_at": row.get("date_updated") or "",
         "closed_at": row.get("date_closed") or "",
@@ -359,6 +467,13 @@ def normalize_ticket(row: dict[str, str], forums: list[ForumAlias]) -> dict[str,
         "topic": topic,
         "intent": build_intent(category, topic),
         "subintent": "",
+        "query_category": query_category,
+        "query_topic": query_topic,
+        "query_forum_normalized": query_forum,
+        "query_needs_clarification": query_needs_clarification,
+        "query_should_escalate": query_should_escalate,
+        "query_escalation_reason": query_escalation_reason,
+        "response_profile": response_profile,
         "forum_normalized": forum,
         "has_pii": bool(pii_types),
         "pii_types": pii_types,
@@ -382,12 +497,22 @@ def is_boilerplate(text: str) -> bool:
     normalized = normalize_for_match(text)
     if len(normalized) < 4:
         return True
+    if URL_RE.fullmatch(text.strip()):
+        return True
     return any(phrase in normalized for phrase in BOILERPLATE_PHRASES)
 
 
 def choose_question_candidate(title: str, segments: list[str]) -> str:
     title_score = score_question_segment(title)
-    if 8 <= len(title) <= 500 and not is_low_signal_title(title) and title_score >= 0:
+    if (
+        8 <= len(title) <= 500
+        and not is_low_signal_title(title)
+        and (
+            title_score > 0
+            or title_score == 0
+            and _is_request_like_title(title)
+        )
+    ):
         return title
 
     candidates: list[tuple[int, int, str]] = []
@@ -402,19 +527,32 @@ def choose_question_candidate(title: str, segments: list[str]) -> str:
 
 def score_question_segment(segment: str) -> int:
     normalized = normalize_for_match(segment)
-    padded = f" {normalized} "
+    padded_prefix = f" {normalized[:240]} "
     if not normalized or is_boilerplate(segment):
         return -100
 
     score = 0
-    score += 8 * sum(marker in padded for marker in USER_REQUEST_MARKERS)
-    score += 5 * sum(marker in normalized for marker in QUESTION_MARKERS)
+    user_signal = sum(marker in padded_prefix for marker in USER_REQUEST_MARKERS)
+    leading = re.sub(
+        r"^(?:здравствуйте|добрый день|добрый вечер|привет)[,!.:\s-]*",
+        "",
+        normalized,
+    )
+    leading_question_signal = sum(
+        leading.startswith(marker.strip())
+        for marker in QUESTION_MARKERS
+    )
+    if leading.startswith("вопрос ") or leading.startswith("вопрос по"):
+        leading_question_signal += 1
+
+    score += 8 * user_signal
+    score += 7 * leading_question_signal
     if "?" in segment:
         score += 6
-    if re.search(r"\b(?:здравствуйте|добрый день|добрый вечер)\b", normalized):
-        score += 2
     if re.search(r"\b(?:не могу|не получается|не пришло|не получил|не успел)\b", normalized):
         score += 4
+    if len(segment) > 220 and not user_signal and not leading_question_signal:
+        score -= 12
 
     score -= 9 * sum(marker in normalized for marker in ANSWER_OPENING_MARKERS)
     score -= 12 * sum(marker in normalized for marker in THREAD_ARTIFACT_MARKERS)
@@ -437,6 +575,42 @@ def is_low_signal_title(title: str) -> bool:
         return True
     words = re.findall(r"[a-zа-я0-9]{3,}", normalized)
     return len(words) <= 1
+
+
+def _is_request_like_title(title: str) -> bool:
+    normalized = normalize_for_match(title)
+    if len(normalized) > 180:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "вопрос",
+            "заявк",
+            "ошиб",
+            "не работ",
+            "регистрац",
+            "статус",
+            "документ",
+            "трансфер",
+            "проезд",
+            "прожив",
+            "питан",
+            "грант",
+            "помощ",
+            "участ",
+            "доступ",
+            "парол",
+            "письм",
+            "результат",
+            "срок",
+            "дата",
+            "как ",
+            "когда ",
+            "где ",
+            "почему ",
+            "можно ",
+        )
+    )
 
 
 def choose_answer_candidate(segments: list[str], question: str) -> str:
@@ -553,6 +727,12 @@ def build_profile(records: list[dict[str, Any]], input_path: Path) -> dict[str, 
         ),
         "category_counts": dict(Counter(item["category"] for item in records).most_common()),
         "topic_counts": dict(Counter(item["topic"] for item in records).most_common()),
+        "response_profile_counts": dict(
+            Counter(
+                item.get("response_profile") or "generic"
+                for item in records
+            ).most_common()
+        ),
         "forum_counts": dict(
             Counter(item["forum_normalized"] or "unknown" for item in records).most_common(50)
         ),
@@ -575,18 +755,19 @@ def build_profile(records: list[dict[str, Any]], input_path: Path) -> dict[str, 
 
 
 def build_taxonomy(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for item in records:
         key = (
             item["category"],
             item["topic"],
             item["intent"],
+            item.get("response_profile") or "generic",
             item["forum_normalized"] or "",
         )
         grouped[key].append(item)
 
     rows: list[dict[str, Any]] = []
-    for (category, topic, intent, forum), items in sorted(
+    for (category, topic, intent, response_profile, forum), items in sorted(
         grouped.items(), key=lambda pair: len(pair[1]), reverse=True
     ):
         examples = [
@@ -601,10 +782,12 @@ def build_taxonomy(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "topic": topic,
                 "intent": intent,
                 "subintent": "",
+                "response_profile": response_profile,
                 "forum_normalized": forum,
                 "frequency": len(items),
                 "example_queries": " || ".join(examples),
-                "typical_answer_summary": summarize_answers(items),
+                "operator_copy_summary": summarize_answers(items),
+                "operator_copy_status": "weak_unreviewed",
                 "should_escalate_default": escalation_rate >= 0.5,
             }
         )
@@ -612,18 +795,22 @@ def build_taxonomy(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_top_questions(records: list[dict[str, Any]], limit: int = 100) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for item in records:
-        question_key = normalize_question_key(
-            item.get("question_candidate") or item["title_masked"]
-        )
+        question_key = normalize_question_key(item.get("question_candidate") or "")
         if not question_key:
             continue
-        key = (question_key, item["category"], item["topic"], item["forum_normalized"] or "")
+        key = (
+            question_key,
+            item["category"],
+            item["topic"],
+            item.get("response_profile") or "generic",
+            item["forum_normalized"] or "",
+        )
         grouped[key].append(item)
 
     results: list[dict[str, Any]] = []
-    for (question_key, category, topic, forum), items in sorted(
+    for (question_key, category, topic, response_profile, forum), items in sorted(
         grouped.items(), key=lambda pair: len(pair[1]), reverse=True
     )[:limit]:
         best = max(items, key=lambda item: len(item.get("answer_candidate") or ""))
@@ -634,8 +821,10 @@ def build_top_questions(records: list[dict[str, Any]], limit: int = 100) -> list
                 "frequency": len(items),
                 "category": category,
                 "topic": topic,
+                "response_profile": response_profile,
                 "forum_normalized": forum,
-                "typical_answer": best.get("answer_candidate") or "",
+                "operator_copy_candidate": best.get("answer_candidate") or "",
+                "operator_copy_status": "weak_unreviewed",
                 "should_escalate": (
                     sum(1 for item in items if item["should_escalate"]) >= len(items) / 2
                 ),
@@ -691,12 +880,17 @@ def build_golden_candidates(
                 "category": item["category"],
                 "topic": item["topic"],
                 "intent": item["intent"],
+                "response_profile": item.get("response_profile") or "generic",
                 "expected_escalated": item["should_escalate"],
                 "expected_escalation_reason": item["escalation_reason"],
                 "difficulty": item["difficulty"],
                 "source_ticket_ids": [item["ticket_id"]],
                 "source_refs": ["RAG_Dataset.xlsx"],
                 "notes": item["quality_notes"],
+                "label_status": "legacy_weak_operator_copy",
+                "operator_answer_used_as_fact": True,
+                "deprecated_for_product_eval": True,
+                "requires_human_review": True,
             }
         )
         if len(selected) >= max_items:
@@ -705,7 +899,10 @@ def build_golden_candidates(
 
 
 def balanced_scored_records(scored: list[tuple[int, dict[str, Any]]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[str, str, bool], list[tuple[int, int, dict[str, Any]]]] = defaultdict(list)
+    groups: dict[
+        tuple[str, str, str, bool],
+        list[tuple[int, int, dict[str, Any]]],
+    ] = defaultdict(list)
     for index, (score, item) in enumerate(scored):
         groups[golden_group_key(item)].append((score, index, item))
 
@@ -719,6 +916,7 @@ def balanced_scored_records(scored: list[tuple[int, dict[str, Any]]]) -> list[di
             key[0],
             key[1],
             key[2],
+            key[3],
         ),
         reverse=True,
     )
@@ -732,9 +930,10 @@ def balanced_scored_records(scored: list[tuple[int, dict[str, Any]]]) -> list[di
     return ordered
 
 
-def golden_group_key(item: dict[str, Any]) -> tuple[str, str, bool]:
+def golden_group_key(item: dict[str, Any]) -> tuple[str, str, str, bool]:
     return (
         str(item.get("category") or "unknown"),
+        str(item.get("response_profile") or "generic"),
         str(item.get("difficulty") or "unknown"),
         bool(item.get("should_escalate")),
     )
@@ -775,14 +974,291 @@ def build_reranker_pairs(
                     "forum_normalized": case["forum_normalized"],
                     "category": case["category"],
                     "topic": case["topic"],
+                    "response_profile": case.get("response_profile") or "generic",
                     "relevance_positive": 3,
                     "relevance_negatives": [1 for _ in negatives],
                     "source_ticket_ids": case["source_ticket_ids"],
+                    "label_status": "legacy_weak_operator_copy",
+                    "operator_answer_used_as_fact": True,
+                    "deprecated_for_product_eval": True,
+                    "requires_human_review": True,
                 }
             )
         if len(pairs) >= max_pairs:
             break
     return pairs
+
+
+def build_product_eval_splits(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    """Build private, query-only review queues without treating operator copy as gold."""
+
+    candidates = [
+        item
+        for item in records
+        if item.get("question_candidate")
+        and item.get("response_profile") not in {None, "", "unresolved"}
+    ]
+    dated_keys = sorted(
+        key
+        for item in candidates
+        if (key := _product_available_at_key(item)) is not None
+    )
+    validation_cutoff = _quantile_key(dated_keys, 0.70)
+    holdout_cutoff = _quantile_key(dated_keys, 0.85)
+
+    families: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in candidates:
+        families[_ticket_query_family(item)].append(item)
+
+    splits: dict[str, list[dict[str, Any]]] = {
+        "calibration": [],
+        "validation": [],
+        "holdout": [],
+    }
+    crossing_family_count = 0
+    for family_key, items in sorted(families.items()):
+        item_dates = [
+            key
+            for item in items
+            if (key := _product_available_at_key(item)) is not None
+        ]
+        split, crosses_boundary = _assign_product_split(
+            item_dates,
+            validation_cutoff=validation_cutoff,
+            holdout_cutoff=holdout_cutoff,
+        )
+        crossing_family_count += int(crosses_boundary)
+        cluster_id = sha1_short(family_key)
+        for item in sorted(
+            items,
+            key=lambda row: (
+                _product_available_at_key(row)
+                or (0, 0, 0, 0, 0, 0),
+                str(row.get("ticket_hash") or ""),
+            ),
+        ):
+            splits[split].append(
+                _build_product_eval_case(
+                    item,
+                    split=split,
+                    duplicate_cluster_id=cluster_id,
+                )
+            )
+
+    for cases in splits.values():
+        cases.sort(key=lambda item: (item["available_at"], item["id"]))
+
+    summary = {
+        "schema_version": "1.0.0",
+        "total": sum(len(cases) for cases in splits.values()),
+        "split_counts": {
+            split: len(cases)
+            for split, cases in splits.items()
+        },
+        "unique_duplicate_clusters": len(families),
+        "crossing_families_forced_to_calibration": crossing_family_count,
+        "validation_cutoff": _format_sort_key(validation_cutoff),
+        "holdout_cutoff": _format_sort_key(holdout_cutoff),
+        "input_tickets_total": len(records),
+        "excluded_without_query_or_profile": len(records) - len(candidates),
+        "candidate_coverage_ratio": (
+            round(len(candidates) / len(records), 4)
+            if records
+            else 0.0
+        ),
+        "unit": "merged_ticket_query_candidate",
+        "split_timestamp": "latest_of_created_updated_closed",
+        "label_status": "weak_unreviewed",
+        "deidentification_status": "best_effort_private_only",
+        "operator_answers_used_as_facts": False,
+        "factual_ground_truth_present": False,
+        "sealed_holdout_ready": False,
+        "limitations": [
+            "Every case requires human review before it can become gold.",
+            "Operator replies are excluded from cases and are not factual ground truth.",
+            (
+                "Cases are query-only: dialogue roles and full multi-turn context "
+                "are not reconstructed."
+            ),
+            (
+                "Best-effort masking is not anonymization; every artifact must remain "
+                "under data/private."
+            ),
+            "Time-sensitive facts require an approved as-of release snapshot.",
+            (
+                "Lexical template families crossing time boundaries stay in calibration; "
+                "semantic paraphrase leakage still requires human review."
+            ),
+        ],
+    }
+    return splits, summary
+
+
+def _build_product_eval_case(
+    item: dict[str, Any],
+    *,
+    split: str,
+    duplicate_cluster_id: str,
+) -> dict[str, Any]:
+    query = str(item.get("question_candidate") or "")
+    query_category = str(item.get("query_category") or classify_category(query))
+    query_topic = str(item.get("query_topic") or classify_topic(query))
+    profile = infer_response_profile(
+        QueryAnalysis(
+            category=query_category,
+            is_technical=query_category == "техподдержка",
+        ),
+        query,
+    ).value
+    query_escalation_reason = (
+        item.get("query_escalation_reason")
+        if "query_escalation_reason" in item
+        else classify_escalation(query, {})
+    )
+    query_should_escalate = bool(
+        item.get("query_should_escalate")
+        if "query_should_escalate" in item
+        else query_escalation_reason
+    )
+    query_needs_clarification = bool(
+        item.get("query_needs_clarification")
+        if "query_needs_clarification" in item
+        else needs_clarification(query)
+    )
+    available_at = _format_sort_key(_product_available_at_key(item)) or ""
+    return {
+        "schema_version": "1.0.0",
+        "id": f"ticket::{item['ticket_hash']}",
+        "ticket_id_hash": item["ticket_hash"],
+        "query": query,
+        "first_timestamp": str(item.get("created_at") or ""),
+        "available_at": available_at,
+        "channel": str(item.get("channel") or ""),
+        "category": query_category,
+        "topic": query_topic,
+        "entity": str(item.get("query_forum_normalized") or ""),
+        "expected_response_profile": profile,
+        "expected_route": (
+            "escalate"
+            if query_should_escalate
+            else "clarify"
+            if query_needs_clarification
+            else "answer"
+        ),
+        "needs_clarification": query_needs_clarification,
+        "needs_escalation": query_should_escalate,
+        "expected_escalation_reason": query_escalation_reason,
+        "time_sensitive": _is_time_sensitive_case(profile, query),
+        "answerable_from_snapshot": None,
+        "approved_chunk_ids": [],
+        "forbidden_response_profiles": [],
+        "duplicate_cluster_id": duplicate_cluster_id,
+        "split": split,
+        "label_status": "weak_unreviewed",
+        "label_provenance": "deterministic_query_only_v2",
+        "requires_human_review": True,
+        "operator_answer_included": False,
+        "operator_answer_used_as_fact": False,
+    }
+
+
+def _ticket_query_family(item: dict[str, Any]) -> str:
+    query = normalize_question_key(str(item.get("question_candidate") or ""))
+    forum = normalize_for_match(str(item.get("query_forum_normalized") or ""))
+    if forum:
+        query = query.replace(forum, "[event]")
+    query = re.sub(r"\b\d+\b", "[num]", query)
+    query = re.sub(r"(?:\[num\]\s*){2,}", "[num] ", query)
+    return WHITESPACE_RE.sub(" ", query).strip()
+
+
+def _product_available_at_key(
+    item: dict[str, Any],
+) -> tuple[int, int, int, int, int, int] | None:
+    timestamps = [
+        key
+        for field in ("created_at", "updated_at", "closed_at")
+        if (key := _created_at_sort_key(str(item.get(field) or ""))) is not None
+    ]
+    return max(timestamps, default=None)
+
+
+def _created_at_sort_key(value: str) -> tuple[int, int, int, int, int, int] | None:
+    match = re.search(
+        r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})"
+        r"(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?",
+        value,
+    )
+    if not match:
+        return None
+    parts = [int(part or 0) for part in match.groups()]
+    year, month, day, hour, minute, second = parts
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return year, month, day, hour, minute, second
+
+
+def _quantile_key(
+    values: list[tuple[int, int, int, int, int, int]],
+    quantile: float,
+) -> tuple[int, int, int, int, int, int] | None:
+    if not values:
+        return None
+    index = min(len(values) - 1, max(0, int(len(values) * quantile)))
+    return values[index]
+
+
+def _assign_product_split(
+    item_dates: list[tuple[int, int, int, int, int, int]],
+    *,
+    validation_cutoff: tuple[int, int, int, int, int, int] | None,
+    holdout_cutoff: tuple[int, int, int, int, int, int] | None,
+) -> tuple[str, bool]:
+    if not item_dates or validation_cutoff is None or holdout_cutoff is None:
+        return "calibration", False
+    earliest = min(item_dates)
+    latest = max(item_dates)
+    if earliest >= holdout_cutoff:
+        return "holdout", False
+    if earliest >= validation_cutoff and latest < holdout_cutoff:
+        return "validation", False
+    crosses_boundary = (
+        earliest < validation_cutoff <= latest
+        or earliest < holdout_cutoff <= latest
+    )
+    return "calibration", crosses_boundary
+
+
+def _format_sort_key(
+    value: tuple[int, int, int, int, int, int] | None,
+) -> str | None:
+    if value is None:
+        return None
+    year, month, day, hour, minute, second = value
+    return f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}"
+
+
+def _is_time_sensitive_case(profile: str, query: str) -> bool:
+    if profile in {
+        ResponseProfileName.DATES.value,
+        ResponseProfileName.SELECTION_STATUS.value,
+    }:
+        return True
+    normalized = normalize_for_match(query)
+    return any(
+        marker in normalized
+        for marker in (
+            "срок",
+            "дедлайн",
+            "прием заяв",
+            "приём заяв",
+            "регистрац",
+            "статус",
+            "результат",
+        )
+    )
 
 
 def build_gap_report(
@@ -804,6 +1280,10 @@ def build_gap_report(
         "",
         *_counter_lines(profile["category_counts"]),
         "",
+        "## Requested Response Profiles",
+        "",
+        *_counter_lines(profile["response_profile_counts"]),
+        "",
         "## Top Forums",
         "",
         *_counter_lines(profile["forum_counts"], limit=30),
@@ -818,7 +1298,7 @@ def build_gap_report(
     for row in taxonomy_rows[:30]:
         lines.append(
             f"- `{row['frequency']}` {row['category']} / {row['topic']} / "
-            f"{row['forum_normalized'] or 'unknown'}"
+            f"{row['response_profile']} / {row['forum_normalized'] or 'unknown'}"
         )
 
     lines.extend(
@@ -831,7 +1311,8 @@ def build_gap_report(
     for item in top_questions[:30]:
         lines.append(
             f"- `{item['frequency']}` {item['category']} / {item['topic']} / "
-            f"{item['forum_normalized'] or 'unknown'}: {item['example_query'][:180]}"
+            f"{item['response_profile']} / {item['forum_normalized'] or 'unknown'}: "
+            f"{item['example_query'][:180]}"
         )
 
     lines.extend(
@@ -844,7 +1325,10 @@ def build_gap_report(
             "- Для форумов с похожими вопросами добавить `forum_normalized` и aliases "
             "в KB metadata.",
             "- Для `personal_status` и открытых статусов оставить controlled escalation.",
-            "- По reranker calibration pairs прогнать threshold sweep до изменения `.env`.",
+            (
+                "- Legacy operator-copy reranker pairs не использовать для threshold sweep; "
+                "сначала сопоставить запросы с approved KB chunks."
+            ),
             "- Сырые и нормализованные приватные данные не коммитить.",
         ]
     )
@@ -859,6 +1343,10 @@ def build_summary(
 ) -> str:
     golden_difficulty = Counter(item.get("difficulty") or "unknown" for item in golden)
     golden_category = Counter(item.get("category") or "unknown" for item in golden)
+    golden_profile = Counter(
+        item.get("response_profile") or "generic"
+        for item in golden
+    )
     golden_escalation = Counter(
         "escalated" if item.get("expected_escalated") else "answerable" for item in golden
     )
@@ -874,6 +1362,10 @@ def build_summary(
             f"- Escalation candidates: `{profile['should_escalate_count']}`",
             f"- Tickets with detected PII: `{profile['has_pii_count']}`",
             "",
+            "> `golden_set_candidates` and reranker pairs contain legacy, weak "
+            "operator copy. They are deprecated for product evaluation and must not "
+            "be used as factual ground truth.",
+            "",
             "## Golden Candidate Mix",
             "",
             *_counter_lines(dict(golden_difficulty.most_common())),
@@ -881,6 +1373,10 @@ def build_summary(
             "## Golden Candidate Categories",
             "",
             *_counter_lines(dict(golden_category.most_common())),
+            "",
+            "## Golden Candidate Response Profiles",
+            "",
+            *_counter_lines(dict(golden_profile.most_common())),
             "",
             "## Golden Candidate Expected Routing",
             "",
@@ -894,6 +1390,10 @@ def build_summary(
             "- `top_questions.md`",
             "- `golden_set_candidates.json`",
             "- `reranker_calibration_pairs.jsonl`",
+            "- `product_calibration_cases.jsonl`",
+            "- `product_validation_cases.jsonl`",
+            "- `product_holdout_cases.jsonl`",
+            "- `product_split_summary.json`",
             "- `kb_gap_report.md`",
             "",
         ]
@@ -904,13 +1404,14 @@ def top_questions_to_markdown(items: list[dict[str, Any]]) -> str:
     lines = [
         "# Top Questions",
         "",
-        "| Rank | Frequency | Category | Topic | Forum | Escalate | Example Query |",
-        "|---:|---:|---|---|---|---|---|",
+        "| Rank | Frequency | Category | Topic | Profile | Forum | Escalate | Example Query |",
+        "|---:|---:|---|---|---|---|---|---|",
     ]
     for index, item in enumerate(items, start=1):
         lines.append(
             "| "
             f"{index} | {item['frequency']} | {item['category']} | {item['topic']} | "
+            f"{item['response_profile']} | "
             f"{item['forum_normalized'] or 'unknown'} | {item['should_escalate']} | "
             f"{markdown_cell(item['example_query'][:220])} |"
         )
@@ -938,10 +1439,15 @@ def mask_pii(text: str) -> tuple[str, list[str]]:
     pii_types: list[str] = []
     for pii_type, regex, placeholder in (
         ("email", EMAIL_RE, "[EMAIL]"),
-        ("phone", PHONE_RE, "[ТЕЛЕФОН]"),
-        ("passport", PASSPORT_RE, "[ДОКУМЕНТ]"),
-        ("date", DATE_RE, "[ДАТА]"),
         ("url", URL_RE, "[URL]"),
+        ("phone", PHONE_RE, "[ТЕЛЕФОН]"),
+        ("snils", SNILS_RE, "[СНИЛС]"),
+        ("passport", PASSPORT_RE, "[ДОКУМЕНТ]"),
+        ("vk_id", VK_ID_RE, "[VK_ID]"),
+        ("handle", HANDLE_RE, "[HANDLE]"),
+        ("fio_context", FIO_CONTEXT_RE, "[ФИО]"),
+        ("long_id", LONG_ID_RE, "[ID]"),
+        ("date", DATE_RE, "[ДАТА]"),
     ):
         masked, count = regex.subn(placeholder, masked)
         if count:
@@ -1001,6 +1507,11 @@ def build_quality_notes(row: dict[str, str], question: str, answer: str) -> str:
 
 def sha1_short(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def private_id_hash(value: str) -> str:
+    namespaced = f"rosmol-private-ticket-v1\0{value}"
+    return hashlib.sha256(namespaced.encode("utf-8", errors="ignore")).hexdigest()[:24]
 
 
 def markdown_cell(value: str) -> str:

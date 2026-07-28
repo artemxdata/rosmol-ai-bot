@@ -15,7 +15,11 @@ from src.graph.nodes.analyze import (
 from src.graph.nodes.clarify import OFFTOPIC_SCOPE_NOTE, clarify
 from src.graph.nodes.escalate import PARTIAL_COVERAGE_NOTE, escalate
 from src.graph.nodes.generate import build_deterministic_source_response, generate
-from src.graph.nodes.rerank import _candidate_chunks_for_question, rerank
+from src.graph.nodes.rerank import (
+    _candidate_chunks_for_question,
+    _topic_candidate_for_question,
+    rerank,
+)
 from src.graph.nodes.respond import normalize_final_response, respond
 from src.graph.nodes.retrieve import retrieve
 from src.graph.nodes.verify import UNKNOWN_FORUM_RESPONSE, verify
@@ -4223,6 +4227,60 @@ def test_rerank_candidate_prefilter_prioritizes_travel_to_venue_wording() -> Non
     assert [chunk.chunk_id for chunk in candidates] == ["travel", "docs"]
 
 
+def test_rerank_topic_pin_prefers_event_dates_over_other_same_forum_aspects() -> None:
+    question = Question(
+        text="Когда Машук?",
+        category="форумы",
+        forum_normalized="Машук",
+        topic="daty_nachala_meropriyatiya",
+    )
+    transfer = YonoteChunk(
+        chunk_id="mashuk_transfer",
+        text="Трансфер от вокзала до площадки оплачивают организаторы.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "finansirovanie_uchastnikov",
+        },
+        score=1.0,
+    )
+    registration = YonoteChunk(
+        chunk_id="mashuk_registration",
+        text="Регистрация проходит через ФГАИС до 15.06.2026.",
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "registraciya",
+            "dates_mentioned": ["15.06.2026"],
+            "registration_deadline": "2026-06-15T00:00:00+03:00",
+        },
+        score=1.1,
+    )
+    dates = YonoteChunk(
+        chunk_id="mashuk_first_shift",
+        text=(
+            "1 смена 8-15 августа. 8 августа — день заезда; "
+            "15 августа — день закрытия и разъезда."
+        ),
+        metadata={
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "1_smena_8_15_avgusta",
+            "dates_mentioned": ["8 августа", "15 августа"],
+        },
+        score=0.6,
+    )
+
+    candidate = _topic_candidate_for_question(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        question,
+        [registration, transfer, dates],
+    )
+
+    assert candidate is not None
+    assert candidate.chunk_id == "mashuk_first_shift"
+
+
 def test_rerank_candidate_prefilter_prioritizes_regional_invitation_letter() -> None:
     chunks = [
         YonoteChunk(
@@ -5580,7 +5638,7 @@ async def test_generate_synthesizes_multi_aspect_answer_from_sources(
 
 
 @pytest.mark.asyncio
-async def test_generate_escalates_when_llm_omits_multi_aspect_citation_twice(
+async def test_generate_escalates_when_llm_omits_multi_aspect_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -5642,7 +5700,7 @@ async def test_generate_escalates_when_llm_omits_multi_aspect_citation_twice(
 
     assert llm.calls == 2
     assert result["should_escalate"] is True
-    assert result["escalation_reason"] == "llm_response_contract_failed"
+    assert result["escalation_reason"] == "llm_response_profile_failed"
     assert result["generated_response"] == ""
     assert result["cited_sources"] == []
 
@@ -8364,7 +8422,11 @@ async def test_generate_uses_official_catalog_without_contextual_llm_synthesis(
     catalog = ScoredChunk(
         chunk_id="recommendation_catalog",
         text="Посмотри все доступные форумы на https://events.myrosmol.ru/forumy/.",
-        metadata={"category": "общее", "topic": "rekomendacii_obschie"},
+        metadata={
+            "source_type": "yonote",
+            "category": "общее",
+            "topic": "rekomendacii_obschie",
+        },
         score=0.5,
         reranker_score=0.3,
     )

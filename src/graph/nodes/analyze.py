@@ -9,6 +9,7 @@ from src.graph.context import (
     build_contextual_message,
     last_forum_from_session,
 )
+from src.graph.response_profiles import infer_response_profile
 from src.graph.state import BotState
 from src.kb.forum_registry import detect_forums_from_text
 from src.llm.cascade import select_analyzer_model
@@ -1757,112 +1758,7 @@ def _infer_response_profile(
     analysis: QueryAnalysis,
     message: str,
 ) -> ResponseProfileName:
-    category = str(analysis.category or "").casefold().replace("ё", "е")
-    evidence_parts = [
-        message,
-        *analysis.topics,
-        *(question.text for question in analysis.questions),
-        *(question.topic or "" for question in analysis.questions),
-    ]
-    evidence = " ".join(evidence_parts).casefold().replace("ё", "е")
-
-    if analysis.is_technical or category == "техподдержка" or any(
-        marker in evidence
-        for marker in (
-            "ошиб",
-            "не работает",
-            "не могу войти",
-            "не получается",
-            "техподдерж",
-        )
-    ):
-        return ResponseProfileName.TECHNICAL
-    if any(
-        marker in evidence
-        for marker in (
-            "когда",
-            "дата",
-            "даты",
-            "срок",
-            "период проведения",
-        )
-    ):
-        return ResponseProfileName.DATES
-    if any(
-        marker in evidence
-        for marker in (
-            "статус заяв",
-            "результат",
-            "прошел отбор",
-            "прошёл отбор",
-            "прошла отбор",
-            "одобрен",
-            "отклонен",
-            "отклонён",
-            "отбор",
-        )
-    ):
-        return ResponseProfileName.SELECTION_STATUS
-    if any(
-        marker in evidence
-        for marker in (
-            "документ",
-            "справк",
-            "сертификат",
-            "положение",
-            "письмо-вызов",
-            "письмо вызов",
-        )
-    ):
-        return ResponseProfileName.DOCUMENTS
-    if any(
-        marker in evidence
-        for marker in (
-            "возраст",
-            "кто может",
-            "кто может участвовать",
-            "условия участия",
-            "требования к участник",
-            "подхожу ли",
-        )
-    ):
-        return ResponseProfileName.ELIGIBILITY
-    if any(
-        marker in evidence
-        for marker in ("проезд", "дорог", "трансфер", "маршрут", "билет")
-    ):
-        return ResponseProfileName.TRAVEL
-    if any(
-        marker in evidence
-        for marker in ("прожив", "размещен", "размещён", "общежит", "гостиниц")
-    ):
-        return ResponseProfileName.ACCOMMODATION
-    if any(marker in evidence for marker in ("питан", "еда", "корм")):
-        return ResponseProfileName.FOOD
-    if any(
-        marker in evidence
-        for marker in (
-            "доступн",
-            "инвалид",
-            "овз",
-            "маломобиль",
-            "сопровождающ",
-        )
-    ):
-        return ResponseProfileName.ACCESSIBILITY
-    if any(
-        marker in evidence
-        for marker in ("подать заяв", "подача заяв", "регистрац", "зарегистр")
-    ):
-        return ResponseProfileName.APPLICATION
-    if any(
-        marker in evidence
-        for marker in ("программ", "расписан", "афиш", "кто выступ")
-    ):
-        return ResponseProfileName.PROGRAM
-    if category == "гранты" or "грант" in evidence:
-        return ResponseProfileName.GRANTS
-    return ResponseProfileName.GENERIC
+    return infer_response_profile(analysis, message)
 
 
 def _apply_deterministic_forum(payload: dict, message: str) -> None:

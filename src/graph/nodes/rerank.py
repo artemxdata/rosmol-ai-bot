@@ -9,6 +9,12 @@ from typing import Any
 from src.config import get_settings
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
+from src.graph.response_profiles import (
+    asks_event_dates as asks_profile_event_dates,
+)
+from src.graph.response_profiles import (
+    chunk_has_event_date_evidence,
+)
 from src.graph.state import BotState
 from src.models import Chunk, Question, ScoredChunk
 from src.rag.errors import MLDependencyError
@@ -814,6 +820,12 @@ def _topic_match_rank(question: Question, chunk: Chunk) -> int:
         and any(marker in chunk.text.casefold() for marker in ("регистрац", "заявк"))
     ):
         return 1
+    if (
+        question_topic_group
+        == _equivalent_topic_group("daty_nachala_meropriyatiya")
+        and chunk_has_event_date_evidence(chunk.text, chunk.metadata)
+    ):
+        return 1
     if _is_combined_food_housing_source(question_topic_group, chunk_topic, chunk.text):
         return 1
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
@@ -1122,12 +1134,7 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
             or "вещ" in metadata_haystack
         )
     if _asks_event_dates(normalized_question):
-        return (
-            "daty_nachala" in metadata_haystack
-            or "mesto_i_daty" in metadata_haystack
-            or "sut_festivalya_i_data" in metadata_haystack
-            or ("даты" in metadata_haystack and "мероприят" in metadata_haystack)
-        )
+        return chunk_has_event_date_evidence(chunk.text, chunk.metadata)
     if _asks_profile_id(normalized_question):
         return (
             "gde_nayti_id_profilya" in metadata_haystack
@@ -1214,12 +1221,7 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
             or ("заезд" in metadata_haystack and "выезд" in metadata_haystack)
         )
     if _asks_event_dates(normalized_question):
-        return (
-            "daty_nachala" in metadata_haystack
-            or "mesto_i_daty" in metadata_haystack
-            or "sut_festivalya_i_data" in metadata_haystack
-            or ("даты" in metadata_haystack and "мероприят" in metadata_haystack)
-        )
+        return chunk_has_event_date_evidence(chunk.text, chunk.metadata)
     return False
 
 
@@ -1820,6 +1822,8 @@ def _asks_event_dates(normalized_question: str) -> bool:
         return False
     if "когда добав" in normalized_question and "чат" in normalized_question:
         return False
+    if asks_profile_event_dates(normalized_question):
+        return True
     return any(
         marker in normalized_question
         for marker in (

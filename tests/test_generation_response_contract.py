@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -177,6 +179,24 @@ def _date_state(event: str, llm_client: object) -> dict:
         "max_confidence": 0.95,
         "llm_client": llm_client,
     }
+
+
+def _published_seed_chunk(chunk_id: str, *, score: float) -> ScoredChunk:
+    seed_path = Path(__file__).resolve().parents[1] / "data" / "knowledge_base_seed.json"
+    records = json.loads(seed_path.read_text(encoding="utf-8"))
+    record = next(item for item in records if item.get("chunk_id") == chunk_id)
+    metadata = {
+        key: value
+        for key, value in record.items()
+        if key not in {"text_raw", "text_clean"}
+    }
+    return ScoredChunk(
+        chunk_id=chunk_id,
+        text=record["text_clean"],
+        metadata=metadata,
+        score=score,
+        reranker_score=score,
+    )
 
 
 @pytest.mark.asyncio
@@ -453,6 +473,164 @@ async def test_date_answer_rejects_unasked_registration_curator_and_chat_details
 
 
 @pytest.mark.asyncio
+async def test_real_seed_date_question_ignores_higher_scoring_transfer_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    transfer = _published_seed_chunk(
+        "yonote_api_pmbmqm6lug_s0018_finansirovanie_uchastnikov",
+        score=0.99,
+    )
+    first_shift_dates = _published_seed_chunk(
+        "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta",
+        score=0.8,
+    )
+    llm = RaisingLLM()
+
+    result = await generate(
+        {
+            "message_masked": "Когда Машук?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Машук",
+                response_profile=ResponseProfileName.DATES,
+                questions=[
+                    Question(
+                        text="Когда Машук?",
+                        category="форумы",
+                        forum_normalized="Машук",
+                        topic="daty_nachala_meropriyatiya",
+                    )
+                ],
+            ),
+            "reranked_chunks": [transfer, first_shift_dates],
+            "max_confidence": 0.99,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result.get("should_escalate") is not True
+    assert result["cited_sources"] == [first_shift_dates.chunk_id]
+    assert "августа" in result["generated_response"]
+    assert "трансфер" not in result["generated_response"].casefold()
+
+
+@pytest.mark.asyncio
+async def test_date_question_with_only_transfer_source_does_not_answer_other_aspect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    transfer = _published_seed_chunk(
+        "yonote_api_pmbmqm6lug_s0018_finansirovanie_uchastnikov",
+        score=0.99,
+    )
+    llm = RaisingLLM()
+
+    result = await generate(
+        {
+            "message_masked": "Когда Машук?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Машук",
+                response_profile=ResponseProfileName.DATES,
+                questions=[
+                    Question(
+                        text="Когда Машук?",
+                        category="форумы",
+                        forum_normalized="Машук",
+                        topic="daty_nachala_meropriyatiya",
+                    )
+                ],
+            ),
+            "reranked_chunks": [transfer],
+            "max_confidence": 0.99,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["should_escalate"] is True
+    assert result["generated_response"] == ""
+    assert result["cited_sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_non_date_profile_retries_then_rejects_cross_aspect_llm_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    application = ScoredChunk(
+        chunk_id="yonote_application_long",
+        text=(
+            "Подать заявку на форум можно через карточку события в личном кабинете. "
+            * 20
+        ),
+        metadata={
+            "source_type": "yonote",
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "poryadok_registracii_na_forum",
+            "intent_examples": ["Как подать заявку на Машук?"],
+        },
+        score=0.9,
+        reranker_score=0.9,
+    )
+    llm = StubLLM(
+        "Трансфер от вокзала до площадки организуют бесплатно. "
+        "[src:yonote_application_long]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Как подать заявку на Машук?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Машук",
+                response_profile=ResponseProfileName.APPLICATION,
+                questions=[
+                    Question(
+                        text="Как подать заявку на Машук?",
+                        category="форумы",
+                        forum_normalized="Машук",
+                        topic="podacha_zayavki_na_proekt",
+                    )
+                ],
+            ),
+            "reranked_chunks": [application],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_response_profile_failed"
+    assert result["generated_response"] == ""
+
+
+@pytest.mark.asyncio
 async def test_multi_source_answer_requires_grounded_synthesis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -473,6 +651,30 @@ async def test_multi_source_answer_requires_grounded_synthesis(
     assert llm.calls == 1
     assert result["generator_model"] != "source_chunk"
     assert result["cited_sources"] == ["yonote_application", "yonote_travel"]
+
+
+@pytest.mark.asyncio
+async def test_multi_question_answer_rejects_unrequested_only_aspect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    llm = StubLLM(
+        "Питание предоставляют три раза в день. "
+        "[src:yonote_application] [src:yonote_travel]"
+    )
+
+    result = await generate(_multi_source_state(llm))
+
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_response_profile_failed"
+    assert result["generated_response"] == ""
 
 
 @pytest.mark.asyncio

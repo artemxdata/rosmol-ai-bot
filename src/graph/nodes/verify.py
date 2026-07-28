@@ -9,6 +9,13 @@ from src.graph.question_utils import (
     FALLBACK_QUESTION_MARKERS,
     build_effective_questions,
 )
+from src.graph.response_profiles import (
+    LEGACY_EVENT_DATE_TOPICS,
+    chunk_has_event_date_evidence,
+)
+from src.graph.response_profiles import (
+    asks_event_dates as asks_profile_event_dates,
+)
 from src.graph.state import BotState
 from src.llm.cascade import select_judge_model
 from src.llm.json_utils import parse_llm_json
@@ -147,15 +154,7 @@ DATE_COVERAGE_MARKERS = frozenset(
         "локац",
     )
 )
-DATE_TOPIC_ALIASES = frozenset(
-    {
-        "daty_nachala_meropriyatiya",
-        "mesto_i_daty_provedeniya_meropriyatiya",
-        "mesto_i_ploschadka_provedeniya",
-        "vremya_nachala_i_raspisanie",
-        "sut_festivalya_i_data",
-    }
-)
+DATE_TOPIC_ALIASES = LEGACY_EVENT_DATE_TOPICS
 OVERVIEW_COVERAGE_MARKERS = frozenset(
     (
         "в чем суть",
@@ -841,6 +840,11 @@ def _question_has_source_coverage(question: Question, chunks: list[ScoredChunk])
     ]
     if not relevant_chunks:
         return False
+    if asks_profile_event_dates(question.text):
+        return any(
+            chunk_has_event_date_evidence(chunk.text, chunk.metadata)
+            for chunk in relevant_chunks
+        )
 
     haystack = " ".join(_chunk_haystack(chunk) for chunk in relevant_chunks)
     required_markers = _required_marker_groups(question.text)

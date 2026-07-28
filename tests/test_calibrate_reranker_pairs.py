@@ -164,3 +164,18 @@ async def test_calibrate_pairs_can_skip_output_files(tmp_path) -> None:
 
     assert report["pairs_total"] == 1
     assert not (tmp_path / "-").exists()
+
+
+@pytest.mark.asyncio
+async def test_calibrate_pairs_rejects_deprecated_operator_copy(tmp_path) -> None:
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text(
+        (
+            '{"query":"q","positive_text":"operator copy",'
+            '"hard_negative_texts":["n"],"deprecated_for_product_eval":true}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="deprecated operator copy"):
+        await calibrate_pairs(pairs, Path("-"), scorer=FakeScorer())

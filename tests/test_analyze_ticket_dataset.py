@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from scripts.analyze_ticket_dataset import (
     ForumAlias,
     build_golden_candidates,
+    build_product_eval_splits,
     build_reranker_pairs,
     choose_answer_candidate,
     choose_question_candidate,
@@ -11,11 +14,95 @@ from scripts.analyze_ticket_dataset import (
     classify_topic,
     detect_forum,
     is_low_signal_title,
+    load_ticket_rows,
     mask_pii,
     normalize_ticket,
     score_question_segment,
     split_message_segments,
 )
+from src.kb.source_extractors import SpreadsheetRow
+
+
+def test_load_ticket_rows_merges_export_continuations(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.analyze_ticket_dataset.read_xlsx_sheets",
+        lambda _path: {
+            "Sheet1": [
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=1,
+                    cells=("id", "unique_id", "messages", "status"),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=2,
+                    cells=("ticket-1", "unique-1", "Первая часть", "closed"),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=3,
+                    cells=("ticket-1", "", "Вторая часть", ""),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=4,
+                    cells=("ticket-1", "", "Третья часть", ""),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=5,
+                    cells=("ticket-1", "", "", ""),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=6,
+                    cells=("ticket-2", "unique-2", "Другой тикет", "closed"),
+                ),
+            ]
+        },
+    )
+
+    rows = load_ticket_rows(Path("unused.xlsx"))
+
+    assert len(rows) == 2
+    assert rows[0]["messages"] == "Первая часть\nВторая часть\nТретья часть"
+    assert rows[0]["status"] == "closed"
+    assert rows[1]["id"] == "ticket-2"
+
+
+def test_load_ticket_rows_does_not_merge_incomplete_independent_row(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.analyze_ticket_dataset.read_xlsx_sheets",
+        lambda _path: {
+            "Sheet1": [
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=1,
+                    cells=("id", "unique_id", "messages", "status"),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=2,
+                    cells=("ticket-1", "unique-1", "Первая часть", "closed"),
+                ),
+                SpreadsheetRow(
+                    sheet_name="Sheet1",
+                    row_number=3,
+                    cells=("ticket-1", "", "Не continuation", "open"),
+                ),
+            ]
+        },
+    )
+
+    rows = load_ticket_rows(Path("unused.xlsx"))
+
+    assert len(rows) == 2
+    assert rows[0]["messages"] == "Первая часть"
+    assert rows[1]["status"] == "open"
 
 
 def test_mask_pii_masks_contacts_and_urls() -> None:
@@ -26,7 +113,21 @@ def test_mask_pii_masks_contacts_and_urls() -> None:
     assert "[EMAIL]" in masked
     assert "[ТЕЛЕФОН]" in masked
     assert "[URL]" in masked
-    assert pii_types == ["email", "phone", "url"]
+    assert pii_types == ["email", "url", "phone"]
+
+
+def test_mask_pii_masks_private_platform_identifiers() -> None:
+    masked, pii_types = mask_pii(
+        "ФИО: Иванов Иван Иванович, @private_user, id12345678, "
+        "СНИЛС 123-456-789 01, номер 123456789012345"
+    )
+
+    assert "Иванов Иван Иванович" not in masked
+    assert "@private_user" not in masked
+    assert "id12345678" not in masked
+    assert "123-456-789 01" not in masked
+    assert "123456789012345" not in masked
+    assert {"fio_context", "handle", "vk_id", "snils", "long_id"} <= set(pii_types)
 
 
 def test_split_message_segments_uses_dialog_separator() -> None:
@@ -180,6 +281,38 @@ def test_choose_question_candidate_skips_answer_only_segments() -> None:
     assert question == ""
 
 
+def test_choose_question_candidate_skips_support_acknowledgement_and_form_artifacts() -> None:
+    question = choose_question_candidate(
+        "Личное сообщение VKontakte",
+        [
+            "Для оценки качества обслуживания, пожалуйста, нажмите на кнопку внизу:",
+            "тест",
+            (
+                "Здравствуйте! Мы уже занимаемся вашим вопросом. "
+                "Вернемся с ответом в течение 15 минут 🤗"
+            ),
+        ],
+    )
+
+    assert question == ""
+
+
+def test_choose_question_candidate_prefers_user_button_over_long_bot_copy() -> None:
+    question = choose_question_candidate(
+        "Личное сообщение VKontakte",
+        [
+            (
+                "Реализация проекта предполагает не только подготовку мероприятия, "
+                "но и подведение итогов. Для этого нужно заполнить отчёт и приложить "
+                "подтверждающие документы по официальной форме."
+            ),
+            "В списке нет моего мероприятия",
+        ],
+    )
+
+    assert question == "В списке нет моего мероприятия"
+
+
 def test_classification_detects_forum_registration_and_technical_escalation() -> None:
     text = "Не могу войти в профиль, кнопка подачи заявки на форум Машук не работает"
 
@@ -212,11 +345,66 @@ def test_normalize_ticket_builds_masked_private_record() -> None:
         [ForumAlias(normalized="Машук", aliases=("Машук",))],
     )
 
-    assert record["ticket_id"] == "1"
+    assert record["ticket_id"].startswith("ticket::")
+    assert record["ticket_id"] != "1"
+    assert record["unique_id"] != "u1"
     assert record["category"] == "платформа_фгаис"
     assert record["forum_normalized"] == "Машук"
     assert record["answerable_by_kb"] is True
     assert record["should_escalate"] is False
+
+
+def test_normalize_ticket_profiles_only_the_user_question_not_operator_answer() -> None:
+    record = normalize_ticket(
+        {
+            "id": "aspect-1",
+            "unique_id": "aspect-1",
+            "department": "ВК Умный Бот",
+            "status": "closed",
+            "title": "Когда проходит форум Машук?",
+            "messages": (
+                "Когда проходит форум Машук? --- "
+                "Трансфер от вокзала до площадки организуют бесплатно."
+            ),
+            "typical_atypical": "Типовой",
+        },
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+
+    assert record["response_profile"] == "dates"
+    assert record["query_category"] == "форумы"
+    assert record["query_forum_normalized"] == "Машук"
+    assert record["query_should_escalate"] is False
+
+
+def test_product_labels_do_not_use_operator_copy_or_ticket_status() -> None:
+    record = normalize_ticket(
+        {
+            "id": "query-only-1",
+            "unique_id": "query-only-1",
+            "department": "ВК Умный Бот",
+            "status": "open",
+            "title": "Когда проходит форум Машук?",
+            "messages": (
+                "Когда проходит форум Машук? --- "
+                "Перевожу на оператора. Трансфер организуют от вокзала."
+            ),
+            "typical_atypical": "Типовой",
+            "date_created": "2026-01-01 10:00:00",
+            "date_updated": "2026-01-02 10:00:00",
+        },
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+
+    splits, _summary = build_product_eval_splits([record])
+    case = next(case for cases in splits.values() for case in cases)
+
+    assert case["category"] == "форумы"
+    assert case["entity"] == "Машук"
+    assert case["expected_response_profile"] == "dates"
+    assert case["expected_route"] == "answer"
+    assert case["expected_escalation_reason"] is None
+    assert case["available_at"] == "2026-01-02T10:00:00"
 
 
 def test_golden_candidates_and_reranker_pairs_are_built() -> None:
@@ -257,7 +445,81 @@ def test_golden_candidates_and_reranker_pairs_are_built() -> None:
     pairs = build_reranker_pairs(golden, records, max_pairs=10)
 
     assert len(golden) == 2
+    assert golden[0]["deprecated_for_product_eval"] is True
+    assert golden[0]["operator_answer_used_as_fact"] is True
     assert pairs[0]["query"] == "Как подать заявку на Машук?"
+    assert pairs[0]["deprecated_for_product_eval"] is True
     assert pairs[0]["hard_negative_texts"] == [
         "Для форума Утро заявка также подается через личный кабинет."
     ]
+
+
+def test_product_eval_split_is_ticket_level_query_only_and_leakage_safe() -> None:
+    labels = [
+        "альфа",
+        "бета",
+        "гамма",
+        "дельта",
+        "эпсилон",
+        "дзета",
+        "эта",
+        "тета",
+        "йота",
+        "каппа",
+        "лямбда",
+        "мю",
+        "ню",
+        "кси",
+        "омикрон",
+        "пи",
+        "ро",
+        "сигма",
+        "тау",
+        "ипсилон",
+    ]
+    records = []
+    for index, label in enumerate(labels, start=1):
+        query = (
+            "Когда проходит Машук?"
+            if index in {1, 20}
+            else f"Какие документы нужны для темы {label}?"
+        )
+        records.append(
+            {
+                "ticket_hash": f"hash-{index}",
+                "question_candidate": query,
+                "answer_candidate": "Операторский ответ не должен попасть в eval case.",
+                "created_at": f"2026-01-{index:02d} 10:00:00",
+                "channel": "ВК Умный Бот",
+                "category": "форумы",
+                "forum_normalized": "Машук" if index in {1, 20} else "",
+                "query_forum_normalized": "Машук" if index in {1, 20} else "",
+                "response_profile": "dates" if index in {1, 20} else "documents",
+                "needs_clarification": False,
+                "should_escalate": False,
+                "escalation_reason": None,
+            }
+        )
+
+    splits, summary = build_product_eval_splits(records)
+
+    assert summary["total"] == 20
+    assert splits["validation"]
+    assert splits["holdout"]
+    assert summary["sealed_holdout_ready"] is False
+    assert summary["unit"] == "merged_ticket_query_candidate"
+    cluster_splits: dict[str, set[str]] = {}
+    for split, cases in splits.items():
+        for case in cases:
+            cluster_splits.setdefault(case["duplicate_cluster_id"], set()).add(split)
+            assert "answer_candidate" not in case
+            assert case["operator_answer_included"] is False
+            assert case["requires_human_review"] is True
+    assert all(len(split_names) == 1 for split_names in cluster_splits.values())
+
+    repeated = [
+        case
+        for case in splits["calibration"]
+        if case["query"] == "Когда проходит Машук?"
+    ]
+    assert len(repeated) == 2

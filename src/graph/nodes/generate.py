@@ -7,6 +7,17 @@ from src.config import get_settings
 from src.graph.nodes.respond import normalize_final_response
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
+from src.graph.response_profiles import (
+    DATE_VALUE_RE,
+    LEGACY_EVENT_DATE_TOPICS,
+    chunk_has_event_date_evidence,
+    infer_response_profile,
+    response_has_cross_aspect_drift,
+    response_has_cross_aspect_drift_for_profiles,
+)
+from src.graph.response_profiles import (
+    asks_event_dates as asks_profile_event_dates,
+)
 from src.graph.state import BotState
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
@@ -32,18 +43,6 @@ EMOJI_RE = re.compile(
     "\ufe0f"
     "\u200d"
     "]+",
-)
-DATE_VALUE_RE = re.compile(
-    r"(?:"
-    r"\b\d{1,2}\s*(?:(?:[-–—]\s*|по\s+)\d{1,2})?\s+"
-    r"(?:январ[яе]|феврал[яе]|март[ае]?|апрел[яе]|ма[яе]|июн[яе]|"
-    r"июл[яе]|август[ае]?|сентябр[яе]|октябр[яе]|ноябр[яе]|декабр[яе])"
-    r"|\b(?:январ[яе]|феврал[яе]|март[ае]?|апрел[яе]|ма[яе]|июн[яе]|"
-    r"июл[яе]|август[ае]?|сентябр[яе]|октябр[яе]|ноябр[яе]|декабр[яе])\b"
-    r"|\b\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\b"
-    r"|\b20\d{2}\s+год"
-    r")",
-    flags=re.IGNORECASE,
 )
 SIMPLE_RESPONSE_MAX_CHARS = _RESPONSE_CONTRACT.limits.simple_max_chars
 COMPLEX_RESPONSE_MAX_CHARS = _RESPONSE_CONTRACT.limits.compound_max_chars
@@ -225,6 +224,7 @@ async def _generate_core(state: BotState) -> dict:
             chunks,
             getattr(get_settings(), "reranker_threshold_high", 0.7),
             analysis=analysis,
+            questions=questions,
         )
         if single_official_source is not None:
             source_response = build_deterministic_source_response(single_official_source)
@@ -804,17 +804,32 @@ def _violates_response_profile(
     analysis: QueryAnalysis,
     questions: list[Question],
 ) -> bool:
-    if analysis.response_profile != ResponseProfileName.DATES:
-        return False
-    if _has_multiple_distinct_questions(questions):
-        return False
+    contract_questions = analysis.questions or questions
+    if _has_multiple_distinct_questions(contract_questions):
+        expected_profiles = {
+            infer_response_profile(
+                QueryAnalysis(
+                    category=question.category,
+                    forum_normalized=question.forum_normalized,
+                ),
+                question.text,
+            )
+            for question in contract_questions
+        }
+        return response_has_cross_aspect_drift_for_profiles(
+            expected_profiles,
+            SOURCE_RE.sub("", response).strip(),
+        )
 
     visible = SOURCE_RE.sub("", response).strip()
+    if analysis.response_profile != ResponseProfileName.DATES:
+        return response_has_cross_aspect_drift(analysis.response_profile, visible)
+
     first_answer_part = re.split(r"(?:[.!?](?:\s|$)|\n)", visible, maxsplit=1)[0]
     if not DATE_VALUE_RE.search(first_answer_part):
         return True
 
-    question_text = _normalize(" ".join(question.text for question in questions))
+    question_text = _normalize(" ".join(question.text for question in contract_questions))
     response_text = _normalize(visible)
     unsolicited_groups = (
         ("регистрац", "заявк"),
@@ -1044,6 +1059,7 @@ def select_deterministic_source_chunks(
             chunks,
             getattr(settings, "reranker_threshold_high", 0.7),
             analysis=analysis,
+            original_question=original_question,
         )
         if trusted_raw_official is not None:
             return [trusted_raw_official]
@@ -1062,6 +1078,7 @@ def select_deterministic_source_chunks(
         candidates,
         getattr(settings, "reranker_threshold_high", 0.7),
         analysis=analysis,
+        original_question=questions[0] if len(questions) == 1 else None,
     )
     if top_official_source is not None and len(questions) == 1:
         return [top_official_source]
@@ -1601,15 +1618,7 @@ TOPIC_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({"vozrastnye_ogranicheniya"}),
 )
 
-DATE_TOPIC_ALIASES = frozenset(
-    {
-        "daty_nachala_meropriyatiya",
-        "mesto_i_daty_provedeniya_meropriyatiya",
-        "mesto_i_ploschadka_provedeniya",
-        "vremya_nachala_i_raspisanie",
-        "sut_festivalya_i_data",
-    }
-)
+DATE_TOPIC_ALIASES = LEGACY_EVENT_DATE_TOPICS
 
 
 def _source_topic_match_rank(question: Question, chunk: ScoredChunk) -> int:
@@ -1625,6 +1634,12 @@ def _source_topic_match_rank(question: Question, chunk: ScoredChunk) -> int:
         and question_topic_group
         == _equivalent_topic_group("podacha_zayavki_na_proekt")
         and any(marker in chunk.text.casefold() for marker in ("регистрац", "заявк"))
+    ):
+        return 1
+    if (
+        question_topic_group
+        == _equivalent_topic_group("daty_nachala_meropriyatiya")
+        and chunk_has_event_date_evidence(chunk.text, chunk.metadata)
     ):
         return 1
     if _is_combined_food_housing_source(question_topic_group, chunk_topic, chunk.text):
@@ -2010,6 +2025,7 @@ def _trusted_top_official_source(
     threshold: float,
     *,
     analysis: QueryAnalysis | None = None,
+    original_question: Question | None = None,
 ) -> ScoredChunk | None:
     if not chunks:
         return None
@@ -2027,6 +2043,13 @@ def _trusted_top_official_source(
         return None
     if float(top_chunk.score or 0) < 0.95:
         return None
+    if (
+        original_question is not None
+        and analysis is not None
+        and analysis.response_profile != ResponseProfileName.GENERIC
+        and not _source_chunk_covers_question(original_question, top_chunk)
+    ):
+        return None
     return top_chunk
 
 
@@ -2035,6 +2058,7 @@ def _trusted_single_official_source(
     threshold: float,
     *,
     analysis: QueryAnalysis,
+    questions: list[Question],
 ) -> ScoredChunk | None:
     if len(chunks) != 1:
         return None
@@ -2045,6 +2069,17 @@ def _trusted_single_official_source(
     if not _chunk_matches_analysis_scope(chunk, analysis):
         return None
     if float(chunk.reranker_score or 0) < threshold:
+        return None
+    if (
+        analysis.response_profile != ResponseProfileName.GENERIC
+        and (
+            not questions
+            or not all(
+                _source_chunk_covers_question(question, chunk)
+                for question in questions
+            )
+        )
+    ):
         return None
     return chunk
 
@@ -2331,7 +2366,7 @@ def _metadata_matches_specific_question(
 
     if _asks_event_dates_or_marker(question_normalized):
         return (
-            _chunk_has_date_topic_alias(chunk)
+            chunk_has_event_date_evidence(chunk.text, chunk.metadata)
             or "daty_nachala" in metadata_haystack
             or "mesto_i_daty" in metadata_haystack
             or ("даты" in metadata_haystack and "мероприят" in metadata_haystack)
@@ -2475,7 +2510,7 @@ def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> boo
     if _asks_housing_conditions(question_normalized):
         return _chunk_has_housing_conditions(chunk)
     if _asks_event_date_marker(question_normalized):
-        return _chunk_has_date_topic_alias(chunk)
+        return chunk_has_event_date_evidence(chunk.text, chunk.metadata)
 
     haystack = _source_coverage_haystack(chunk)
     for markers, _question_text in FALLBACK_QUESTION_MARKERS:
@@ -2872,6 +2907,8 @@ def _asks_event_dates(question_normalized: str) -> bool:
         return False
     if "когда добав" in question_normalized and "чат" in question_normalized:
         return False
+    if asks_profile_event_dates(question_normalized):
+        return True
     return any(
         marker in question_normalized
         for marker in (
@@ -3005,12 +3042,7 @@ def _chunk_has_housing_conditions(chunk: ScoredChunk) -> bool:
 
 
 def _chunk_has_date_topic_alias(chunk: ScoredChunk) -> bool:
-    metadata = chunk.metadata or {}
-    topic = str(metadata.get("topic") or "").strip()
-    if topic in DATE_TOPIC_ALIASES:
-        return True
-    metadata_haystack = _metadata_haystack(chunk)
-    return any(alias in metadata_haystack for alias in DATE_TOPIC_ALIASES)
+    return chunk_has_event_date_evidence(chunk.text, chunk.metadata)
 
 
 def _metadata_haystack(chunk: ScoredChunk) -> str:

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from scripts.prepare_ticket_eval_sets import (
     build_chunk_index,
     match_chunks,
     prepare_case,
+    prepare_eval_sets,
     retrieval_case,
     select_balanced_cases,
 )
@@ -85,6 +90,28 @@ def test_prepare_case_marks_weak_chunk_labels_for_review() -> None:
         "topic:грантовая_отчетность",
         "difficulty:simple",
     ]
+
+
+def test_prepare_eval_sets_rejects_deprecated_operator_copy(tmp_path) -> None:
+    candidates_path = tmp_path / "candidates.json"
+    seed_path = tmp_path / "seed.json"
+    candidates_path.write_text(
+        json.dumps(
+            [
+                {
+                    "query": "Вопрос",
+                    "expected_answer": "Операторский ответ",
+                    "deprecated_for_product_eval": True,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    seed_path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="deprecated operator copy"):
+        prepare_eval_sets(candidates_path, seed_path, tmp_path / "out")
 
 
 def test_retrieval_case_contains_filters_and_expected_chunks() -> None:

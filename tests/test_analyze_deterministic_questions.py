@@ -19,7 +19,7 @@ from src.graph.nodes.analyze import (
     _fallback_analysis,
     _infer_response_profile,
 )
-from src.models import Channel, QueryAnalysis, Session
+from src.models import Channel, QueryAnalysis, Question, Session
 from src.response_contract import ResponseProfileName, get_response_contract
 
 
@@ -426,6 +426,59 @@ def test_response_profile_is_inferred_for_every_contract_profile(
     expected: str,
 ) -> None:
     assert _infer_response_profile(analysis, query) == ResponseProfileName(expected)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("Когда будут результаты отбора?", "selection_status"),
+        ("До какого числа можно подать заявку?", "application"),
+        ("Когда будет трансфер?", "travel"),
+        ("Когда опубликуют программу?", "program"),
+        ("Когда будет сертификат?", "documents"),
+        ("Когда Машук?", "dates"),
+        ("Даты Машука", "dates"),
+    ],
+)
+def test_response_profile_prefers_explicit_aspect_over_temporal_word(
+    query: str,
+    expected: str,
+) -> None:
+    analysis = QueryAnalysis(category="форумы")
+
+    assert _infer_response_profile(analysis, query) == ResponseProfileName(expected)
+
+
+def test_response_profile_prefers_user_message_over_wrong_secondary_analysis() -> None:
+    analysis = QueryAnalysis(
+        category="форумы",
+        topics=["transfer_do_mesta_provedeniya"],
+        questions=[
+            Question(
+                text="Есть ли трансфер?",
+                category="форумы",
+                forum_normalized="Машук",
+            )
+        ],
+    )
+
+    assert (
+        _infer_response_profile(analysis, "Когда проходит Машук?")
+        == ResponseProfileName.DATES
+    )
+
+
+def test_response_profile_ignores_wrong_secondary_technical_flags() -> None:
+    analysis = QueryAnalysis(
+        category="техподдержка",
+        is_technical=True,
+        topics=["oshibka_avtorizacii"],
+    )
+
+    assert (
+        _infer_response_profile(analysis, "Когда проходит Машук?")
+        == ResponseProfileName.DATES
+    )
 
 
 @pytest.mark.parametrize(

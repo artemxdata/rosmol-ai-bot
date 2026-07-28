@@ -77,6 +77,11 @@ def prepare_eval_sets(
         raise ValueError("golden candidates must be a JSON array")
     if not isinstance(kb_records, list):
         raise ValueError("KB seed must be a JSON array")
+    if any(candidate.get("deprecated_for_product_eval") for candidate in candidates):
+        raise ValueError(
+            "ticket candidates contain deprecated operator copy; "
+            "use reviewed query-only product cases instead"
+        )
 
     chunk_index = build_chunk_index(kb_records)
     prepared = [

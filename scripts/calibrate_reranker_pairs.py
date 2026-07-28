@@ -69,6 +69,11 @@ async def calibrate_pairs(
     scorer: PairScorer | None = None,
 ) -> dict[str, Any]:
     pairs = read_jsonl(pairs_path)
+    if any(pair.get("deprecated_for_product_eval") for pair in pairs):
+        raise ValueError(
+            "reranker pairs contain deprecated operator copy; "
+            "map queries to approved KB chunks before calibration"
+        )
     if limit is not None:
         pairs = pairs[:limit]
     scorer = scorer or RerankerPairScorer()
