@@ -9,10 +9,23 @@
 по полному SHA. Миграции, versioned seed и index inputs относительно предыдущего runtime не
 менялись; повторная индексация не выполнялась.
 
-**Repository release, не deployed:** `4f786594281412845dbac9b080133b3881433d63`
-(`Add read-only Yonote database inventory`) находится в `origin/master`. Он добавляет
-read-only inventory/TXT export Yonote и не меняет seed/index inputs. Это не означает deployment:
-healthy runtime продолжает работать на `b4bc23a`.
+**Repository candidate, не deployed:** `913b0f9` (`Enforce Yonote-only response contract`) поверх
+`d1b295a` (`Add versioned NLU response contract`). Первый commit фиксирует точные сервисные
+реплики, 13 `response_profile` и безопасную migration matrix для 42 NLU-контуров / 762 ответных
+узлов. Второй подключает copy-контракт к runtime, ограничивает factual pipeline
+`source_type=yonote`, переводит cache на schema v3 и ставит fail-closed guards длины, ссылок,
+эмодзи и LLM retry. Seed/index inputs не менялись; candidate не индексировался и не развёртывался.
+Healthy runtime продолжает работать на `b4bc23a`.
+
+Локальный gate candidate: Ruff прошёл; полный pytest — `1482 passed, 1 skipped` с
+`asyncio_default_test_loop_scope=module`. Обычный function-scoped прогон на текущем Windows host
+дошёл до 92% и упёрся в создание служебного `socket._fallback_socketpair`; faulthandler подтвердил
+environment-level loop/socket limit, а оставшиеся 147 тестов отдельно прошли. KB validation:
+`2186 valid / 2152 published`; полный seed audit — `0 errors / 4 warnings`. Отдельный
+Yonote-only audit проверил `1429` опубликованных записей: `0 errors / 4 warnings`. До release
+нужен content/taxonomy verdict по предупреждениям: 14 registry-форумов без canonical published
+Yonote chunks, 79 Yonote forum values вне registry, 223 grant records с forum taxonomy и
+58 duplicate-text groups.
 
 **Статус релиза:** `TEST-PRODUCTION CONNECTED / SECURITY + QUALITY + HDE/VK SMOKE PASS`.
 Ограниченная тестовая линия HDE/VK включена и отвечает через постоянный корпоративный endpoint.
@@ -96,13 +109,14 @@ knowledge loop, build-vs-buy и границы исходящих коммуни
 `2186/2152`. Seed/index inputs не менялись, поэтому reindex не выполнялся. Любой deployment этого
 commit остаётся отдельной ручной SHA-bound операцией с повторным image/security/runtime gate.
 
-**Точный следующий шаг:** не менять healthy deployed runtime `b4bc23a`; оставить тестовые HDE
-rules включёнными и вести новую измеримую test-production выборку со следующего реального
-обращения. Оба smoke-события 27 июля не включать в продуктовую конверсию. Deployment `4f78659`,
-если будет отдельно согласован, выполнять только по SHA-bound rebuild/rescan и полному server
-gate без автоматического reindex. Кейс `Ей -> low_confidence escalation`, неполная дата смены
-«Правда» и Mashuk content findings входят в отдельный regression-first quality cycle. Пункты
-публичной roadmap являются направлением, а не разрешением менять runtime, KB или широкий traffic.
+**Точный следующий шаг:** не менять healthy deployed runtime `b4bc23a`. Сначала вручную
+разобрать Yonote-only coverage/taxonomy warnings, получить content verdict по «Правде» и
+«Машуку» и при необходимости опубликовать исправления через versioned snapshot. Затем повторить
+Ruff, полный pytest, KB/Yonote audit и release quality suite. Deployment candidate `913b0f9`
+допустим только отдельной SHA-bound операцией с image/security/runtime gate; после неё нужен
+короткий HDE/VK smoke и новая cohort boundary. Seed в этих commits не менялся, поэтому
+автоматический reindex не разрешён и не требуется. Оба smoke-события 27 июля не включать в
+продуктовую конверсию; пункты публичной roadmap не разрешают широкий traffic или изменение KB.
 
 ## 1. Цель
 
