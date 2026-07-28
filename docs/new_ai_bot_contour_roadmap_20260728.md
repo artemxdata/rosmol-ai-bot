@@ -39,8 +39,12 @@
   `gap -> content verdict -> published Yonote -> diff -> versioned seed -> validation/regression
   -> controlled reindex -> verification -> rollback evidence`.
 - Yonote — целевой human-controlled content authority, но не live runtime dependency для ответов.
-  Текущий production artifact — проверенный versioned Git seed. До завершения content migration
-  действующий приоритет legacy XLSX/DOCX остаётся таким, как определено в D-003.
+  Текущий production artifact — проверенный versioned Git seed. Фактический ответ нового
+  помощника подтверждается только опубликованным `source_type=yonote`; legacy XLSX/DOCX и
+  operator answer bank остаются материалом миграции/regression, но не factual fallback.
+- Старый NLU является согласованным copy-контрактом сервисных реплик и структуры ответа.
+  Динамические факты и ссылки из него не переносятся; они заполняются только из versioned
+  опубликованного Yonote snapshot.
 - Формулировка «обновление по кнопке» означает будущую оркестрацию всех перечисленных gate,
   а не прямой production Apply, автономное изменение Yonote или обход review.
 

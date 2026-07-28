@@ -1,0 +1,4643 @@
+{
+  "matrix_version": "1.0.0",
+  "source_kind": "untracked_legacy_nlu_structure",
+  "content_fields_included": false,
+  "name_normalization": "trim_outer_whitespace_only",
+  "answer_node_definition": "context_with_bot_message_input",
+  "traversal_rule": "from_nlu_root_stop_before_nested_nlu_or_llm",
+  "assignment_partition": "unique_first_level_branch_slot_index",
+  "allowed_dispositions": [
+    "exact_static",
+    "yonote_template",
+    "current_safety_policy",
+    "deprecated"
+  ],
+  "baseline": {
+    "nlu_contour_count": 42,
+    "reachable_answer_node_count": 762,
+    "root_overlap_node_count": 0,
+    "first_level_branch_overlap_node_count": 0,
+    "disposition_node_counts": {
+      "exact_static": 6,
+      "yonote_template": 710,
+      "current_safety_policy": 1,
+      "deprecated": 45
+    },
+    "response_profile_node_counts": {
+      "dates": 38,
+      "application": 64,
+      "eligibility": 65,
+      "documents": 131,
+      "selection_status": 65,
+      "program": 42,
+      "travel": 56,
+      "accommodation": 17,
+      "food": 23,
+      "accessibility": 18,
+      "grants": 29,
+      "technical": 40,
+      "generic": 174
+    }
+  },
+  "contours": [
+    {
+      "legacy_slot_index": 72,
+      "legacy_name": "NLU/гранты",
+      "contour_kind": "grants",
+      "covered_node_count": 13,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 11,
+        "current_safety_policy": 0,
+        "deprecated": 2
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 128,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 0,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 11,
+        "technical": 0,
+        "generic": 2
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "grants",
+        "exceptions": [
+          {
+            "branch_slot_index": 128,
+            "response_profile": "generic",
+            "covered_node_count": 2
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 73,
+      "legacy_name": "NLU/другое",
+      "contour_kind": "general_service",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 6,
+        "yonote_template": 16,
+        "current_safety_policy": 1,
+        "deprecated": 1
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 131,
+            "disposition": "exact_static"
+          },
+          {
+            "branch_slot_index": 144,
+            "disposition": "exact_static"
+          },
+          {
+            "branch_slot_index": 145,
+            "disposition": "exact_static"
+          },
+          {
+            "branch_slot_index": 146,
+            "disposition": "exact_static"
+          },
+          {
+            "branch_slot_index": 147,
+            "disposition": "exact_static"
+          },
+          {
+            "branch_slot_index": 150,
+            "disposition": "exact_static"
+          },
+          {
+            "branch_slot_index": 151,
+            "disposition": "deprecated"
+          },
+          {
+            "branch_slot_index": 152,
+            "disposition": "current_safety_policy"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 1,
+        "program": 0,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 11,
+        "generic": 12
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 134,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 135,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 136,
+            "response_profile": "technical",
+            "covered_node_count": 3
+          },
+          {
+            "branch_slot_index": 137,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 138,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 139,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 140,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 141,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 142,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 143,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 74,
+      "legacy_name": "NLU/территория",
+      "contour_kind": "event",
+      "covered_node_count": 23,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 20,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 175,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 153,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 154,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 156,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 157,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 158,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 159,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 160,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 161,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 162,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 163,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 164,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 165,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 166,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 167,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 170,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 171,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 172,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 174,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 75,
+      "legacy_name": "NLU/иволга",
+      "contour_kind": "event",
+      "covered_node_count": 23,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 20,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 198,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 4
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 176,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 177,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 179,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 180,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 181,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 182,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 183,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 184,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 185,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 186,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 187,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 188,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 189,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 190,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 192,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 193,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 194,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 195,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 197,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 76,
+      "legacy_name": "NLU/Машук",
+      "contour_kind": "event",
+      "covered_node_count": 25,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 25,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 1,
+        "eligibility": 3,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 4
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 199,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 200,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 202,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 203,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 204,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 205,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 206,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 207,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 208,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 209,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 210,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 212,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 213,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 214,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 216,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 217,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 219,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 220,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 223,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 224,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 225,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 77,
+      "legacy_name": "NLU/Бирюса",
+      "contour_kind": "event",
+      "covered_node_count": 29,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 26,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 248,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 7
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 226,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 227,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 229,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 230,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 231,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 232,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 233,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 234,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 235,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 236,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 237,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 238,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 239,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 240,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 242,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 243,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 245,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 247,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 249,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 250,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 253,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 254,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 78,
+      "legacy_name": "NLU/Истоки",
+      "contour_kind": "event",
+      "covered_node_count": 26,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 23,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 276,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 4,
+        "eligibility": 3,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 255,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 256,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 258,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 259,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 260,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 261,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 262,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 263,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 264,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 265,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 266,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 267,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 268,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 269,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 270,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 271,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 272,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 273,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 275,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 278,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 279,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 79,
+      "legacy_name": "NLU/Утро",
+      "contour_kind": "event",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 24,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 1,
+        "eligibility": 3,
+        "documents": 6,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 4
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 280,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 281,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 283,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 284,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 285,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 286,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 287,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 288,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 290,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 291,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 292,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 293,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 295,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 296,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 298,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 299,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 302,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 303,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 304,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 305,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 80,
+      "legacy_name": "NLU/Таврида",
+      "contour_kind": "event",
+      "covered_node_count": 20,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 17,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 325,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 1,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 306,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 307,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 309,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 310,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 311,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 312,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 313,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 314,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 315,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 316,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 317,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 318,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 319,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 320,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 322,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 323,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 324,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 81,
+      "legacy_name": "NLU/Амур",
+      "contour_kind": "event",
+      "covered_node_count": 19,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 16,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 344,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 1,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 326,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 327,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 329,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 330,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 331,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 332,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 333,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 334,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 335,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 336,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 337,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 338,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 339,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 340,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 342,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 343,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 82,
+      "legacy_name": "NLU/Агропродвижение",
+      "contour_kind": "event",
+      "covered_node_count": 19,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 16,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 363,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 1,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 345,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 346,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 348,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 349,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 350,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 351,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 352,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 353,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 354,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 355,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 356,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 357,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 358,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 359,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 361,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 362,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 83,
+      "legacy_name": "NLU/На волне",
+      "contour_kind": "event",
+      "covered_node_count": 30,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 30,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 4,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 1,
+        "travel": 1,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 8
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 364,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 366,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 367,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 368,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 369,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 370,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 371,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 372,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 373,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 374,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 375,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 376,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 378,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 379,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 381,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 383,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 386,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 388,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 390,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 391,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 392,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 393,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 84,
+      "legacy_name": "Область будущего",
+      "contour_kind": "event",
+      "covered_node_count": 18,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 15,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 410,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 1,
+        "documents": 3,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 394,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 395,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 397,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 398,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 399,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 400,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 401,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 402,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 403,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 404,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 405,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 406,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 407,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 408,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 409,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 85,
+      "legacy_name": "Каспий",
+      "contour_kind": "event",
+      "covered_node_count": 28,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 25,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 430,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 3,
+        "selection_status": 3,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 7
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 411,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 412,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 414,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 415,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 416,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 417,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 418,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 419,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 420,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 421,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 422,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 423,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 424,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 425,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 426,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 427,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 429,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 432,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 435,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 436,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 437,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 86,
+      "legacy_name": "Полюс",
+      "contour_kind": "event",
+      "covered_node_count": 23,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 23,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 2,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 2,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 438,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 439,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 441,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 442,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 443,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 444,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 445,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 446,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 447,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 448,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 449,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 450,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 451,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 453,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 456,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 459,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 460,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 461,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 87,
+      "legacy_name": "ОстроVа",
+      "contour_kind": "event",
+      "covered_node_count": 26,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 23,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 482,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 0,
+        "technical": 1,
+        "generic": 7
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 462,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 463,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 465,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 466,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 467,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 468,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 469,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 470,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 471,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 472,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 473,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 474,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 475,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 476,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 477,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 478,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 479,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 481,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 486,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 88,
+      "legacy_name": "Ладога",
+      "contour_kind": "event",
+      "covered_node_count": 28,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 25,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 506,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 6
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 487,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 488,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 490,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 491,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 492,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 493,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 494,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 495,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 496,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 497,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 498,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 499,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 500,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 501,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 502,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 503,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 504,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 505,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 508,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 511,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 512,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 513,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 89,
+      "legacy_name": "Шерегеш",
+      "contour_kind": "event",
+      "covered_node_count": 21,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 21,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 1,
+        "eligibility": 3,
+        "documents": 4,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 4
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 514,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 515,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 517,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 518,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 519,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 520,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 521,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 522,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 523,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 525,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 526,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 528,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 529,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 532,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 533,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 534,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 535,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 90,
+      "legacy_name": "Студенческий спецназ",
+      "contour_kind": "event",
+      "covered_node_count": 22,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 19,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 556,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 4
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 536,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 537,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 539,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 540,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 541,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 542,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 543,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 544,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 545,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 546,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 547,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 548,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 549,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 550,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 551,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 552,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 553,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 555,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 91,
+      "legacy_name": "Волга",
+      "contour_kind": "event",
+      "covered_node_count": 27,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 24,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 575,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 0,
+        "accessibility": 1,
+        "grants": 0,
+        "technical": 1,
+        "generic": 6
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 557,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 558,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 560,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 561,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 562,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 563,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 564,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 565,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 566,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 567,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 568,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 569,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 570,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 571,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 572,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 573,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 574,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 577,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 578,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 581,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 582,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 92,
+      "legacy_name": "NLU/Истоки школа",
+      "contour_kind": "event",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 21,
+        "current_safety_policy": 0,
+        "deprecated": 3
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": [
+          {
+            "branch_slot_index": 604,
+            "disposition": "deprecated"
+          }
+        ]
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 3,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 3,
+        "program": 0,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 1,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 583,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 584,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 586,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 587,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 588,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 589,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 590,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 591,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 592,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 593,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 594,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 595,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 596,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 597,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 598,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 599,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 600,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 601,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 603,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 94,
+      "legacy_name": "NLU/Ростов",
+      "contour_kind": "event",
+      "covered_node_count": 20,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 20,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 1,
+        "eligibility": 2,
+        "documents": 4,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 0,
+        "grants": 1,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 607,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 608,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 610,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 611,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 612,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 613,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 614,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 615,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 616,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 618,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 621,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 624,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 625,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 626,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 627,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 95,
+      "legacy_name": "NLU/Арктика",
+      "contour_kind": "event",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 24,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 1,
+        "eligibility": 3,
+        "documents": 4,
+        "selection_status": 1,
+        "program": 2,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 628,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 629,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 631,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 632,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 633,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 634,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 635,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 636,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 637,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 638,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 640,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 643,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 646,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 647,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 648,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 649,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 650,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 651,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 652,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 96,
+      "legacy_name": "NLU/Добрино",
+      "contour_kind": "event",
+      "covered_node_count": 21,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 21,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 0,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 653,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 654,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 656,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 657,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 658,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 659,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 660,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 661,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 662,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 663,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 665,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 668,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 671,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 672,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 673,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 674,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 97,
+      "legacy_name": "NLU/ШУМ",
+      "contour_kind": "event",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 24,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 1,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 2,
+        "technical": 1,
+        "generic": 6
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 675,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 676,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 678,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 679,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 680,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 681,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 682,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 683,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 684,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 685,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 687,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 690,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 693,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 694,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 695,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 696,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 698,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 699,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 98,
+      "legacy_name": "NLU/ГосСтарт",
+      "contour_kind": "event",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 24,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 1,
+        "eligibility": 3,
+        "documents": 5,
+        "selection_status": 1,
+        "program": 2,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 700,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 701,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 703,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 704,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 705,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 706,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 707,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 708,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 709,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 710,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 712,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 715,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 718,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 719,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 720,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 721,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 722,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 723,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 724,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 99,
+      "legacy_name": "NLU/День молодёжи",
+      "contour_kind": "event",
+      "covered_node_count": 15,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 15,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 4,
+        "eligibility": 1,
+        "documents": 2,
+        "selection_status": 0,
+        "program": 3,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 2,
+        "generic": 2
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 725,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 726,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 728,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 729,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 730,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 732,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 734,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 735,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 736,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 737,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 738,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 739,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 740,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 100,
+      "legacy_name": "NLU/Путешествие",
+      "contour_kind": "event",
+      "covered_node_count": 20,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 20,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 1,
+        "eligibility": 2,
+        "documents": 6,
+        "selection_status": 0,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 0,
+        "generic": 4
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 742,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 743,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 745,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 746,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 747,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 748,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 749,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 750,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 752,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 755,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 757,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 758,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 759,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 760,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 761,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 762,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 101,
+      "legacy_name": "Российский Север",
+      "contour_kind": "event",
+      "covered_node_count": 17,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 17,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 0,
+        "eligibility": 3,
+        "documents": 3,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 1,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 1,
+        "technical": 1,
+        "generic": 2
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 764,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 766,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 767,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 768,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 769,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 770,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 771,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 772,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 773,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 774,
+            "response_profile": "accommodation",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 775,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 776,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 778,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 779,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 780,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 102,
+      "legacy_name": "Ямолод",
+      "contour_kind": "event",
+      "covered_node_count": 16,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 16,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 0,
+        "eligibility": 1,
+        "documents": 4,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 1,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 0,
+        "technical": 1,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 783,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 784,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 785,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 786,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 787,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 788,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 789,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 790,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 792,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 793,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 795,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 796,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 797,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 103,
+      "legacy_name": "Экосистема",
+      "contour_kind": "event",
+      "covered_node_count": 24,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 24,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 2,
+        "application": 1,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 1,
+        "generic": 6
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 800,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 801,
+            "response_profile": "technical",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 802,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 803,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 804,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 805,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 806,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 807,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 809,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 810,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 812,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 813,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 814,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 816,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 817,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 820,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 821,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 822,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 104,
+      "legacy_name": "Территория БезОпасности",
+      "contour_kind": "event",
+      "covered_node_count": 20,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 20,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 1,
+        "application": 0,
+        "eligibility": 2,
+        "documents": 5,
+        "selection_status": 1,
+        "program": 1,
+        "travel": 2,
+        "accommodation": 0,
+        "food": 1,
+        "accessibility": 1,
+        "grants": 1,
+        "technical": 0,
+        "generic": 5
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 825,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 826,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 827,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 828,
+            "response_profile": "dates",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 829,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 830,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 831,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 832,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 833,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 835,
+            "response_profile": "accessibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 836,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 838,
+            "response_profile": "travel",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 839,
+            "response_profile": "food",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 840,
+            "response_profile": "grants",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 842,
+            "response_profile": "documents",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 105,
+      "legacy_name": "КМОЦ Полюс",
+      "contour_kind": "event",
+      "covered_node_count": 5,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 5,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 1,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 3,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 1
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 845,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 847,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 848,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 849,
+            "response_profile": "program",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 106,
+      "legacy_name": "КМОЦ Спортэкс",
+      "contour_kind": "event",
+      "covered_node_count": 4,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 4,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 1,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 1,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 2
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 853,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 854,
+            "response_profile": "application",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 107,
+      "legacy_name": "КМОЦ Дон",
+      "contour_kind": "event",
+      "covered_node_count": 5,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 5,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 1,
+        "program": 3,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 1
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 856,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 858,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 859,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 860,
+            "response_profile": "program",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 108,
+      "legacy_name": "КМОЦ Вместе",
+      "contour_kind": "event",
+      "covered_node_count": 6,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 6,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 4,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 2
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 862,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 864,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 866,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 867,
+            "response_profile": "program",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 109,
+      "legacy_name": "КМОЦ ГосСтарт",
+      "contour_kind": "event",
+      "covered_node_count": 4,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 4,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 1,
+        "program": 2,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 1
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 869,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 871,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 872,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 110,
+      "legacy_name": "КМОЦ Экосистема",
+      "contour_kind": "event",
+      "covered_node_count": 6,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 6,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 1,
+        "program": 2,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 876,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 877,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 879,
+            "response_profile": "selection_status",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 111,
+      "legacy_name": "КМОЦ Добрино",
+      "contour_kind": "event",
+      "covered_node_count": 4,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 4,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 1,
+        "eligibility": 1,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 1,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 1
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 881,
+            "response_profile": "program",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 883,
+            "response_profile": "application",
+            "covered_node_count": 1
+          },
+          {
+            "branch_slot_index": 884,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 112,
+      "legacy_name": "КМОЦ Острова",
+      "contour_kind": "event",
+      "covered_node_count": 4,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 4,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 1,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 888,
+            "response_profile": "program",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 113,
+      "legacy_name": "КМОЦ Маяк",
+      "contour_kind": "event",
+      "covered_node_count": 4,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 4,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 1,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 0,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 3
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 893,
+            "response_profile": "eligibility",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "legacy_slot_index": 114,
+      "legacy_name": "КМОЦ Профилактика и безопасность",
+      "contour_kind": "event",
+      "covered_node_count": 3,
+      "disposition_counts": {
+        "exact_static": 0,
+        "yonote_template": 3,
+        "current_safety_policy": 0,
+        "deprecated": 0
+      },
+      "assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_disposition": "yonote_template",
+        "exceptions": []
+      },
+      "response_profile_counts": {
+        "dates": 0,
+        "application": 0,
+        "eligibility": 0,
+        "documents": 0,
+        "selection_status": 0,
+        "program": 1,
+        "travel": 0,
+        "accommodation": 0,
+        "food": 0,
+        "accessibility": 0,
+        "grants": 0,
+        "technical": 0,
+        "generic": 2
+      },
+      "response_profile_assignment": {
+        "partition_key": "first_level_branch_slot_index",
+        "default_profile": "generic",
+        "exceptions": [
+          {
+            "branch_slot_index": 896,
+            "response_profile": "program",
+            "covered_node_count": 1
+          }
+        ]
+      }
+    }
+  ],
+  "allowed_response_profiles": [
+    "dates",
+    "application",
+    "eligibility",
+    "documents",
+    "selection_status",
+    "program",
+    "travel",
+    "accommodation",
+    "food",
+    "accessibility",
+    "grants",
+    "technical",
+    "generic"
+  ]
+}

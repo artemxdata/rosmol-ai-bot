@@ -1,0 +1,213 @@
+{
+  "contract_version": "1.0.0",
+  "language": "ru",
+  "address_form": "ты",
+  "legacy_nlu_role": "approved_copy_and_structure_only",
+  "fact_policy": {
+    "authority": "published_yonote_release_snapshot",
+    "source_type": "yonote",
+    "live_runtime_lookup": false,
+    "legacy_factual_answers_allowed": false,
+    "operator_answers_allowed_as_facts": false,
+    "missing_fact_actions": [
+      "clarify",
+      "controlled_escalation"
+    ]
+  },
+  "limits": {
+    "simple_max_chars": 450,
+    "compound_max_chars": 900
+  },
+  "composition": {
+    "section_order": [
+      "direct_answer",
+      "necessary_details",
+      "source_link_or_next_step"
+    ],
+    "max_source_links": 1,
+    "mechanical_truncation_allowed": false,
+    "llm_may_add_emoji": false,
+    "text_only_options": true
+  },
+  "global_allowed_emojis": [
+    "😊",
+    "👇"
+  ],
+  "messages": [
+    {
+      "id": "greeting",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "Чем я могу быть полезен?",
+      "allowed_emojis": []
+    },
+    {
+      "id": "operator_transfer",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "Перевожу на оператора. Пожалуйста, ожидай.",
+      "allowed_emojis": []
+    },
+    {
+      "id": "gratitude",
+      "kind": "variants",
+      "complexity": "simple",
+      "variants": [
+        "Всегда рад!",
+        "Рад быть полезным!"
+      ],
+      "selection": "stable_hash",
+      "allowed_emojis": []
+    },
+    {
+      "id": "farewell",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "Обращайся! 😊",
+      "allowed_emojis": [
+        "😊"
+      ]
+    },
+    {
+      "id": "unknown_forum",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "Уточни, пожалуйста, название форума, о котором спрашиваешь.",
+      "allowed_emojis": []
+    },
+    {
+      "id": "dates_event_clarification",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "Подскажи, пожалуйста, даты какого мероприятия тебя интересуют?",
+      "allowed_emojis": []
+    },
+    {
+      "id": "unclear_request",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "Я не совсем понял вопрос. Попробуй переформулировать — я помогу с мероприятиями, грантами и техническими вопросами.",
+      "allowed_emojis": []
+    },
+    {
+      "id": "clarification_with_options",
+      "kind": "template",
+      "complexity": "simple",
+      "template": "Пожалуйста, уточни свой вопрос 👇\n{options}",
+      "required_placeholders": [
+        "options"
+      ],
+      "options_style": "numbered_text",
+      "allowed_emojis": [
+        "👇"
+      ]
+    },
+    {
+      "id": "capabilities",
+      "kind": "exact",
+      "complexity": "simple",
+      "text": "ЗаБотливый Бот создан, чтобы информировать о деятельности Росмолодёжи, форумах, грантах и возможностях для молодёжи.\n\nСпрашивай о мероприятиях, проектах и поддержке — я найду ответ!",
+      "allowed_emojis": []
+    }
+  ],
+  "profiles": [
+    {
+      "name": "dates",
+      "guidance": "Сначала дай подтверждённую дату или период; различия по аудитории или смене добавляй только при необходимости.",
+      "context_keys": [
+        "event",
+        "audience",
+        "shift"
+      ],
+      "clarification_message_id": "dates_event_clarification"
+    },
+    {
+      "name": "application",
+      "guidance": "Сначала назови подтверждённый способ подачи заявки, затем только обязательные шаги и следующий переход.",
+      "context_keys": [
+        "event_or_program"
+      ]
+    },
+    {
+      "name": "eligibility",
+      "guidance": "Сначала ответь, подходит ли пользователь под подтверждённые условия; затем кратко перечисли влияющие ограничения.",
+      "context_keys": [
+        "event_or_program",
+        "audience"
+      ]
+    },
+    {
+      "name": "documents",
+      "guidance": "Сначала перечисли обязательные документы из источника; дополнительные материалы отдели от обязательных.",
+      "context_keys": [
+        "event_or_program"
+      ]
+    },
+    {
+      "name": "selection_status",
+      "guidance": "Объясни общий подтверждённый порядок статусов; персональный статус не угадывай и передавай оператору по действующей политике.",
+      "context_keys": [
+        "event_or_program"
+      ]
+    },
+    {
+      "name": "program",
+      "guidance": "Сначала ответь по запрошенной части программы; не добавляй регистрацию, контакты и бытовые детали без запроса.",
+      "context_keys": [
+        "event",
+        "shift"
+      ]
+    },
+    {
+      "name": "travel",
+      "guidance": "Сначала ответь по оплате или маршруту проезда, затем добавь только подтверждённые точки и следующий шаг.",
+      "context_keys": [
+        "event"
+      ]
+    },
+    {
+      "name": "accommodation",
+      "guidance": "Сначала опиши подтверждённый формат проживания; различия по аудитории или смене укажи отдельно.",
+      "context_keys": [
+        "event",
+        "audience",
+        "shift"
+      ]
+    },
+    {
+      "name": "food",
+      "guidance": "Сначала ответь, предусмотрено ли питание; режим и ограничения добавляй только при наличии подтверждения.",
+      "context_keys": [
+        "event"
+      ]
+    },
+    {
+      "name": "accessibility",
+      "guidance": "Сначала дай подтверждённую информацию о доступности и безопасном следующем шаге; индивидуальные обещания не формулируй.",
+      "context_keys": [
+        "event",
+        "access_need"
+      ]
+    },
+    {
+      "name": "grants",
+      "guidance": "Сначала ответь по конкретному этапу грантового процесса, затем добавь только необходимые условия и официальный следующий шаг.",
+      "context_keys": [
+        "grant_stage"
+      ]
+    },
+    {
+      "name": "technical",
+      "guidance": "Дай только безопасные подтверждённые шаги первой линии; при повторной нерешённой проблеме используй действующую эскалацию.",
+      "context_keys": [
+        "platform",
+        "problem"
+      ]
+    },
+    {
+      "name": "generic",
+      "guidance": "Дай прямой подтверждённый ответ без соседних тем; если контекста недостаточно, задай один конкретный вопрос.",
+      "context_keys": []
+    }
+  ]
+}
