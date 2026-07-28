@@ -1016,3 +1016,38 @@ uncommitted Yonote-файлы и точный следующий gate.
 выборку и отдельно завершить локальную Yonote statistics/export итерацию без потери текущего
 dirty worktree. Любой новый deploy — только после отдельного review, commit/push, CI,
 SHA-bound rebuild/rescan и полного server gate.
+
+## 11. Локальный product-quality change set 28 июля 2026
+
+Commit `b4435d5` системно закрывает класс off-aspect ответов, но не развёрнут на сервере:
+healthy runtime `b4bc23a`, HDE/VK и production-конфигурация не изменялись.
+
+Что сделано:
+
+- raw user query стал первичным evidence для `response_profile`;
+- analyze, rerank, composer и verifier различают даты, заявку, результаты, документы,
+  программу, трансфер, проживание и питание;
+- регистрационные дедлайны и этапы отбора больше не считаются датами события; семь реальных
+  false-positive Yonote chunks закреплены regression-тестами;
+- multi-aspect ответ обязан покрывать каждый явно заданный аспект;
+- 25 508 строк `RAG_Dataset.xlsx` объединены в 24 220 целых тикетов;
+- сформирована private review-очередь из 11 453 query-кандидатов: 8 438 calibration,
+  1 445 validation и 1 570 unsealed holdout candidates;
+- labels product-очереди вычисляются только по query, без ответа оператора и ticket status;
+- legacy operator-copy golden/reranker artifacts явно deprecated и fail-closed в потребителях;
+- расширено best-effort PII masking; производные ticket-level файлы остаются только в
+  `data/private` и не считаются анонимизированными.
+
+Проверки change set:
+
+- Ruff: успешно;
+- pytest: `1518 passed, 1 skipped`;
+- KB validation: `2186 valid / 2152 published`;
+- private corpus regeneration: `24 220` тикетов, `11 453` query-кандидата;
+- residual handle/VK-ID/СНИЛС/long-ID patterns в query payload: `0`.
+
+Эти 11 453 кейса имеют статус `weak_unreviewed` и не доказывают 50–60% closure. Точный следующий
+product step: восстановить роли и multi-turn контекст для `12 767 unresolved`, вручную проверить
+top-20 сочетаний `intent × aspect × entity class`, затем получить baseline текущего runtime через
+локальный `/ask` без HDE. Только после correction cycle формируется sealed holdout минимум из
+400 полных тикетов и считается human-verified ticket closure.
