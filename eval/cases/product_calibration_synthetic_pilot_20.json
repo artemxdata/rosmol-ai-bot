@@ -1,0 +1,691 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_capabilities_scope",
+    "query": "Что умеет ЗаБотливый Бот?",
+    "user_id": "synthetic-pilot-capabilities-scope",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 1,
+    "aggregate_intent": "другое.прочее",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "other:unknown",
+    "expected_behavior": "answer",
+    "expected_response_profile": "generic",
+    "expected_answer_contains": [
+      "форум",
+      "грант"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "service_copy"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_unspecified_forum_overview",
+    "query": "Расскажи, пожалуйста, про форум.",
+    "user_id": "synthetic-pilot-unspecified-forum-overview",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 2,
+    "aggregate_intent": "форумы.прочее",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "forum:unspecified",
+    "expected_behavior": "clarify",
+    "expected_response_profile": "generic",
+    "expected_answer_contains": [
+      "название форума"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "clarification"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_grant_directions",
+    "query": "Какие направления есть в конкурсах Росмолодёжь.Гранты?",
+    "user_id": "synthetic-pilot-grant-directions",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 3,
+    "aggregate_intent": "гранты.прочее",
+    "aggregate_aspect": "grants",
+    "aggregate_entity_class": "grant:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "grants",
+    "expected_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "номинац"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_fgais_registration",
+    "query": "Как зарегистрироваться во ФГАИС «Молодёжь России»?",
+    "user_id": "synthetic-pilot-fgais-registration",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 4,
+    "aggregate_intent": "платформа_фгаис.регистрация_и_заявка",
+    "aggregate_aspect": "application",
+    "aggregate_entity_class": "platform:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "application",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "myrosmol.ru/auth/register"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_fgais_event_navigation",
+    "query": "Где во ФГАИС найти доступные мероприятия?",
+    "user_id": "synthetic-pilot-fgais-event-navigation",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 5,
+    "aggregate_intent": "платформа_фгаис.регистрация_и_заявка",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "platform:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "generic",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "фильтр"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_personal_selection_unknown_event",
+    "query": "Проверь, прошёл ли я отбор на мероприятие.",
+    "user_id": "synthetic-pilot-personal-selection-unknown-event",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 6,
+    "aggregate_intent": "другое.статус_заявки",
+    "aggregate_aspect": "selection_status",
+    "aggregate_entity_class": "other:unknown",
+    "expected_behavior": "escalate",
+    "expected_response_profile": "selection_status",
+    "expected_escalated": true,
+    "expected_escalation_reason": "personal_status",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "personal_status"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_personal_forum_application_status",
+    "query": "Скажи, одобрена ли моя заявка на форум.",
+    "user_id": "synthetic-pilot-personal-forum-application-status",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 7,
+    "aggregate_intent": "форумы.статус_заявки",
+    "aggregate_aspect": "selection_status",
+    "aggregate_entity_class": "forum:unspecified",
+    "expected_behavior": "escalate",
+    "expected_response_profile": "selection_status",
+    "expected_escalated": true,
+    "expected_escalation_reason": "personal_status",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "personal_status"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_fgais_application_notifications",
+    "query": "Где во ФГАИС посмотреть уведомления по моим заявкам?",
+    "user_id": "synthetic-pilot-fgais-application-notifications",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 8,
+    "aggregate_intent": "навигация.письмо_и_уведомления",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "navigation:generic",
+    "expected_behavior": "clarify",
+    "expected_response_profile": "generic",
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "clarification",
+      "source_gap"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_fgais_status_meanings",
+    "query": "Что означают статусы заявки во ФГАИС?",
+    "user_id": "synthetic-pilot-fgais-status-meanings",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 9,
+    "aggregate_intent": "платформа_фгаис.регистрация_и_заявка",
+    "aggregate_aspect": "selection_status",
+    "aggregate_entity_class": "platform:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "selection_status",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "на рассмотрении",
+      "одобрена"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_grant_application_steps",
+    "query": "Как подать заявку на первый сезон Росмолодёжь.Гранты?",
+    "user_id": "synthetic-pilot-grant-application-steps",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 10,
+    "aggregate_intent": "гранты.регистрация_и_заявка",
+    "aggregate_aspect": "application",
+    "aggregate_entity_class": "grant:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "application",
+    "expected_chunk_ids": [
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "Госуслуг",
+      "ФГАИС"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_grants_overview",
+    "query": "Что такое гранты для физических лиц?",
+    "user_id": "synthetic-pilot-grants-overview",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 11,
+    "aggregate_intent": "гранты.регистрация_и_заявка",
+    "aggregate_aspect": "grants",
+    "aggregate_entity_class": "grant:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "grants",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "конкурс"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_unspecified_event_dates",
+    "query": "Когда проходит мероприятие?",
+    "user_id": "synthetic-pilot-unspecified-event-dates",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 12,
+    "aggregate_intent": "другое.прочее",
+    "aggregate_aspect": "dates",
+    "aggregate_entity_class": "other:unknown",
+    "expected_behavior": "clarify",
+    "expected_response_profile": "dates",
+    "expected_answer_contains": [
+      "даты какого мероприятия"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "clarification",
+      "off_aspect_guard"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_unspecified_event_food",
+    "query": "Будет ли питание на мероприятии?",
+    "user_id": "synthetic-pilot-unspecified-event-food",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 13,
+    "aggregate_intent": "другое.прочее",
+    "aggregate_aspect": "food",
+    "aggregate_entity_class": "other:unknown",
+    "expected_behavior": "clarify",
+    "expected_response_profile": "food",
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "clarification"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_fgais_lost_email_access",
+    "query": "Я потерял доступ к почте от профиля ФГАИС. Как восстановить доступ к данным?",
+    "user_id": "synthetic-pilot-fgais-lost-email-access",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 14,
+    "aggregate_intent": "техподдержка.доступ_и_техническая_ошибка",
+    "aggregate_aspect": "technical",
+    "aggregate_entity_class": "technical:generic",
+    "expected_behavior": "answer",
+    "expected_response_profile": "technical",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "новый аккаунт"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_territory_meanings_overview",
+    "query": "Что такое форум «Территория смыслов»?",
+    "user_id": "synthetic-pilot-territory-meanings-overview",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 15,
+    "aggregate_intent": "другое.прочее",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "other:event-scoped",
+    "expected_behavior": "answer",
+    "expected_response_profile": "generic",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "общественно-политическ"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_ladoga_overview",
+    "query": "Что такое форум «Ладога»?",
+    "user_id": "synthetic-pilot-ladoga-overview",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 16,
+    "aggregate_intent": "форумы.прочее",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "forum:named",
+    "expected_behavior": "answer",
+    "expected_response_profile": "generic",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0001_o_forume"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0001_o_forume"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "Ленинградск"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_mashuk_selection_timing",
+    "query": "Когда будут известны результаты отбора на форум «Машук»?",
+    "user_id": "synthetic-pilot-mashuk-selection-timing",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 17,
+    "aggregate_intent": "форумы.статус_заявки",
+    "aggregate_aspect": "selection_status",
+    "aggregate_entity_class": "forum:named",
+    "expected_behavior": "answer",
+    "expected_response_profile": "selection_status",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "14",
+      "до даты начала"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote",
+      "off_aspect_guard"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_explicit_operator_request",
+    "query": "Переведи меня на оператора.",
+    "user_id": "synthetic-pilot-explicit-operator-request",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 18,
+    "aggregate_intent": "навигация.контакты_и_оператор",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "navigation:generic",
+    "expected_behavior": "escalate",
+    "expected_response_profile": "generic",
+    "expected_answer_contains": [
+      "Перевожу на оператора. Пожалуйста, ожидай."
+    ],
+    "expected_escalated": true,
+    "expected_escalation_reason": "operator_requested",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "service_copy"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_unspecified_forum_invitation_letter",
+    "query": "Когда придёт письмо-вызов на форум?",
+    "user_id": "synthetic-pilot-unspecified-forum-invitation-letter",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 19,
+    "aggregate_intent": "форумы.письмо_и_уведомления",
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "forum:unspecified",
+    "expected_behavior": "clarify",
+    "expected_response_profile": "documents",
+    "expected_answer_contains": [
+      "название форума"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "clarification"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_unspecified_forum_application",
+    "query": "Хочу участвовать в форуме — где начинается подача заявки?",
+    "user_id": "synthetic-pilot-unspecified-forum-application",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "aggregate_rank": 20,
+    "aggregate_intent": "форумы.регистрация_и_заявка",
+    "aggregate_aspect": "application",
+    "aggregate_entity_class": "forum:unspecified",
+    "expected_behavior": "clarify",
+    "expected_response_profile": "application",
+    "expected_answer_contains": [
+      "название форума"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "clarification",
+      "off_aspect_guard"
+    ]
+  }
+]

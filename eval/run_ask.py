@@ -23,6 +23,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from eval.ask_cases import build_seed_ask_cases
 from src.config import get_settings
+from src.response_contract import ResponseProfileName
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_DATA_ROOT = PROJECT_ROOT / "data" / "private"
+PRIVATE_TICKET_DERIVED = "private_ticket_derived"
+ALLOWED_PRIVACY_CLASSES = {"standard", PRIVATE_TICKET_DERIVED}
+PRIVATE_EVAL_HOSTS = {"localhost", "127.0.0.1", "::1", "app-ml"}
 
 FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
     r"(ответ[а]?[^.!?]{0,120}\s+в\s+источник(?:е|ах)\s+нет|"
@@ -41,6 +48,78 @@ NON_ANSWER_RE = re.compile(
     flags=re.IGNORECASE,
 )
 EXPECTED_BEHAVIORS = {"answer", "clarify", "scope_note", "escalate"}
+EXPECTED_RESPONSE_PROFILES = {profile.value for profile in ResponseProfileName}
+EVAL_CRITICAL_FORBIDDEN_RESPONSE_PROFILES: dict[str, tuple[str, ...]] = {
+    "dates": ("application", "selection_status", "travel"),
+    "application": ("dates", "selection_status", "travel"),
+    "selection_status": ("application", "dates", "travel"),
+    "travel": ("application", "selection_status"),
+}
+EVAL_RESPONSE_PROFILE_MARKERS: dict[str, tuple[str, ...]] = {
+    "application": (
+        "подать заяв",
+        "подача заяв",
+        "заявку пода",
+        "прием заяв",
+        "регистрац",
+        "зарегистр",
+        "заполнить анкет",
+        "отправить заяв",
+        "дедлайн подачи",
+    ),
+    "selection_status": (
+        "статус заяв",
+        "результат отбора",
+        "результаты отбора",
+        "прошел отбор",
+        "прошла отбор",
+        "одобрен",
+        "отклонен",
+        "резерв",
+        "список участник",
+        "списки участник",
+        "решение по заяв",
+    ),
+    "travel": (
+        "трансфер",
+        "проезд",
+        "авиабилет",
+        "железнодорожн",
+        "ж/д билет",
+        "вокзал",
+        "аэропорт",
+        "точка сбора",
+        "точки сбора",
+        "довез",
+        "отвез",
+        "подвез",
+        "как добраться",
+        "добраться до",
+        "как доехать",
+        "доехать до",
+        "доставят участник",
+        "встретят участник",
+        "расходы на дорогу",
+        "оплатить дорогу",
+    ),
+}
+EVAL_EVENT_DATE_RE = re.compile(
+    r"\b(?:форум|мероприятие|смена|фестиваль|слет|съезд|лагерь)\b"
+    r"[^.!?]{0,100}\b(?:проход(?:ит|ил|ила|ят)|пройдет|состоится|"
+    r"начнется|завершится|закончится)\b"
+    r"|"
+    r"\b(?:пройдет|состоится|начнется|завершится|закончится)\b"
+    r"[^.!?]{0,100}\b(?:форум|мероприятие|смена|фестиваль|слет|съезд|лагерь)\b",
+    flags=re.IGNORECASE,
+)
+EVAL_EVENT_DATE_MARKERS = (
+    "даты проведения",
+    "дата проведения",
+    "период проведения",
+    "дни проведения",
+    "начало мероприятия",
+    "окончание мероприятия",
+)
 SCOPE_NOTE_MARKERS = (
     "я отвечаю на вопросы по мероприятиям",
     "форумам, фгаис",
@@ -59,9 +138,31 @@ CLARIFICATION_MARKERS = (
 
 
 def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
+    label_status = str(raw.get("label_status") or "").strip().casefold()
+    review_flag = raw.get("requires_human_review")
+    review_required = review_flag is True or (
+        isinstance(review_flag, str)
+        and review_flag.strip().casefold() in {"1", "true", "yes"}
+    )
+    if review_required or label_status.startswith("weak_"):
+        raise ValueError(
+            "ask eval cases requiring human review cannot be executed"
+        )
     query = raw.get("query") or raw.get("question") or raw.get("text")
     if not query:
         raise ValueError("ask eval case must contain query, question, or text")
+    privacy_class = str(raw.get("privacy_class") or "standard").strip().casefold()
+    if privacy_class not in ALLOWED_PRIVACY_CLASSES:
+        raise ValueError(
+            "privacy_class must be one of: "
+            f"{', '.join(sorted(ALLOWED_PRIVACY_CLASSES))}"
+        )
+    if privacy_class == PRIVATE_TICKET_DERIVED and (
+        label_status != "human_reviewed" or review_flag is not False
+    ):
+        raise ValueError(
+            "private_ticket_derived cases require an explicit human-reviewed verdict"
+        )
 
     expected_behavior = _normalize_expected_behavior(
         raw.get("expected_behavior")
@@ -86,6 +187,15 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     expected_cited_chunk_ids = _string_list(
         raw.get("expected_cited_chunk_ids") or raw.get("expected_cited_sources") or []
     )
+    allowed_cited_source_types = sorted(
+        {
+            source_type.strip().casefold()
+            for source_type in _string_list(
+                raw.get("allowed_cited_source_types") or []
+            )
+            if source_type.strip()
+        }
+    )
     equivalent_chunk_ids = _equivalent_chunk_id_map(
         raw.get("equivalent_chunk_ids")
         or raw.get("equivalent_chunks")
@@ -98,19 +208,42 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         expected_cited_chunk_ids = []
         equivalent_chunk_ids = {}
 
+    expected_response_profile = _normalize_expected_response_profile(
+        raw.get("expected_response_profile")
+        or raw.get("expected_profile")
+        or raw.get("response_profile")
+    )
+    forbidden_response_profiles = set(
+        _normalize_response_profile_list(
+            raw.get("forbidden_response_profiles")
+            or raw.get("forbidden_profiles")
+            or []
+        )
+    )
+    forbidden_response_profiles.update(
+        EVAL_CRITICAL_FORBIDDEN_RESPONSE_PROFILES.get(
+            expected_response_profile or "",
+            (),
+        )
+    )
+
     return {
         "id": str(raw.get("id") or raw.get("case_id") or query),
         "query": str(query),
+        "privacy_class": privacy_class,
         "user_id": str(raw.get("user_id") or "ask-eval"),
         "channel": str(raw.get("channel") or "api"),
         "forum_context": str(raw.get("forum_context") or "").strip() or None,
         "expected_chunk_ids": expected_chunk_ids,
         "expected_cited_chunk_ids": expected_cited_chunk_ids,
+        "allowed_cited_source_types": allowed_cited_source_types,
         "equivalent_chunk_ids": equivalent_chunk_ids,
         "expected_answer_contains": expected_answer_contains,
         "expected_message_masked_contains": expected_message_masked_contains,
         "forbidden_message_masked_contains": forbidden_message_masked_contains,
         "expected_behavior": expected_behavior,
+        "expected_response_profile": expected_response_profile,
+        "forbidden_response_profiles": sorted(forbidden_response_profiles),
         "expected_escalated": raw.get("expected_escalated"),
         "expected_escalation_reason": raw.get("expected_escalation_reason"),
         "expected_generator_model": raw.get("expected_generator_model"),
@@ -147,6 +280,13 @@ async def run_eval(
         auto_smoke_cases=auto_smoke_cases,
         max_smoke_cases=max_smoke_cases,
         user_prefix=generated_user_prefix or _default_generated_user_prefix("ask-eval"),
+    )
+    _guard_eval_privacy(
+        cases=cases,
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=markdown_path,
+        target=target,
     )
     original_cases_total = len(cases)
     if max_cases is not None:
@@ -280,6 +420,21 @@ def summarize_results(
     cited_scored = [item for item in results if item.get("expected_cited_chunk_ids")]
     answer_scored = [item for item in results if item.get("expected_answer_contains")]
     behavior_scored = [item for item in results if item.get("expected_behavior")]
+    routing_profile_scored = [
+        item
+        for item in results
+        if item.get("expected_response_profile")
+    ]
+    forbidden_profile_scored = [
+        item
+        for item in results
+        if item.get("forbidden_response_profiles")
+    ]
+    cited_source_policy_scored = [
+        item
+        for item in results
+        if item.get("allowed_cited_source_types")
+    ]
     trace_scored = [item for item in results if item.get("trace_found")]
     usage_events = [event for item in results for event in item.get("llm_usage", [])]
     reranker_scores = _numeric_values(results, "max_reranker_score")
@@ -314,6 +469,18 @@ def summarize_results(
         ),
         "answer_contains_rate": _bool_rate(answer_scored, "answer_contains_match"),
         "behavior_match_rate": _bool_rate(behavior_scored, "behavior_match"),
+        "routing_response_profile_match_rate": _bool_rate(
+            routing_profile_scored,
+            "routing_response_profile_match",
+        ),
+        "forbidden_response_profile_absence_rate": _bool_rate(
+            forbidden_profile_scored,
+            "forbidden_response_profiles_absent",
+        ),
+        "cited_source_type_policy_rate": _bool_rate(
+            cited_source_policy_scored,
+            "cited_source_types_allowed",
+        ),
         "trace_coverage_rate": len(trace_scored) / len(results) if results else None,
         "escalation_rate": _bool_rate(trace_scored, "was_escalated"),
         "cache_hit_rate": _bool_rate(trace_scored, "cache_hit"),
@@ -348,6 +515,25 @@ def summarize_results(
         ),
         "observed_behavior_counts": dict(
             Counter(str(item.get("observed_behavior") or "unknown") for item in results)
+        ),
+        "expected_response_profile_counts": dict(
+            Counter(
+                str(item.get("expected_response_profile") or "unscored")
+                for item in results
+            )
+        ),
+        "observed_routing_response_profile_counts": dict(
+            Counter(
+                str(item.get("observed_routing_response_profile") or "unknown")
+                for item in results
+            )
+        ),
+        "detected_response_profile_counts": dict(
+            Counter(
+                profile
+                for item in results
+                for profile in item.get("detected_response_profiles") or []
+            )
         ),
         "likely_infrastructure_failure": _likely_infrastructure_failure(results),
         "llm_prompt_tokens": sum(int(item.get("llm_prompt_tokens") or 0) for item in results),
@@ -392,6 +578,43 @@ def _guard_large_live_run_budget(
         "Pass --max-llm-cost-rub <rubles>, --max-cases <n>, or "
         "--allow-unbounded-llm-cost for a deliberate full run."
     )
+
+
+def _guard_eval_privacy(
+    *,
+    cases: list[dict[str, Any]],
+    cases_path: Path,
+    output_path: Path,
+    markdown_path: Path | None,
+    target: str,
+) -> None:
+    if not any(
+        case.get("privacy_class") == PRIVATE_TICKET_DERIVED for case in cases
+    ):
+        return
+
+    parsed = urlsplit(target)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in PRIVATE_EVAL_HOSTS
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path.rstrip("/") != "/ask"
+    ):
+        raise ValueError(
+            "private_ticket_derived cases may only use a loopback or app-ml /ask target"
+        )
+
+    private_root = PRIVATE_DATA_ROOT.resolve()
+    artifact_paths = [cases_path.resolve(), output_path.resolve()]
+    if markdown_path is not None:
+        artifact_paths.append(markdown_path.resolve())
+    if not all(path.is_relative_to(private_root) for path in artifact_paths):
+        raise ValueError(
+            f"private_ticket_derived eval artifacts must stay under {private_root}"
+        )
 
 
 def _apply_run_limits(
@@ -445,6 +668,16 @@ def score_case(
     forbidden_message_masked_contains = case.get("forbidden_message_masked_contains") or []
     expected_behavior = case.get("expected_behavior")
     observed_behavior = _observed_behavior(response_text, trace)
+    expected_response_profile = case.get("expected_response_profile")
+    observed_routing_profile = _observed_response_profile(trace)
+    detected_response_profiles = sorted(
+        _detect_eval_response_profiles(response_text)
+    )
+    forbidden_response_profiles = case.get("forbidden_response_profiles") or []
+    forbidden_response_profile_hits = sorted(
+        set(forbidden_response_profiles) & set(detected_response_profiles)
+    )
+    allowed_cited_source_types = case.get("allowed_cited_source_types") or []
     expected_escalated = case.get("expected_escalated")
     expected_escalation_reason = case.get("expected_escalation_reason")
     expected_generator_model = case.get("expected_generator_model")
@@ -475,6 +708,7 @@ def score_case(
     missing_expected_cited_chunk_ids: list[str] = []
     missing_expected_cited_or_equivalent_chunk_ids: list[str] = []
     cited_chunk_ids = _collect_trace_cited_chunk_ids(trace)
+    cited_source_types = _cited_source_types(trace, cited_chunk_ids)
     if expected_cited_chunk_ids:
         expected_cited_set = set(expected_cited_chunk_ids)
         missing_expected_cited_chunk_ids = sorted(expected_cited_set - cited_chunk_ids)
@@ -492,6 +726,14 @@ def score_case(
         required_checks["expected_cited_chunk_hit"] = (
             equivalent_cited_hit if equivalent_chunk_ids else exact_cited_hit
         )
+    unexpected_cited_source_types: list[str] = []
+    if allowed_cited_source_types:
+        unexpected_cited_source_types = sorted(
+            set(cited_source_types) - set(allowed_cited_source_types)
+        )
+        cited_source_types_allowed = not unexpected_cited_source_types
+        checks["cited_source_types_allowed"] = cited_source_types_allowed
+        required_checks["cited_source_types_allowed"] = cited_source_types_allowed
     if expected_answer_contains:
         normalized_response = _normalize_answer_contains_text(response_text)
         answer_contains_match = all(
@@ -520,6 +762,20 @@ def score_case(
         behavior_match = observed_behavior == expected_behavior
         checks["behavior_match"] = behavior_match
         required_checks["behavior_match"] = behavior_match
+    if expected_response_profile:
+        routing_profile_match = (
+            observed_routing_profile == expected_response_profile
+            if trace
+            else None
+        )
+        checks["routing_response_profile_match"] = routing_profile_match
+        required_checks["routing_response_profile_match"] = routing_profile_match
+    if forbidden_response_profiles:
+        forbidden_profiles_absent = not forbidden_response_profile_hits
+        checks["forbidden_response_profiles_absent"] = forbidden_profiles_absent
+        required_checks["forbidden_response_profiles_absent"] = (
+            forbidden_profiles_absent
+        )
     if expected_escalated is not None:
         escalation_match = (
             bool(trace.get("was_escalated")) == bool(expected_escalated)
@@ -569,6 +825,9 @@ def score_case(
         ),
         expected_behavior=expected_behavior,
         observed_behavior=observed_behavior,
+        expected_response_profile=expected_response_profile,
+        observed_routing_profile=observed_routing_profile,
+        forbidden_response_profile_hits=forbidden_response_profile_hits,
         expected_escalated=expected_escalated,
         was_escalated=trace.get("was_escalated"),
         error=http_result.get("error") or trace.get("error"),
@@ -604,7 +863,10 @@ def score_case(
             missing_expected_cited_or_equivalent_chunk_ids
         ),
         "cited_source_ids": sorted(cited_chunk_ids),
-        "cited_source_types": _cited_source_types(trace, cited_chunk_ids),
+        "cited_source_types": cited_source_types,
+        "allowed_cited_source_types": allowed_cited_source_types,
+        "unexpected_cited_source_types": unexpected_cited_source_types,
+        "cited_source_types_allowed": checks.get("cited_source_types_allowed"),
         "expected_answer_contains": expected_answer_contains,
         "answer_contains_match": checks.get("answer_contains_match"),
         "message_masked": trace.get("message_masked"),
@@ -617,6 +879,17 @@ def score_case(
         "expected_behavior": expected_behavior,
         "observed_behavior": observed_behavior,
         "behavior_match": checks.get("behavior_match"),
+        "expected_response_profile": expected_response_profile,
+        "observed_routing_response_profile": observed_routing_profile,
+        "routing_response_profile_match": checks.get(
+            "routing_response_profile_match"
+        ),
+        "detected_response_profiles": detected_response_profiles,
+        "forbidden_response_profiles": forbidden_response_profiles,
+        "forbidden_response_profile_hits": forbidden_response_profile_hits,
+        "forbidden_response_profiles_absent": checks.get(
+            "forbidden_response_profiles_absent"
+        ),
         "expected_escalated": expected_escalated,
         "was_escalated": trace.get("was_escalated"),
         "escalation_match": checks.get("escalation_match"),
@@ -658,6 +931,9 @@ def _failure_reasons(
     missing_expected_cited_or_equivalent_chunk_ids: list[str],
     expected_behavior: object,
     observed_behavior: object,
+    expected_response_profile: object,
+    observed_routing_profile: object,
+    forbidden_response_profile_hits: list[str],
     expected_escalated: object,
     was_escalated: object,
     error: object,
@@ -688,12 +964,24 @@ def _failure_reasons(
             reasons.append("expected_chunk_not_cited")
     if required_checks.get("answer_contains_match") is False:
         reasons.append("answer_contains_mismatch")
+    if required_checks.get("cited_source_types_allowed") is False:
+        reasons.append("forbidden_cited_source_type")
     if required_checks.get("message_masked_contains_match") is False:
         reasons.append("message_masked_contains_mismatch")
     if required_checks.get("message_masked_forbidden_absent_match") is False:
         reasons.append("message_masked_forbidden_contains_raw_pii")
     if required_checks.get("behavior_match") is False:
         reasons.append(f"behavior_mismatch:{expected_behavior}!={observed_behavior}")
+    if required_checks.get("routing_response_profile_match") is False:
+        reasons.append(
+            "routing_response_profile_mismatch:"
+            f"{expected_response_profile}!={observed_routing_profile}"
+        )
+    if required_checks.get("forbidden_response_profiles_absent") is False:
+        reasons.append(
+            "forbidden_response_profile_detected:"
+            + ",".join(forbidden_response_profile_hits)
+        )
     if required_checks.get("escalation_match") is False:
         if expected_escalated is False and was_escalated is True:
             reasons.append("unexpected_escalation")
@@ -744,6 +1032,46 @@ def _normalize_expected_behavior(value: Any) -> str | None:
     return normalized
 
 
+def _normalize_expected_response_profile(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    normalized = str(value).casefold().strip().replace("-", "_")
+    if normalized not in EXPECTED_RESPONSE_PROFILES:
+        raise ValueError(
+            "expected_response_profile must be one of: "
+            f"{', '.join(sorted(EXPECTED_RESPONSE_PROFILES))}"
+        )
+    return normalized
+
+
+def _normalize_response_profile_list(value: Any) -> list[str]:
+    normalized: set[str] = set()
+    for item in _string_list(value):
+        profile = _normalize_expected_response_profile(item)
+        if profile:
+            normalized.add(profile)
+    return sorted(normalized)
+
+
+def _detect_eval_response_profiles(response_text: str) -> set[str]:
+    """Detect critical answer aspects independently from the production verifier."""
+
+    normalized = " ".join(
+        str(response_text or "").casefold().replace("ё", "е").split()
+    )
+    detected = {
+        profile
+        for profile, markers in EVAL_RESPONSE_PROFILE_MARKERS.items()
+        if any(marker in normalized for marker in markers)
+    }
+    if (
+        any(marker in normalized for marker in EVAL_EVENT_DATE_MARKERS)
+        or EVAL_EVENT_DATE_RE.search(normalized)
+    ):
+        detected.add("dates")
+    return detected
+
+
 def _infer_expected_behavior(raw: dict[str, Any], query: str) -> str | None:
     tags = " ".join(_string_list(raw.get("tags") or []))
     identity = f"{raw.get('id') or raw.get('case_id') or ''} {tags}".casefold()
@@ -773,6 +1101,14 @@ def _observed_behavior(response_text: str, trace: dict[str, Any]) -> str:
     if _looks_like_clarification(normalized):
         return "clarify"
     return "answer"
+
+
+def _observed_response_profile(trace: dict[str, Any]) -> str | None:
+    analysis = _json_safe(trace.get("query_analysis"))
+    if not isinstance(analysis, dict):
+        return None
+    value = analysis.get("response_profile")
+    return str(value).strip() or None
 
 
 def _looks_like_scope_note(normalized_response: str) -> bool:
@@ -926,7 +1262,8 @@ async def _fetch_trace(pool: asyncpg.Pool, request_id: str) -> dict[str, Any] | 
     row = await pool.fetchrow(
         """
         SELECT
-            message_masked, cache_hit, generator_model, cited_sources, was_escalated,
+            message_masked, query_analysis, cache_hit, generator_model,
+            cited_sources, was_escalated,
             escalation_reason, max_reranker_score, total_latency_ms,
             retrieved_chunks, reranker_scores, trace_events, llm_usage,
             llm_prompt_tokens, llm_completion_tokens, llm_total_tokens,
@@ -987,11 +1324,13 @@ def _trace_metadata_by_chunk_id(trace: dict[str, Any]) -> dict[str, dict[str, An
 
 def _source_type_for_chunk(chunk_id: str, metadata: dict[str, Any] | None) -> str:
     metadata = metadata or {}
-    source_type = str(metadata.get("source_type") or "").strip()
+    source_type = str(metadata.get("source_type") or "").strip().casefold()
     if source_type:
         return source_type
     if chunk_id.startswith("ticket_answer_bank_"):
         return "ticket_answer_bank"
+    if chunk_id.startswith("yonote_api_"):
+        return "yonote"
     if chunk_id.startswith("xlsx_"):
         return "xlsx"
     if chunk_id.startswith("docx_"):
@@ -1117,6 +1456,12 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
         f"`{_format_rate(metrics.get('expected_cited_or_equivalent_chunk_hit_rate'))}`",
         f"- Escalation rate: `{_format_rate(metrics.get('escalation_rate'))}`",
         f"- Behavior match rate: `{_format_rate(metrics.get('behavior_match_rate'))}`",
+        "- Routing response profile match rate: "
+        f"`{_format_rate(metrics.get('routing_response_profile_match_rate'))}`",
+        "- Forbidden answer profile absence rate: "
+        f"`{_format_rate(metrics.get('forbidden_response_profile_absence_rate'))}`",
+        "- Cited source type policy rate: "
+        f"`{_format_rate(metrics.get('cited_source_type_policy_rate'))}`",
         f"- Cache hit rate: `{_format_rate(metrics.get('cache_hit_rate'))}`",
         f"- Source chunk rate: `{_format_rate(metrics.get('source_chunk_rate'))}`",
         "- Low-confidence chunk hits: "
@@ -1260,6 +1605,23 @@ def _format_rate(value: Any) -> str:
     return f"{float(value) * 100:.1f}%"
 
 
+def _quality_gate_failures(
+    metrics: dict[str, Any],
+    *,
+    fail_on_any_case: bool,
+    require_complete_traces: bool,
+) -> list[str]:
+    failures: list[str] = []
+    if fail_on_any_case and metrics.get("pass_rate") != 1.0:
+        failures.append("case_pass_rate_below_100_percent")
+    if (
+        require_complete_traces
+        and metrics.get("trace_coverage_rate") != 1.0
+    ):
+        failures.append("trace_coverage_below_100_percent")
+    return failures
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
@@ -1310,6 +1672,16 @@ def main() -> None:
     parser.add_argument("--user-prefix", default="")
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--bypass-cache", action="store_true")
+    parser.add_argument(
+        "--fail-on-any-case",
+        action="store_true",
+        help="Exit with status 1 unless every evaluated case passes.",
+    )
+    parser.add_argument(
+        "--require-complete-traces",
+        action="store_true",
+        help="Exit with status 1 unless trace coverage is exactly 100%%.",
+    )
     args = parser.parse_args()
 
     output_path = Path(args.output)
@@ -1339,15 +1711,26 @@ def main() -> None:
             large_run_threshold=args.large_run_threshold,
         )
     )
+    quality_gate_failures = _quality_gate_failures(
+        metrics,
+        fail_on_any_case=args.fail_on_any_case,
+        require_complete_traces=args.require_complete_traces,
+    )
+    stdout_metrics = {
+        key: value for key, value in metrics.items() if key != "results"
+    }
+    stdout_metrics["quality_gate_failures"] = quality_gate_failures
     print(
         json.dumps(
-            {key: value for key, value in metrics.items() if key != "results"},
+            stdout_metrics,
             ensure_ascii=False,
             indent=2,
         )
     )
     if metrics.get("llm_budget_exceeded") is True:
         raise SystemExit(2)
+    if quality_gate_failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

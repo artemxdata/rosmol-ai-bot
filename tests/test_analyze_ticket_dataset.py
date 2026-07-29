@@ -2,25 +2,104 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts.analyze_ticket_dataset import (
     ForumAlias,
+    build_artifact_manifest,
     build_golden_candidates,
+    build_product_conversation_splits,
     build_product_eval_splits,
+    build_product_role_review_queue,
+    build_product_split_plan,
     build_reranker_pairs,
     choose_answer_candidate,
     choose_question_candidate,
     classify_category,
     classify_escalation,
+    classify_segment_role,
     classify_topic,
     detect_forum,
+    ensure_private_output_dir,
     is_low_signal_title,
     load_ticket_rows,
     mask_pii,
     normalize_ticket,
+    promote_staged_artifacts,
+    reconstruct_dialogue_turns,
     score_question_segment,
     split_message_segments,
+    validate_artifact_manifest,
+    write_json,
+    write_json_array,
 )
 from src.kb.source_extractors import SpreadsheetRow
+
+
+def test_ticket_analysis_rejects_output_outside_private_data(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="data.private"):
+        ensure_private_output_dir(tmp_path / "public-output")
+
+
+def test_mask_pii_repeats_until_adjacent_phone_numbers_are_removed() -> None:
+    masked, pii_types = mask_pii(
+        "+7 900 000 00 00+7 901 111 11 11"
+    )
+
+    assert "+7 900" not in masked
+    assert "+7 901" not in masked
+    assert pii_types == ["phone"]
+
+
+def test_json_array_writer_preserves_existing_file_on_serialization_error(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "cases.json"
+    target.write_text('{"previous": true}\n', encoding="utf-8")
+
+    with pytest.raises(TypeError):
+        write_json_array(
+            target,
+            [
+                {"ok": 1},
+                {"not_json_serializable": {1}},
+            ],
+        )
+
+    assert target.read_text(encoding="utf-8") == '{"previous": true}\n'
+
+
+def test_artifact_manifest_detects_partial_or_tampered_output(
+    tmp_path: Path,
+) -> None:
+    staging = tmp_path / "staging"
+    output = tmp_path / "output"
+    staging.mkdir()
+    input_path = tmp_path / "source.xlsx"
+    forums_path = tmp_path / "forums.json"
+    input_path.write_bytes(b"source")
+    forums_path.write_text("[]\n", encoding="utf-8")
+    write_json(staging / "dataset_profile.json", {"tickets": 1})
+    write_json(staging / "product_split_summary.json", {"total": 1})
+    manifest = build_artifact_manifest(
+        staging,
+        input_path=input_path,
+        forums_path=forums_path,
+    )
+    write_json(staging / "artifact_manifest.json", manifest)
+
+    promote_staged_artifacts(staging, output)
+
+    validated = validate_artifact_manifest(output)
+    assert validated["artifact_count"] == 2
+    (output / "dataset_profile.json").write_text(
+        '{"tickets": 2}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="mismatch"):
+        validate_artifact_manifest(output)
 
 
 def test_load_ticket_rows_merges_export_continuations(
@@ -136,6 +215,404 @@ def test_split_message_segments_uses_dialog_separator() -> None:
         "Ответ оператора",
         "Спасибо",
     ]
+
+
+def test_reconstruct_dialogue_turns_preserves_order_without_forced_alternation() -> None:
+    turns = reconstruct_dialogue_turns(
+        [
+            "Когда проходит форум Машук?",
+            "Как подать заявку на форум?",
+            "Для этого необходимо открыть личный кабинет и выбрать мероприятие.",
+            "А трансфер будет?",
+        ]
+    )
+
+    assert [turn.index for turn in turns] == [0, 1, 2, 3]
+    assert [turn.role for turn in turns] == [
+        "user",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert turns[0].role_confidence == "high"
+    assert turns[2].assistant_kind == "unknown"
+
+
+def test_reconstruct_dialogue_turns_keeps_ambiguous_copy_unknown() -> None:
+    turn = classify_segment_role("Хорошо", index=0)
+
+    assert turn.role == "unknown"
+    assert turn.role_confidence == "low"
+    assert turn.role_reason == "ambiguous_without_speaker_metadata"
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Подскажите, пожалуйста, номер заявки?",
+        "Подскажите номер заявки?",
+        "Укажите номер заявки?",
+        "Пожалуйста, укажите номер заявки?",
+    ),
+)
+def test_operator_data_request_is_not_promoted_to_user_turn(text: str) -> None:
+    turn = classify_segment_role(text, index=0)
+
+    assert turn.role == "assistant"
+    assert turn.role_confidence == "medium"
+    assert turn.role_reason == "assistant_data_request"
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Вы уже подавали заявку?",
+        "Вам удалось войти в личный кабинет?",
+        "Проблема ещё актуальна?",
+        "Подскажите, пожалуйста, у вас получилось войти?",
+        "Трансфер вам нужен?",
+    ),
+)
+def test_operator_status_check_is_not_promoted_to_user_turn(text: str) -> None:
+    turn = classify_segment_role(text, index=0)
+
+    assert turn.role == "assistant"
+    assert turn.role_confidence == "medium"
+    assert turn.role_reason == "assistant_status_check"
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Я передал обращение коллегам.",
+        "Я уточню информацию и вернусь с ответом.",
+        "Я проверю статус заявки.",
+    ),
+)
+def test_operator_promise_is_not_promoted_to_user_turn(text: str) -> None:
+    turn = classify_segment_role(text, index=0)
+
+    assert turn.role == "assistant"
+    assert turn.role_confidence == "medium"
+    assert turn.role_reason == "assistant_followup_promise"
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Заявка отправлена?",
+        "Я отправил заявку.",
+    ),
+)
+def test_question_mark_or_first_person_alone_does_not_make_user_high(
+    text: str,
+) -> None:
+    turn = classify_segment_role(text, index=0)
+
+    assert (turn.role, turn.role_confidence) != ("user", "high")
+
+
+def test_user_question_after_system_copy_is_extracted_without_bot_prefix() -> None:
+    turn = classify_segment_role(
+        (
+            "Чем я могу быть полезен? "
+            "Не могу войти в личный кабинет, что делать?"
+        ),
+        index=0,
+    )
+
+    assert turn.role == "user"
+    assert turn.role_confidence == "high"
+    assert turn.role_reason == "user_request_after_system_copy"
+    assert turn.text_masked == "Не могу войти в личный кабинет, что делать?"
+
+
+def test_short_user_problem_requires_role_review_without_first_person() -> None:
+    turn = classify_segment_role("Регистрация не работает", index=0)
+
+    assert turn.role == "user"
+    assert turn.role_confidence == "medium"
+    assert turn.role_reason == "ambiguous_reported_problem"
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "У меня регистрация не работает",
+        "Я не могу войти в личный кабинет",
+        "Мне не приходит код подтверждения",
+    ),
+)
+def test_first_person_problem_is_high_confidence_user_turn(text: str) -> None:
+    turn = classify_segment_role(text, index=0)
+
+    assert turn.role == "user"
+    assert turn.role_confidence == "high"
+    assert turn.role_reason == "reported_problem"
+
+
+def test_instruction_about_known_problem_remains_assistant_copy() -> None:
+    turn = classify_segment_role(
+        "Регистрация не работает, попробуйте подать заявку позднее.",
+        index=0,
+    )
+
+    assert turn.role != "user"
+
+
+def test_operator_problem_explanation_is_not_promoted_to_user_turn() -> None:
+    turn = classify_segment_role(
+        "Ошибка возникает из-за неверно заполненного поля.",
+        index=0,
+    )
+
+    assert turn.role != "user"
+
+
+def test_short_reply_after_clarification_requires_role_review() -> None:
+    turns = reconstruct_dialogue_turns(
+        [
+            "Уточни, пожалуйста, название форума, о котором спрашиваешь?",
+            "Машук",
+        ]
+    )
+
+    assert turns[0].role == "assistant"
+    assert turns[0].role_confidence == "medium"
+    assert turns[1].role == "user"
+    assert turns[1].role_confidence == "medium"
+    assert turns[1].role_reason == "short_reply_after_clarification"
+
+
+def test_medium_confidence_turn_keeps_ticket_in_partial_role_review() -> None:
+    record = normalize_ticket(
+        {
+            "id": "partial-role",
+            "title": "Личное сообщение VKontakte",
+            "messages": (
+                "Когда проходит форум Машук? --- "
+                "Уточни, пожалуйста, название форума, о котором спрашиваешь?"
+            ),
+        },
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+
+    assert record["high_confidence_user_turns_count"] == 1
+    assert record["review_required_turns_count"] == 1
+    assert record["role_reconstruction_status"] == "partial"
+
+
+def test_role_reconstruction_masks_each_turn_before_serialization() -> None:
+    turns = reconstruct_dialogue_turns(
+        ["Подскажите, статус заявки можно прислать на test@example.com?"]
+    )
+
+    assert turns[0].role == "user"
+    assert turns[0].has_pii is True
+    assert turns[0].pii_types == ("email",)
+    assert "test@example.com" not in turns[0].text_masked
+    assert "[EMAIL]" in turns[0].text_masked
+
+
+def test_choose_question_candidate_checks_segments_after_eighth() -> None:
+    segments = ["Хорошо"] * 8 + ["Когда проходит форум Машук?"]
+
+    assert choose_question_candidate("", segments) == "Когда проходит форум Машук?"
+
+
+def test_high_confidence_user_turn_overrides_conflicting_ticket_title() -> None:
+    record = normalize_ticket(
+        {
+            "id": "title-conflict",
+            "title": "Статус заявки",
+            "messages": "Когда проходит форум Машук?",
+        },
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+
+    assert record["question_candidate"] == "Когда проходит форум Машук?"
+    assert record["response_profile"] == "dates"
+    assert record["title_role_review_candidate"] == ""
+
+
+def test_title_only_candidate_stays_in_role_review_and_out_of_product_splits() -> None:
+    record = normalize_ticket(
+        {
+            "id": "title-only",
+            "title": "Статус заявки",
+            "messages": "Хорошо",
+            "date_created": "2026-01-20 10:00:00",
+        },
+        [],
+    )
+
+    splits, summary = build_product_eval_splits([record])
+    role_review_queue = build_product_role_review_queue([record])
+    title_review = next(
+        item
+        for item in role_review_queue
+        if item["role_reason"] == "unverified_ticket_title"
+    )
+
+    assert record["question_candidate"] == ""
+    assert record["high_confidence_user_turns_count"] == 0
+    assert record["role_reconstruction_status"] == "unresolved"
+    assert record["title_role_review_candidate"] == "Статус заявки"
+    assert summary["total"] == 0
+    assert all(not cases for cases in splits.values())
+    assert title_review["turn_index"] == -1
+    assert title_review["requires_human_review"] is True
+
+
+def test_product_conversation_payload_contains_only_high_confidence_user_turns() -> None:
+    record = normalize_ticket(
+        {
+            "id": "conversation-1",
+            "unique_id": "conversation-1",
+            "department": "ВК Умный Бот",
+            "status": "closed",
+            "title": "Личное сообщение VKontakte",
+            "messages": (
+                "Когда проходит форум Машук? --- "
+                "Для этого необходимо проверить страницу мероприятия в личном кабинете. --- "
+                "А трансфер будет?"
+            ),
+            "date_created": "2026-01-01 10:00:00",
+        },
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+
+    splits, summary = build_product_conversation_splits(
+        [record],
+        [ForumAlias(normalized="Машук", aliases=("Машук",))],
+    )
+    conversation = next(
+        item
+        for conversations in splits.values()
+        for item in conversations
+    )
+
+    assert summary["total"] == 1
+    assert summary["turns_total"] == 2
+    assert [turn["source_turn_index"] for turn in conversation["turns"]] == [0, 2]
+    assert all(turn["operator_answer_included"] is False for turn in conversation["turns"])
+    assert all("expected_behavior" not in turn for turn in conversation["turns"])
+    assert all("predicted_behavior" in turn for turn in conversation["turns"])
+    assert conversation["operator_answer_used_as_fact"] is False
+
+
+def test_product_conversation_components_do_not_cross_splits() -> None:
+    def record(
+        ticket_hash: str,
+        day: int,
+        queries: list[str],
+    ) -> dict[str, object]:
+        return {
+            "ticket_hash": ticket_hash,
+            "created_at": f"2026-01-{day:02d} 10:00:00",
+            "channel": "api",
+            "role_reconstruction_status": "complete",
+            "dialogue_turns": [
+                {
+                    "turn_index": index,
+                    "role": "user",
+                    "role_confidence": "high",
+                    "text_masked": query,
+                }
+                for index, query in enumerate(queries)
+            ],
+        }
+
+    records = [
+        record(
+            "linked-a",
+            1,
+            ["Когда проходит форум?", "Как подать заявку?"],
+        ),
+        record(
+            "linked-b",
+            10,
+            ["Как подать заявку?", "Какие документы нужны?"],
+        ),
+        record(
+            "linked-c",
+            20,
+            ["Какие документы нужны?", "Где посмотреть программу?"],
+        ),
+    ]
+    labels = [
+        "альфа",
+        "бета",
+        "гамма",
+        "дельта",
+        "эпсилон",
+        "дзета",
+        "эта",
+        "тета",
+        "йота",
+        "каппа",
+        "лямбда",
+        "мю",
+        "ню",
+        "кси",
+        "омикрон",
+        "пи",
+        "ро",
+    ]
+    records.extend(
+        record(
+            f"independent-{index}",
+            index + 1,
+            [f"Что нужно для темы {label}?"],
+        )
+        for index, label in enumerate(labels, start=1)
+    )
+
+    splits, _summary = build_product_conversation_splits(records, [])
+    component_splits: dict[str, set[str]] = {}
+    linked = []
+    for split, conversations in splits.items():
+        for conversation in conversations:
+            component_splits.setdefault(
+                conversation["duplicate_component_id"],
+                set(),
+            ).add(split)
+            if conversation["ticket_id_hash"].startswith("linked-"):
+                linked.append((split, conversation["duplicate_component_id"]))
+
+    assert len({component_id for _, component_id in linked}) == 1
+    assert {split for split, _ in linked} == {"calibration"}
+    assert all(len(split_names) == 1 for split_names in component_splits.values())
+
+
+def test_role_review_queue_excludes_high_confidence_turns() -> None:
+    queue = build_product_role_review_queue(
+        [
+            {
+                "ticket_hash": "review-1",
+                "dialogue_turns": [
+                    {
+                        "turn_index": 0,
+                        "role": "user",
+                        "role_confidence": "high",
+                        "text_masked": "Когда проходит форум?",
+                    },
+                    {
+                        "turn_index": 1,
+                        "role": "unknown",
+                        "role_confidence": "low",
+                        "role_reason": "ambiguous_without_speaker_metadata",
+                        "text_masked": "Хорошо",
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert len(queue) == 1
+    assert queue[0]["turn_index"] == 1
+    assert queue[0]["requires_human_review"] is True
+    assert queue[0]["operator_answer_used_as_fact"] is False
 
 
 def test_golden_candidates_are_balanced_across_groups() -> None:
@@ -404,6 +881,11 @@ def test_product_labels_do_not_use_operator_copy_or_ticket_status() -> None:
     assert case["expected_response_profile"] == "dates"
     assert case["expected_route"] == "answer"
     assert case["expected_escalation_reason"] is None
+    assert case["forbidden_response_profiles"] == [
+        "application",
+        "selection_status",
+        "travel",
+    ]
     assert case["available_at"] == "2026-01-02T10:00:00"
 
 
@@ -495,6 +977,7 @@ def test_product_eval_split_is_ticket_level_query_only_and_leakage_safe() -> Non
                 "forum_normalized": "Машук" if index in {1, 20} else "",
                 "query_forum_normalized": "Машук" if index in {1, 20} else "",
                 "response_profile": "dates" if index in {1, 20} else "documents",
+                "role_reconstruction_status": "complete",
                 "needs_clarification": False,
                 "should_escalate": False,
                 "escalation_reason": None,
@@ -523,3 +1006,105 @@ def test_product_eval_split_is_ticket_level_query_only_and_leakage_safe() -> Non
         if case["query"] == "Когда проходит Машук?"
     ]
     assert len(repeated) == 2
+
+
+def test_shared_split_plan_keeps_each_source_ticket_and_partial_component_together() -> None:
+    labels = (
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "iota",
+        "kappa",
+        "lambda",
+        "mu",
+        "nu",
+        "xi",
+        "omicron",
+        "pi",
+        "rho",
+        "sigma",
+        "tau",
+        "alpha",
+    )
+    records: list[dict[str, object]] = []
+    for index, label in enumerate(labels, start=1):
+        query = f"When is event {label}?"
+        records.append(
+            {
+                "ticket_hash": f"cross-artifact-{index}",
+                "question_candidate": query,
+                "created_at": f"2026-01-{index:02d} 10:00:00",
+                "channel": "api",
+                "query_forum_normalized": "",
+                "response_profile": "dates",
+                "query_needs_clarification": False,
+                "query_should_escalate": False,
+                "query_escalation_reason": None,
+                "role_reconstruction_status": (
+                    "partial"
+                    if index == len(labels)
+                    else "complete"
+                ),
+                "dialogue_turns": [
+                    {
+                        "turn_index": 0,
+                        "role": "user",
+                        "role_confidence": "high",
+                        "text_masked": query,
+                    }
+                ],
+            }
+        )
+
+    plan = build_product_split_plan(records, [])
+    query_splits, _query_summary = build_product_eval_splits(
+        records,
+        [],
+        split_plan=plan,
+    )
+    conversation_splits, _conversation_summary = (
+        build_product_conversation_splits(
+            records,
+            [],
+            split_plan=plan,
+        )
+    )
+
+    query_locations = {
+        case["ticket_id_hash"]: (
+            split,
+            case["duplicate_component_id"],
+        )
+        for split, cases in query_splits.items()
+        for case in cases
+    }
+    conversation_locations = {
+        conversation["ticket_id_hash"]: (
+            split,
+            conversation["duplicate_component_id"],
+        )
+        for split, conversations in conversation_splits.items()
+        for conversation in conversations
+    }
+
+    assert query_locations.keys() == conversation_locations.keys()
+    assert query_locations == conversation_locations
+    assert query_splits["validation"]
+    assert query_splits["holdout"]
+    assert conversation_splits["validation"]
+    assert conversation_splits["holdout"]
+
+    partial_ticket = "cross-artifact-20"
+    linked_early_ticket = "cross-artifact-1"
+    assert query_locations[partial_ticket][0] == "calibration"
+    assert query_locations[linked_early_ticket] == query_locations[partial_ticket]
+    assert all(
+        partial_ticket != item["ticket_id_hash"]
+        for split in ("validation", "holdout")
+        for item in query_splits[split] + conversation_splits[split]
+    )

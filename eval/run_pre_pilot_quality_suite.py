@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -54,6 +55,52 @@ DEFAULT_MIN_SECTION_PASS_RATE = 0.9
 SAFETY_MIN_PASS_RATE = 1.0
 RELEASE_MIN_TRACE_COVERAGE_RATE = 1.0
 MAX_PROVENANCE_ATTESTATION_BYTES = 64 * 1024
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LEGACY_FOLLOWUP_CONTENT_SHA256_V1 = {
+    (PROJECT_ROOT / "eval" / "cases" / "pre_pilot_followup.json").resolve():
+        "1f5d53723b134e2fb4a4701d60db2658f9a8e5c49a6d6786e6df60805a5e226a",
+    (PROJECT_ROOT / "eval" / "cases" / "dialog_memory_regression.json").resolve():
+        "8a74f5acd66fcb7c9bbfeb5a84c5e15a396b4bcaea15402e061118a20d1719f1",
+}
+LEGACY_FOLLOWUP_SCHEMAS_V1: dict[str, frozenset[str]] = {
+    "followup_amur_refusal_after_context": frozenset(
+        f"followup_amur_refusal_after_context_t{index}" for index in range(1, 7)
+    ),
+    "followup_bctp_family_transfer": frozenset(
+        f"followup_bctp_family_transfer_t{index}" for index in range(1, 3)
+    ),
+    "followup_grants_refund_contact": frozenset(
+        f"followup_grants_refund_contact_t{index}" for index in range(1, 3)
+    ),
+    "followup_youth_day_ticket_family_program": frozenset(
+        f"followup_youth_day_ticket_family_program_t{index}"
+        for index in range(1, 7)
+    ),
+    "dialog_ticket_event_clarification": frozenset(
+        f"dialog_ticket_event_clarification_t{index}" for index in range(1, 3)
+    ),
+    "dialog_five_followups_keep_event": frozenset(
+        f"dialog_five_followups_keep_event_t{index}" for index in range(1, 8)
+    ),
+    "dialog_long_clarifications_then_resolution": frozenset(
+        f"dialog_long_clarifications_then_resolution_t{index}"
+        for index in range(1, 8)
+    ),
+    "dialog_nested_grant_followups": frozenset(
+        f"dialog_nested_grant_followups_t{index}" for index in range(1, 4)
+    ),
+}
+_REVIEW_STATE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "label_status",
+        "requires_human_review",
+        "ticket_id_hash",
+        "duplicate_component_id",
+        "source_turn_index",
+        "role_confidence",
+    }
+)
 
 
 async def run_pre_pilot_quality_suite(
@@ -323,13 +370,64 @@ async def _open_trace_pool(trace_dsn: str | None) -> asyncpg.Pool | None:
 
 
 def _load_followup_cases(path: Path) -> list[dict[str, Any]]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_payload = path.read_bytes()
+    payload = json.loads(raw_payload.decode("utf-8"))
     if not isinstance(payload, list):
         raise ValueError(f"Follow-up cases must contain a JSON array: {path}")
+    expected_legacy_hash = LEGACY_FOLLOWUP_CONTENT_SHA256_V1.get(path.resolve())
+    canonical_payload = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    legacy_file_allowed = (
+        expected_legacy_hash is not None
+        and hashlib.sha256(canonical_payload).hexdigest() == expected_legacy_hash
+    )
     for item in payload:
         if not isinstance(item, dict) or not isinstance(item.get("turns"), list):
             raise ValueError("Each follow-up case must be an object with a turns array")
+        if legacy_file_allowed and _is_allowlisted_legacy_followup(item):
+            continue
+        _require_human_reviewed_followup(item, location="Follow-up case")
+        for turn in item["turns"]:
+            if not isinstance(turn, dict):
+                raise ValueError("Each follow-up turn must be an object")
+            _require_human_reviewed_followup(turn, location="Follow-up turn")
     return payload
+
+
+def _is_allowlisted_legacy_followup(item: dict[str, Any]) -> bool:
+    conversation_id = str(item.get("id") or "")
+    expected_turn_ids = LEGACY_FOLLOWUP_SCHEMAS_V1.get(conversation_id)
+    if expected_turn_ids is None or _REVIEW_STATE_FIELDS.intersection(item):
+        return False
+
+    turns = item.get("turns")
+    if not isinstance(turns, list) or not all(isinstance(turn, dict) for turn in turns):
+        return False
+    if any(_REVIEW_STATE_FIELDS.intersection(turn) for turn in turns):
+        return False
+    actual_turn_ids = {str(turn.get("id") or "") for turn in turns}
+    return len(actual_turn_ids) == len(turns) and actual_turn_ids == expected_turn_ids
+
+
+def _require_human_reviewed_followup(
+    item: dict[str, Any],
+    *,
+    location: str,
+) -> None:
+    if item.get("label_status") != "human_reviewed":
+        raise ValueError(
+            f"{location} requiring human review must set "
+            "label_status='human_reviewed'"
+        )
+    if item.get("requires_human_review") is not False:
+        raise ValueError(
+            f"{location} requiring human review must set "
+            "requires_human_review=false"
+        )
 
 
 def _summarize_followup_results(

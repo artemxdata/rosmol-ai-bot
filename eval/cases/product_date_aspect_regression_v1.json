@@ -1,0 +1,76 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_pravda_shift_dates_only",
+    "query": "Назови период проведения смены «Правда» на форуме «Территория смыслов».",
+    "user_id": "synthetic-regression-pravda-shift-dates-only",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_response_profile": "dates",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "26",
+      "30 июля"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "dates",
+      "yonote",
+      "off_aspect_guard"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "synthetic_mashuk_first_shift_dates_only",
+    "query": "Назови период проведения первой смены форума «Машук».",
+    "user_id": "synthetic-regression-mashuk-first-shift-dates-only",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_response_profile": "dates",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "8",
+      "15 августа"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "dates",
+      "yonote",
+      "off_aspect_guard"
+    ]
+  }
+]

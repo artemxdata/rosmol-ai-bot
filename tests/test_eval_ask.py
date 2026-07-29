@@ -6,10 +6,13 @@ from pathlib import Path
 import httpx
 import pytest
 
+import eval.run_ask as run_ask_module
 from eval.run_ask import (
+    _guard_eval_privacy,
     _json_safe,
     _llm_cost_rub_total,
     _normalize_case,
+    _quality_gate_failures,
     _trace_dsn_candidates,
     build_seed_ask_cases,
     run_eval,
@@ -34,16 +37,20 @@ def test_normalize_case_accepts_common_fields() -> None:
     assert case == {
         "id": "mashuk-travel",
         "query": "Кто оплачивает проезд на Машук?",
+        "privacy_class": "standard",
         "user_id": "ask-eval",
         "channel": "api",
         "forum_context": None,
         "expected_chunk_ids": ["chunk_1"],
         "expected_cited_chunk_ids": [],
+        "allowed_cited_source_types": [],
         "equivalent_chunk_ids": {},
         "expected_answer_contains": ["оплачивает самостоятельно"],
         "expected_message_masked_contains": [],
         "forbidden_message_masked_contains": [],
         "expected_behavior": None,
+        "expected_response_profile": None,
+        "forbidden_response_profiles": [],
         "expected_escalated": False,
         "expected_escalation_reason": None,
         "expected_generator_model": "source_chunk",
@@ -61,6 +68,96 @@ def test_normalize_case_keeps_explicit_forum_context() -> None:
     )
 
     assert case["forum_context"] == "День молодёжи"
+
+
+def test_normalize_case_keeps_private_ticket_privacy_class() -> None:
+    case = _normalize_case(
+        {
+            "id": "private-ticket",
+            "query": "private masked ticket query",
+            "privacy_class": "private_ticket_derived",
+            "label_status": "human_reviewed",
+            "requires_human_review": False,
+        }
+    )
+
+    assert case["privacy_class"] == "private_ticket_derived"
+
+
+@pytest.mark.parametrize(
+    ("requires_human_review", "label_status"),
+    [
+        (" true ", "human_reviewed"),
+        (False, " Weak_Unreviewed "),
+    ],
+)
+def test_normalize_case_rejects_weak_review_flags(
+    requires_human_review: object,
+    label_status: str,
+) -> None:
+    with pytest.raises(ValueError, match="requiring human review"):
+        _normalize_case(
+            {
+                "query": "private masked ticket query",
+                "requires_human_review": requires_human_review,
+                "label_status": label_status,
+            }
+        )
+
+
+def test_normalize_case_rejects_unreviewed_private_ticket() -> None:
+    with pytest.raises(ValueError, match="human-reviewed"):
+        _normalize_case(
+            {
+                "query": "private masked ticket query",
+                "privacy_class": "private_ticket_derived",
+            }
+        )
+
+
+def test_private_ticket_eval_allows_only_local_private_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    private_case = [{"privacy_class": "private_ticket_derived"}]
+    cases_path = private_root / "cases.json"
+    output_path = private_root / "result.json"
+    markdown_path = private_root / "result.md"
+
+    _guard_eval_privacy(
+        cases=private_case,
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=markdown_path,
+        target="http://127.0.0.1:8001/ask",
+    )
+    _guard_eval_privacy(
+        cases=private_case,
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=None,
+        target="http://app-ml:8000/ask",
+    )
+
+    with pytest.raises(ValueError, match="loopback"):
+        _guard_eval_privacy(
+            cases=private_case,
+            cases_path=cases_path,
+            output_path=output_path,
+            markdown_path=None,
+            target="https://example.test/ask",
+        )
+    with pytest.raises(ValueError, match="must stay under"):
+        _guard_eval_privacy(
+            cases=private_case,
+            cases_path=cases_path,
+            output_path=tmp_path / "public-result.json",
+            markdown_path=None,
+            target="http://localhost:8001/ask",
+        )
 
 
 def test_build_seed_ask_cases_uses_intent_examples() -> None:
@@ -198,6 +295,192 @@ def test_normalize_case_accepts_expected_behavior_aliases() -> None:
     )
 
     assert case["expected_behavior"] == "scope_note"
+
+
+def test_normalize_case_validates_expected_response_profile() -> None:
+    case = _normalize_case(
+        {
+            "id": "dates",
+            "query": "Когда проходит форум Машук?",
+            "expected_response_profile": "dates",
+        }
+    )
+
+    assert case["expected_response_profile"] == "dates"
+    assert case["forbidden_response_profiles"] == [
+        "application",
+        "selection_status",
+        "travel",
+    ]
+
+    with pytest.raises(ValueError, match="expected_response_profile"):
+        _normalize_case(
+            {
+                "id": "invalid-profile",
+                "query": "Когда проходит форум?",
+                "expected_response_profile": "travel_and_dates",
+            }
+        )
+
+
+def test_normalize_case_unions_explicit_and_default_forbidden_profiles() -> None:
+    case = _normalize_case(
+        {
+            "id": "dates-with-explicit-forbidden",
+            "query": "Когда проходит форум Машук?",
+            "expected_response_profile": "dates",
+            "forbidden_response_profiles": ["food", "travel"],
+        }
+    )
+
+    assert case["forbidden_response_profiles"] == [
+        "application",
+        "food",
+        "selection_status",
+        "travel",
+    ]
+
+
+def test_score_case_checks_routing_profile_from_trace() -> None:
+    case = _normalize_case(
+        {
+            "id": "dates",
+            "query": "Когда проходит форум Машук?",
+            "expected_behavior": "answer",
+            "expected_response_profile": "dates",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Форум проходит с 10 по 14 августа.",
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    matched = score_case(
+        case,
+        http_result,
+        {
+            "was_escalated": False,
+            "query_analysis": {"response_profile": "dates"},
+        },
+    )
+    mismatched = score_case(
+        case,
+        http_result,
+        {
+            "was_escalated": False,
+            "query_analysis": '{"response_profile": "travel"}',
+        },
+    )
+
+    assert matched["routing_response_profile_match"] is True
+    assert matched["passed"] is True
+    assert mismatched["routing_response_profile_match"] is False
+    assert mismatched["passed"] is False
+    assert (
+        "routing_response_profile_mismatch:dates!=travel"
+        in mismatched["failure_reasons"]
+    )
+
+
+def test_score_case_fails_profile_check_without_trace() -> None:
+    case = _normalize_case(
+        {
+            "id": "dates-no-trace",
+            "query": "Когда проходит форум Машук?",
+            "expected_response_profile": "dates",
+        }
+    )
+
+    result = score_case(
+        case,
+        {
+            "http_status": 200,
+            "request_id": "11111111-1111-1111-1111-111111111111",
+            "response": "Форум проходит в августе.",
+            "latency_ms": 120,
+            "error": None,
+        },
+        None,
+    )
+
+    assert result["routing_response_profile_match"] is None
+    assert result["passed"] is False
+    assert "trace_missing" in result["failure_reasons"]
+
+
+def test_score_case_rejects_forbidden_answer_profile_drift() -> None:
+    case = _normalize_case(
+        {
+            "id": "dates-vs-travel",
+            "query": "Когда проходит форум Машук?",
+            "expected_behavior": "answer",
+            "expected_response_profile": "dates",
+            "forbidden_response_profiles": [
+                "travel",
+                "application",
+            ],
+        }
+    )
+    trace = {
+        "was_escalated": False,
+        "query_analysis": {"response_profile": "dates"},
+    }
+
+    result = score_case(
+        case,
+        {
+            "http_status": 200,
+            "request_id": "11111111-1111-1111-1111-111111111111",
+            "response": "Трансфер от вокзала до площадки будет бесплатным.",
+            "latency_ms": 120,
+            "error": None,
+        },
+        trace,
+    )
+
+    assert result["routing_response_profile_match"] is True
+    assert result["detected_response_profiles"] == ["travel"]
+    assert result["forbidden_response_profile_hits"] == ["travel"]
+    assert result["forbidden_response_profiles_absent"] is False
+    assert result["passed"] is False
+    assert (
+        "forbidden_response_profile_detected:travel"
+        in result["failure_reasons"]
+    )
+
+
+def test_score_case_rejects_eval_only_travel_paraphrase_for_dates() -> None:
+    case = _normalize_case(
+        {
+            "id": "dates-vs-travel-paraphrase",
+            "query": "Когда проходит форум Машук?",
+            "expected_behavior": "answer",
+            "expected_response_profile": "dates",
+        }
+    )
+
+    result = score_case(
+        case,
+        {
+            "http_status": 200,
+            "request_id": "11111111-1111-1111-1111-111111111111",
+            "response": "Организаторы довезут участников от точки сбора.",
+            "latency_ms": 120,
+            "error": None,
+        },
+        {
+            "was_escalated": False,
+            "query_analysis": {"response_profile": "dates"},
+        },
+    )
+
+    assert result["detected_response_profiles"] == ["travel"]
+    assert result["forbidden_response_profile_hits"] == ["travel"]
+    assert result["forbidden_response_profiles_absent"] is False
+    assert result["passed"] is False
 
 
 def test_normalize_case_infers_scope_note_from_seed_topic() -> None:
@@ -645,6 +928,209 @@ def test_score_case_reports_cited_source_types() -> None:
     assert result["cited_source_ids"] == ["xlsx_category_r0004_otkazali_v_zayavke"]
     assert result["cited_source_types"] == ["xlsx"]
     assert result["failure_reasons"] == ["expected_chunk_not_cited"]
+
+
+def test_normalize_case_accepts_allowed_cited_source_types() -> None:
+    case = _normalize_case(
+        {
+            "id": "yonote-policy",
+            "query": "Что такое Росмолодёжь?",
+            "allowed_cited_source_types": [" Yonote ", "yonote"],
+        }
+    )
+
+    assert case["allowed_cited_source_types"] == ["yonote"]
+
+
+def test_score_case_rejects_any_citation_outside_allowed_source_types() -> None:
+    expected_chunk = "yonote_api_source_s0001_fact"
+    case = _normalize_case(
+        {
+            "id": "yonote-only-policy",
+            "query": "Что подтверждает источник?",
+            "expected_chunk_ids": [expected_chunk],
+            "expected_cited_chunk_ids": [expected_chunk],
+            "allowed_cited_source_types": ["yonote"],
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Подтверждённый ответ.",
+        "latency_ms": 120,
+        "error": None,
+    }
+    trace = {
+        "cited_sources": [
+            expected_chunk,
+            "xlsx_category_r0001_legacy",
+        ],
+        "retrieved_chunks": [
+            {
+                "chunk_id": expected_chunk,
+                "metadata": {"source_type": "yonote"},
+            },
+            {
+                "chunk_id": "xlsx_category_r0001_legacy",
+                "metadata": {"source_type": "xlsx"},
+            },
+        ],
+        "reranker_scores": [],
+        "was_escalated": False,
+        "generator_model": "source_chunk",
+    }
+
+    result = score_case(case, http_result, trace)
+
+    assert result["cited_source_types"] == ["xlsx", "yonote"]
+    assert result["unexpected_cited_source_types"] == ["xlsx"]
+    assert result["cited_source_types_allowed"] is False
+    assert result["passed"] is False
+    assert result["failure_reasons"] == ["forbidden_cited_source_type"]
+
+
+def test_score_case_infers_yonote_source_type_from_chunk_id() -> None:
+    expected_chunk = "yonote_api_source_s0001_fact"
+    case = _normalize_case(
+        {
+            "id": "yonote-prefix",
+            "query": "Что подтверждает источник?",
+            "expected_chunk_ids": [expected_chunk],
+            "expected_cited_chunk_ids": [expected_chunk],
+            "allowed_cited_source_types": ["yonote"],
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Подтверждённый ответ.",
+        "latency_ms": 120,
+        "error": None,
+    }
+    trace = {
+        "cited_sources": [expected_chunk],
+        "retrieved_chunks": [],
+        "reranker_scores": [],
+        "was_escalated": False,
+        "generator_model": "source_chunk",
+    }
+
+    result = score_case(case, http_result, trace)
+
+    assert result["cited_source_types"] == ["yonote"]
+    assert result["unexpected_cited_source_types"] == []
+    assert result["cited_source_types_allowed"] is True
+    assert result["passed"] is True
+
+
+def test_clarification_rejects_forbidden_residual_citation_source() -> None:
+    case = _normalize_case(
+        {
+            "id": "clarify-source-policy",
+            "query": "Когда проходит мероприятие?",
+            "expected_behavior": "clarify",
+            "allowed_cited_source_types": ["yonote"],
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Уточни, пожалуйста, название мероприятия.",
+        "latency_ms": 120,
+        "error": None,
+    }
+    trace = {
+        "cited_sources": ["xlsx_category_r0001_legacy"],
+        "retrieved_chunks": [
+            {
+                "chunk_id": "xlsx_category_r0001_legacy",
+                "metadata": {"source_type": "xlsx"},
+            }
+        ],
+        "reranker_scores": [],
+        "was_escalated": False,
+        "generator_model": None,
+    }
+
+    result = score_case(case, http_result, trace)
+
+    assert case["expected_chunk_ids"] == []
+    assert case["expected_cited_chunk_ids"] == []
+    assert case["allowed_cited_source_types"] == ["yonote"]
+    assert result["observed_behavior"] == "clarify"
+    assert result["cited_source_types_allowed"] is False
+    assert result["passed"] is False
+    assert result["failure_reasons"] == ["forbidden_cited_source_type"]
+
+
+def test_cited_source_type_metadata_is_case_insensitive() -> None:
+    expected_chunk = "custom_yonote_chunk"
+    case = _normalize_case(
+        {
+            "id": "yonote-metadata-case",
+            "query": "Что подтверждает источник?",
+            "expected_chunk_ids": [expected_chunk],
+            "expected_cited_chunk_ids": [expected_chunk],
+            "allowed_cited_source_types": ["yonote"],
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Подтверждённый ответ.",
+        "latency_ms": 120,
+        "error": None,
+    }
+    trace = {
+        "cited_sources": [expected_chunk],
+        "retrieved_chunks": [
+            {
+                "chunk_id": expected_chunk,
+                "metadata": {"source_type": " Yonote "},
+            }
+        ],
+        "reranker_scores": [],
+        "was_escalated": False,
+        "generator_model": "source_chunk",
+    }
+
+    result = score_case(case, http_result, trace)
+
+    assert result["cited_source_types"] == ["yonote"]
+    assert result["cited_source_types_allowed"] is True
+    assert result["passed"] is True
+
+
+def test_quality_gate_failures_are_opt_in_and_fail_closed() -> None:
+    metrics = {
+        "pass_rate": 0.95,
+        "trace_coverage_rate": None,
+    }
+
+    assert _quality_gate_failures(
+        metrics,
+        fail_on_any_case=False,
+        require_complete_traces=False,
+    ) == []
+    assert _quality_gate_failures(
+        metrics,
+        fail_on_any_case=True,
+        require_complete_traces=True,
+    ) == [
+        "case_pass_rate_below_100_percent",
+        "trace_coverage_below_100_percent",
+    ]
+
+
+def test_quality_gate_accepts_only_exact_complete_rates() -> None:
+    assert _quality_gate_failures(
+        {
+            "pass_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+        },
+        fail_on_any_case=True,
+        require_complete_traces=True,
+    ) == []
 
 
 def test_score_case_classifies_infrastructure_http_error() -> None:

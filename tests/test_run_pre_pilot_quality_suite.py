@@ -9,6 +9,183 @@ import pytest
 from eval import run_pre_pilot_quality_suite as suite
 
 
+def _reviewed_ticket_followup() -> list[dict[str, object]]:
+    return [
+        {
+            "schema_version": "2.0.0",
+            "id": "ticket::reviewed",
+            "label_status": "human_reviewed",
+            "requires_human_review": False,
+            "turns": [
+                {
+                    "id": "ticket::reviewed::t001",
+                    "query": "Когда проходит форум?",
+                    "expected_behavior": "answer",
+                    "label_status": "human_reviewed",
+                    "requires_human_review": False,
+                }
+            ],
+        }
+    ]
+
+
+def _write_followup_payload(path: Path, payload: object) -> None:
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_followup_loader_rejects_weak_role_reconstruction(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "weak_followup.json"
+    cases_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "ticket::weak",
+                    "label_status": "weak_unreviewed",
+                    "requires_human_review": True,
+                    "turns": [
+                        {
+                            "id": "ticket::weak::t001",
+                            "query": "Когда проходит форум?",
+                            "predicted_behavior": "answer",
+                            "requires_human_review": True,
+                        }
+                    ],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requiring human review"):
+        suite._load_followup_cases(cases_path)
+
+
+def test_followup_loader_accepts_explicitly_reviewed_ticket_schema(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "reviewed_followup.json"
+    payload = _reviewed_ticket_followup()
+    _write_followup_payload(cases_path, payload)
+
+    assert suite._load_followup_cases(cases_path) == payload
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "unsafe_value"),
+    (
+        ("conversation", "label_status", "Weak_Unreviewed "),
+        ("conversation", "label_status", "HUMAN_REVIEWED"),
+        ("conversation", "label_status", "human_reviewed "),
+        ("conversation", "requires_human_review", "false"),
+        ("conversation", "requires_human_review", 0),
+        ("turn", "label_status", " weak_unreviewed"),
+        ("turn", "label_status", "Human_Reviewed"),
+        ("turn", "requires_human_review", "true"),
+        ("turn", "requires_human_review", 0),
+    ),
+)
+def test_followup_loader_rejects_review_state_type_case_and_space_bypasses(
+    tmp_path: Path,
+    target: str,
+    field: str,
+    unsafe_value: object,
+) -> None:
+    cases_path = tmp_path / "unsafe_followup.json"
+    payload = _reviewed_ticket_followup()
+    record = payload[0] if target == "conversation" else payload[0]["turns"][0]
+    assert isinstance(record, dict)
+    record[field] = unsafe_value
+    _write_followup_payload(cases_path, payload)
+
+    with pytest.raises(ValueError, match="requiring human review"):
+        suite._load_followup_cases(cases_path)
+
+
+@pytest.mark.parametrize(
+    ("target", "field"),
+    (
+        ("conversation", "label_status"),
+        ("conversation", "requires_human_review"),
+        ("turn", "label_status"),
+        ("turn", "requires_human_review"),
+    ),
+)
+def test_followup_loader_requires_explicit_review_state_fields(
+    tmp_path: Path,
+    target: str,
+    field: str,
+) -> None:
+    cases_path = tmp_path / "missing_review_state.json"
+    payload = _reviewed_ticket_followup()
+    record = payload[0] if target == "conversation" else payload[0]["turns"][0]
+    assert isinstance(record, dict)
+    record.pop(field)
+    _write_followup_payload(cases_path, payload)
+
+    with pytest.raises(ValueError, match="requiring human review"):
+        suite._load_followup_cases(cases_path)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        Path("eval/cases/pre_pilot_followup.json"),
+        Path("eval/cases/dialog_memory_regression.json"),
+    ),
+)
+def test_followup_loader_preserves_explicit_legacy_v1_allowlist(
+    relative_path: Path,
+) -> None:
+    path = Path(__file__).resolve().parents[1] / relative_path
+
+    loaded = suite._load_followup_cases(path)
+
+    assert loaded
+    assert {str(item["id"]) for item in loaded}.issubset(
+        suite.LEGACY_FOLLOWUP_SCHEMAS_V1
+    )
+
+
+def test_followup_loader_rejects_unversioned_non_allowlisted_legacy_shape(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "unknown_legacy.json"
+    _write_followup_payload(
+        cases_path,
+        [
+            {
+                "id": "legacy_like_but_not_allowlisted",
+                "turns": [
+                    {
+                        "id": "legacy_like_but_not_allowlisted_t1",
+                        "query": "Когда проходит форум?",
+                    }
+                ],
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="requiring human review"):
+        suite._load_followup_cases(cases_path)
+
+
+def test_followup_loader_rejects_copied_legacy_ids_outside_allowlisted_file(
+    tmp_path: Path,
+) -> None:
+    source = Path(__file__).resolve().parents[1] / "eval/cases/pre_pilot_followup.json"
+    copied = tmp_path / "copied_legacy.json"
+    copied.write_bytes(source.read_bytes())
+
+    with pytest.raises(ValueError, match="requiring human review"):
+        suite._load_followup_cases(copied)
+
+
 def test_compact_stdout_summary_excludes_case_results() -> None:
     compact = suite._compact_stdout_summary(
         {
