@@ -1051,3 +1051,48 @@ product step: восстановить роли и multi-turn контекст �
 top-20 сочетаний `intent × aspect × entity class`, затем получить baseline текущего runtime через
 локальный `/ask` без HDE. Только после correction cycle формируется sealed holdout минимум из
 400 полных тикетов и считается human-verified ticket closure.
+
+## 12. Независимый first-turn product baseline 29 июля 2026
+
+Commit `47e2b52` подготовил независимый directional baseline текущего runtime, но не запускал
+его и не менял сервер, HDE/VK, prompts, routing, thresholds или KB.
+
+Состав оценки:
+
+- 80 реальных `single_turn` запросов из chronological holdout: 80 уникальных ticket ID,
+  duplicate clusters и duplicate components;
+- нулевое пересечение с calibration и validation по известным ID/cluster/component;
+- 72 pre-review `answer`, 8 pre-review `escalate`; labels до ручной проверки остаются
+  эвристическими;
+- отдельные наборы не смешиваются с denominator: 20 synthetic calibration и 2 известных
+  regression-кейса «Правда»/«Машук»;
+- приватный review workbook:
+  `data/private/tickets/product_baseline_20260729_roles_v1/independent_holdout_80_v1/independent_holdout_80_review_v1.xlsx`;
+- полная методика и ограничения: `docs/independent_product_baseline_20260729.md`.
+
+Контур fail-closed связывает source, selection, заполненный XLSX, reviewed CSV, freeze, Yonote
+seed и exact exported JSON. Runner требует внешний SHA freeze, semantic payload и точных байтов
+JSON, exact runtime SHA, bypass cache, 100% PostgreSQL trace binding, fresh per-case Redis
+identity и канонический one-shot ledger. Частичный прогон, cache hit или trace gap не создают
+валидный baseline.
+
+Проверки:
+
+- Ruff: успешно;
+- pytest: `1843 passed, 1 skipped` по 111 изолированным test-файлам;
+- KB validation: `2186 valid / 2152 published`;
+- adversarial review: P0/P1-блокеров не осталось;
+- freeze: 80/80 `single_turn`, overlap `0/0/0`, `execution_allowed=false` до human review;
+- private workbook и ticket-level artifacts игнорируются Git и не входят в Docker/release.
+
+Последний подтверждённый пользователем runtime — `4c6262455d1338c6e0f26b8900a5f66e64a97489`:
+`/ready` healthy, Qdrant `knowledge_base=2152`, runtime security `31/31`. Первый date diagnostic
+дал `0/2` strict pass при `2/2` retrieval hit; поэтому по двум кейсам нельзя делать вывод о
+конверсии или менять архитектуру.
+
+Точный следующий product step: reviewer заполняет все 80 pre-run строк workbook до просмотра
+ответов runtime. Затем локально выполняются import, privacy/source gates, seal и export. Только
+после этого пользователь самостоятельно запускает один server-local exact-80 `/ask`; Codex
+сервер не трогает и выдаёт только secret-safe команды. Post-run blind verdict определяет
+first-turn closure и распределение root causes. Эти 80 не являются общей ticket conversion;
+для внешнего заявления о 50–60% всё ещё нужны минимум 400 независимых полных диалогов.
