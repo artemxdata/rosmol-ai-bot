@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -27,9 +28,35 @@ from src.response_contract import ResponseProfileName
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_DATA_ROOT = PROJECT_ROOT / "data" / "private"
+CANONICAL_HOLDOUT_LEDGER_DIRNAME = "sealed-holdout-ledger-v1"
 PRIVATE_TICKET_DERIVED = "private_ticket_derived"
+PRIVATE_HOLDOUT_SPLIT = "holdout"
+PRIVATE_EVAL_SPLITS = frozenset({"calibration", "validation", PRIVATE_HOLDOUT_SPLIT})
 ALLOWED_PRIVACY_CLASSES = {"standard", PRIVATE_TICKET_DERIVED}
 PRIVATE_EVAL_HOSTS = {"localhost", "127.0.0.1", "::1", "app-ml"}
+HOLDOUT_CONTRACT_SCHEMA_VERSION = "1.0.0"
+EXPECTED_HOLDOUT_CASES_TOTAL = 80
+HOLDOUT_CONTRACT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "baseline_id",
+        "runtime_git_sha",
+        "freeze_contract_sha256",
+        "review_manifest_sha256",
+        "selected_case_ids_sha256",
+        "cases_payload_sha256",
+        "knowledge_base_seed_sha256",
+        "review_workbook_sha256",
+        "source_cases_sha256",
+        "selection_manifest_sha256",
+        "cases_total",
+        "execution_allowed",
+    }
+)
+FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+SAFE_BASELINE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+HOLDOUT_MARKER_RE = re.compile(r"(?:^|[:_./-])holdout(?:$|[:_./-])")
 
 FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
     r"(ответ[а]?[^.!?]{0,120}\s+в\s+источник(?:е|ах)\s+нет|"
@@ -152,17 +179,57 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     if not query:
         raise ValueError("ask eval case must contain query, question, or text")
     privacy_class = str(raw.get("privacy_class") or "standard").strip().casefold()
+    split = str(raw.get("split") or "").strip().casefold()
+    tags = _string_list(raw.get("tags") or [])
+    user_id = str(raw.get("user_id") or "ask-eval")
     if privacy_class not in ALLOWED_PRIVACY_CLASSES:
         raise ValueError(
             "privacy_class must be one of: "
             f"{', '.join(sorted(ALLOWED_PRIVACY_CLASSES))}"
         )
-    if privacy_class == PRIVATE_TICKET_DERIVED and (
-        label_status != "human_reviewed" or review_flag is not False
+    if privacy_class == PRIVATE_TICKET_DERIVED:
+        if label_status != "human_reviewed" or review_flag is not False:
+            raise ValueError(
+                "private_ticket_derived cases require an explicit human-reviewed verdict"
+            )
+        if split not in PRIVATE_EVAL_SPLITS:
+            raise ValueError(
+                "private_ticket_derived cases require an explicit split: "
+                f"{', '.join(sorted(PRIVATE_EVAL_SPLITS))}"
+            )
+
+    split_holdout = split == PRIVATE_HOLDOUT_SPLIT
+    tag_holdout = any(_has_holdout_marker(tag) for tag in tags)
+    user_holdout = _has_holdout_marker(user_id)
+    contract_holdout = "holdout_contract" in raw
+    holdout_markers = {
+        "split": split_holdout,
+        "tag": tag_holdout,
+        "user_id": user_holdout,
+        "contract": contract_holdout,
+    }
+    if any(holdout_markers.values()) and (
+        privacy_class != PRIVATE_TICKET_DERIVED
+        or not all(holdout_markers.values())
     ):
         raise ValueError(
-            "private_ticket_derived cases require an explicit human-reviewed verdict"
+            "holdout markers in split, tags, user_id, and holdout_contract "
+            f"must be present and consistent: {holdout_markers}"
         )
+    private_split_tags = {
+        tag.split(":", maxsplit=1)[1].strip().casefold()
+        for tag in tags
+        if tag.casefold().startswith("split:") and ":" in tag
+    }
+    if privacy_class == PRIVATE_TICKET_DERIVED and private_split_tags not in (
+        set(),
+        {split},
+    ):
+        raise ValueError("private_ticket_derived split tags must match split")
+
+    holdout_contract: dict[str, Any] | None = None
+    if split_holdout:
+        holdout_contract = _normalize_holdout_contract(raw.get("holdout_contract"))
 
     expected_behavior = _normalize_expected_behavior(
         raw.get("expected_behavior")
@@ -227,11 +294,11 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
-    return {
+    normalized = {
         "id": str(raw.get("id") or raw.get("case_id") or query),
         "query": str(query),
         "privacy_class": privacy_class,
-        "user_id": str(raw.get("user_id") or "ask-eval"),
+        "user_id": user_id,
         "channel": str(raw.get("channel") or "api"),
         "forum_context": str(raw.get("forum_context") or "").strip() or None,
         "expected_chunk_ids": expected_chunk_ids,
@@ -247,8 +314,158 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
         "expected_escalated": raw.get("expected_escalated"),
         "expected_escalation_reason": raw.get("expected_escalation_reason"),
         "expected_generator_model": raw.get("expected_generator_model"),
-        "tags": _string_list(raw.get("tags") or []),
+        "tags": tags,
     }
+    if split:
+        normalized["split"] = split
+    if holdout_contract is not None:
+        normalized["holdout_contract"] = holdout_contract
+    return normalized
+
+
+def _normalize_holdout_contract(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "private_ticket_derived holdout cases require holdout_contract"
+        )
+    fields = set(value)
+    if fields != HOLDOUT_CONTRACT_FIELDS:
+        missing = sorted(HOLDOUT_CONTRACT_FIELDS - fields)
+        unexpected = sorted(fields - HOLDOUT_CONTRACT_FIELDS)
+        raise ValueError(
+            "holdout_contract fields must match schema exactly: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    schema_version = str(value["schema_version"] or "").strip()
+    if schema_version != HOLDOUT_CONTRACT_SCHEMA_VERSION:
+        raise ValueError(
+            "holdout_contract schema_version must be "
+            f"{HOLDOUT_CONTRACT_SCHEMA_VERSION}"
+        )
+    raw_baseline_id = str(value["baseline_id"] or "")
+    baseline_id = raw_baseline_id.strip()
+    if (
+        baseline_id != raw_baseline_id
+        or SAFE_BASELINE_ID_RE.fullmatch(baseline_id) is None
+    ):
+        raise ValueError(
+            "holdout_contract baseline_id must be 1-128 safe ASCII characters "
+            "using only letters, digits, dot, underscore, or hyphen"
+        )
+    runtime_git_sha = str(value["runtime_git_sha"] or "").strip()
+    if FULL_GIT_SHA_RE.fullmatch(runtime_git_sha) is None:
+        raise ValueError(
+            "holdout_contract runtime_git_sha must be a full lowercase 40-hex SHA"
+        )
+
+    hashes: dict[str, str] = {}
+    for field in (
+        "freeze_contract_sha256",
+        "review_manifest_sha256",
+        "selected_case_ids_sha256",
+        "cases_payload_sha256",
+        "knowledge_base_seed_sha256",
+        "review_workbook_sha256",
+        "source_cases_sha256",
+        "selection_manifest_sha256",
+    ):
+        digest = str(value[field] or "").strip()
+        if SHA256_RE.fullmatch(digest) is None:
+            raise ValueError(
+                f"holdout_contract {field} must be a lowercase SHA-256 digest"
+            )
+        hashes[field] = digest
+
+    cases_total = value["cases_total"]
+    if (
+        not isinstance(cases_total, int)
+        or isinstance(cases_total, bool)
+        or cases_total != EXPECTED_HOLDOUT_CASES_TOTAL
+    ):
+        raise ValueError(
+            "holdout_contract cases_total must be exactly "
+            f"{EXPECTED_HOLDOUT_CASES_TOTAL}"
+        )
+    if value["execution_allowed"] is not True:
+        raise ValueError("holdout_contract execution_allowed must be true")
+
+    return {
+        "schema_version": schema_version,
+        "baseline_id": baseline_id,
+        "runtime_git_sha": runtime_git_sha,
+        **hashes,
+        "cases_total": cases_total,
+        "execution_allowed": True,
+    }
+
+
+def _validate_holdout_run_contract(
+    cases: list[dict[str, Any]],
+    *,
+    raw_cases_payload_sha256: str | None,
+) -> dict[str, Any] | None:
+    holdout_cases = [
+        case
+        for case in cases
+        if case.get("privacy_class") == PRIVATE_TICKET_DERIVED
+        and case.get("split") == PRIVATE_HOLDOUT_SPLIT
+    ]
+    if not holdout_cases:
+        return None
+    if len(holdout_cases) != len(cases):
+        raise ValueError(
+            "private_ticket_derived holdout cases cannot be mixed with other eval cases"
+        )
+
+    contract = holdout_cases[0]["holdout_contract"]
+    if any(case.get("holdout_contract") != contract for case in holdout_cases[1:]):
+        raise ValueError("all private holdout cases must have an identical holdout_contract")
+
+    case_ids = [str(case["id"]) for case in holdout_cases]
+    if len(set(case_ids)) != len(case_ids):
+        raise ValueError("private holdout case ids must be unique")
+    if contract["cases_total"] != len(case_ids):
+        raise ValueError(
+            "holdout_contract cases_total does not match the loaded case count"
+        )
+    selected_case_ids_sha256 = hashlib.sha256(
+        ("\n".join(sorted(case_ids)) + "\n").encode("utf-8")
+    ).hexdigest()
+    if contract["selected_case_ids_sha256"] != selected_case_ids_sha256:
+        raise ValueError(
+            "holdout_contract selected_case_ids_sha256 does not match loaded case ids"
+        )
+    if (
+        raw_cases_payload_sha256 is None
+        or contract["cases_payload_sha256"] != raw_cases_payload_sha256
+    ):
+        raise ValueError(
+            "holdout_contract cases_payload_sha256 does not match raw exported cases"
+        )
+    return dict(contract)
+
+
+def holdout_cases_payload_sha256(cases: list[dict[str, Any]]) -> str:
+    """Hash raw exported cases, excluding only their repeated contract."""
+
+    payload: list[dict[str, Any]] = []
+    for case in cases:
+        if not isinstance(case, dict):
+            raise ValueError("holdout cases payload must contain only JSON objects")
+        raw_without_contract = {
+            str(key): value
+            for key, value in case.items()
+            if key != "holdout_contract"
+        }
+        payload.append(raw_without_contract)
+    payload.sort(
+        key=lambda case: (
+            str(case.get("id") or ""),
+            _canonical_json(case),
+        )
+    )
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 async def run_eval(
@@ -272,15 +489,48 @@ async def run_eval(
     max_llm_cost_rub: float | None = None,
     require_budget_for_large_runs: bool = True,
     large_run_threshold: int = 20,
+    sealed_holdout: bool = False,
+    expected_holdout_freeze_sha256: str | None = None,
+    expected_cases_payload_sha256: str | None = None,
+    expected_cases_file_sha256: str | None = None,
+    holdout_ledger_dir: Path | None = None,
 ) -> dict[str, Any]:
     eval_run_id = f"ask-eval-{uuid4()}"
-    cases, generated_smoke_cases = await _load_cases(
+    _guard_eval_artifact_aliases(
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=markdown_path,
+    )
+    (
+        cases,
+        generated_smoke_cases,
+        raw_cases_payload_sha256,
+        cases_file_sha256,
+    ) = await _load_cases(
         cases_path=cases_path,
         kb_seed_path=kb_seed_path,
         auto_smoke_cases=auto_smoke_cases,
         max_smoke_cases=max_smoke_cases,
         user_prefix=generated_user_prefix or _default_generated_user_prefix("ask-eval"),
     )
+    holdout_contract = _validate_holdout_run_contract(
+        cases,
+        raw_cases_payload_sha256=raw_cases_payload_sha256,
+    )
+    if (holdout_contract is not None) != sealed_holdout:
+        raise ValueError(
+            "holdout contract cases and explicit sealed_holdout mode are required "
+            "together"
+        )
+    if not sealed_holdout and (
+        expected_holdout_freeze_sha256 is not None
+        or expected_cases_payload_sha256 is not None
+        or expected_cases_file_sha256 is not None
+        or holdout_ledger_dir is not None
+    ):
+        raise ValueError(
+            "holdout freeze identity and ledger options require sealed_holdout mode"
+        )
     _guard_eval_privacy(
         cases=cases,
         cases_path=cases_path,
@@ -288,19 +538,187 @@ async def run_eval(
         markdown_path=markdown_path,
         target=target,
     )
+    holdout_ledger: Path | None = None
+    holdout_receipt_key: str | None = None
+    holdout_receipt_path: Path | None = None
+    holdout_completed_receipt_path: Path | None = None
+    if holdout_contract is not None:
+        expected_freeze_sha256 = str(
+            expected_holdout_freeze_sha256 or ""
+        ).strip()
+        if SHA256_RE.fullmatch(expected_freeze_sha256) is None:
+            raise ValueError(
+                "sealed private holdout requires "
+                "expected_holdout_freeze_sha256 as lowercase SHA-256"
+            )
+        if expected_freeze_sha256 != holdout_contract["freeze_contract_sha256"]:
+            raise ValueError(
+                "expected_holdout_freeze_sha256 does not match holdout_contract"
+            )
+        expected_payload_sha256 = str(
+            expected_cases_payload_sha256 or ""
+        ).strip()
+        if SHA256_RE.fullmatch(expected_payload_sha256) is None:
+            raise ValueError(
+                "sealed private holdout requires "
+                "expected_cases_payload_sha256 as lowercase SHA-256"
+            )
+        if (
+            expected_payload_sha256
+            != holdout_contract["cases_payload_sha256"]
+            or expected_payload_sha256 != raw_cases_payload_sha256
+        ):
+            raise ValueError(
+                "expected_cases_payload_sha256 does not match both "
+                "holdout_contract and recomputed raw cases"
+            )
+        expected_file_sha256 = str(
+            expected_cases_file_sha256 or ""
+        ).strip()
+        if SHA256_RE.fullmatch(expected_file_sha256) is None:
+            raise ValueError(
+                "sealed private holdout requires "
+                "expected_cases_file_sha256 as lowercase SHA-256"
+            )
+        if expected_file_sha256 != cases_file_sha256:
+            raise ValueError(
+                "expected_cases_file_sha256 does not match the exact cases file"
+            )
+        holdout_ledger = _validated_holdout_ledger_dir(
+            holdout_ledger_dir,
+            cases_path=cases_path,
+        )
+        holdout_receipt_key = _derive_holdout_receipt_key(
+            holdout_contract["selected_case_ids_sha256"]
+        )
+        holdout_receipt_path = holdout_ledger / (
+            f"{holdout_receipt_key}.started.json"
+        )
+        holdout_completed_receipt_path = holdout_ledger / (
+            f"{holdout_receipt_key}.completed.json"
+        )
+        assert holdout_receipt_key is not None
+        _guard_eval_artifact_aliases(
+            cases_path=cases_path,
+            output_path=output_path,
+            markdown_path=markdown_path,
+            extra_paths=[
+                holdout_receipt_path,
+                holdout_completed_receipt_path,
+            ],
+        )
+        canonical_existing = [
+            str(path)
+            for path in (output_path, markdown_path)
+            if path is not None and _path_lexists(path)
+        ]
+        if canonical_existing:
+            await _write_holdout_rejection_report(
+                ledger_dir=holdout_ledger,
+                receipt_key=holdout_receipt_key,
+                target=target,
+                cases_path=cases_path,
+                eval_run_id=eval_run_id,
+                contract=holdout_contract,
+                expected_cases_file_sha256=expected_file_sha256,
+                status="canonical_output_exists",
+                failures=["canonical_output_must_be_absent"],
+                executed_cases_total=0,
+                receipt_path=holdout_receipt_path,
+                detail=", ".join(canonical_existing),
+            )
+            raise FileExistsError(
+                "sealed private holdout canonical output and markdown must be absent"
+            )
+        existing_receipts = [
+            path.name
+            for path in (
+                holdout_receipt_path,
+                holdout_completed_receipt_path,
+            )
+            if _path_lexists(path)
+        ]
+        if existing_receipts:
+            await _write_holdout_rejection_report(
+                ledger_dir=holdout_ledger,
+                receipt_key=holdout_receipt_key,
+                target=target,
+                cases_path=cases_path,
+                eval_run_id=eval_run_id,
+                contract=holdout_contract,
+                expected_cases_file_sha256=expected_file_sha256,
+                status="rerun_rejected",
+                failures=["holdout_receipt_exists"],
+                executed_cases_total=0,
+                receipt_path=holdout_receipt_path,
+                detail=", ".join(existing_receipts),
+            )
+            raise ValueError(
+                "sealed private holdout already has a started or completed "
+                "receipt; rerun is forbidden"
+            )
+        preflight_failures: list[str] = []
+        if generated_user_prefix:
+            preflight_failures.append("user_prefix_forbidden")
+        if bypass_cache is not True:
+            preflight_failures.append("bypass_cache_required")
+        if trace_lookup is not True:
+            preflight_failures.append("trace_lookup_required")
+        if max_cases is not None:
+            preflight_failures.append("max_cases_forbidden")
+        if preflight_failures:
+            await _write_holdout_rejection_report(
+                ledger_dir=holdout_ledger,
+                receipt_key=holdout_receipt_key,
+                target=target,
+                cases_path=cases_path,
+                eval_run_id=eval_run_id,
+                contract=holdout_contract,
+                expected_cases_file_sha256=expected_file_sha256,
+                status="preflight_rejected",
+                failures=preflight_failures,
+                executed_cases_total=0,
+                receipt_path=holdout_receipt_path,
+            )
+            raise ValueError(
+                "sealed private holdout preflight failed: "
+                + ", ".join(preflight_failures)
+            )
     original_cases_total = len(cases)
     if max_cases is not None:
+        if holdout_contract is not None:
+            raise ValueError("--max-cases is forbidden for a sealed private holdout")
         if max_cases < 1:
             raise ValueError("--max-cases must be greater than zero")
         cases = cases[:max_cases]
-    _guard_large_live_run_budget(
-        cases=cases,
-        target=target,
-        transport=transport,
-        max_llm_cost_rub=max_llm_cost_rub,
-        require_budget=require_budget_for_large_runs,
-        large_run_threshold=large_run_threshold,
-    )
+    try:
+        _guard_large_live_run_budget(
+            cases=cases,
+            target=target,
+            transport=transport,
+            max_llm_cost_rub=max_llm_cost_rub,
+            require_budget=require_budget_for_large_runs,
+            large_run_threshold=large_run_threshold,
+        )
+    except ValueError as exc:
+        if holdout_contract is not None:
+            assert holdout_ledger is not None
+            assert holdout_receipt_key is not None
+            await _write_holdout_rejection_report(
+                ledger_dir=holdout_ledger,
+                receipt_key=holdout_receipt_key,
+                target=target,
+                cases_path=cases_path,
+                eval_run_id=eval_run_id,
+                contract=holdout_contract,
+                expected_cases_file_sha256=expected_file_sha256,
+                status="budget_preflight_rejected",
+                failures=["llm_budget_required"],
+                executed_cases_total=0,
+                receipt_path=holdout_receipt_path,
+                detail=str(exc),
+            )
+        raise
     if not cases:
         metrics = _empty_metrics(target=target, cases_path=cases_path, auto_smoke_cases=False)
         metrics["eval_run_id"] = eval_run_id
@@ -328,55 +746,189 @@ async def run_eval(
                 )
                 break
             except Exception as exc:
-                errors.append(f"{type(exc).__name__}: {exc}")
+                errors.append(type(exc).__name__)
         if trace_pool is None and errors:
             trace_lookup_error = "; ".join(errors)
+    if holdout_contract is not None and (
+        trace_pool is None or trace_lookup_error is not None
+    ):
+        failures = ["trace_lookup_unavailable"]
+        assert holdout_ledger is not None
+        assert holdout_receipt_key is not None
+        await _write_holdout_rejection_report(
+            ledger_dir=holdout_ledger,
+            receipt_key=holdout_receipt_key,
+            target=target,
+            cases_path=cases_path,
+            eval_run_id=eval_run_id,
+            contract=holdout_contract,
+            expected_cases_file_sha256=expected_file_sha256,
+            status="trace_unavailable",
+            failures=failures,
+            executed_cases_total=0,
+            receipt_path=holdout_receipt_path,
+            trace_lookup_error=trace_lookup_error or "trace pool was not created",
+        )
+        raise RuntimeError(
+            "sealed private holdout requires an available trace lookup connection"
+        )
 
     headers = _auth_headers(api_key_env)
     if bypass_cache:
         headers["X-Bypass-Cache"] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
     budget_stopped = False
-    async with httpx.AsyncClient(
-        transport=transport,
-        timeout=request_timeout,
-        trust_env=False,
-    ) as client:
-        if max_llm_cost_rub is None:
-            tasks = [
-                _run_case(
-                    client=client,
-                    target=target,
-                    headers=headers,
-                    eval_run_id=eval_run_id,
-                    case=case,
-                    semaphore=semaphore,
-                    trace_pool=trace_pool,
-                )
-                for case in cases
-            ]
-            results = await asyncio.gather(*tasks)
-        else:
-            # Budget enforcement needs trace usage after each response, so run cases sequentially.
-            results = []
-            sequential_semaphore = asyncio.Semaphore(1)
-            for case in cases:
-                result = await _run_case(
-                    client=client,
-                    target=target,
-                    headers=headers,
-                    eval_run_id=eval_run_id,
-                    case=case,
-                    semaphore=sequential_semaphore,
-                    trace_pool=trace_pool,
-                )
-                results.append(result)
-                if _llm_cost_rub_total(results) > max_llm_cost_rub:
-                    budget_stopped = True
-                    break
-
-    if trace_pool:
-        await trace_pool.close()
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=request_timeout,
+            trust_env=False,
+        ) as client:
+            if holdout_contract is not None:
+                try:
+                    await _verify_holdout_runtime(
+                        client=client,
+                        target=target,
+                        headers=headers,
+                        expected_git_sha=holdout_contract["runtime_git_sha"],
+                    )
+                except ValueError as exc:
+                    assert holdout_ledger is not None
+                    assert holdout_receipt_key is not None
+                    await _write_holdout_rejection_report(
+                        ledger_dir=holdout_ledger,
+                        receipt_key=holdout_receipt_key,
+                        target=target,
+                        cases_path=cases_path,
+                        eval_run_id=eval_run_id,
+                        contract=holdout_contract,
+                        expected_cases_file_sha256=expected_file_sha256,
+                        status="runtime_rejected",
+                        failures=["runtime_ready_check_failed"],
+                        executed_cases_total=0,
+                        receipt_path=holdout_receipt_path,
+                        detail=str(exc),
+                    )
+                    raise
+                assert holdout_receipt_path is not None
+                try:
+                    await asyncio.to_thread(
+                        _create_holdout_started_receipt,
+                        holdout_receipt_path,
+                        contract=holdout_contract,
+                        expected_cases_file_sha256=expected_file_sha256,
+                        eval_run_id=eval_run_id,
+                        cases_path=cases_path,
+                        output_path=output_path,
+                        receipt_key=holdout_receipt_key,
+                    )
+                except FileExistsError:
+                    await _write_holdout_rejection_report(
+                        ledger_dir=holdout_ledger,
+                        receipt_key=holdout_receipt_key,
+                        target=target,
+                        cases_path=cases_path,
+                        eval_run_id=eval_run_id,
+                        contract=holdout_contract,
+                        expected_cases_file_sha256=expected_file_sha256,
+                        status="rerun_rejected",
+                        failures=["started_receipt_exists"],
+                        executed_cases_total=0,
+                        receipt_path=holdout_receipt_path,
+                    )
+                    raise ValueError(
+                        "sealed private holdout already has a started receipt; "
+                        "rerun is forbidden"
+                    ) from None
+                except OSError as exc:
+                    await _write_holdout_rejection_report(
+                        ledger_dir=holdout_ledger,
+                        receipt_key=holdout_receipt_key,
+                        target=target,
+                        cases_path=cases_path,
+                        eval_run_id=eval_run_id,
+                        contract=holdout_contract,
+                        expected_cases_file_sha256=expected_file_sha256,
+                        status="receipt_rejected",
+                        failures=["started_receipt_create_failed"],
+                        executed_cases_total=0,
+                        receipt_path=holdout_receipt_path,
+                        detail=f"{type(exc).__name__}: {exc}",
+                    )
+                    raise RuntimeError(
+                        "sealed private holdout started receipt could not be created"
+                    ) from exc
+            if max_llm_cost_rub is None:
+                tasks = [
+                    _run_case(
+                        client=client,
+                        target=target,
+                        headers=headers,
+                        eval_run_id=eval_run_id,
+                        case=case,
+                        semaphore=semaphore,
+                        trace_pool=trace_pool,
+                        sealed_holdout=sealed_holdout,
+                    )
+                    for case in cases
+                ]
+                results = await asyncio.gather(*tasks)
+            else:
+                # Budget enforcement needs trace usage after each response, so run cases
+                # sequentially.
+                results = []
+                sequential_semaphore = asyncio.Semaphore(1)
+                for case in cases:
+                    result = await _run_case(
+                        client=client,
+                        target=target,
+                        headers=headers,
+                        eval_run_id=eval_run_id,
+                        case=case,
+                        semaphore=sequential_semaphore,
+                        trace_pool=trace_pool,
+                        sealed_holdout=sealed_holdout,
+                    )
+                    results.append(result)
+                    if _llm_cost_rub_total(results) > max_llm_cost_rub:
+                        budget_stopped = True
+                        break
+            if holdout_contract is not None:
+                try:
+                    await _verify_holdout_runtime(
+                        client=client,
+                        target=target,
+                        headers=headers,
+                        expected_git_sha=holdout_contract["runtime_git_sha"],
+                    )
+                except ValueError as exc:
+                    assert holdout_ledger is not None
+                    assert holdout_receipt_key is not None
+                    await _write_holdout_rejection_report(
+                        ledger_dir=holdout_ledger,
+                        receipt_key=holdout_receipt_key,
+                        target=target,
+                        cases_path=cases_path,
+                        eval_run_id=eval_run_id,
+                        contract=holdout_contract,
+                        expected_cases_file_sha256=expected_file_sha256,
+                        status="post_runtime_rejected",
+                        failures=["post_runtime_ready_check_failed"],
+                        executed_cases_total=len(results),
+                        receipt_path=holdout_receipt_path,
+                        detail=str(exc),
+                        base_metrics=summarize_results(
+                            results,
+                            target=target,
+                            cases_path=cases_path,
+                            generated_smoke_cases=generated_smoke_cases,
+                            trace_lookup_error=trace_lookup_error,
+                        ),
+                    )
+                    raise
+    finally:
+        if trace_pool:
+            await trace_pool.close()
 
     metrics = summarize_results(
         results,
@@ -386,6 +938,8 @@ async def run_eval(
         trace_lookup_error=trace_lookup_error,
     )
     metrics["eval_run_id"] = eval_run_id
+    if holdout_contract is not None:
+        metrics["holdout_contract"] = holdout_contract
     _apply_run_limits(
         metrics,
         original_cases_total=original_cases_total,
@@ -396,9 +950,109 @@ async def run_eval(
         metrics["cases_original_total"] = original_cases_total
         metrics["cases_limited"] = True
         metrics["llm_budget_stopped"] = True
-    await asyncio.to_thread(_write_json, output_path, metrics)
-    if markdown_path:
-        await asyncio.to_thread(_write_markdown, markdown_path, metrics)
+    holdout_failures: list[str] = []
+    if holdout_contract is not None:
+        executed_cases_total = len(results)
+        holdout_failures = _holdout_integrity_failures(
+            metrics,
+            results=results,
+            expected_cases_total=holdout_contract["cases_total"],
+            executed_cases_total=executed_cases_total,
+        )
+        status = _holdout_failure_status(
+            holdout_failures,
+            budget_stopped=budget_stopped,
+        )
+        metrics["holdout_run"] = {
+            "status": status,
+            "completed": not holdout_failures,
+            "expected_cases_total": holdout_contract["cases_total"],
+            "executed_cases_total": executed_cases_total,
+            "expected_cases_file_sha256": expected_file_sha256,
+            "integrity_failures": holdout_failures,
+            "started_receipt": holdout_receipt_path.name
+            if holdout_receipt_path
+            else None,
+            "completed_receipt": holdout_completed_receipt_path.name
+            if holdout_completed_receipt_path
+            else None,
+            "knowledge_base_identity_gate": (
+                "manual_pre_run_verification_required"
+            ),
+            "one_shot_scope": (
+                "enforced_while_canonical_persistent_ledger_is_preserved"
+            ),
+        }
+    if holdout_failures:
+        assert holdout_ledger is not None
+        assert holdout_receipt_key is not None
+        await _write_holdout_rejection_report(
+            ledger_dir=holdout_ledger,
+            receipt_key=holdout_receipt_key,
+            target=target,
+            cases_path=cases_path,
+            eval_run_id=eval_run_id,
+            contract=holdout_contract,
+            expected_cases_file_sha256=expected_file_sha256,
+            status=str(metrics["holdout_run"]["status"]),
+            failures=holdout_failures,
+            executed_cases_total=len(results),
+            receipt_path=holdout_receipt_path,
+            trace_lookup_error=metrics.get("trace_lookup_error"),
+            base_metrics=metrics,
+        )
+        raise RuntimeError(
+            "sealed private holdout failed run-integrity checks; rejection evidence "
+            "was written and the canonical report was not created: "
+            + ", ".join(holdout_failures)
+        )
+    if holdout_contract is not None:
+        assert holdout_completed_receipt_path is not None
+        assert holdout_receipt_key is not None
+        try:
+            await asyncio.to_thread(_write_json_exclusive, output_path, metrics)
+            if markdown_path:
+                await asyncio.to_thread(
+                    _write_markdown_exclusive,
+                    markdown_path,
+                    metrics,
+                )
+            output_sha256 = await asyncio.to_thread(_file_sha256, output_path)
+            await asyncio.to_thread(
+                _create_holdout_completed_receipt,
+                holdout_completed_receipt_path,
+                contract=holdout_contract,
+                expected_cases_file_sha256=expected_file_sha256,
+                eval_run_id=eval_run_id,
+                receipt_key=holdout_receipt_key,
+                output_path=output_path,
+                output_sha256=output_sha256,
+            )
+        except OSError as exc:
+            assert holdout_ledger is not None
+            await _write_holdout_rejection_report(
+                ledger_dir=holdout_ledger,
+                receipt_key=holdout_receipt_key,
+                target=target,
+                cases_path=cases_path,
+                eval_run_id=eval_run_id,
+                contract=holdout_contract,
+                expected_cases_file_sha256=expected_file_sha256,
+                status="finalization_failed",
+                failures=["exclusive_finalization_failed"],
+                executed_cases_total=len(results),
+                receipt_path=holdout_receipt_path,
+                detail=type(exc).__name__,
+                base_metrics=metrics,
+            )
+            raise RuntimeError(
+                "sealed private holdout final report or completed receipt "
+                "could not be created exclusively"
+            ) from exc
+    else:
+        await asyncio.to_thread(_write_json, output_path, metrics)
+        if markdown_path:
+            await asyncio.to_thread(_write_markdown, markdown_path, metrics)
     return metrics
 
 
@@ -548,8 +1202,17 @@ def summarize_results(
         "llm_usage_events": usage_events,
         "results": results,
     }
+    trace_lookup_errors = [
+        str(item["trace_lookup_error"])
+        for item in results
+        if item.get("trace_lookup_error")
+    ]
     if trace_lookup_error:
-        metrics["trace_lookup_error"] = trace_lookup_error
+        trace_lookup_errors.insert(0, trace_lookup_error)
+    if trace_lookup_errors:
+        metrics["trace_lookup_error"] = "; ".join(
+            dict.fromkeys(trace_lookup_errors)
+        )
     return metrics
 
 
@@ -588,6 +1251,14 @@ def _guard_eval_privacy(
     markdown_path: Path | None,
     target: str,
 ) -> None:
+    private_root = PRIVATE_DATA_ROOT.resolve()
+    cases_resolved = cases_path.resolve()
+    if cases_resolved.is_relative_to(private_root) and any(
+        case.get("privacy_class") != PRIVATE_TICKET_DERIVED for case in cases
+    ):
+        raise ValueError(
+            "eval cases stored under data/private cannot use privacy_class=standard"
+        )
     if not any(
         case.get("privacy_class") == PRIVATE_TICKET_DERIVED for case in cases
     ):
@@ -607,14 +1278,315 @@ def _guard_eval_privacy(
             "private_ticket_derived cases may only use a loopback or app-ml /ask target"
         )
 
-    private_root = PRIVATE_DATA_ROOT.resolve()
-    artifact_paths = [cases_path.resolve(), output_path.resolve()]
+    artifact_paths = [cases_resolved, output_path.resolve()]
     if markdown_path is not None:
         artifact_paths.append(markdown_path.resolve())
     if not all(path.is_relative_to(private_root) for path in artifact_paths):
         raise ValueError(
             f"private_ticket_derived eval artifacts must stay under {private_root}"
         )
+
+
+def _guard_eval_artifact_aliases(
+    *,
+    cases_path: Path,
+    output_path: Path,
+    markdown_path: Path | None,
+    extra_paths: list[Path] | None = None,
+) -> None:
+    named_paths: list[tuple[str, Path]] = [
+        ("cases", cases_path),
+        ("output", output_path),
+    ]
+    if markdown_path is not None:
+        named_paths.append(("markdown", markdown_path))
+    for index, path in enumerate(extra_paths or [], start=1):
+        named_paths.append((f"extra_{index}", path))
+
+    for left_index, (left_name, left_path) in enumerate(named_paths):
+        for right_name, right_path in named_paths[left_index + 1 :]:
+            if _paths_alias(left_path, right_path):
+                raise ValueError(
+                    "eval artifact paths must not alias each other: "
+                    f"{left_name} and {right_name}"
+                )
+
+
+def _paths_alias(left: Path, right: Path) -> bool:
+    left_resolved = left.expanduser().resolve()
+    right_resolved = right.expanduser().resolve()
+    if os.path.normcase(str(left_resolved)) == os.path.normcase(
+        str(right_resolved)
+    ):
+        return True
+    if left_resolved.exists() and right_resolved.exists():
+        try:
+            return os.path.samefile(left_resolved, right_resolved)
+        except OSError:
+            return False
+    return False
+
+
+def _path_lexists(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
+async def _verify_holdout_runtime(
+    *,
+    client: httpx.AsyncClient,
+    target: str,
+    headers: dict[str, str],
+    expected_git_sha: str,
+) -> None:
+    ready_url = urlsplit(target)._replace(path="/ready", query="", fragment="").geturl()
+    try:
+        response = await client.get(ready_url, headers=headers)
+    except httpx.HTTPError:
+        raise ValueError(
+            "sealed private holdout runtime /ready check failed"
+        ) from None
+    if response.status_code != 200:
+        raise ValueError(
+            "sealed private holdout runtime /ready check returned "
+            f"HTTP {response.status_code}"
+        )
+    payload = _safe_response_json(response)
+    if not isinstance(payload, dict) or payload.get("status") != "ready":
+        raise ValueError(
+            "sealed private holdout runtime /ready payload is not ready"
+        )
+    release_git_sha = str(payload.get("release_git_sha") or "").strip()
+    if release_git_sha != expected_git_sha:
+        raise ValueError(
+            "sealed private holdout runtime release_git_sha does not match "
+            "holdout_contract"
+        )
+
+
+def _validated_holdout_ledger_dir(
+    value: Path | None,
+    *,
+    cases_path: Path,
+) -> Path:
+    if value is None:
+        raise ValueError("sealed private holdout requires holdout_ledger_dir")
+    ledger = value.expanduser().resolve()
+    private_root = PRIVATE_DATA_ROOT.resolve()
+    cases_dir = cases_path.expanduser().resolve().parent
+    if not ledger.is_relative_to(private_root):
+        raise ValueError("holdout ledger must stay under data/private")
+    if ledger.is_relative_to(cases_dir) or cases_dir.is_relative_to(ledger):
+        raise ValueError(
+            "holdout ledger must be in a separate private directory tree "
+            "from the cases file"
+        )
+    canonical_ledger = (
+        private_root / CANONICAL_HOLDOUT_LEDGER_DIRNAME
+    ).resolve()
+    if ledger != canonical_ledger:
+        raise ValueError(
+            "holdout ledger must use the canonical persistent private "
+            f"directory: {canonical_ledger}"
+        )
+    ledger.mkdir(parents=True, exist_ok=True)
+    if not ledger.is_dir():
+        raise ValueError("holdout ledger path must be a directory")
+    return ledger
+
+
+def _derive_holdout_receipt_key(selected_case_ids_sha256: str) -> str:
+    immutable_identity = {
+        "domain": "rosmol-private-holdout-selection-v1",
+        "selected_case_ids_sha256": selected_case_ids_sha256,
+    }
+    return hashlib.sha256(
+        _canonical_json(immutable_identity).encode("utf-8")
+    ).hexdigest()
+
+
+def _create_holdout_started_receipt(
+    path: Path,
+    *,
+    contract: dict[str, Any],
+    expected_cases_file_sha256: str,
+    eval_run_id: str,
+    cases_path: Path,
+    output_path: Path,
+    receipt_key: str,
+) -> None:
+    payload = {
+        "schema_version": "1.0.0",
+        "status": "started",
+        "started_at": datetime.now(UTC).isoformat(),
+        "baseline_id": contract["baseline_id"],
+        "eval_run_id": eval_run_id,
+        "runtime_git_sha": contract["runtime_git_sha"],
+        "freeze_contract_sha256": contract["freeze_contract_sha256"],
+        "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
+        "cases_payload_sha256": contract["cases_payload_sha256"],
+        "expected_cases_payload_sha256": contract["cases_payload_sha256"],
+        "cases_file_sha256": expected_cases_file_sha256,
+        "expected_cases_file_sha256": expected_cases_file_sha256,
+        "receipt_key": receipt_key,
+        "cases_path": str(cases_path.expanduser().resolve()),
+        "output_path": str(output_path.expanduser().resolve()),
+        "knowledge_base_identity_gate": "manual_pre_run_verification_required",
+        "one_shot_scope": (
+            "enforced_while_canonical_persistent_ledger_is_preserved"
+        ),
+    }
+    _write_json_exclusive(path, payload)
+
+
+def _create_holdout_completed_receipt(
+    path: Path,
+    *,
+    contract: dict[str, Any],
+    expected_cases_file_sha256: str,
+    eval_run_id: str,
+    receipt_key: str,
+    output_path: Path,
+    output_sha256: str,
+) -> None:
+    payload = {
+        "schema_version": "1.0.0",
+        "status": "completed",
+        "completed_at": datetime.now(UTC).isoformat(),
+        "baseline_id": contract["baseline_id"],
+        "eval_run_id": eval_run_id,
+        "receipt_key": receipt_key,
+        "runtime_git_sha": contract["runtime_git_sha"],
+        "freeze_contract_sha256": contract["freeze_contract_sha256"],
+        "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
+        "cases_payload_sha256": contract["cases_payload_sha256"],
+        "expected_cases_payload_sha256": contract["cases_payload_sha256"],
+        "cases_file_sha256": expected_cases_file_sha256,
+        "expected_cases_file_sha256": expected_cases_file_sha256,
+        "output_path": str(output_path.expanduser().resolve()),
+        "output_sha256": output_sha256,
+        "cases_total": contract["cases_total"],
+        "one_shot_scope": (
+            "enforced_while_canonical_persistent_ledger_is_preserved"
+        ),
+    }
+    _write_json_exclusive(path, payload)
+
+
+async def _write_holdout_rejection_report(
+    *,
+    ledger_dir: Path,
+    receipt_key: str,
+    target: str,
+    cases_path: Path,
+    eval_run_id: str,
+    contract: dict[str, Any],
+    expected_cases_file_sha256: str,
+    status: str,
+    failures: list[str],
+    executed_cases_total: int,
+    receipt_path: Path | None,
+    trace_lookup_error: str | None = None,
+    detail: str | None = None,
+    base_metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metrics = (
+        dict(base_metrics)
+        if base_metrics is not None
+        else _empty_metrics(
+            target=target,
+            cases_path=cases_path,
+            auto_smoke_cases=False,
+        )
+    )
+    metrics["eval_run_id"] = eval_run_id
+    metrics["cases_total"] = executed_cases_total
+    metrics["message"] = "sealed holdout rejected before valid completion"
+    metrics["holdout_contract"] = contract
+    if trace_lookup_error:
+        metrics["trace_lookup_error"] = trace_lookup_error
+    if detail:
+        metrics["holdout_rejection_detail"] = detail
+    rejection_path = ledger_dir / (
+        f"{receipt_key}.{eval_run_id}.rejected.json"
+    )
+    metrics["holdout_run"] = {
+        "status": status,
+        "completed": False,
+        "expected_cases_total": contract["cases_total"],
+        "executed_cases_total": executed_cases_total,
+        "cases_file_sha256": expected_cases_file_sha256,
+        "expected_cases_file_sha256": expected_cases_file_sha256,
+        "integrity_failures": list(failures),
+        "started_receipt": receipt_path.name if receipt_path else None,
+        "knowledge_base_identity_gate": "manual_pre_run_verification_required",
+        "one_shot_scope": (
+            "enforced_while_canonical_persistent_ledger_is_preserved"
+        ),
+        "rejection_evidence": rejection_path.name,
+    }
+    await asyncio.to_thread(_write_json_exclusive, rejection_path, metrics)
+    return metrics
+
+
+def _holdout_integrity_failures(
+    metrics: dict[str, Any],
+    *,
+    results: list[dict[str, Any]],
+    expected_cases_total: int,
+    executed_cases_total: int,
+) -> list[str]:
+    failures: list[str] = []
+    if executed_cases_total != expected_cases_total:
+        failures.append("case_count_incomplete")
+    if metrics.get("http_success_rate") != 1.0:
+        failures.append("http_success_below_100_percent")
+    if metrics.get("trace_coverage_rate") != 1.0:
+        failures.append("trace_coverage_below_100_percent")
+    request_ids = [
+        str(item.get("request_id") or "").strip()
+        for item in results
+    ]
+    if (
+        len(request_ids) != expected_cases_total
+        or any(not request_id for request_id in request_ids)
+    ):
+        failures.append("request_ids_missing")
+    if len(set(request_ids)) != expected_cases_total:
+        failures.append("request_ids_not_unique")
+    if any(item.get("cache_hit") is not False for item in results):
+        failures.append("cache_hit_not_exactly_false")
+    if any(item.get("trace_binding_match") is not True for item in results):
+        failures.append("trace_binding_mismatch")
+    if any(item.get("trace_lookup_error") for item in results) or metrics.get(
+        "trace_lookup_error"
+    ):
+        failures.append("trace_lookup_error")
+    if any(item.get("trace_error") not in (None, "") for item in results):
+        failures.append("trace_error_present")
+    return failures
+
+
+def _holdout_failure_status(
+    failures: list[str],
+    *,
+    budget_stopped: bool,
+) -> str:
+    if not failures:
+        return "completed"
+    if "case_count_incomplete" in failures:
+        return "incomplete_budget_stop" if budget_stopped else "incomplete"
+    if "http_success_below_100_percent" in failures:
+        return "http_failed"
+    if (
+        "trace_coverage_below_100_percent" in failures
+        or "trace_lookup_error" in failures
+        or "trace_binding_mismatch" in failures
+        or "trace_error_present" in failures
+    ):
+        return "trace_failed"
+    if "cache_hit_not_exactly_false" in failures:
+        return "cache_contaminated"
+    return "integrity_failed"
 
 
 def _apply_run_limits(
@@ -1148,22 +2120,32 @@ async def _load_cases(
     auto_smoke_cases: bool,
     max_smoke_cases: int,
     user_prefix: str,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], bool, str | None, str | None]:
     raw_cases: list[dict[str, Any]] = []
     generated_smoke_cases = False
+    cases_file_sha256: str | None = None
     cases_file_exists = await asyncio.to_thread(cases_path.exists)
     if cases_file_exists:
-        raw = await asyncio.to_thread(_read_json, cases_path)
+        raw_bytes = await asyncio.to_thread(cases_path.read_bytes)
+        cases_file_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        raw = json.loads(raw_bytes.decode("utf-8-sig"))
         if not isinstance(raw, list):
             raise ValueError("ask eval cases file must be a JSON array")
         raw_cases = raw
     elif not auto_smoke_cases:
         raise FileNotFoundError(f"ask eval cases file not found: {cases_path}")
 
-    cases = _apply_user_prefix(
-        [_normalize_case(item) for item in raw_cases],
-        user_prefix=user_prefix,
+    raw_cases_payload_sha256 = (
+        holdout_cases_payload_sha256(raw_cases)
+        if any(
+            isinstance(item, dict) and "holdout_contract" in item
+            for item in raw_cases
+        )
+        else None
     )
+    cases = [_normalize_case(item) for item in raw_cases]
+    if not any(case.get("split") == PRIVATE_HOLDOUT_SPLIT for case in cases):
+        cases = _apply_user_prefix(cases, user_prefix=user_prefix)
     if not cases and auto_smoke_cases:
         records = await asyncio.to_thread(_read_json, kb_seed_path)
         if not isinstance(records, list):
@@ -1174,7 +2156,12 @@ async def _load_cases(
             user_prefix=user_prefix,
         )
         generated_smoke_cases = True
-    return cases, generated_smoke_cases
+    return (
+        cases,
+        generated_smoke_cases,
+        raw_cases_payload_sha256,
+        cases_file_sha256,
+    )
 
 
 def _apply_user_prefix(cases: list[dict[str, Any]], *, user_prefix: str) -> list[dict[str, Any]]:
@@ -1193,6 +2180,12 @@ def _default_generated_user_prefix(base: str) -> str:
     return f"{base}-{stamp}"
 
 
+def _sealed_holdout_user_id(eval_run_id: str, case_id: str) -> str:
+    run_digest = hashlib.sha256(eval_run_id.encode("utf-8")).hexdigest()
+    case_digest = hashlib.sha256(case_id.encode("utf-8")).hexdigest()
+    return f"runner-holdout-{run_digest}-{case_digest}"
+
+
 async def _run_case(
     *,
     client: httpx.AsyncClient,
@@ -1202,13 +2195,19 @@ async def _run_case(
     case: dict[str, Any],
     semaphore: asyncio.Semaphore,
     trace_pool: asyncpg.Pool | None,
+    sealed_holdout: bool = False,
 ) -> dict[str, Any]:
     async with semaphore:
         started_at = perf_counter()
         request_id: str | None = None
         try:
+            request_user_id = (
+                _sealed_holdout_user_id(eval_run_id, str(case["id"]))
+                if sealed_holdout
+                else case["user_id"]
+            )
             request_payload: dict[str, Any] = {
-                "user_id": case["user_id"],
+                "user_id": request_user_id,
                 "channel": case["channel"],
                 "text": case["query"],
             }
@@ -1248,12 +2247,41 @@ async def _run_case(
             }
 
         trace: dict[str, Any] | None = None
+        case_trace_lookup_error: str | None = None
         if trace_pool and request_id:
-            trace = await _fetch_trace(trace_pool, request_id)
-        return score_case(case, http_result, trace)
+            try:
+                trace = await _fetch_trace(
+                    trace_pool,
+                    request_id,
+                    expected_eval_run_id=eval_run_id,
+                    expected_eval_case_id=str(case["id"]),
+                )
+            except Exception as exc:
+                case_trace_lookup_error = type(exc).__name__
+        result = score_case(case, http_result, trace)
+        result["trace_eval_run_id"] = (
+            str(trace.get("eval_run_id") or "") if trace else ""
+        )
+        result["trace_eval_case_id"] = (
+            str(trace.get("eval_case_id") or "") if trace else ""
+        )
+        result["trace_binding_match"] = bool(trace) and (
+            result["trace_eval_run_id"] == eval_run_id
+            and result["trace_eval_case_id"] == str(case["id"])
+        )
+        result["trace_error"] = trace.get("error") if trace else None
+        if case_trace_lookup_error:
+            result["trace_lookup_error"] = case_trace_lookup_error
+        return result
 
 
-async def _fetch_trace(pool: asyncpg.Pool, request_id: str) -> dict[str, Any] | None:
+async def _fetch_trace(
+    pool: asyncpg.Pool,
+    request_id: str,
+    *,
+    expected_eval_run_id: str = "",
+    expected_eval_case_id: str = "",
+) -> dict[str, Any] | None:
     try:
         request_uuid = UUID(request_id)
     except ValueError:
@@ -1263,6 +2291,7 @@ async def _fetch_trace(pool: asyncpg.Pool, request_id: str) -> dict[str, Any] | 
         """
         SELECT
             message_masked, query_analysis, cache_hit, generator_model,
+            eval_run_id, eval_case_id,
             cited_sources, was_escalated,
             escalation_reason, max_reranker_score, total_latency_ms,
             retrieved_chunks, reranker_scores, trace_events, llm_usage,
@@ -1275,7 +2304,11 @@ async def _fetch_trace(pool: asyncpg.Pool, request_id: str) -> dict[str, Any] | 
     )
     if not row:
         return None
-    return {key: _json_safe(row[key]) for key in row.keys()}
+    trace = {key: _json_safe(row[key]) for key in row.keys()}
+    # Expected values are deliberately not used to populate trace fields: callers
+    # compare them against the independently stored SQL values.
+    _ = expected_eval_run_id, expected_eval_case_id
+    return trace
 
 
 def _collect_trace_chunk_ids(trace: dict[str, Any]) -> set[str]:
@@ -1392,6 +2425,19 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _has_holdout_marker(value: Any) -> bool:
+    return HOLDOUT_MARKER_RE.search(str(value or "").strip().casefold()) is not None
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _equivalent_chunk_id_map(value: Any, expected_chunk_ids: list[str]) -> dict[str, list[str]]:
     if value is None or value == "":
         return {}
@@ -1437,8 +2483,23 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _write_json_exclusive(path: Path, payload: dict[str, Any]) -> None:
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    _write_bytes_exclusive(path, encoded)
+
+
 def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_markdown_text(metrics), encoding="utf-8")
+
+
+def _write_markdown_exclusive(path: Path, metrics: dict[str, Any]) -> None:
+    _write_bytes_exclusive(path, _markdown_text(metrics).encode("utf-8"))
+
+
+def _markdown_text(metrics: dict[str, Any]) -> str:
     lines = [
         "# Ask Eval Report",
         "",
@@ -1515,7 +2576,31 @@ def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
                 f"{source_note} reason={reason}"
             )
 
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"
+
+
+def _write_bytes_exclusive(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+    except Exception:
+        # A partial exclusive artifact remains fail-closed and is never overwritten.
+        raise
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _empty_metrics(target: str, cases_path: Path, auto_smoke_cases: bool) -> dict[str, Any]:
@@ -1673,6 +2758,34 @@ def main() -> None:
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--bypass-cache", action="store_true")
     parser.add_argument(
+        "--sealed-holdout",
+        action="store_true",
+        help="Enable the one-shot sealed 80-case private holdout protocol.",
+    )
+    parser.add_argument(
+        "--expected-holdout-freeze-sha256",
+        default="",
+        help="Externally supplied frozen holdout contract SHA-256.",
+    )
+    parser.add_argument(
+        "--expected-cases-payload-sha256",
+        default="",
+        help="Externally supplied canonical raw holdout cases SHA-256.",
+    )
+    parser.add_argument(
+        "--expected-cases-file-sha256",
+        default="",
+        help="Externally supplied exact holdout cases file SHA-256.",
+    )
+    parser.add_argument(
+        "--holdout-ledger-dir",
+        default="",
+        help=(
+            "Canonical persistent private directory for one-shot holdout "
+            "receipts; it must be preserved after the run."
+        ),
+    )
+    parser.add_argument(
         "--fail-on-any-case",
         action="store_true",
         help="Exit with status 1 unless every evaluated case passes.",
@@ -1709,6 +2822,21 @@ def main() -> None:
             max_llm_cost_rub=args.max_llm_cost_rub,
             require_budget_for_large_runs=not args.allow_unbounded_llm_cost,
             large_run_threshold=args.large_run_threshold,
+            sealed_holdout=args.sealed_holdout,
+            expected_holdout_freeze_sha256=(
+                args.expected_holdout_freeze_sha256 or None
+            ),
+            expected_cases_payload_sha256=(
+                args.expected_cases_payload_sha256 or None
+            ),
+            expected_cases_file_sha256=(
+                args.expected_cases_file_sha256 or None
+            ),
+            holdout_ledger_dir=(
+                Path(args.holdout_ledger_dir)
+                if args.holdout_ledger_dir
+                else None
+            ),
         )
     )
     quality_gate_failures = _quality_gate_failures(

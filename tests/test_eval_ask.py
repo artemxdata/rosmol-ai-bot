@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 
 import eval.run_ask as run_ask_module
 from eval.run_ask import (
+    _guard_eval_artifact_aliases,
     _guard_eval_privacy,
     _json_safe,
     _llm_cost_rub_total,
@@ -15,10 +17,145 @@ from eval.run_ask import (
     _quality_gate_failures,
     _trace_dsn_candidates,
     build_seed_ask_cases,
+    holdout_cases_payload_sha256,
     run_eval,
     score_case,
     summarize_results,
 )
+
+HOLDOUT_CASE_IDS = [f"case-{index:03d}" for index in range(1, 81)]
+
+
+def _holdout_contract(
+    case_ids: list[str],
+    **overrides: object,
+) -> dict[str, object]:
+    selected_case_ids_sha256 = hashlib.sha256(
+        ("\n".join(sorted(case_ids)) + "\n").encode("utf-8")
+    ).hexdigest()
+    contract: dict[str, object] = {
+        "schema_version": "1.0.0",
+        "baseline_id": "independent_holdout_80_v1",
+        "runtime_git_sha": "1" * 40,
+        "freeze_contract_sha256": "2" * 64,
+        "review_manifest_sha256": "3" * 64,
+        "selected_case_ids_sha256": selected_case_ids_sha256,
+        "cases_payload_sha256": "4" * 64,
+        "knowledge_base_seed_sha256": "5" * 64,
+        "review_workbook_sha256": "6" * 64,
+        "source_cases_sha256": "7" * 64,
+        "selection_manifest_sha256": "8" * 64,
+        "cases_total": 80,
+        "execution_allowed": True,
+    }
+    contract.update(overrides)
+    return contract
+
+
+def _private_holdout_cases(
+    case_ids: list[str],
+    *,
+    contract: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    shared_contract = dict(contract or _holdout_contract(case_ids))
+    cases = [
+        {
+            "id": case_id,
+            "query": f"deidentified query {index}",
+            "user_id": f"reviewed-holdout-{case_id}",
+            "privacy_class": "private_ticket_derived",
+            "split": "holdout",
+            "label_status": "human_reviewed",
+            "requires_human_review": False,
+            "tags": ["label_verdict:approved", "split:holdout"],
+            "source_provenance": {
+                "case_fingerprint": f"fingerprint-{index}",
+            },
+        }
+        for index, case_id in enumerate(case_ids, start=1)
+    ]
+    if contract is None:
+        shared_contract["cases_payload_sha256"] = holdout_cases_payload_sha256(
+            cases
+        )
+    for case in cases:
+        case["holdout_contract"] = dict(shared_contract)
+    return cases
+
+
+class _FakeTracePool:
+    async def close(self) -> None:
+        return None
+
+
+def _install_holdout_trace_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cache_hit: object = False,
+    trace_error: Exception | None = None,
+    trace_record_error: object = None,
+    binding_mismatch: bool = False,
+) -> None:
+    async def fake_create_pool(*args: object, **kwargs: object) -> _FakeTracePool:
+        return _FakeTracePool()
+
+    async def fake_fetch_trace(
+        pool: object,
+        request_id: str,
+        *,
+        expected_eval_run_id: str = "",
+        expected_eval_case_id: str = "",
+    ) -> dict[str, object]:
+        if trace_error is not None:
+            raise trace_error
+        return {
+            "cache_hit": cache_hit,
+            "eval_run_id": (
+                "wrong-eval-run" if binding_mismatch else expected_eval_run_id
+            ),
+            "eval_case_id": expected_eval_case_id,
+            "error": trace_record_error,
+        }
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "_fetch_trace", fake_fetch_trace)
+
+
+def _holdout_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, Path]:
+    private_root = tmp_path / "private"
+    cases_dir = private_root / "cases" / "sealed"
+    cases_dir.mkdir(parents=True)
+    ledger_dir = (
+        private_root / run_ask_module.CANONICAL_HOLDOUT_LEDGER_DIRNAME
+    )
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    return private_root, cases_dir, ledger_dir
+
+
+def _sealed_holdout_kwargs(
+    ledger_dir: Path,
+    cases: list[dict[str, object]],
+    cases_path: Path,
+) -> dict[str, object]:
+    contract = cases[0]["holdout_contract"]
+    return {
+        "sealed_holdout": True,
+        "expected_holdout_freeze_sha256": contract[
+            "freeze_contract_sha256"
+        ],
+        "expected_cases_payload_sha256": contract["cases_payload_sha256"],
+        "expected_cases_file_sha256": run_ask_module._file_sha256(cases_path),
+        "holdout_ledger_dir": ledger_dir,
+    }
+
+
+def _request_id_for_case(request: httpx.Request) -> str:
+    case_id = request.headers["X-Eval-Case-Id"]
+    index = int(case_id.rsplit("-", maxsplit=1)[-1])
+    return f"00000000-0000-0000-0000-{index:012d}"
 
 
 def test_normalize_case_accepts_common_fields() -> None:
@@ -76,12 +213,91 @@ def test_normalize_case_keeps_private_ticket_privacy_class() -> None:
             "id": "private-ticket",
             "query": "private masked ticket query",
             "privacy_class": "private_ticket_derived",
+            "split": "validation",
             "label_status": "human_reviewed",
             "requires_human_review": False,
         }
     )
 
     assert case["privacy_class"] == "private_ticket_derived"
+
+
+def test_normalize_case_preserves_valid_private_holdout_contract() -> None:
+    raw = _private_holdout_cases(["case-1"])[0]
+
+    case = _normalize_case(raw)
+
+    assert case["split"] == "holdout"
+    assert case["holdout_contract"] == raw["holdout_contract"]
+
+
+def test_holdout_cases_payload_hash_is_order_independent() -> None:
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    original_digest = holdout_cases_payload_sha256(raw_cases)
+    mutated = json.loads(json.dumps(raw_cases))
+    mutated[0]["source_provenance"]["case_fingerprint"] = "mutated"
+
+    assert original_digest == holdout_cases_payload_sha256(
+        list(reversed(raw_cases))
+    )
+    assert original_digest != holdout_cases_payload_sha256(mutated)
+
+
+@pytest.mark.parametrize(
+    ("contract", "error"),
+    [
+        (None, "require holdout_contract"),
+        (
+            _holdout_contract(["case-1"], schema_version="2.0.0"),
+            "schema_version",
+        ),
+        (
+            _holdout_contract(["case-1"], baseline_id="../holdout"),
+            "baseline_id",
+        ),
+        (
+            _holdout_contract(["case-1"], baseline_id="holdout\n"),
+            "baseline_id",
+        ),
+        (
+            _holdout_contract(["case-1"], runtime_git_sha="abc123"),
+            "full lowercase 40-hex",
+        ),
+        (
+            _holdout_contract(["case-1"], freeze_contract_sha256="bad"),
+            "SHA-256",
+        ),
+        (
+            {
+                key: value
+                for key, value in _holdout_contract(["case-1"]).items()
+                if key != "review_workbook_sha256"
+            },
+            "schema exactly",
+        ),
+        (
+            {**_holdout_contract(["case-1"]), "unexpected": "value"},
+            "schema exactly",
+        ),
+        (
+            _holdout_contract(["case-1"], cases_total=79),
+            "exactly 80",
+        ),
+        (
+            _holdout_contract(["case-1"], execution_allowed=False),
+            "execution_allowed",
+        ),
+    ],
+)
+def test_normalize_case_rejects_invalid_private_holdout_contract(
+    contract: dict[str, object] | None,
+    error: str,
+) -> None:
+    raw = _private_holdout_cases(["case-1"])[0]
+    raw["holdout_contract"] = contract
+
+    with pytest.raises(ValueError, match=error):
+        _normalize_case(raw)
 
 
 @pytest.mark.parametrize(
@@ -113,6 +329,42 @@ def test_normalize_case_rejects_unreviewed_private_ticket() -> None:
                 "privacy_class": "private_ticket_derived",
             }
         )
+
+
+def test_normalize_case_requires_explicit_split_for_private_ticket() -> None:
+    with pytest.raises(ValueError, match="explicit split"):
+        _normalize_case(
+            {
+                "query": "private masked ticket query",
+                "privacy_class": "private_ticket_derived",
+                "label_status": "human_reviewed",
+                "requires_human_review": False,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("split", "validation"),
+        ("tags", ["split:validation"]),
+        ("user_id", "reviewed-validation-case-001"),
+        ("holdout_contract", None),
+        ("privacy_class", "standard"),
+    ],
+)
+def test_normalize_case_rejects_inconsistent_holdout_markers(
+    field: str,
+    value: object,
+) -> None:
+    raw = _private_holdout_cases(HOLDOUT_CASE_IDS)[0]
+    if field == "holdout_contract" and value is None:
+        raw.pop(field)
+    else:
+        raw[field] = value
+
+    with pytest.raises(ValueError, match="holdout markers"):
+        _normalize_case(raw)
 
 
 def test_private_ticket_eval_allows_only_local_private_paths(
@@ -157,6 +409,44 @@ def test_private_ticket_eval_allows_only_local_private_paths(
             output_path=tmp_path / "public-result.json",
             markdown_path=None,
             target="http://localhost:8001/ask",
+        )
+
+
+def test_private_directory_rejects_standard_privacy_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+
+    with pytest.raises(ValueError, match="cannot use privacy_class=standard"):
+        _guard_eval_privacy(
+            cases=[{"privacy_class": "standard"}],
+            cases_path=private_root / "cases.json",
+            output_path=private_root / "result.json",
+            markdown_path=None,
+            target="http://app-ml:8000/ask",
+        )
+
+
+def test_eval_artifact_paths_cannot_alias(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must not alias"):
+        _guard_eval_artifact_aliases(
+            cases_path=cases_path,
+            output_path=tmp_path / "." / "cases.json",
+            markdown_path=None,
+        )
+    with pytest.raises(ValueError, match="must not alias"):
+        _guard_eval_artifact_aliases(
+            cases_path=cases_path,
+            output_path=tmp_path / "output.json",
+            markdown_path=tmp_path / "output.json",
         )
 
 
@@ -1269,6 +1559,8 @@ async def test_run_eval_writes_json_and_markdown_without_db(tmp_path: Path) -> N
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         assert payload["text"] == "Привет"
+        assert payload["user_id"].startswith("ask-eval-")
+        assert not payload["user_id"].startswith("runner-holdout-")
         assert request.headers["X-Eval-Run-Id"].startswith("ask-eval-")
         assert request.headers["X-Eval-Case-Id"] == "hello"
         return httpx.Response(
@@ -1466,3 +1758,1042 @@ async def test_run_eval_user_prefix_isolates_loaded_case_users(tmp_path: Path) -
     )
 
     assert seen_user_ids == ["isolated-1", "isolated-2"]
+
+
+@pytest.mark.asyncio
+async def test_run_eval_executes_sealed_private_holdout_after_matching_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    contract = raw_cases[0]["holdout_contract"]
+    receipt_key = run_ask_module._derive_holdout_receipt_key(
+        contract["selected_case_ids_sha256"]
+    )
+    receipt_path = ledger_dir / f"{receipt_key}.started.json"
+    completed_path = ledger_dir / f"{receipt_key}.completed.json"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+    sealed_user_ids: list[str] = []
+    exported_user_ids = {str(case["user_id"]) for case in raw_cases}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"status": "ready", "release_git_sha": "1" * 40},
+            )
+        assert receipt_path.is_file()
+        assert request.headers["X-Bypass-Cache"] == "1"
+        request_user_id = str(json.loads(request.content)["user_id"])
+        sealed_user_ids.append(request_user_id)
+        assert request_user_id.startswith("runner-holdout-")
+        assert len(request_user_id) <= 200
+        assert request_user_id not in exported_user_ids
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases_path,
+        output_path=output_path,
+        target="http://app-ml:8000/ask",
+        trace_lookup=True,
+        trace_dsn="postgresql://trace.test/db",
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+        **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+    )
+
+    assert requests[0] == ("GET", "/ready")
+    assert requests[-1] == ("GET", "/ready")
+    assert requests.count(("GET", "/ready")) == 2
+    assert requests.count(("POST", "/ask")) == 80
+    assert len(sealed_user_ids) == 80
+    assert len(set(sealed_user_ids)) == 80
+    assert metrics["cases_total"] == 80
+    assert metrics["http_success_rate"] == 1.0
+    assert metrics["trace_coverage_rate"] == 1.0
+    assert metrics["cache_hit_rate"] == 0.0
+    assert metrics["holdout_contract"] == raw_cases[0]["holdout_contract"]
+    assert metrics["holdout_run"]["completed"] is True
+    assert metrics["holdout_run"]["status"] == "completed"
+    assert metrics["holdout_run"]["integrity_failures"] == []
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    expected_cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    assert receipt["status"] == "started"
+    assert receipt["baseline_id"] == "independent_holdout_80_v1"
+    assert receipt["cases_payload_sha256"] == raw_cases[0]["holdout_contract"][
+        "cases_payload_sha256"
+    ]
+    assert (
+        receipt["expected_cases_file_sha256"]
+        == expected_cases_file_sha256
+    )
+    assert receipt["output_path"] == str(output_path.resolve())
+    completed = json.loads(completed_path.read_text(encoding="utf-8"))
+    assert completed["status"] == "completed"
+    assert (
+        completed["expected_cases_file_sha256"]
+        == expected_cases_file_sha256
+    )
+    assert completed["output_sha256"] == run_ask_module._file_sha256(output_path)
+
+    copied_cases = json.loads(json.dumps(raw_cases))
+    for case in copied_cases:
+        case["holdout_contract"]["baseline_id"] = "renamed_baseline"
+        case["holdout_contract"]["freeze_contract_sha256"] = "9" * 64
+    copied_dir = private_root / "copied_cases"
+    copied_dir.mkdir()
+    copied_cases_path = copied_dir / "renamed.json"
+    copied_output_path = copied_dir / "result.json"
+    copied_cases_path.write_text(json.dumps(copied_cases), encoding="utf-8")
+    copied_receipt_key = run_ask_module._derive_holdout_receipt_key(
+        copied_cases[0]["holdout_contract"]["selected_case_ids_sha256"]
+    )
+    assert copied_receipt_key == receipt_key
+    requests_before_rerun = list(requests)
+
+    with pytest.raises(ValueError, match="rerun is forbidden"):
+        await run_eval(
+            cases_path=copied_cases_path,
+            output_path=copied_output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            transport=httpx.MockTransport(handler),
+            bypass_cache=True,
+            **_sealed_holdout_kwargs(
+                ledger_dir,
+                copied_cases,
+                copied_cases_path,
+            ),
+        )
+
+    assert requests == requests_before_rerun
+    assert not copied_output_path.exists()
+    assert list(ledger_dir.glob("*.rejected.json"))
+
+
+@pytest.mark.asyncio
+async def test_run_eval_rejects_inconsistent_private_holdout_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    raw_cases[1]["holdout_contract"] = _holdout_contract(
+        HOLDOUT_CASE_IDS,
+        freeze_contract_sha256="9" * 64,
+    )
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="identical holdout_contract"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"selected_case_ids_sha256": "9" * 64}, "selected_case_ids_sha256"),
+        ({"cases_payload_sha256": "9" * 64}, "cases_payload_sha256"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_eval_rejects_private_holdout_selection_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    error: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    case_ids = HOLDOUT_CASE_IDS
+    raw_cases = _private_holdout_cases(
+        case_ids,
+        contract=_holdout_contract(case_ids, **overrides),
+    )
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_eval_rejects_mutated_private_holdout_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    raw_cases[0]["query"] = "mutated after sealing"
+    cases_path = private_root / "holdout.json"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cases_payload_sha256"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=private_root / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_eval_requires_exactly_80_loaded_holdout_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS[:-1])
+    cases_path = private_root / "holdout.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cases_total"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=private_root / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_eval_requires_explicit_sealed_mode_in_both_directions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    holdout_path = cases_dir / "holdout.json"
+    holdout_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="required together"):
+        await run_eval(
+            cases_path=holdout_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+        )
+
+    public_cases = tmp_path / "standard.json"
+    public_cases.write_text(
+        json.dumps([{"id": "standard", "query": "test"}]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="required together"):
+        await run_eval(
+            cases_path=public_cases,
+            output_path=tmp_path / "standard-result.json",
+            sealed_holdout=True,
+            expected_holdout_freeze_sha256="2" * 64,
+            expected_cases_payload_sha256="3" * 64,
+            holdout_ledger_dir=ledger_dir,
+            trace_lookup=False,
+            api_key_env=None,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "value", "error"),
+    [
+        ("expected_holdout_freeze_sha256", None, "requires expected_holdout"),
+        ("expected_holdout_freeze_sha256", "9" * 64, "does not match"),
+        ("expected_cases_payload_sha256", None, "requires expected_cases"),
+        ("expected_cases_payload_sha256", "9" * 64, "does not match"),
+        ("expected_cases_file_sha256", None, "requires expected_cases_file"),
+        ("expected_cases_file_sha256", "9" * 64, "does not match"),
+        ("holdout_ledger_dir", None, "requires holdout_ledger_dir"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_eval_rejects_missing_or_mismatched_external_holdout_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    override: str,
+    value: object,
+    error: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    options = _sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path)
+    options[override] = value
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match=error):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **options,
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+    assert not list(ledger_dir.glob("*.started.json"))
+
+
+@pytest.mark.asyncio
+async def test_external_payload_digest_blocks_self_declared_mutated_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    old_external_digest = raw_cases[0]["holdout_contract"][
+        "cases_payload_sha256"
+    ]
+    raw_cases[0]["query"] = "mutated query"
+    raw_cases[0]["expected_chunk_ids"] = ["mutated_chunk"]
+    new_self_declared_digest = holdout_cases_payload_sha256(raw_cases)
+    for case in raw_cases:
+        case["holdout_contract"]["cases_payload_sha256"] = (
+            new_self_declared_digest
+        )
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="expected_cases_payload_sha256"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            sealed_holdout=True,
+            expected_holdout_freeze_sha256="2" * 64,
+            expected_cases_payload_sha256=old_external_digest,
+            holdout_ledger_dir=ledger_dir,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+    assert not list(ledger_dir.glob("*.started.json"))
+
+
+@pytest.mark.parametrize(
+    ("contract_field", "mutated_value"),
+    [
+        ("runtime_git_sha", "9" * 40),
+        ("review_manifest_sha256", "9" * 64),
+    ],
+)
+@pytest.mark.asyncio
+async def test_external_file_digest_blocks_mutated_holdout_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contract_field: str,
+    mutated_value: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    sealed_options = _sealed_holdout_kwargs(
+        ledger_dir,
+        raw_cases,
+        cases_path,
+    )
+    for case in raw_cases:
+        case["holdout_contract"][contract_field] = mutated_value
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="expected_cases_file_sha256"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **sealed_options,
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+    assert not list(ledger_dir.glob("*.started.json"))
+
+
+@pytest.mark.parametrize("existing_artifact", ["output", "markdown"])
+@pytest.mark.asyncio
+async def test_sealed_holdout_never_overwrites_canonical_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_artifact: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    markdown_path = cases_dir / "result.md"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    existing_path = (
+        output_path if existing_artifact == "output" else markdown_path
+    )
+    existing_path.write_text("sentinel", encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(FileExistsError, match="must be absent"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            markdown_path=markdown_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    assert existing_path.read_text(encoding="utf-8") == "sentinel"
+    assert requests == []
+    assert len(list(ledger_dir.glob("*.rejected.json"))) == 1
+    assert not list(ledger_dir.glob("*.started.json"))
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "error"),
+    [
+        ("sha_mismatch", "release_git_sha"),
+        ("unavailable", "runtime /ready check failed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_run_ready_failure_rejects_before_canonical_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+    error: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    get_count = 0
+    post_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_count, post_count
+        if request.method == "GET":
+            get_count += 1
+            if get_count == 2 and failure_mode == "unavailable":
+                raise httpx.ConnectError("runtime unavailable", request=request)
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ready",
+                    "release_git_sha": (
+                        "1" * 40 if get_count == 1 else "9" * 40
+                    ),
+                },
+            )
+        post_count += 1
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(ValueError, match=error):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    assert get_count == 2
+    assert post_count == 80
+    assert not output_path.exists()
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert report["holdout_run"]["status"] == "post_runtime_rejected"
+    assert list(ledger_dir.glob("*.started.json"))
+    assert not list(ledger_dir.glob("*.completed.json"))
+
+
+@pytest.mark.parametrize(
+    ("trace_lookup", "bypass_cache", "max_cases", "failure"),
+    [
+        (False, True, None, "trace_lookup_required"),
+        (True, False, None, "bypass_cache_required"),
+        (True, True, 80, "max_cases_forbidden"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_eval_writes_preflight_rejection_for_invalid_holdout_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trace_lookup: bool,
+    bypass_cache: bool,
+    max_cases: int | None,
+    failure: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="preflight failed"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=trace_lookup,
+            api_key_env=None,
+            bypass_cache=bypass_cache,
+            max_cases=max_cases,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    rejection_paths = list(ledger_dir.glob("*.rejected.json"))
+    assert len(rejection_paths) == 1
+    report = json.loads(rejection_paths[0].read_text(encoding="utf-8"))
+    assert report["holdout_run"]["completed"] is False
+    assert report["holdout_run"]["status"] == "preflight_rejected"
+    assert report["holdout_run"]["expected_cases_file_sha256"] == (
+        run_ask_module._file_sha256(cases_path)
+    )
+    assert failure in report["holdout_run"]["integrity_failures"]
+    assert requests == []
+    assert not output_path.exists()
+    assert not list(ledger_dir.glob("*.started.json"))
+
+
+@pytest.mark.asyncio
+async def test_run_eval_writes_but_rejects_partial_budget_stopped_holdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    monkeypatch.setattr(
+        run_ask_module,
+        "_llm_cost_rub_total",
+        lambda results: 1.0,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"status": "ready", "release_git_sha": "1" * 40},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(RuntimeError, match="run-integrity"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            transport=httpx.MockTransport(handler),
+            bypass_cache=True,
+            max_llm_cost_rub=0.0,
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    rejection_path = next(ledger_dir.glob("*.rejected.json"))
+    report = json.loads(rejection_path.read_text(encoding="utf-8"))
+    assert requests == [
+        ("GET", "/ready"),
+        ("POST", "/ask"),
+        ("GET", "/ready"),
+    ]
+    assert report["holdout_run"]["status"] == "incomplete_budget_stop"
+    assert report["holdout_run"]["completed"] is False
+    assert report["holdout_run"]["expected_cases_total"] == 80
+    assert report["holdout_run"]["executed_cases_total"] == 1
+    assert "case_count_incomplete" in report["holdout_run"]["integrity_failures"]
+    assert report["llm_budget_stopped"] is True
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_eval_rejects_private_holdout_runtime_sha_mismatch_before_ask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json={"status": "ready", "release_git_sha": "9" * 40},
+        )
+
+    with pytest.raises(ValueError, match="release_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    assert requests == [("GET", "/ready")]
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert report["holdout_run"]["status"] == "runtime_rejected"
+    assert report["holdout_run"]["completed"] is False
+    assert not output_path.exists()
+    assert not list(ledger_dir.glob("*.started.json"))
+
+
+@pytest.mark.parametrize("receipt_suffix", ["started", "completed"])
+@pytest.mark.asyncio
+async def test_run_eval_existing_receipt_rejects_holdout_rerun(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt_suffix: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    receipt_key = run_ask_module._derive_holdout_receipt_key(
+        raw_cases[0]["holdout_contract"]["selected_case_ids_sha256"]
+    )
+    ledger_dir.mkdir()
+    receipt_path = ledger_dir / f"{receipt_key}.{receipt_suffix}.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    receipt_path.write_text('{"status":"started"}', encoding="utf-8")
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json={"status": "ready", "release_git_sha": "1" * 40},
+        )
+
+    with pytest.raises(ValueError, match="rerun is forbidden"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    assert requests == []
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert report["holdout_run"]["status"] == "rerun_rejected"
+    assert report["holdout_run"]["completed"] is False
+    assert receipt_path.read_text(encoding="utf-8") == '{"status":"started"}'
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_status", "expected_failure"),
+    [
+        ("http", "http_failed", "http_success_below_100_percent"),
+        ("trace_missing", "trace_failed", "trace_coverage_below_100_percent"),
+        ("trace_error", "trace_failed", "trace_lookup_error"),
+        ("trace_record_error", "trace_failed", "trace_error_present"),
+        ("binding", "trace_failed", "trace_binding_mismatch"),
+        ("cache", "cache_contaminated", "cache_hit_not_exactly_false"),
+        ("cache_missing", "cache_contaminated", "cache_hit_not_exactly_false"),
+        ("duplicate_request_id", "integrity_failed", "request_ids_not_unique"),
+        ("missing_request_id", "trace_failed", "request_ids_missing"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_eval_writes_and_rejects_holdout_integrity_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+    expected_status: str,
+    expected_failure: str,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    if failure_mode == "trace_missing":
+        async def missing_trace(
+            pool: object,
+            request_id: str,
+            **kwargs: object,
+        ) -> None:
+            return None
+
+        async def fake_create_pool(
+            *args: object,
+            **kwargs: object,
+        ) -> _FakeTracePool:
+            return _FakeTracePool()
+
+        monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+        monkeypatch.setattr(run_ask_module, "_fetch_trace", missing_trace)
+    else:
+        _install_holdout_trace_stubs(
+            monkeypatch,
+            cache_hit=(
+                True
+                if failure_mode == "cache"
+                else None
+                if failure_mode == "cache_missing"
+                else False
+            ),
+            trace_error=(
+                RuntimeError("trace read failed")
+                if failure_mode == "trace_error"
+                else None
+            ),
+            trace_record_error=(
+                "trace failed"
+                if failure_mode == "trace_record_error"
+                else None
+            ),
+            binding_mismatch=failure_mode == "binding",
+        )
+
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    post_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal post_count
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"status": "ready", "release_git_sha": "1" * 40},
+            )
+        post_count += 1
+        return httpx.Response(
+            503 if failure_mode == "http" and post_count == 1 else 200,
+            json={
+                "request_id": (
+                    ""
+                    if failure_mode == "missing_request_id"
+                    else
+                    "11111111-1111-1111-1111-111111111111"
+                    if failure_mode == "duplicate_request_id"
+                    else _request_id_for_case(request)
+                ),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(RuntimeError, match="run-integrity"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert post_count == 80
+    assert report["holdout_run"]["completed"] is False
+    assert report["holdout_run"]["status"] == expected_status
+    assert expected_failure in report["holdout_run"]["integrity_failures"]
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_eval_trace_connection_failure_writes_report_before_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+
+    async def fail_create_pool(*args: object, **kwargs: object) -> None:
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fail_create_pool)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(RuntimeError, match="trace lookup"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert requests == []
+    assert report["holdout_run"]["status"] == "trace_unavailable"
+    assert report["holdout_run"]["completed"] is False
+    assert "trace_lookup_error" in report
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_holdout_ledger_must_be_separate_from_cases_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, _ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="separate private directory tree"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(500)
+            ),
+            **_sealed_holdout_kwargs(cases_dir, raw_cases, cases_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_holdout_ledger_must_use_canonical_persistent_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, _ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    alternate_ledger = private_root / "alternate-ledger"
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="canonical persistent private"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_sealed_holdout_kwargs(
+                alternate_ledger,
+                raw_cases,
+                cases_path,
+            ),
+        )
+
+    assert requests == []
+    assert not alternate_ledger.exists()

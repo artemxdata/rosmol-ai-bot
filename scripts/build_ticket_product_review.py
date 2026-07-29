@@ -4,7 +4,9 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import re
+import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -23,6 +25,8 @@ DEFAULT_MANIFEST_NAME = "top20_review_manifest.csv"
 DEFAULT_TOP_N = 20
 DEFAULT_MIN_PER_STRATUM = 10
 DEFAULT_TOTAL = 300
+DEFAULT_SPLIT = "calibration"
+DEFAULT_SELECTION_MODE = "frequency_risk"
 
 SUMMARY_FIELDS = (
     "rank",
@@ -65,11 +69,23 @@ MANIFEST_FIELDS = (
     "corrected_intent",
     "corrected_aspect",
     "corrected_entity_class",
+    "corrected_route",
+    "corrected_escalation_reason",
+    "deidentified_query",
+    "privacy_verdict",
+    "date_privacy_verdict",
+    "review_workbook_sha256",
+    "review_source_sha256",
+    "review_selection_sha256",
+    "review_freeze_contract_sha256",
+    "review_payload_sha256",
     "answerable_from_snapshot",
     "approved_chunk_ids",
     "approved_kb_seed_sha256",
     "forbidden_profiles",
     "include_in_calibration",
+    "include_in_validation",
+    "include_in_holdout",
 )
 
 _HASH_RE = re.compile(r"^[0-9a-f]{12,64}$")
@@ -99,6 +115,12 @@ _SAFE_ROLE_STATUSES = {
     "not_available",
 }
 _SAFE_MULTITURN_STATUSES = {"single_turn", "multi_turn", "unknown", "not_available"}
+_SAFE_SPLITS = {"calibration", "validation", "holdout"}
+_SAFE_SELECTION_MODES = {
+    "frequency",
+    "frequency_risk",
+    "profile_route_frequency",
+}
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -162,9 +184,12 @@ def build_review_exports(
     top_n: int = DEFAULT_TOP_N,
     min_per_stratum: int = DEFAULT_MIN_PER_STRATUM,
     total: int = DEFAULT_TOTAL,
+    split: str = DEFAULT_SPLIT,
+    selection_mode: str = DEFAULT_SELECTION_MODE,
+    multiturn_status: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, int]:
-    """Build metadata-only review queues from private calibration cases."""
+    """Build metadata-only review queues from one private product split."""
 
     _validate_options(
         input_path,
@@ -173,6 +198,9 @@ def build_review_exports(
         top_n=top_n,
         min_per_stratum=min_per_stratum,
         total=total,
+        split=split,
+        selection_mode=selection_mode,
+        multiturn_status=multiturn_status,
     )
     if not overwrite:
         existing = [
@@ -185,21 +213,46 @@ def build_review_exports(
                 "Review output already exists; use explicit overwrite: "
                 + ", ".join(str(path) for path in existing)
             )
-    cases = read_calibration_cases(input_path)
-    strata = _build_top_strata(cases, top_n=top_n)
-    selected = _select_cases(
-        strata,
-        min_per_stratum=min_per_stratum,
-        total=total,
+    source_cases = read_calibration_cases(input_path, expected_split=split)
+    cases = [
+        case
+        for case in source_cases
+        if multiturn_status is None or case.multiturn_status == multiturn_status
+    ]
+    if not cases:
+        raise ValueError("No cases remain after the multiturn_status filter")
+    all_strata = _build_top_strata(cases, top_n=len(cases))
+    strata = all_strata[:top_n]
+    if selection_mode == "profile_route_frequency":
+        if min_per_stratum != 0:
+            raise ValueError(
+                "profile_route_frequency requires min_per_stratum=0"
+            )
+        selected = _select_cases_by_profile_route(cases, total=total)
+        manifest_strata = all_strata
+        summary_strata = all_strata
+    else:
+        selected = _select_cases(
+            strata,
+            min_per_stratum=min_per_stratum,
+            total=total,
+            selection_mode=selection_mode,
+        )
+        manifest_strata = strata
+        summary_strata = strata
+    summary_rows = _build_summary_rows(
+        summary_strata,
+        selected,
+        total_cases=len(cases),
     )
-    summary_rows = _build_summary_rows(strata, selected, total_cases=len(cases))
-    manifest_rows = _build_manifest_rows(strata, selected)
+    manifest_rows = _build_manifest_rows(manifest_strata, selected)
 
     _write_csv(summary_path, SUMMARY_FIELDS, summary_rows, overwrite=overwrite)
     _write_csv(manifest_path, MANIFEST_FIELDS, manifest_rows, overwrite=overwrite)
 
     return {
-        "input_cases": len(cases),
+        "input_cases": len(source_cases),
+        "eligible_cases": len(cases),
         "strata_total": len({case.stratum for case in cases}),
         "top_strata": len(strata),
         "selected_cases": len(selected),
@@ -209,7 +262,11 @@ def build_review_exports(
     }
 
 
-def read_calibration_cases(path: Path) -> list[ReviewCase]:
+def read_calibration_cases(
+    path: Path,
+    *,
+    expected_split: str = DEFAULT_SPLIT,
+) -> list[ReviewCase]:
     cases: list[ReviewCase] = []
     seen_case_ids: set[str] = set()
     try:
@@ -227,7 +284,11 @@ def read_calibration_cases(path: Path) -> list[ReviewCase]:
                 raise ValueError(f"Invalid JSON object at line {line_number}") from None
             if not isinstance(payload, dict):
                 raise ValueError(f"Line {line_number} must contain a JSON object")
-            case = _case_from_payload(payload, line_number=line_number)
+            case = _case_from_payload(
+                payload,
+                line_number=line_number,
+                expected_split=expected_split,
+            )
             if case.case_id_hash in seen_case_ids:
                 raise ValueError(f"Duplicate ticket_id_hash at line {line_number}")
             seen_case_ids.add(case.case_id_hash)
@@ -238,9 +299,16 @@ def read_calibration_cases(path: Path) -> list[ReviewCase]:
     return cases
 
 
-def _case_from_payload(payload: dict[str, Any], *, line_number: int) -> ReviewCase:
-    if payload.get("split") != "calibration":
-        raise ValueError(f"Non-calibration case at line {line_number}")
+def _case_from_payload(
+    payload: dict[str, Any],
+    *,
+    line_number: int,
+    expected_split: str = DEFAULT_SPLIT,
+) -> ReviewCase:
+    if payload.get("split") != expected_split:
+        raise ValueError(
+            f"Case at line {line_number} does not belong to split {expected_split!r}"
+        )
     for flag in ("operator_answer_included", "operator_answer_used_as_fact"):
         if flag not in payload:
             raise ValueError(f"Missing required safety flag {flag!r} at line {line_number}")
@@ -371,6 +439,7 @@ def _select_cases(
     *,
     min_per_stratum: int,
     total: int,
+    selection_mode: str = DEFAULT_SELECTION_MODE,
 ) -> list[ReviewCase]:
     minimum_by_key = {
         stratum.key: min(min_per_stratum, len(stratum.representatives))
@@ -453,8 +522,13 @@ def _select_cases(
             if (stratum.key, case.duplicate_cluster_id) not in selected_keys
         ]
         for ordinal, case in enumerate(remaining, start=1):
+            weight = (
+                len(stratum.cases)
+                if selection_mode == "frequency"
+                else stratum.weight
+            )
             extra_candidates.append(
-                (Fraction(stratum.weight, ordinal), stratum.rank, case)
+                (Fraction(weight, ordinal), stratum.rank, case)
             )
     extra_candidates.sort(
         key=lambda item: (
@@ -477,6 +551,235 @@ def _select_cases(
     if len(selected) != target:
         raise ValueError("Could not reach target with globally unique duplicate clusters")
     return sorted(selected, key=lambda case: _selected_sort_key(case, strata))
+
+
+def _select_cases_by_profile_route(
+    cases: list[ReviewCase],
+    *,
+    total: int,
+) -> list[ReviewCase]:
+    """Select a deterministic traffic-weighted sample without risk oversampling.
+
+    Exact Hamilton margins are fixed independently for profile and route.
+    A bounded dynamic program then finds the closest joint allocation that
+    satisfies both margins and every observed profile-route cell capacity.
+    """
+
+    grouped: dict[tuple[str, str], list[ReviewCase]] = defaultdict(list)
+    for case in cases:
+        grouped[(case.stratum.aspect, case.expected_route)].append(case)
+
+    available_unique = {case.duplicate_cluster_id for case in cases}
+    if len(available_unique) != len(cases):
+        raise ValueError(
+            "profile_route_frequency requires one case per duplicate cluster"
+        )
+    target = min(total, len(cases))
+    representatives: dict[tuple[str, str], list[ReviewCase]] = {}
+    for key, group_cases in sorted(grouped.items()):
+        representatives_by_cluster: dict[str, ReviewCase] = {}
+        for case in sorted(
+            group_cases,
+            key=lambda item: (
+                item.case_id_hash,
+                item.duplicate_cluster_id,
+            ),
+        ):
+            representatives_by_cluster.setdefault(case.duplicate_cluster_id, case)
+        representatives[key] = list(representatives_by_cluster.values())
+
+    quotas = _balanced_profile_route_quotas(
+        representatives,
+        target=target,
+        population=len(cases),
+    )
+
+    selected = [
+        case
+        for key in sorted(representatives)
+        for case in representatives[key][: quotas.get(key, 0)]
+    ]
+    if len(selected) != target:
+        raise ValueError("Profile-route quota produced an incomplete selection")
+    return sorted(
+        selected,
+        key=lambda case: (
+            case.stratum.aspect,
+            case.expected_route,
+            case.case_id_hash,
+        ),
+    )
+
+
+def _balanced_profile_route_quotas(
+    representatives: dict[tuple[str, str], list[ReviewCase]],
+    *,
+    target: int,
+    population: int,
+) -> dict[tuple[str, str], int]:
+    """Round a profile-route matrix while preserving both exact margins."""
+
+    cell_sizes = {
+        key: len(group_cases)
+        for key, group_cases in representatives.items()
+    }
+    profiles = sorted({profile for profile, _ in cell_sizes})
+    routes = sorted({route for _, route in cell_sizes})
+    profile_sizes = {
+        profile: sum(
+            cell_sizes.get((profile, route), 0)
+            for route in routes
+        )
+        for profile in profiles
+    }
+    route_sizes = {
+        route: sum(
+            cell_sizes.get((profile, route), 0)
+            for profile in profiles
+        )
+        for route in routes
+    }
+    if sum(cell_sizes.values()) != population:
+        raise ValueError("Profile-route cells do not cover the full population")
+
+    profile_quotas = _hamilton_quotas(profile_sizes, target=target)
+    route_quotas = _hamilton_quotas(route_sizes, target=target)
+    zero_state = tuple(0 for _ in routes)
+    # State value is the scaled squared joint-cell error plus the flattened
+    # allocation path. The path is the deterministic final tie-break.
+    states: dict[tuple[int, ...], tuple[int, tuple[int, ...]]] = {
+        zero_state: (0, ())
+    }
+    for profile in profiles:
+        capacities = tuple(
+            cell_sizes.get((profile, route), 0)
+            for route in routes
+        )
+        allocations = tuple(
+            _bounded_row_allocations(
+                capacities,
+                total=profile_quotas[profile],
+            )
+        )
+        if not allocations:
+            raise ValueError(
+                f"Profile quota is infeasible for {profile!r}"
+            )
+        next_states: dict[tuple[int, ...], tuple[int, tuple[int, ...]]] = {}
+        for state, (score, path) in states.items():
+            for allocation in allocations:
+                next_state = tuple(
+                    current + increment
+                    for current, increment in zip(
+                        state,
+                        allocation,
+                        strict=True,
+                    )
+                )
+                if any(
+                    value > route_quotas[route]
+                    for value, route in zip(
+                        next_state,
+                        routes,
+                        strict=True,
+                    )
+                ):
+                    continue
+                row_score = sum(
+                    (
+                        allocated * population
+                        - cell_sizes.get((profile, route), 0) * target
+                    )
+                    ** 2
+                    for allocated, route in zip(
+                        allocation,
+                        routes,
+                        strict=True,
+                    )
+                )
+                candidate = (score + row_score, path + allocation)
+                current = next_states.get(next_state)
+                if current is None or candidate < current:
+                    next_states[next_state] = candidate
+        states = next_states
+        if not states:
+            raise ValueError("Profile-route margins are jointly infeasible")
+
+    final_state = tuple(route_quotas[route] for route in routes)
+    final = states.get(final_state)
+    if final is None:
+        raise ValueError("Could not satisfy exact profile and route margins")
+
+    path = final[1]
+    quotas: dict[tuple[str, str], int] = {}
+    offset = 0
+    for profile in profiles:
+        for route in routes:
+            quotas[(profile, route)] = path[offset]
+            offset += 1
+    return quotas
+
+
+def _bounded_row_allocations(
+    capacities: tuple[int, ...],
+    *,
+    total: int,
+) -> list[tuple[int, ...]]:
+    """Enumerate deterministic bounded integer rows with an exact sum."""
+
+    allocations: list[tuple[int, ...]] = []
+
+    def visit(index: int, remaining: int, prefix: tuple[int, ...]) -> None:
+        if index == len(capacities):
+            if remaining == 0:
+                allocations.append(prefix)
+            return
+        capacity = capacities[index]
+        later_capacity = sum(capacities[index + 1 :])
+        lower = max(0, remaining - later_capacity)
+        upper = min(capacity, remaining)
+        for value in range(lower, upper + 1):
+            visit(index + 1, remaining - value, prefix + (value,))
+
+    visit(0, total, ())
+    return allocations
+
+
+def _hamilton_quotas(
+    group_sizes: dict[str, int] | Counter[str],
+    *,
+    target: int,
+) -> dict[str, int]:
+    """Allocate an exact integer target by largest proportional remainders."""
+
+    population = sum(group_sizes.values())
+    if target < 0 or target > population:
+        raise ValueError("Hamilton target must fit the available population")
+    if population == 0:
+        if target:
+            raise ValueError("Cannot allocate a non-zero empty population")
+        return {}
+
+    quotas: dict[str, int] = {}
+    remainders: list[tuple[Fraction, str]] = []
+    for key, size in sorted(group_sizes.items()):
+        exact = Fraction(size * target, population)
+        base = exact.numerator // exact.denominator
+        quotas[key] = base
+        remainders.append((exact - base, key))
+
+    remaining = target - sum(quotas.values())
+    remainders.sort(key=lambda item: (-item[0], item[1]))
+    for _, key in remainders:
+        if remaining <= 0:
+            break
+        if quotas[key] >= group_sizes[key]:
+            continue
+        quotas[key] += 1
+        remaining -= 1
+    if remaining:
+        raise ValueError("Could not allocate complete Hamilton quota")
+    return quotas
 
 
 def _build_summary_rows(
@@ -546,6 +849,16 @@ def _build_manifest_rows(
                 "corrected_intent": "",
                 "corrected_aspect": "",
                 "corrected_entity_class": "",
+                "corrected_route": "",
+                "corrected_escalation_reason": "",
+                "deidentified_query": "",
+                "privacy_verdict": "",
+                "date_privacy_verdict": "",
+                "review_workbook_sha256": "",
+                "review_source_sha256": "",
+                "review_selection_sha256": "",
+                "review_freeze_contract_sha256": "",
+                "review_payload_sha256": "",
                 "answerable_from_snapshot": _csv_nullable_bool(
                     case.answerable_from_snapshot
                 ),
@@ -553,6 +866,8 @@ def _build_manifest_rows(
                 "approved_kb_seed_sha256": "",
                 "forbidden_profiles": "|".join(case.forbidden_profiles),
                 "include_in_calibration": "",
+                "include_in_validation": "",
+                "include_in_holdout": "",
             }
         )
     return rows
@@ -803,20 +1118,34 @@ def _write_csv(
     if path.exists() and not overwrite:
         raise ValueError(f"Review output already exists: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=list(fieldnames),
-            extrasaction="raise",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-    if path.exists() and not overwrite:
-        temp_path.unlink(missing_ok=True)
-        raise ValueError(f"Review output already exists: {path}")
-    temp_path.replace(path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(
+            descriptor,
+            "w",
+            encoding="utf-8-sig",
+            newline="",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(fieldnames),
+                extrasaction="raise",
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+            file.flush()
+            os.fsync(file.fileno())
+        if path.exists() and not overwrite:
+            raise ValueError(f"Review output already exists: {path}")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _validate_options(
@@ -827,13 +1156,27 @@ def _validate_options(
     top_n: int,
     min_per_stratum: int,
     total: int,
+    split: str,
+    selection_mode: str,
+    multiturn_status: str | None,
 ) -> None:
     if top_n <= 0:
         raise ValueError("top_n must be positive")
-    if min_per_stratum <= 0:
-        raise ValueError("min_per_stratum must be positive")
+    if min_per_stratum < 0:
+        raise ValueError("min_per_stratum must be non-negative")
     if total <= 0:
         raise ValueError("total must be positive")
+    if split not in _SAFE_SPLITS:
+        raise ValueError(f"Unsupported product split: {split!r}")
+    if selection_mode not in _SAFE_SELECTION_MODES:
+        raise ValueError(f"Unsupported selection mode: {selection_mode!r}")
+    if (
+        multiturn_status is not None
+        and multiturn_status not in {"single_turn", "multi_turn"}
+    ):
+        raise ValueError(
+            "multiturn_status must be 'single_turn', 'multi_turn', or None"
+        )
     resolved = {
         input_path.resolve(),
         summary_path.resolve(),
@@ -866,6 +1209,21 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MIN_PER_STRATUM,
     )
     parser.add_argument("--total", type=int, default=DEFAULT_TOTAL)
+    parser.add_argument(
+        "--split",
+        choices=sorted(_SAFE_SPLITS),
+        default=DEFAULT_SPLIT,
+    )
+    parser.add_argument(
+        "--selection-mode",
+        choices=sorted(_SAFE_SELECTION_MODES),
+        default=DEFAULT_SELECTION_MODE,
+    )
+    parser.add_argument(
+        "--multiturn-status",
+        choices=("single_turn", "multi_turn"),
+        help="Optionally restrict the eligible population before sampling.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -881,6 +1239,9 @@ def main() -> None:
         top_n=args.top_n,
         min_per_stratum=args.min_per_stratum,
         total=args.total,
+        split=args.split,
+        selection_mode=args.selection_mode,
+        multiturn_status=args.multiturn_status,
         overwrite=args.overwrite,
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))

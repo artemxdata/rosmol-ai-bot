@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -54,15 +55,28 @@ MANIFEST_FIELDS = (
     "corrected_intent",
     "corrected_aspect",
     "corrected_entity_class",
+    "corrected_route",
+    "corrected_escalation_reason",
+    "deidentified_query",
+    "privacy_verdict",
+    "date_privacy_verdict",
+    "review_workbook_sha256",
+    "review_source_sha256",
+    "review_selection_sha256",
+    "review_freeze_contract_sha256",
+    "review_payload_sha256",
     "answerable_from_snapshot",
     "approved_chunk_ids",
     "approved_kb_seed_sha256",
     "forbidden_profiles",
     "include_in_calibration",
+    "include_in_validation",
+    "include_in_holdout",
 )
 
 STATS_FIELDS = {
     "input_cases",
+    "eligible_cases",
     "strata_total",
     "top_strata",
     "selected_cases",
@@ -94,6 +108,7 @@ def _case(
     split: str = "calibration",
     operator_answer_included: bool = False,
     operator_answer_used_as_fact: bool = False,
+    multiturn_status: str = "single_turn",
 ) -> dict[str, object]:
     ticket_id_hash = _digest(f"ticket:{label}")
     return {
@@ -130,6 +145,7 @@ def _case(
         "requires_human_review": True,
         "operator_answer_included": operator_answer_included,
         "operator_answer_used_as_fact": operator_answer_used_as_fact,
+        "multiturn_status": multiturn_status,
     }
 
 
@@ -157,6 +173,9 @@ def _build(
     top_n: int = 20,
     min_per_stratum: int = 10,
     total: int = 300,
+    split: str = "calibration",
+    selection_mode: str = "frequency_risk",
+    multiturn_status: str | None = None,
 ) -> tuple[dict[str, int], Path, Path]:
     input_path = tmp_path / f"{prefix}.jsonl"
     summary_path = tmp_path / f"{prefix}_summary.csv"
@@ -169,6 +188,9 @@ def _build(
         top_n=top_n,
         min_per_stratum=min_per_stratum,
         total=total,
+        split=split,
+        selection_mode=selection_mode,
+        multiturn_status=multiturn_status,
     )
     return stats, summary_path, manifest_path
 
@@ -179,6 +201,9 @@ def test_build_review_exports_defaults_are_product_review_contract() -> None:
     assert parameters["top_n"].default == 20
     assert parameters["min_per_stratum"].default == 10
     assert parameters["total"].default == 300
+    assert parameters["split"].default == "calibration"
+    assert parameters["selection_mode"].default == "frequency_risk"
+    assert parameters["multiturn_status"].default is None
     assert parameters["overwrite"].default is False
 
 
@@ -207,6 +232,7 @@ def test_build_review_exports_writes_top20_metadata_only(tmp_path: Path) -> None
     assert set(stats) == STATS_FIELDS
     assert stats == {
         "input_cases": 231,
+        "eligible_cases": 231,
         "strata_total": 21,
         "top_strata": 20,
         "selected_cases": 20,
@@ -415,7 +441,7 @@ def test_weighted_top_up_is_deterministic_and_prioritizes_frequency_and_risk(
 
 
 def test_build_review_exports_rejects_non_calibration_case(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="calibration"):
+    with pytest.raises(ValueError, match="split 'calibration'"):
         _build(
             tmp_path,
             [
@@ -423,6 +449,365 @@ def test_build_review_exports_rejects_non_calibration_case(tmp_path: Path) -> No
                 _case("holdout", split="holdout"),
             ],
         )
+
+
+def test_build_review_exports_supports_frequency_weighted_holdout(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        *[
+            _case(
+                f"generic-{index}",
+                split="holdout",
+                category="другое",
+                topic="прочее",
+                aspect="generic",
+            )
+            for index in range(12)
+        ],
+        *[
+            _case(
+                f"application-{index}",
+                split="holdout",
+                category="платформа_фгаис",
+                topic="регистрация_и_заявка",
+                aspect="application",
+            )
+            for index in range(4)
+        ],
+        _case(
+            "accessibility",
+            split="holdout",
+            category="форумы",
+            topic="доступность",
+            aspect="accessibility",
+        ),
+    ]
+
+    stats, _, manifest_path = _build(
+        tmp_path,
+        cases,
+        top_n=3,
+        min_per_stratum=0,
+        total=8,
+        split="holdout",
+        selection_mode="frequency",
+    )
+    _, manifest = _read_csv(manifest_path)
+    selected_profiles = [row["aspect"] for row in manifest]
+
+    assert stats["selected_cases"] == 8
+    assert selected_profiles.count("generic") == 6
+    assert selected_profiles.count("application") == 2
+    assert "accessibility" not in selected_profiles
+    assert len({row["duplicate_cluster_id"] for row in manifest}) == 8
+
+
+def test_profile_route_frequency_matches_traffic_without_risk_oversampling(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        *[
+            _case(
+                f"generic-answer-{index}",
+                split="holdout",
+                category="другое",
+                topic=f"generic_{index % 4}",
+                aspect="generic",
+            )
+            for index in range(12)
+        ],
+        *[
+            _case(
+                f"application-answer-{index}",
+                split="holdout",
+                category="платформа_фгаис",
+                topic=f"application_{index % 2}",
+                aspect="application",
+            )
+            for index in range(4)
+        ],
+        _case(
+            "technical-escalate",
+            split="holdout",
+            category="техподдержка",
+            topic="technical",
+            aspect="technical",
+            route="escalate",
+            time_sensitive=True,
+        ),
+    ]
+
+    stats, _, manifest_path = _build(
+        tmp_path,
+        cases,
+        top_n=7,
+        min_per_stratum=0,
+        total=8,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+    )
+    _, manifest = _read_csv(manifest_path)
+    selected = Counter(
+        (row["aspect"], row["expected_route"])
+        for row in manifest
+    )
+
+    assert stats["selected_cases"] == 8
+    assert selected == {
+        ("generic", "answer"): 6,
+        ("application", "answer"): 2,
+    }
+    assert len({row["duplicate_cluster_id"] for row in manifest}) == 8
+
+
+def test_profile_route_frequency_preserves_route_share_before_profile_rounding(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        *[
+            _case(
+                f"generic-answer-{index}",
+                split="holdout",
+                category="другое",
+                topic=f"generic_{index % 3}",
+                aspect="generic",
+            )
+            for index in range(12)
+        ],
+        *[
+            _case(
+                f"application-answer-{index}",
+                split="holdout",
+                category="платформа_фгаис",
+                topic="application",
+                aspect="application",
+            )
+            for index in range(4)
+        ],
+        *[
+            _case(
+                f"technical-escalate-{index}",
+                split="holdout",
+                category="техподдержка",
+                topic="technical",
+                aspect="technical",
+                route="escalate",
+                time_sensitive=True,
+            )
+            for index in range(4)
+        ],
+    ]
+
+    stats, _, manifest_path = _build(
+        tmp_path,
+        cases,
+        top_n=8,
+        min_per_stratum=0,
+        total=10,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+    )
+    _, manifest = _read_csv(manifest_path)
+    selected_routes = Counter(row["expected_route"] for row in manifest)
+
+    assert stats["selected_cases"] == 10
+    assert selected_routes == {"answer": 8, "escalate": 2}
+    assert len({row["duplicate_cluster_id"] for row in manifest}) == 10
+
+
+def test_profile_route_frequency_preserves_both_realistic_holdout_margins(
+    tmp_path: Path,
+) -> None:
+    cell_counts = {
+        ("accessibility", "answer"): 1,
+        ("accommodation", "answer"): 3,
+        ("application", "answer"): 19,
+        ("application", "escalate"): 1,
+        ("dates", "answer"): 13,
+        ("documents", "answer"): 13,
+        ("documents", "escalate"): 3,
+        ("eligibility", "answer"): 6,
+        ("food", "answer"): 6,
+        ("generic", "answer"): 33,
+        ("generic", "escalate"): 2,
+        ("grants", "answer"): 13,
+        ("grants", "escalate"): 1,
+        ("program", "answer"): 5,
+        ("program", "escalate"): 1,
+        ("selection_status", "answer"): 39,
+        ("selection_status", "escalate"): 1,
+        ("technical", "answer"): 8,
+        ("technical", "escalate"): 9,
+        ("travel", "answer"): 7,
+        ("travel", "escalate"): 1,
+    }
+    cases = [
+        _case(
+            f"{profile}-{route}-{index}",
+            split="holdout",
+            category="форумы",
+            topic=f"{profile}_{route}",
+            aspect=profile,
+            route=route,
+        )
+        for (profile, route), count in cell_counts.items()
+        for index in range(count)
+    ]
+
+    stats, _, manifest_path = _build(
+        tmp_path,
+        cases,
+        top_n=1,
+        min_per_stratum=0,
+        total=80,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+    )
+    _, manifest = _read_csv(manifest_path)
+    selected_profiles = Counter(row["aspect"] for row in manifest)
+    selected_routes = Counter(row["expected_route"] for row in manifest)
+
+    assert stats["input_cases"] == 185
+    assert stats["eligible_cases"] == 185
+    assert stats["top_strata"] == 1
+    assert stats["summary_rows"] == len(cell_counts)
+    assert stats["manifest_rows"] == 80
+    assert selected_routes == {"answer": 72, "escalate": 8}
+    assert "accessibility" not in selected_profiles
+    assert selected_profiles == {
+        "accommodation": 1,
+        "application": 9,
+        "dates": 6,
+        "documents": 7,
+        "eligibility": 3,
+        "food": 3,
+        "generic": 15,
+        "grants": 6,
+        "program": 3,
+        "selection_status": 17,
+        "technical": 7,
+        "travel": 3,
+    }
+    _, summary = _read_csv(tmp_path / "review_summary.csv")
+    assert sum(int(row["review_quota"]) for row in summary) == 80
+
+
+def test_multiturn_filter_is_applied_before_sampling(tmp_path: Path) -> None:
+    cases = [
+        _case(
+            f"single-{index}",
+            split="holdout",
+            multiturn_status="single_turn",
+        )
+        for index in range(4)
+    ]
+    cases.extend(
+        _case(
+            f"multi-{index}",
+            split="holdout",
+            multiturn_status="multi_turn",
+        )
+        for index in range(2)
+    )
+
+    stats, _, manifest_path = _build(
+        tmp_path,
+        cases,
+        total=3,
+        min_per_stratum=0,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+        multiturn_status="single_turn",
+    )
+    _, manifest = _read_csv(manifest_path)
+
+    assert stats["input_cases"] == 6
+    assert stats["eligible_cases"] == 4
+    assert stats["selected_cases"] == 3
+    assert {row["multiturn_status"] for row in manifest} == {"single_turn"}
+    selected_ids = {row["case_id_hash"] for row in manifest}
+    assert selected_ids.isdisjoint(
+        {
+            str(case["ticket_id_hash"])
+            for case in cases
+            if case["multiturn_status"] == "multi_turn"
+        }
+    )
+
+
+def test_multiturn_filter_rejects_unknown_status(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="multiturn_status must be"):
+        _build(
+            tmp_path,
+            [_case("one")],
+            total=1,
+            min_per_stratum=1,
+            multiturn_status="unknown",
+        )
+
+
+def test_profile_route_frequency_is_order_and_risk_invariant(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        *[
+            _case(
+                f"generic-answer-{index}",
+                split="holdout",
+                category="другое",
+                topic="generic",
+                aspect="generic",
+            )
+            for index in range(20)
+        ],
+        *[
+            _case(
+                f"technical-escalate-{index}",
+                split="holdout",
+                category="техподдержка",
+                topic="technical",
+                aspect="technical",
+                route="escalate",
+            )
+            for index in range(5)
+        ],
+    ]
+    changed_risk = [
+        {
+            **case,
+            "time_sensitive": not bool(case["time_sensitive"]),
+            "difficulty": "high",
+        }
+        for case in reversed(cases)
+    ]
+
+    _, _, first_manifest_path = _build(
+        tmp_path,
+        cases,
+        prefix="first",
+        top_n=1,
+        min_per_stratum=0,
+        total=10,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+    )
+    _, _, second_manifest_path = _build(
+        tmp_path,
+        changed_risk,
+        prefix="second",
+        top_n=1,
+        min_per_stratum=0,
+        total=10,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+    )
+    _, first_manifest = _read_csv(first_manifest_path)
+    _, second_manifest = _read_csv(second_manifest_path)
+
+    assert {row["case_id_hash"] for row in first_manifest} == {
+        row["case_id_hash"] for row in second_manifest
+    }
 
 
 @pytest.mark.parametrize(
@@ -467,6 +852,25 @@ def test_build_review_exports_preserves_existing_review_files(
 
     assert summary_path.read_bytes() == summary_before
     assert manifest_path.read_bytes() == manifest_before
+
+
+def test_build_review_exports_does_not_use_predictable_temp_paths(
+    tmp_path: Path,
+) -> None:
+    predictable_summary = tmp_path / "review_summary.csv.tmp"
+    predictable_manifest = tmp_path / "review_manifest.csv.tmp"
+    predictable_summary.write_text("summary sentinel", encoding="utf-8")
+    predictable_manifest.write_text("manifest sentinel", encoding="utf-8")
+
+    _build(
+        tmp_path,
+        [_case("safe-temp")],
+        total=1,
+        min_per_stratum=1,
+    )
+
+    assert predictable_summary.read_text(encoding="utf-8") == "summary sentinel"
+    assert predictable_manifest.read_text(encoding="utf-8") == "manifest sentinel"
 
 
 def test_build_review_exports_rejects_paths_outside_project_private_root(
