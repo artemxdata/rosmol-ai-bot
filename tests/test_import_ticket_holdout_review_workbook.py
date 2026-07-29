@@ -197,6 +197,7 @@ def _review_sheet(
     raw_query: str,
     deidentified_query: str = "Когда пройдёт форум?",
     date_privacy_verdict: str = "event_date_only",
+    reviewed_at: str = "2026-07-29T12:00:00+07:00",
     immutable_overrides: dict[str, str] | None = None,
 ) -> list[SpreadsheetRow]:
     values = {
@@ -228,7 +229,7 @@ def _review_sheet(
         "Date privacy verdict": date_privacy_verdict,
         "Include in holdout": "true",
         "Reviewer": "reviewer@example.test",
-        "Reviewed at ISO + timezone": "2026-07-29T12:00:00+07:00",
+        "Reviewed at ISO + timezone": reviewed_at,
         "Source fingerprint": row["source_case_fingerprint"],
         "Duplicate cluster": row["duplicate_cluster_id"],
         "Review note": "",
@@ -327,6 +328,27 @@ def test_import_binds_receipts_and_excludes_raw_query(
     assert rows[0]["review_payload_sha256"] == ""
     assert "Иван Иванов" not in serialized
     assert "+7 999 000-00-00" not in serialized
+
+
+def test_import_normalizes_excel_review_timestamp_serial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepare(tmp_path)
+    workbook, selection, source, freeze, output, source_case, source_row = prepared
+    _mock_workbook(
+        monkeypatch,
+        row=source_row,
+        raw_query=str(source_case["query"]),
+        reviewed_at="46232.5",
+    )
+
+    _import((workbook, selection, source, freeze, output))
+
+    rows = list(
+        csv.DictReader(output.read_text(encoding="utf-8-sig").splitlines())
+    )
+    assert rows[0]["reviewed_at"] == "2026-07-29T12:00:00Z"
 
 
 def test_import_rejects_raw_query_mutation(

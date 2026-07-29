@@ -8,7 +8,7 @@ import os
 import re
 import tempfile
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -187,6 +187,7 @@ def build_review_exports(
     split: str = DEFAULT_SPLIT,
     selection_mode: str = DEFAULT_SELECTION_MODE,
     multiturn_status: str | None = None,
+    excluded_case_ids: Collection[str] = (),
     overwrite: bool = False,
 ) -> dict[str, int]:
     """Build metadata-only review queues from one private product split."""
@@ -201,6 +202,7 @@ def build_review_exports(
         split=split,
         selection_mode=selection_mode,
         multiturn_status=multiturn_status,
+        excluded_case_ids=excluded_case_ids,
     )
     if not overwrite:
         existing = [
@@ -214,10 +216,18 @@ def build_review_exports(
                 + ", ".join(str(path) for path in existing)
             )
     source_cases = read_calibration_cases(input_path, expected_split=split)
+    normalized_exclusions = _validated_excluded_case_ids(
+        excluded_case_ids,
+        source_cases=source_cases,
+    )
     cases = [
         case
         for case in source_cases
-        if multiturn_status is None or case.multiturn_status == multiturn_status
+        if case.case_id_hash not in normalized_exclusions
+        and (
+            multiturn_status is None
+            or case.multiturn_status == multiturn_status
+        )
     ]
     if not cases:
         raise ValueError("No cases remain after the multiturn_status filter")
@@ -252,6 +262,7 @@ def build_review_exports(
 
     return {
         "input_cases": len(source_cases),
+        "excluded_cases": len(normalized_exclusions),
         "eligible_cases": len(cases),
         "strata_total": len({case.stratum for case in cases}),
         "top_strata": len(strata),
@@ -297,6 +308,22 @@ def read_calibration_cases(
     if not cases:
         raise ValueError("Calibration input is empty")
     return cases
+
+
+def _validated_excluded_case_ids(
+    values: Collection[str],
+    *,
+    source_cases: Collection[ReviewCase],
+) -> frozenset[str]:
+    exclusions = frozenset(str(value).strip() for value in values)
+    source_ids = {case.case_id_hash for case in source_cases}
+    unknown = sorted(exclusions - source_ids)
+    if unknown:
+        raise ValueError(
+            "excluded_case_ids are missing from the source split: "
+            + ", ".join(unknown)
+        )
+    return exclusions
 
 
 def _case_from_payload(
@@ -1159,6 +1186,7 @@ def _validate_options(
     split: str,
     selection_mode: str,
     multiturn_status: str | None,
+    excluded_case_ids: Collection[str],
 ) -> None:
     if top_n <= 0:
         raise ValueError("top_n must be positive")
@@ -1177,6 +1205,11 @@ def _validate_options(
         raise ValueError(
             "multiturn_status must be 'single_turn', 'multi_turn', or None"
         )
+    exclusions = [str(value).strip() for value in excluded_case_ids]
+    if len(exclusions) != len(set(exclusions)):
+        raise ValueError("excluded_case_ids must not contain duplicates")
+    if any(not _HASH_RE.fullmatch(value) for value in exclusions):
+        raise ValueError("excluded_case_ids must contain safe ticket hashes")
     resolved = {
         input_path.resolve(),
         summary_path.resolve(),
@@ -1224,6 +1257,15 @@ def parse_args() -> argparse.Namespace:
         choices=("single_turn", "multi_turn"),
         help="Optionally restrict the eligible population before sampling.",
     )
+    parser.add_argument(
+        "--exclude-case-id",
+        action="append",
+        default=[],
+        help=(
+            "Exclude a pre-run rejected ticket hash before deterministic "
+            "selection. Repeat for multiple hashes."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -1242,6 +1284,7 @@ def main() -> None:
         split=args.split,
         selection_mode=args.selection_mode,
         multiturn_status=args.multiturn_status,
+        excluded_case_ids=args.exclude_case_id,
         overwrite=args.overwrite,
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))

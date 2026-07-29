@@ -34,13 +34,24 @@ PRIVATE_HOLDOUT_SPLIT = "holdout"
 PRIVATE_EVAL_SPLITS = frozenset({"calibration", "validation", PRIVATE_HOLDOUT_SPLIT})
 ALLOWED_PRIVACY_CLASSES = {"standard", PRIVATE_TICKET_DERIVED}
 PRIVATE_EVAL_HOSTS = {"localhost", "127.0.0.1", "::1", "app-ml"}
-HOLDOUT_CONTRACT_SCHEMA_VERSION = "1.0.0"
+HUMAN_REVIEW_MODE = "human_reviewed"
+MODEL_ASSISTED_PRERUN_MODE = "model_assisted_prerun"
+HOLDOUT_REVIEW_MODES = frozenset(
+    {
+        HUMAN_REVIEW_MODE,
+        MODEL_ASSISTED_PRERUN_MODE,
+    }
+)
+HOLDOUT_CONTRACT_SCHEMA_VERSION = "1.1.0"
+MODEL_ASSISTED_REPORT_STATUS = "provisional_model_assisted_prerun"
 EXPECTED_HOLDOUT_CASES_TOTAL = 80
 HOLDOUT_CONTRACT_FIELDS = frozenset(
     {
         "schema_version",
         "baseline_id",
         "runtime_git_sha",
+        "review_mode",
+        "product_verdict_eligible",
         "freeze_contract_sha256",
         "review_manifest_sha256",
         "selected_case_ids_sha256",
@@ -164,16 +175,27 @@ CLARIFICATION_MARKERS = (
 )
 
 
-def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
+def _normalize_case(
+    raw: dict[str, Any],
+    *,
+    allow_model_assisted_prerun: bool = False,
+) -> dict[str, Any]:
     label_status = str(raw.get("label_status") or "").strip().casefold()
     review_flag = raw.get("requires_human_review")
     review_required = review_flag is True or (
         isinstance(review_flag, str)
         and review_flag.strip().casefold() in {"1", "true", "yes"}
     )
-    if review_required or label_status.startswith("weak_"):
+    model_assisted_prerun = label_status == MODEL_ASSISTED_PRERUN_MODE
+    if label_status.startswith("weak_") or (
+        review_required and not model_assisted_prerun
+    ):
         raise ValueError(
             "ask eval cases requiring human review cannot be executed"
+        )
+    if model_assisted_prerun and not allow_model_assisted_prerun:
+        raise ValueError(
+            "model_assisted_prerun requires an explicit runner opt-in"
         )
     query = raw.get("query") or raw.get("question") or raw.get("text")
     if not query:
@@ -188,15 +210,32 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
             f"{', '.join(sorted(ALLOWED_PRIVACY_CLASSES))}"
         )
     if privacy_class == PRIVATE_TICKET_DERIVED:
-        if label_status != "human_reviewed" or review_flag is not False:
+        if label_status == HUMAN_REVIEW_MODE:
+            if review_flag is not False:
+                raise ValueError(
+                    "human-reviewed private_ticket_derived cases require "
+                    "requires_human_review=false"
+                )
+        elif label_status == MODEL_ASSISTED_PRERUN_MODE:
+            if split != PRIVATE_HOLDOUT_SPLIT or review_flag is not True:
+                raise ValueError(
+                    "model_assisted_prerun is only valid for a sealed holdout "
+                    "with requires_human_review=true"
+                )
+        else:
             raise ValueError(
-                "private_ticket_derived cases require an explicit human-reviewed verdict"
+                "private_ticket_derived cases require an explicit "
+                "human-reviewed or model_assisted_prerun verdict"
             )
         if split not in PRIVATE_EVAL_SPLITS:
             raise ValueError(
                 "private_ticket_derived cases require an explicit split: "
                 f"{', '.join(sorted(PRIVATE_EVAL_SPLITS))}"
             )
+    elif model_assisted_prerun:
+        raise ValueError(
+            "model_assisted_prerun requires privacy_class=private_ticket_derived"
+        )
 
     split_holdout = split == PRIVATE_HOLDOUT_SPLIT
     tag_holdout = any(_has_holdout_marker(tag) for tag in tags)
@@ -230,6 +269,10 @@ def _normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     holdout_contract: dict[str, Any] | None = None
     if split_holdout:
         holdout_contract = _normalize_holdout_contract(raw.get("holdout_contract"))
+        if holdout_contract["review_mode"] != label_status:
+            raise ValueError(
+                "holdout_contract review_mode must match case label_status"
+            )
 
     expected_behavior = _normalize_expected_behavior(
         raw.get("expected_behavior")
@@ -358,6 +401,23 @@ def _normalize_holdout_contract(value: Any) -> dict[str, Any]:
         raise ValueError(
             "holdout_contract runtime_git_sha must be a full lowercase 40-hex SHA"
         )
+    review_mode = str(value["review_mode"] or "").strip().casefold()
+    if review_mode not in HOLDOUT_REVIEW_MODES:
+        raise ValueError(
+            "holdout_contract review_mode must be one of: "
+            + ", ".join(sorted(HOLDOUT_REVIEW_MODES))
+        )
+    product_verdict_eligible = value["product_verdict_eligible"]
+    if not isinstance(product_verdict_eligible, bool):
+        raise ValueError(
+            "holdout_contract product_verdict_eligible must be boolean"
+        )
+    if product_verdict_eligible is not (
+        review_mode == HUMAN_REVIEW_MODE
+    ):
+        raise ValueError(
+            "holdout_contract product_verdict_eligible conflicts with review_mode"
+        )
 
     hashes: dict[str, str] = {}
     for field in (
@@ -394,6 +454,8 @@ def _normalize_holdout_contract(value: Any) -> dict[str, Any]:
         "schema_version": schema_version,
         "baseline_id": baseline_id,
         "runtime_git_sha": runtime_git_sha,
+        "review_mode": review_mode,
+        "product_verdict_eligible": product_verdict_eligible,
         **hashes,
         "cases_total": cases_total,
         "execution_allowed": True,
@@ -494,8 +556,13 @@ async def run_eval(
     expected_cases_payload_sha256: str | None = None,
     expected_cases_file_sha256: str | None = None,
     holdout_ledger_dir: Path | None = None,
+    allow_model_assisted_prerun: bool = False,
 ) -> dict[str, Any]:
     eval_run_id = f"ask-eval-{uuid4()}"
+    if allow_model_assisted_prerun and not sealed_holdout:
+        raise ValueError(
+            "allow_model_assisted_prerun requires sealed_holdout mode"
+        )
     _guard_eval_artifact_aliases(
         cases_path=cases_path,
         output_path=output_path,
@@ -512,6 +579,7 @@ async def run_eval(
         auto_smoke_cases=auto_smoke_cases,
         max_smoke_cases=max_smoke_cases,
         user_prefix=generated_user_prefix or _default_generated_user_prefix("ask-eval"),
+        allow_model_assisted_prerun=allow_model_assisted_prerun,
     )
     holdout_contract = _validate_holdout_run_contract(
         cases,
@@ -522,6 +590,16 @@ async def run_eval(
             "holdout contract cases and explicit sealed_holdout mode are required "
             "together"
         )
+    if holdout_contract is not None:
+        model_assisted_contract = (
+            holdout_contract["review_mode"]
+            == MODEL_ASSISTED_PRERUN_MODE
+        )
+        if model_assisted_contract != allow_model_assisted_prerun:
+            raise ValueError(
+                "model_assisted_prerun contract and explicit runner opt-in "
+                "must be used together"
+            )
     if not sealed_holdout and (
         expected_holdout_freeze_sha256 is not None
         or expected_cases_payload_sha256 is not None
@@ -940,6 +1018,9 @@ async def run_eval(
     metrics["eval_run_id"] = eval_run_id
     if holdout_contract is not None:
         metrics["holdout_contract"] = holdout_contract
+        metrics["report_classification"] = _holdout_report_classification(
+            holdout_contract
+        )
     _apply_run_limits(
         metrics,
         original_cases_total=original_cases_total,
@@ -966,6 +1047,7 @@ async def run_eval(
         metrics["holdout_run"] = {
             "status": status,
             "completed": not holdout_failures,
+            **_holdout_report_classification(holdout_contract),
             "expected_cases_total": holdout_contract["cases_total"],
             "executed_cases_total": executed_cases_total,
             "expected_cases_file_sha256": expected_file_sha256,
@@ -1404,6 +1486,34 @@ def _derive_holdout_receipt_key(selected_case_ids_sha256: str) -> str:
     ).hexdigest()
 
 
+def _holdout_report_classification(
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    review_mode = str(contract["review_mode"])
+    provisional = review_mode == MODEL_ASSISTED_PRERUN_MODE
+    return {
+        "review_mode": review_mode,
+        "report_status": (
+            MODEL_ASSISTED_REPORT_STATUS
+            if provisional
+            else "sealed_human_reviewed_prerun_diagnostic"
+        ),
+        "provisional": provisional,
+        "product_verdict_eligible": bool(
+            contract["product_verdict_eligible"]
+        ),
+        "human_product_verdict": False,
+        "measurement_disclaimer": (
+            "Diagnostic only. Model-assisted pre-run labels were not "
+            "human-reviewed and cannot be reported as product conversion "
+            "or a human product verdict."
+            if provisional
+            else "Machine diagnostics require a separate human post-run "
+            "product verdict."
+        ),
+    }
+
+
 def _create_holdout_started_receipt(
     path: Path,
     *,
@@ -1421,6 +1531,7 @@ def _create_holdout_started_receipt(
         "baseline_id": contract["baseline_id"],
         "eval_run_id": eval_run_id,
         "runtime_git_sha": contract["runtime_git_sha"],
+        **_holdout_report_classification(contract),
         "freeze_contract_sha256": contract["freeze_contract_sha256"],
         "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
         "cases_payload_sha256": contract["cases_payload_sha256"],
@@ -1456,6 +1567,7 @@ def _create_holdout_completed_receipt(
         "eval_run_id": eval_run_id,
         "receipt_key": receipt_key,
         "runtime_git_sha": contract["runtime_git_sha"],
+        **_holdout_report_classification(contract),
         "freeze_contract_sha256": contract["freeze_contract_sha256"],
         "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
         "cases_payload_sha256": contract["cases_payload_sha256"],
@@ -1502,6 +1614,9 @@ async def _write_holdout_rejection_report(
     metrics["cases_total"] = executed_cases_total
     metrics["message"] = "sealed holdout rejected before valid completion"
     metrics["holdout_contract"] = contract
+    metrics["report_classification"] = _holdout_report_classification(
+        contract
+    )
     if trace_lookup_error:
         metrics["trace_lookup_error"] = trace_lookup_error
     if detail:
@@ -1512,6 +1627,7 @@ async def _write_holdout_rejection_report(
     metrics["holdout_run"] = {
         "status": status,
         "completed": False,
+        **_holdout_report_classification(contract),
         "expected_cases_total": contract["cases_total"],
         "executed_cases_total": executed_cases_total,
         "cases_file_sha256": expected_cases_file_sha256,
@@ -2120,6 +2236,7 @@ async def _load_cases(
     auto_smoke_cases: bool,
     max_smoke_cases: int,
     user_prefix: str,
+    allow_model_assisted_prerun: bool = False,
 ) -> tuple[list[dict[str, Any]], bool, str | None, str | None]:
     raw_cases: list[dict[str, Any]] = []
     generated_smoke_cases = False
@@ -2143,7 +2260,13 @@ async def _load_cases(
         )
         else None
     )
-    cases = [_normalize_case(item) for item in raw_cases]
+    cases = [
+        _normalize_case(
+            item,
+            allow_model_assisted_prerun=allow_model_assisted_prerun,
+        )
+        for item in raw_cases
+    ]
     if not any(case.get("split") == PRIVATE_HOLDOUT_SPLIT for case in cases):
         cases = _apply_user_prefix(cases, user_prefix=user_prefix)
     if not cases and auto_smoke_cases:
@@ -2503,6 +2626,22 @@ def _markdown_text(metrics: dict[str, Any]) -> str:
     lines = [
         "# Ask Eval Report",
         "",
+    ]
+    report_classification = metrics.get("report_classification") or {}
+    if report_classification.get("provisional") is True:
+        lines.extend(
+            [
+                "> [!WARNING]",
+                "> PROVISIONAL MODEL-ASSISTED PRE-RUN DIAGNOSTIC.",
+                "> The pre-run labels were produced with model assistance, "
+                "not human review.",
+                "> This report must not be reported as product conversion or "
+                "a human product verdict.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         f"- Generated: `{metrics.get('generated_at')}`",
         f"- Target: `{metrics.get('target')}`",
         f"- Cases: `{metrics.get('cases_total')}`",
@@ -2537,7 +2676,8 @@ def _markdown_text(metrics: dict[str, Any]) -> str:
         "",
         "| Metric | HTTP ms | Trace ms |",
         "|---|---:|---:|",
-    ]
+        ]
+    )
     failure_counts = metrics.get("failure_reason_counts") or {}
     if failure_counts:
         lines.extend(["", "## Failure Reasons", ""])
@@ -2763,6 +2903,15 @@ def main() -> None:
         help="Enable the one-shot sealed 80-case private holdout protocol.",
     )
     parser.add_argument(
+        "--allow-model-assisted-prerun",
+        action="store_true",
+        help=(
+            "Allow a sealed private holdout whose pre-run labels were "
+            "model-assisted. The report remains provisional and cannot be "
+            "used as a human product verdict."
+        ),
+    )
+    parser.add_argument(
         "--expected-holdout-freeze-sha256",
         default="",
         help="Externally supplied frozen holdout contract SHA-256.",
@@ -2837,6 +2986,7 @@ def main() -> None:
                 if args.holdout_ledger_dir
                 else None
             ),
+            allow_model_assisted_prerun=args.allow_model_assisted_prerun,
         )
     )
     quality_gate_failures = _quality_gate_failures(

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import zipfile
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,13 @@ _REQUIRED_MANIFEST_FIELDS = frozenset(
         "time_bucket",
     }
 )
+_ALLOWED_PRE_RUN_EXCLUSION_REASONS = frozenset(
+    {
+        "not_user_turn",
+        "residual_pii",
+        "unsafe_composite",
+    }
+)
 
 
 def freeze_holdout_selection(
@@ -83,6 +91,7 @@ def freeze_holdout_selection(
     expected_total: int = 80,
     expected_route_counts: dict[str, int] | None = None,
     expected_profile_counts: dict[str, int] | None = None,
+    pre_run_exclusions: Mapping[str, str] | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     """Seal private selection identities without exporting ticket text."""
@@ -119,6 +128,10 @@ def freeze_holdout_selection(
         raise ValueError("expected_total must be positive")
 
     holdout_cases = _read_source_cases(source, expected_split="holdout")
+    normalized_exclusions = _validated_pre_run_exclusions(
+        pre_run_exclusions,
+        holdout_cases=holdout_cases,
+    )
     selection_rows, selection_sha256 = _read_selection(selection)
     if len(selection_rows) != expected_total:
         raise ValueError(f"Selection has {len(selection_rows)} rows; expected {expected_total}")
@@ -139,6 +152,10 @@ def freeze_holdout_selection(
         )
         if case_id in selected_ids:
             raise ValueError(f"Duplicate selected case ID at row {row_number}")
+        if case_id in normalized_exclusions:
+            raise ValueError(
+                f"Selection row {row_number} contains a pre-run excluded case"
+            )
         source_case = holdout_cases.get(case_id)
         if source_case is None:
             raise ValueError(f"Selection row {row_number} is missing from holdout source")
@@ -215,6 +232,7 @@ def freeze_holdout_selection(
         source_path=source,
         selection_rows=selection_rows,
         expected_total=expected_total,
+        excluded_case_ids=frozenset(normalized_exclusions),
     )
 
     comparison_ids: set[str] = set()
@@ -301,6 +319,16 @@ def freeze_holdout_selection(
         "multiturn_status_counts": dict(
             sorted(multiturn_status_counts.items())
         ),
+        "pre_run_exclusions": {
+            "count": len(normalized_exclusions),
+            "cases": [
+                {
+                    "case_id_hash": case_id,
+                    "reason": normalized_exclusions[case_id],
+                }
+                for case_id in sorted(normalized_exclusions)
+            ],
+        },
         "source_timestamp_policy": ("latest_of_created_updated_closed_v1_raw_source_month"),
         "source_timestamp_status_counts": dict(sorted(timestamp_status_counts.items())),
         "comparison_splits": sorted(comparison_splits),
@@ -350,6 +378,7 @@ def freeze_holdout_selection(
     _verify_freeze_contract(written_payload)
     return {
         "cases_total": len(selected_cases),
+        "pre_run_exclusions": payload["pre_run_exclusions"],
         "route_counts": dict(sorted(route_counts.items())),
         "profile_counts": dict(sorted(profile_counts.items())),
         "cross_split_overlap": overlap,
@@ -423,11 +452,36 @@ def _read_selection(path: Path) -> tuple[list[dict[str, str]], str]:
         return list(reader), hashlib.sha256(raw).hexdigest()
 
 
+def _validated_pre_run_exclusions(
+    values: Mapping[str, str] | None,
+    *,
+    holdout_cases: Mapping[str, dict[str, Any]],
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_case_id, raw_reason in (values or {}).items():
+        case_id = str(raw_case_id).strip()
+        reason = str(raw_reason).strip().casefold()
+        if not _SAFE_HASH_RE.fullmatch(case_id):
+            raise ValueError("Pre-run exclusion has an invalid case ID")
+        if reason not in _ALLOWED_PRE_RUN_EXCLUSION_REASONS:
+            raise ValueError(
+                "Pre-run exclusion reason must be one of: "
+                + ", ".join(sorted(_ALLOWED_PRE_RUN_EXCLUSION_REASONS))
+            )
+        if case_id not in holdout_cases:
+            raise ValueError(
+                f"Pre-run excluded case is missing from the holdout source: {case_id}"
+            )
+        normalized[case_id] = reason
+    return normalized
+
+
 def _reproduce_selection(
     *,
     source_path: Path,
     selection_rows: list[dict[str, str]],
     expected_total: int,
+    excluded_case_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Re-run the declared deterministic selector and require the same case set."""
 
@@ -454,6 +508,7 @@ def _reproduce_selection(
             multiturn_status=_SELECTION_REPRODUCTION_CONFIG[
                 "multiturn_status"
             ],
+            excluded_case_ids=excluded_case_ids,
         )
         reproduced_rows, reproduced_manifest_sha256 = _read_selection(
             manifest_path
@@ -480,6 +535,10 @@ def _reproduce_selection(
     return {
         **_SELECTION_REPRODUCTION_CONFIG,
         "total": expected_total,
+        "excluded_cases": len(excluded_case_ids),
+        "excluded_case_ids_sha256": hashlib.sha256(
+            ("\n".join(sorted(excluded_case_ids)) + "\n").encode("utf-8")
+        ).hexdigest(),
         "input_cases": int(stats["input_cases"]),
         "eligible_cases": int(stats["eligible_cases"]),
         "selected_cases": int(stats["selected_cases"]),
@@ -785,6 +844,28 @@ def _parse_counts(values: list[str], *, label: str) -> dict[str, int] | None:
     return parsed
 
 
+def _parse_pre_run_exclusions(values: list[str]) -> dict[str, str] | None:
+    if not values:
+        return None
+    parsed: dict[str, str] = {}
+    for value in values:
+        case_id, separator, reason = value.partition("=")
+        case_id = case_id.strip()
+        reason = reason.strip().casefold()
+        if (
+            not separator
+            or not _SAFE_HASH_RE.fullmatch(case_id)
+            or reason not in _ALLOWED_PRE_RUN_EXCLUSION_REASONS
+            or case_id in parsed
+        ):
+            raise ValueError(
+                "Pre-run exclusions must use unique "
+                "case_hash=allowed_reason values"
+            )
+        parsed[case_id] = reason
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Seal a private independent ticket holdout selection."
@@ -814,6 +895,15 @@ def main() -> None:
         action="append",
         default=[],
     )
+    parser.add_argument(
+        "--pre-run-exclusion",
+        action="append",
+        default=[],
+        help=(
+            "Bind a rejected source row as case_hash=reason before the "
+            "deterministic replacement selection."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -835,6 +925,9 @@ def main() -> None:
         expected_profile_counts=_parse_counts(
             args.expected_profile_count,
             label="profile",
+        ),
+        pre_run_exclusions=_parse_pre_run_exclusions(
+            args.pre_run_exclusion
         ),
         overwrite=args.overwrite,
     )

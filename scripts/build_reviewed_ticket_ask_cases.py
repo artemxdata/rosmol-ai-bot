@@ -36,6 +36,15 @@ DEFAULT_OUTPUT_NAME = "product_calibration_reviewed_ask_cases.json"
 DEFAULT_KB_SEED = Path("data/knowledge_base_seed.json")
 DEFAULT_SPLIT = "calibration"
 KB_SEED_HASH_CANONICALIZATION = "json_sort_keys_compact_utf8_v1"
+HUMAN_REVIEW_MODE = "human_reviewed"
+MODEL_ASSISTED_PRERUN_MODE = "model_assisted_prerun"
+HOLDOUT_REVIEW_MODES = frozenset(
+    {
+        HUMAN_REVIEW_MODE,
+        MODEL_ASSISTED_PRERUN_MODE,
+    }
+)
+HOLDOUT_CONTRACT_SCHEMA_VERSION = "1.1.0"
 
 _SAFE_HASH_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _SAFE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -43,6 +52,10 @@ _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:@/-]{1,200}$")
 _SAFE_BASELINE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_REVIEWER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
+_MODEL_REVIEWER_ID_RE = re.compile(
+    r"^(?:ai|codex|model)(?:[._-]|$)",
+    flags=re.IGNORECASE,
+)
 _RESIDUAL_PII_PATTERNS = (
     re.compile(r"(?<![\w@])@[A-Za-zА-Яа-яЁё0-9_.-]{2,64}\b"),
     re.compile(
@@ -229,10 +242,15 @@ def build_reviewed_ticket_ask_cases(
     split: str = DEFAULT_SPLIT,
     freeze_path: Path | None = None,
     review_workbook_path: Path | None = None,
+    review_mode: str = HUMAN_REVIEW_MODE,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     if split not in _ALLOWED_SPLITS:
         raise ValueError(f"Unsupported product split: {split!r}")
+    normalized_review_mode = _validated_review_mode(
+        review_mode,
+        split=split,
+    )
     source_path, review_path, destination, seed_path = _validate_paths(
         input_path,
         manifest_path,
@@ -355,8 +373,13 @@ def build_reviewed_ticket_ask_cases(
                     f"Approved case {case_id_hash} is missing boolean "
                     f"{include_field}"
                 )
-            _required_reviewer(
+            reviewer = _required_reviewer(
                 row.get("reviewer"),
+                case_id_hash=case_id_hash,
+            )
+            _validated_reviewer_provenance(
+                reviewer,
+                review_mode=normalized_review_mode,
                 case_id_hash=case_id_hash,
             )
             _required_reviewed_at(row.get("reviewed_at"), case_id_hash=case_id_hash)
@@ -370,6 +393,7 @@ def build_reviewed_ticket_ask_cases(
                 _validated_holdout_review_payload(
                     row,
                     case_id_hash=case_id_hash,
+                    review_mode=normalized_review_mode,
                 )
                 assert pii_masker is not None
                 _validated_holdout_privacy(
@@ -423,6 +447,7 @@ def build_reviewed_ticket_ask_cases(
                 manifest_sha256=manifest_sha256,
                 kb_seed_sha256=kb_seed_sha256,
                 split=split,
+                review_mode=normalized_review_mode,
             )
             if include is True:
                 selected.append((case_id_hash, row, source))
@@ -452,6 +477,7 @@ def build_reviewed_ticket_ask_cases(
             review_receipt=review_receipt,
             knowledge_base_seed_sha256=kb_seed_sha256,
             cases_payload_sha256=cases_payload_sha256,
+            review_mode=normalized_review_mode,
         )
         for item in exported:
             item["holdout_contract"] = dict(holdout_contract)
@@ -484,6 +510,11 @@ def build_reviewed_ticket_ask_cases(
         "cases_payload_sha256": cases_payload_sha256,
         "output_file_sha256": output_file_sha256,
         "provenance": {
+            "review_mode": normalized_review_mode,
+            "human_reviewed": normalized_review_mode == HUMAN_REVIEW_MODE,
+            "product_verdict_eligible": (
+                normalized_review_mode == HUMAN_REVIEW_MODE
+            ),
             "review_manifest_path": str(review_path),
             "review_manifest_sha256": manifest_sha256,
             "kb_seed_path": str(seed_path),
@@ -515,6 +546,20 @@ def build_reviewed_ticket_ask_cases(
         },
         "output": str(destination),
     }
+
+
+def _validated_review_mode(value: Any, *, split: str) -> str:
+    review_mode = str(value or "").strip().casefold()
+    if review_mode not in HOLDOUT_REVIEW_MODES:
+        raise ValueError(
+            "review_mode must be one of: "
+            + ", ".join(sorted(HOLDOUT_REVIEW_MODES))
+        )
+    if review_mode == MODEL_ASSISTED_PRERUN_MODE and split != "holdout":
+        raise ValueError(
+            "model_assisted_prerun is only valid for the sealed holdout split"
+        )
+    return review_mode
 
 
 def _read_source_cases(
@@ -650,6 +695,7 @@ def _build_export_case(
     manifest_sha256: str,
     kb_seed_sha256: str,
     split: str,
+    review_mode: str,
 ) -> dict[str, Any]:
     source_schema_version = _required_metadata(
         source.get("schema_version"),
@@ -801,6 +847,7 @@ def _build_export_case(
         case_id_hash=case_id_hash,
     )
     source_label_status = str(source["label_status"])
+    human_reviewed = review_mode == HUMAN_REVIEW_MODE
     tags = {
         "label_verdict:approved",
         f"split:{split}",
@@ -813,6 +860,10 @@ def _build_export_case(
         f"source_channel:{source_channel}",
         f"source_label_status:{source_label_status}",
     }
+    if split == "holdout":
+        tags.add(f"review_mode:{review_mode}")
+        if not human_reviewed:
+            tags.add("product_verdict:provisional")
     tags.update(f"forbidden_profile:{profile}" for profile in forbidden_profiles)
 
     query = (
@@ -829,8 +880,8 @@ def _build_export_case(
         "channel": "api",
         "split": split,
         "privacy_class": "private_ticket_derived",
-        "label_status": "human_reviewed",
-        "requires_human_review": False,
+        "label_status": review_mode,
+        "requires_human_review": not human_reviewed,
         "intent": intent,
         "entity_class": entity_class,
         "expected_response_profile": expected_profile,
@@ -858,6 +909,15 @@ def _build_export_case(
             "reviewer": reviewer,
             "reviewed_at": reviewed_at,
             "manifest_sha256": manifest_sha256,
+            **(
+                {
+                    "review_mode": review_mode,
+                    "human_reviewed": human_reviewed,
+                    "product_verdict_eligible": human_reviewed,
+                }
+                if split == "holdout"
+                else {}
+            ),
             **(
                 {
                     "privacy_verdict": "approved",
@@ -1155,11 +1215,15 @@ def _export_holdout_contract(
     review_receipt: dict[str, str],
     knowledge_base_seed_sha256: str,
     cases_payload_sha256: str,
+    review_mode: str,
 ) -> dict[str, Any]:
+    human_reviewed = review_mode == HUMAN_REVIEW_MODE
     return {
-        "schema_version": "1.0.0",
+        "schema_version": HOLDOUT_CONTRACT_SCHEMA_VERSION,
         "baseline_id": str(freeze_payload["baseline_id"]),
         "runtime_git_sha": str(freeze_payload["runtime_git_sha"]),
+        "review_mode": review_mode,
+        "product_verdict_eligible": human_reviewed,
         "freeze_contract_sha256": str(
             freeze_payload["freeze_contract_sha256"]
         ),
@@ -1325,13 +1389,21 @@ def _validated_review_manifest_derivation(
             )
 
 
-def holdout_review_payload_sha256(row: dict[str, Any]) -> str:
-    """Hash the canonical human-reviewed values before holdout export."""
+def holdout_review_payload_sha256(
+    row: dict[str, Any],
+    *,
+    review_mode: str = HUMAN_REVIEW_MODE,
+) -> str:
+    """Hash canonical pre-run values together with their declared review mode."""
 
     payload = {
         field: _canonical_review_payload_value(field, row.get(field))
         for field in _HOLDOUT_REVIEW_PAYLOAD_FIELDS
     }
+    payload["review_mode"] = _validated_review_mode(
+        review_mode,
+        split="holdout",
+    )
     return hashlib.sha256(
         json.dumps(
             payload,
@@ -1372,13 +1444,17 @@ def _validated_holdout_review_payload(
     row: dict[str, str],
     *,
     case_id_hash: str,
+    review_mode: str,
 ) -> None:
     claimed = _required_sha256(
         row.get("review_payload_sha256"),
         field="review_payload_sha256",
         case_id_hash=case_id_hash,
     )
-    if claimed != holdout_review_payload_sha256(row):
+    if claimed != holdout_review_payload_sha256(
+        row,
+        review_mode=review_mode,
+    ):
         raise ValueError(
             f"Approved holdout case {case_id_hash} has stale "
             "review_payload_sha256"
@@ -1452,6 +1528,25 @@ def _required_reviewer(value: Any, *, case_id_hash: str) -> str:
             f"Approved case {case_id_hash} has invalid pseudonymous reviewer ID"
         )
     return reviewer
+
+
+def _validated_reviewer_provenance(
+    reviewer: str,
+    *,
+    review_mode: str,
+    case_id_hash: str,
+) -> None:
+    model_reviewer = bool(_MODEL_REVIEWER_ID_RE.match(reviewer))
+    if review_mode == MODEL_ASSISTED_PRERUN_MODE and not model_reviewer:
+        raise ValueError(
+            f"Approved case {case_id_hash} uses model_assisted_prerun "
+            "without a model reviewer pseudonym"
+        )
+    if review_mode == HUMAN_REVIEW_MODE and model_reviewer:
+        raise ValueError(
+            f"Approved case {case_id_hash} has a model reviewer pseudonym "
+            "but review_mode=human_reviewed"
+        )
 
 
 def _validated_holdout_privacy(
@@ -1653,9 +1748,15 @@ def seal_holdout_review_payload_hashes(
     source_path: Path,
     freeze_path: Path,
     review_workbook_path: Path,
+    *,
+    review_mode: str = HUMAN_REVIEW_MODE,
 ) -> dict[str, Any]:
     """Atomically seal reviewed CSV values after the XLSX-to-CSV import step."""
 
+    normalized_review_mode = _validated_review_mode(
+        review_mode,
+        split="holdout",
+    )
     manifest = manifest_path.expanduser().resolve()
     if (
         manifest.suffix.casefold() != ".csv"
@@ -1761,8 +1862,13 @@ def seal_holdout_review_payload_hashes(
                 "Every frozen holdout case must be approved and included "
                 "before sealing"
             )
-        _required_reviewer(
+        reviewer = _required_reviewer(
             row.get("reviewer"),
+            case_id_hash=case_id_hash,
+        )
+        _validated_reviewer_provenance(
+            reviewer,
+            review_mode=normalized_review_mode,
             case_id_hash=case_id_hash,
         )
         _required_reviewed_at(
@@ -1779,7 +1885,10 @@ def seal_holdout_review_payload_hashes(
             case_id_hash=case_id_hash,
             expected=review_receipt,
         )
-        row["review_payload_sha256"] = holdout_review_payload_sha256(row)
+        row["review_payload_sha256"] = holdout_review_payload_sha256(
+            row,
+            review_mode=normalized_review_mode,
+        )
 
     reviewed_margins = _reviewed_holdout_margins(rows)
     _write_manifest_csv(manifest, rows)
@@ -1789,6 +1898,11 @@ def seal_holdout_review_payload_hashes(
         "review_manifest_sha256": _file_sha256(manifest),
         "reviewed_profile_counts": reviewed_margins["profile_counts"],
         "reviewed_route_counts": reviewed_margins["route_counts"],
+        "review_mode": normalized_review_mode,
+        "human_reviewed": normalized_review_mode == HUMAN_REVIEW_MODE,
+        "product_verdict_eligible": (
+            normalized_review_mode == HUMAN_REVIEW_MODE
+        ),
         "digest_canonicalization": _CASE_ID_DIGEST_CANONICALIZATION,
         "output": str(manifest),
     }
@@ -1901,7 +2015,9 @@ def _write_json_array(path: Path, payload: list[dict[str, Any]], *, overwrite: b
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Export human-approved private ticket cases for local /ask evaluation."
+        description=(
+            "Export provenance-bound private ticket cases for local /ask evaluation."
+        )
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -1909,6 +2025,16 @@ def main() -> None:
     parser.add_argument("--kb-seed", type=Path, default=DEFAULT_KB_SEED)
     parser.add_argument("--freeze", type=Path)
     parser.add_argument("--review-workbook", type=Path)
+    parser.add_argument(
+        "--review-mode",
+        choices=sorted(HOLDOUT_REVIEW_MODES),
+        default=HUMAN_REVIEW_MODE,
+        help=(
+            "Declare who produced the pre-run labels. "
+            "model_assisted_prerun is allowed only for a sealed holdout "
+            "and never creates a human product verdict."
+        ),
+    )
     parser.add_argument(
         "--split",
         choices=sorted(_ALLOWED_SPLITS),
@@ -1940,6 +2066,7 @@ def main() -> None:
             args.input,
             args.freeze,
             args.review_workbook,
+            review_mode=args.review_mode,
         )
         print(json.dumps(stats, ensure_ascii=False, indent=2))
         return
@@ -1978,6 +2105,7 @@ def main() -> None:
         split=args.split,
         freeze_path=args.freeze,
         review_workbook_path=args.review_workbook,
+        review_mode=args.review_mode,
         overwrite=args.overwrite,
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))

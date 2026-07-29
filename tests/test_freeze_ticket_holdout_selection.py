@@ -176,8 +176,10 @@ def _freeze(
     tmp_path: Path,
     *,
     selected: list[dict[str, object]],
+    source_cases: list[dict[str, object]] | None = None,
     comparison: list[dict[str, object]] | None = None,
     route_counts: dict[str, int] | None = None,
+    pre_run_exclusions: dict[str, str] | None = None,
 ) -> tuple[dict[str, object], Path]:
     directory = _private_dir(tmp_path)
     source = directory / "holdout.jsonl"
@@ -185,7 +187,7 @@ def _freeze(
     comparison_path = directory / "calibration.jsonl"
     validation_path = directory / "validation.jsonl"
     output = directory / "freeze.json"
-    _write_jsonl(source, selected)
+    _write_jsonl(source, source_cases or selected)
     _write_selection(selection, selected)
     _write_jsonl(
         comparison_path,
@@ -209,6 +211,7 @@ def _freeze(
         kb_seed_path=_kb_seed(tmp_path),
         expected_total=len(selected),
         expected_route_counts=route_counts,
+        pre_run_exclusions=pre_run_exclusions,
         **evidence,
     )
     return result, output
@@ -255,6 +258,52 @@ def test_freeze_seals_only_private_identifiers_and_aggregate_counts(
     payload["cases_total"] = 3
     with pytest.raises(ValueError, match="self-hash mismatch"):
         freezer._verify_freeze_contract(payload)
+
+
+def test_freeze_binds_pre_run_exclusion_and_replacement_selection(
+    tmp_path: Path,
+) -> None:
+    source_cases = [
+        _case(
+            f"documents-escalate-{index}",
+            profile="documents",
+            route="escalate",
+        )
+        for index in range(3)
+    ]
+    ordered = sorted(
+        source_cases,
+        key=lambda case: str(case["ticket_id_hash"]),
+    )
+    excluded_case_id = str(ordered[0]["ticket_id_hash"])
+
+    result, output = _freeze(
+        tmp_path,
+        selected=ordered[1:],
+        source_cases=source_cases,
+        route_counts={"escalate": 2},
+        pre_run_exclusions={excluded_case_id: "not_user_turn"},
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result["pre_run_exclusions"] == {
+        "count": 1,
+        "cases": [
+            {
+                "case_id_hash": excluded_case_id,
+                "reason": "not_user_turn",
+            }
+        ],
+    }
+    assert payload["selection"]["reproduction"]["excluded_cases"] == 1
+    assert (
+        payload["selection"]["reproduction"][
+            "excluded_case_ids_sha256"
+        ]
+        == hashlib.sha256(
+            f"{excluded_case_id}\n".encode()
+        ).hexdigest()
+    )
 
 
 def test_freeze_rejects_cross_split_duplicate_component(

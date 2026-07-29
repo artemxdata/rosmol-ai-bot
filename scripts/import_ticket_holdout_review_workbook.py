@@ -10,6 +10,7 @@ import re
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile, ZipFile
@@ -42,6 +43,10 @@ _FREEZE_HASH_FIELDS = frozenset(
 )
 _SAFE_HASH_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_EXCEL_DATE_SERIAL_RE = re.compile(r"^\d{5}(?:\.\d+)?$")
+_EXCEL_DATE_EPOCH = datetime(1899, 12, 30, tzinfo=UTC)
+_MIN_REVIEW_DATE_SERIAL = 25569.0  # 1970-01-01
+_MAX_REVIEW_DATE_SERIAL = 73051.0  # 2100-01-01
 _POST_RAW_QUERY_REF_RE = re.compile(
     r"'Pre-run review'!\$?C(?:\$?\d+)?",
     re.IGNORECASE,
@@ -259,7 +264,10 @@ def load_holdout_review_workbook_rows(
 
         imported = dict(selection_row)
         for header, field in _REVIEW_HEADER_TO_FIELD.items():
-            value = _cell(values, headers, header)
+            value = _normalized_review_value(
+                _cell(values, headers, header),
+                field=field,
+            )
             _reject_formula_like_text(
                 value,
                 field=field,
@@ -596,6 +604,18 @@ def _cell(
     if index >= len(values):
         return ""
     return str(values[index] or "").strip()
+
+
+def _normalized_review_value(value: str, *, field: str) -> str:
+    """Restore ISO UTC timestamps that XLSX stores as Excel date serials."""
+
+    if field != "reviewed_at" or not _EXCEL_DATE_SERIAL_RE.fullmatch(value):
+        return value
+    serial = float(value)
+    if not _MIN_REVIEW_DATE_SERIAL <= serial < _MAX_REVIEW_DATE_SERIAL:
+        return value
+    reviewed_at = _EXCEL_DATE_EPOCH + timedelta(days=serial)
+    return reviewed_at.isoformat().replace("+00:00", "Z")
 
 
 def _cell_exact(

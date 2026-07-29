@@ -1096,3 +1096,41 @@ identity и канонический one-shot ledger. Частичный про�
 сервер не трогает и выдаёт только secret-safe команды. Post-run blind verdict определяет
 first-turn closure и распределение root causes. Эти 80 не являются общей ticket conversion;
 для внешнего заявления о 50–60% всё ещё нужны минимум 400 независимых полных диалогов.
+
+## 13. Запечатанный model-assisted exact-80 pre-run 29 июля 2026
+
+Подготовка независимого first-turn набора завершена локально. Runtime, HDE/VK, Yonote, Qdrant,
+prompts, routing, thresholds и KB не менялись. Строгий factual invariant остаётся прежним:
+ответ и citations подтверждаются только опубликованным `source_type=yonote`; при отсутствии
+подтверждения выполняется уточнение или контролируемая эскалация.
+
+Перед запуском один выбранный элемент был подтверждён как `not_user_turn`. Он исключён до
+просмотра runtime-ответов и заменён следующим детерминированным кандидатом той же страты.
+Итоговый набор:
+
+- 80 уникальных пользовательских `single_turn` кейсов из 172 подходящих holdout-кандидатов;
+- overlap с calibration/validation по ID/cluster/component: `0/0/0`;
+- model-assisted reviewed routes: `answer=31`, `clarify=10`, `escalate=39`;
+- 80/80 role, label и privacy approvals;
+- 31 factual cases привязаны только к published Yonote chunks;
+- residual non-date PII findings: `0`;
+- `review_mode=model_assisted_prerun`, поэтому `product_verdict_eligible=false` до отдельного
+  человеческого post-run verdict.
+
+Приватный exact JSON:
+`data/private/tickets/product_baseline_20260729_roles_v1/independent_holdout_80_v2/reviewed_holdout_80_v2.json`.
+Он не входит в Git или release image.
+
+Контрольные SHA:
+
+- runtime: `4c6262455d1338c6e0f26b8900a5f66e64a97489`;
+- freeze: `6291666f604e12212c59510b8b86a21dff5ad12c9c5d48970ac0a3ed00cc4e26`;
+- manifest: `3fa713f62b48cda3ced611676cb8b4befc280898144039d54fb4b255810f46d3`;
+- semantic payload: `1ff86f0e88576dc1d529688ccb362078c64dd68a73858101aa74c3f14a08da5e`;
+- exact JSON bytes: `bc477d4c641620d0519e348a803d5a7e29852625a4e6f766dcb36bd93143f4db`.
+
+Точный следующий шаг: после commit/push инструментов пользователь сам передаёт приватный JSON
+на новый сервер и один раз запускает exact-80 через server-local `/ask` с bypass cache,
+runtime-SHA gate, complete PostgreSQL traces и one-shot ledger. Codex сервер не трогает.
+HDE/VK остаются выключенными и не используются как массовый транспорт. До получения и
+классификации результата запрещено менять Yonote, индекс, KB или runtime behavior.

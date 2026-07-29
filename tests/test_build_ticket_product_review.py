@@ -76,6 +76,7 @@ MANIFEST_FIELDS = (
 
 STATS_FIELDS = {
     "input_cases",
+    "excluded_cases",
     "eligible_cases",
     "strata_total",
     "top_strata",
@@ -176,6 +177,7 @@ def _build(
     split: str = "calibration",
     selection_mode: str = "frequency_risk",
     multiturn_status: str | None = None,
+    excluded_case_ids: tuple[str, ...] = (),
 ) -> tuple[dict[str, int], Path, Path]:
     input_path = tmp_path / f"{prefix}.jsonl"
     summary_path = tmp_path / f"{prefix}_summary.csv"
@@ -191,6 +193,7 @@ def _build(
         split=split,
         selection_mode=selection_mode,
         multiturn_status=multiturn_status,
+        excluded_case_ids=excluded_case_ids,
     )
     return stats, summary_path, manifest_path
 
@@ -204,6 +207,7 @@ def test_build_review_exports_defaults_are_product_review_contract() -> None:
     assert parameters["split"].default == "calibration"
     assert parameters["selection_mode"].default == "frequency_risk"
     assert parameters["multiturn_status"].default is None
+    assert parameters["excluded_case_ids"].default == ()
     assert parameters["overwrite"].default is False
 
 
@@ -232,6 +236,7 @@ def test_build_review_exports_writes_top20_metadata_only(tmp_path: Path) -> None
     assert set(stats) == STATS_FIELDS
     assert stats == {
         "input_cases": 231,
+        "excluded_cases": 0,
         "eligible_cases": 231,
         "strata_total": 21,
         "top_strata": 20,
@@ -808,6 +813,58 @@ def test_profile_route_frequency_is_order_and_risk_invariant(
     assert {row["case_id_hash"] for row in first_manifest} == {
         row["case_id_hash"] for row in second_manifest
     }
+
+
+def test_profile_route_frequency_replaces_pre_run_exclusion(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        _case(
+            f"documents-escalate-{index}",
+            split="holdout",
+            category="documents",
+            topic="documents",
+            aspect="documents",
+            route="escalate",
+        )
+        for index in range(4)
+    ]
+    excluded_case_id = str(
+        sorted(cases, key=lambda case: str(case["ticket_id_hash"]))[0][
+            "ticket_id_hash"
+        ]
+    )
+
+    stats, _, manifest_path = _build(
+        tmp_path,
+        cases,
+        top_n=1,
+        min_per_stratum=0,
+        total=3,
+        split="holdout",
+        selection_mode="profile_route_frequency",
+        excluded_case_ids=(excluded_case_id,),
+    )
+    _, rows = _read_csv(manifest_path)
+
+    assert stats["excluded_cases"] == 1
+    assert stats["selected_cases"] == 3
+    assert excluded_case_id not in {
+        row["case_id_hash"] for row in rows
+    }
+
+
+def test_build_review_exports_rejects_unknown_pre_run_exclusion(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="missing from the source split"):
+        _build(
+            tmp_path,
+            [_case("known")],
+            total=1,
+            min_per_stratum=1,
+            excluded_case_ids=("f" * 24,),
+        )
 
 
 @pytest.mark.parametrize(

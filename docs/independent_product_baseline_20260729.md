@@ -1,11 +1,12 @@
-# Независимый product baseline v1: 80 реальных first-turn запросов
+# Независимый product baseline v2: 80 реальных first-turn запросов
 
 Дата подготовки: 29 июля 2026 года.
 
-Статус: выборка подготовлена, но не запускалась. Ответы текущего runtime не просмотрены,
-изменения prompts, routing, thresholds и KB под эти кейсы не вносились. Целевой runtime
-зафиксирован на commit `4c6262455d1338c6e0f26b8900a5f66e64a97489`. Сервер и HDE/VK этим
-этапом не затрагиваются; HDE rules остаются выключенными.
+Статус: model-assisted pre-run review завершён, выборка запечатана и экспортирована, но ещё не
+запускалась. Ответы текущего runtime не просмотрены, изменения prompts, routing, thresholds,
+Yonote, Qdrant и KB под эти кейсы не вносились. Целевой runtime зафиксирован на commit
+`4c6262455d1338c6e0f26b8900a5f66e64a97489`. Сервер и HDE/VK этапом подготовки не
+затрагивались; HDE rules остаются выключенными.
 
 ## Что именно мы измеряем
 
@@ -33,11 +34,13 @@
 | Calibration | 6 186 |
 | Validation | 259 |
 | Chronological holdout | 185 |
-| Подходящие `single_turn` в holdout | 173 |
+| Подходящие пользовательские `single_turn` в holdout | 172 |
 | Запечатанная выборка | 80 |
 
-Все 173 подходящих кандидата относятся к каналу `ЕСЗ Текстовая линия`: 108 — май 2026 года,
-65 — июнь. Поэтому результат нельзя автоматически переносить на VK, другие каналы и
+Один исходно выбранный элемент оказался не пользовательской репликой. До запуска он был
+исключён с причиной `not_user_turn` и заменён следующим детерминированным кандидатом той же
+страты. Все 172 подходящих кандидата относятся к каналу `ЕСЗ Текстовая линия`. Поэтому
+результат нельзя автоматически переносить на VK, другие каналы и
 многоходовые диалоги.
 
 Из 185 holdout-кандидатов исключены 12 `multi_turn`. Их нельзя честно тестировать одной
@@ -46,7 +49,7 @@
 
 ## Состав 80 кейсов
 
-Выборка детерминированно повторяет частотное распределение профилей и route среди 173
+Выборка детерминированно повторяет частотное распределение профилей и route среди 172
 подходящих обращений. Внутри неё 80 уникальных ticket hashes, duplicate clusters и duplicate
 components.
 
@@ -103,7 +106,33 @@ components». Перед внешним заявлением о качестве
 Их можно сохранить как regression/calibration, а следующий результат подтверждать на новой
 запечатанной выборке.
 
-## Почему перед запуском нужен ручной review
+## Если pre-run разметку подготовил Codex
+
+Такую разметку нельзя называть `human_reviewed`, даже если Codex проверил все строки, источники и
+privacy-поля. Для неё используется отдельный режим `model_assisted_prerun`.
+
+Он разрешён только для обезличенного sealed holdout и сохраняет все строгие проверки:
+
+- ровно 80 запечатанных ID, freeze, source/workbook/manifest/seed SHA и payload SHA;
+- privacy, role, route, chunk и Yonote-only gates;
+- server-local `/ask`, сверка runtime SHA, bypass cache, PostgreSQL traces и one-shot ledger;
+- запрет на изменение prompts, routing, thresholds и KB до разбора результата.
+
+Режим должен быть указан одинаково при seal и export:
+`--review-mode model_assisted_prerun`. Runner принимает такой набор только с явным
+`--allow-model-assisted-prerun`. Review mode входит в хеш каждой строки и execution-контракт,
+поэтому нельзя запечатать модельную разметку, а затем экспортировать её как человеческую.
+Дополнительно model-assisted строки требуют псевдоним reviewer с префиксом `codex-`, `model-`
+или `ai-`; такой псевдоним блокируется в режиме `human_reviewed`.
+
+JSON-отчёт, Markdown и receipts явно получают статус
+`provisional_model_assisted_prerun`, `product_verdict_eligible=false` и
+`human_product_verdict=false`. Такой запуск показывает распределение технических и продуктовых
+ошибок, но не является human product verdict и не доказывает конверсию. Он всё равно раскрывает
+ответы и расходует one-shot selection: повторно прогонять те же 80 как независимый holdout
+нельзя. Для продуктового вывода после запуска нужен отдельный человеческий post-run verdict.
+
+## Почему перед запуском нужен pre-run review
 
 Исходный XLSX не содержит надёжного speaker metadata, а labels восстановлены эвристиками.
 Операторские ответы намеренно не используются как factual ground truth. Поэтому каждый кейс
@@ -134,7 +163,7 @@ freeze. После freeze из template создаётся отдельная р
 
 ## Что проверяет технический контракт
 
-Цепочка fail-closed связывает выборку, человеческий review и запуск:
+Цепочка fail-closed связывает выборку, заявленную provenance pre-run разметки и запуск:
 
 1. Freeze повторно запускает детерминированный selector и требует получить те же 80 case ID.
    Затем он фиксирует source, selection, calibration, validation, runtime SHA, KB seed,
@@ -146,7 +175,8 @@ freeze. После freeze из template создаётся отдельная р
    формулы, macros, external links и лишние CSV-колонки запрещены.
 4. Seal повторно импортирует заполненный workbook, требует точного совпадения всех разрешённых
    CSV-полей и только затем рассчитывает отдельный `review_payload_sha256` для каждой строки.
-   Изменение route, профиля, chunks, privacy verdict или reviewer после seal обнаруживается.
+   Изменение route, профиля, chunks, privacy verdict, reviewer или `review_mode` после seal
+   обнаруживается.
 5. Export независимо повторяет сверку reviewed manifest с заполненным workbook, требует точного
    совпадения всех 80 ID и сверяет source, selection, freeze, reviewed manifest и KB seed.
 6. Каждый exported case разрешает factual citations только с `source_type=yonote`.
@@ -259,17 +289,46 @@ cross-aspect stress.
 8. По распределению ошибок принимается решение: один regression-first correction cycle своего
    ядра или отдельный Dify PoC.
 
-## Локальная подготовка после ручного review
+## Фактически запечатанный v2
+
+В model-assisted pre-run подтверждены все 80 ролей и privacy verdict. После исправления
+эвристических labels ожидаемое поведение распределилось так:
+
+- `answer` — 31;
+- `clarify` — 10;
+- `escalate` — 39;
+- factual cases с утверждёнными published Yonote chunks — 31;
+- остаточные non-date PII findings — 0.
+
+Строгий инвариант не меняется: factual grounding и citations разрешены только из
+`source_type=yonote`. XLSX/DOCX и ответы операторов не могут подтверждать runtime-ответ.
+
+Контрольные значения для единственного server-local запуска:
+
+- freeze contract SHA-256:
+  `6291666f604e12212c59510b8b86a21dff5ad12c9c5d48970ac0a3ed00cc4e26`;
+- review manifest SHA-256:
+  `3fa713f62b48cda3ced611676cb8b4befc280898144039d54fb4b255810f46d3`;
+- cases payload SHA-256:
+  `1ff86f0e88576dc1d529688ccb362078c64dd68a73858101aa74c3f14a08da5e`;
+- exact JSON file SHA-256:
+  `bc477d4c641620d0519e348a803d5a7e29852625a4e6f766dcb36bd93143f4db`.
+
+Приватный JSON:
+`data/private/tickets/product_baseline_20260729_roles_v1/independent_holdout_80_v2/reviewed_holdout_80_v2.json`.
+Он не входит в Git, Docker image или release artifacts.
+
+## Локальная подготовка после pre-run review
 
 Команды ниже не обращаются к серверу, HDE или VK. Они читают только приватные локальные
 артефакты, импортируют заполненный workbook, запечатывают review и создают обезличенный JSON:
 
 ```powershell
 $baselineDir = "data\private\tickets\product_baseline_20260729_roles_v1"
-$holdoutDir = "$baselineDir\independent_holdout_80_v1"
-$workingWorkbook = "$holdoutDir\independent_holdout_80_review_v1.xlsx"
-$preRunWorkbook = "$holdoutDir\independent_holdout_80_prerun_sealed_v1.xlsx"
-$postRunWorkbook = "$holdoutDir\independent_holdout_80_postrun_review_v1.xlsx"
+$holdoutDir = "$baselineDir\independent_holdout_80_v2"
+$workingWorkbook = "$holdoutDir\independent_holdout_80_review_prefilled_v2.xlsx"
+$preRunWorkbook = "$holdoutDir\independent_holdout_80_prerun_sealed_v2.xlsx"
+$postRunWorkbook = "$holdoutDir\independent_holdout_80_postrun_review_v2.xlsx"
 
 if (Test-Path -LiteralPath $preRunWorkbook) {
   throw "Pre-run snapshot already exists"
@@ -281,25 +340,27 @@ Copy-Item -LiteralPath $workingWorkbook -Destination $preRunWorkbook
   --workbook $preRunWorkbook `
   --selection "$holdoutDir\selection_manifest.csv" `
   --source "$baselineDir\product_holdout_cases.jsonl" `
-  --freeze "$holdoutDir\independent_holdout_80_freeze_v1.json" `
-  --output "$holdoutDir\reviewed_manifest.csv"
+  --freeze "$holdoutDir\independent_holdout_80_freeze_v2.json" `
+  --output "$holdoutDir\reviewed_manifest_v2.csv"
 
 .\.venv\Scripts\python.exe scripts\build_reviewed_ticket_ask_cases.py `
   --split holdout `
+  --review-mode model_assisted_prerun `
   --input "$baselineDir\product_holdout_cases.jsonl" `
-  --manifest "$holdoutDir\reviewed_manifest.csv" `
-  --freeze "$holdoutDir\independent_holdout_80_freeze_v1.json" `
+  --manifest "$holdoutDir\reviewed_manifest_v2.csv" `
+  --freeze "$holdoutDir\independent_holdout_80_freeze_v2.json" `
   --review-workbook $preRunWorkbook `
   --seal-review-payload-hashes
 
 .\.venv\Scripts\python.exe scripts\build_reviewed_ticket_ask_cases.py `
   --split holdout `
+  --review-mode model_assisted_prerun `
   --input "$baselineDir\product_holdout_cases.jsonl" `
-  --manifest "$holdoutDir\reviewed_manifest.csv" `
-  --freeze "$holdoutDir\independent_holdout_80_freeze_v1.json" `
+  --manifest "$holdoutDir\reviewed_manifest_v2.csv" `
+  --freeze "$holdoutDir\independent_holdout_80_freeze_v2.json" `
   --review-workbook $preRunWorkbook `
   --kb-seed "data\knowledge_base_seed.json" `
-  --output "$holdoutDir\reviewed_holdout_80.json"
+  --output "$holdoutDir\reviewed_holdout_80_v2.json"
 
 if (Test-Path -LiteralPath $postRunWorkbook) {
   throw "Post-run workbook already exists"

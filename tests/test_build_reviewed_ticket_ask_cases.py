@@ -409,6 +409,8 @@ def _write_reviewed_holdout_manifest(
     seed_path: Path,
     freeze_path: Path,
     filled_workbook_path: Path,
+    *,
+    review_mode: str = exporter.HUMAN_REVIEW_MODE,
 ) -> None:
     receipt = _review_receipt(
         freeze_path,
@@ -435,7 +437,10 @@ def _write_reviewed_holdout_manifest(
             row.get("approved_kb_seed_sha256")
             or seed_sha256
         )
-        row["review_payload_sha256"] = holdout_review_payload_sha256(row)
+        row["review_payload_sha256"] = holdout_review_payload_sha256(
+            row,
+            review_mode=review_mode,
+        )
         reviewed_rows.append(row)
     _write_manifest(path, reviewed_rows, source_cases, seed_path)
 
@@ -492,6 +497,7 @@ def _build(
     output_name: str = "reviewed.json",
     seed_rows: list[dict[str, object]] | None = None,
     split: str = "calibration",
+    review_mode: str = exporter.HUMAN_REVIEW_MODE,
     with_freeze: bool = True,
     with_review_workbook: bool = True,
 ) -> tuple[dict[str, object], Path]:
@@ -534,6 +540,7 @@ def _build(
             seed,
             freeze,
             review_workbook,
+            review_mode=review_mode,
         )
     else:
         _write_manifest(manifest, manifest_rows, source_cases, seed)
@@ -547,6 +554,7 @@ def _build(
         review_workbook_path=(
             review_workbook if with_review_workbook else None
         ),
+        review_mode=review_mode,
     )
     return stats, output
 
@@ -807,9 +815,11 @@ def test_export_holdout_uses_only_human_deidentified_query(
         "cases_payload_sha256"
     ]
     assert contract == {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "baseline_id": "independent_holdout_80_v1",
         "runtime_git_sha": RUNTIME_SHA,
+        "review_mode": "human_reviewed",
+        "product_verdict_eligible": True,
         "freeze_contract_sha256": contract["freeze_contract_sha256"],
         "review_manifest_sha256": stats["provenance"][
             "review_manifest_sha256"
@@ -874,6 +884,136 @@ def test_export_holdout_uses_only_human_deidentified_query(
     assert private_query not in serialized
     assert "Иван Иванов" not in serialized
     assert "+7 999 000-00-00" not in serialized
+
+
+def test_export_holdout_preserves_model_assisted_prerun_provenance(
+    tmp_path: Path,
+) -> None:
+    case_id_hash = "aaaaaaaaaaaaaaaa"
+    source = _source_case(
+        case_id_hash,
+        query="private source query",
+        split="holdout",
+    )
+    manifest = _manifest_row(
+        case_id_hash,
+        include="false",
+        include_in_holdout="true",
+        deidentified_query="Deidentified forum date question.",
+        privacy_verdict="approved",
+        reviewer="codex_model_assisted",
+    )
+
+    stats, output = _build(
+        tmp_path,
+        [source],
+        [manifest],
+        split="holdout",
+        review_mode=exporter.MODEL_ASSISTED_PRERUN_MODE,
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    case = payload[0]
+    contract = case["holdout_contract"]
+
+    assert case["label_status"] == exporter.MODEL_ASSISTED_PRERUN_MODE
+    assert case["requires_human_review"] is True
+    assert (
+        f"review_mode:{exporter.MODEL_ASSISTED_PRERUN_MODE}"
+        in case["tags"]
+    )
+    assert "product_verdict:provisional" in case["tags"]
+    assert case["review_provenance"]["review_mode"] == (
+        exporter.MODEL_ASSISTED_PRERUN_MODE
+    )
+    assert case["review_provenance"]["human_reviewed"] is False
+    assert (
+        case["review_provenance"]["product_verdict_eligible"] is False
+    )
+    assert contract["schema_version"] == "1.1.0"
+    assert contract["review_mode"] == exporter.MODEL_ASSISTED_PRERUN_MODE
+    assert contract["product_verdict_eligible"] is False
+    assert stats["provenance"]["review_mode"] == (
+        exporter.MODEL_ASSISTED_PRERUN_MODE
+    )
+    assert stats["provenance"]["human_reviewed"] is False
+    assert stats["provenance"]["product_verdict_eligible"] is False
+
+
+def test_model_assisted_prerun_is_rejected_for_non_holdout(
+    tmp_path: Path,
+) -> None:
+    case_id_hash = "aaaaaaaaaaaaaaaa"
+    source = _source_case(case_id_hash)
+    manifest = _manifest_row(case_id_hash)
+
+    with pytest.raises(ValueError, match="only valid for the sealed holdout"):
+        _build(
+            tmp_path,
+            [source],
+            [manifest],
+            review_mode=exporter.MODEL_ASSISTED_PRERUN_MODE,
+        )
+
+
+@pytest.mark.parametrize(
+    ("review_mode", "reviewer", "message"),
+    [
+        (
+            exporter.HUMAN_REVIEW_MODE,
+            "codex-r1",
+            "model reviewer pseudonym",
+        ),
+        (
+            exporter.MODEL_ASSISTED_PRERUN_MODE,
+            "reviewer_01",
+            "without a model reviewer pseudonym",
+        ),
+    ],
+)
+def test_export_rejects_reviewer_provenance_mismatch(
+    tmp_path: Path,
+    review_mode: str,
+    reviewer: str,
+    message: str,
+) -> None:
+    case_id_hash = "aaaaaaaaaaaaaaaa"
+    source = _source_case(case_id_hash, split="holdout")
+    manifest = _manifest_row(
+        case_id_hash,
+        include="false",
+        include_in_holdout="true",
+        deidentified_query="Deidentified forum date question.",
+        privacy_verdict="approved",
+        reviewer=reviewer,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _build(
+            tmp_path,
+            [source],
+            [manifest],
+            split="holdout",
+            review_mode=review_mode,
+        )
+
+
+def test_review_payload_hash_binds_review_mode() -> None:
+    case_id_hash = "aaaaaaaaaaaaaaaa"
+    row = _manifest_row(
+        case_id_hash,
+        include="false",
+        include_in_holdout="true",
+        privacy_verdict="approved",
+        deidentified_query="Deidentified forum date question.",
+    )
+
+    assert holdout_review_payload_sha256(
+        row,
+        review_mode=exporter.HUMAN_REVIEW_MODE,
+    ) != holdout_review_payload_sha256(
+        row,
+        review_mode=exporter.MODEL_ASSISTED_PRERUN_MODE,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1740,9 +1880,17 @@ def test_export_holdout_fails_when_pii_scan_is_unavailable(
         )
 
 
+@pytest.mark.parametrize(
+    "review_mode",
+    [
+        exporter.HUMAN_REVIEW_MODE,
+        exporter.MODEL_ASSISTED_PRERUN_MODE,
+    ],
+)
 def test_seal_review_payload_hashes_is_explicit_and_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    review_mode: str,
 ) -> None:
     case_id_hash = "aaaaaaaaaaaaaaaa"
     directory = _private_dir(tmp_path)
@@ -1755,6 +1903,11 @@ def test_seal_review_payload_hashes_is_explicit_and_deterministic(
         include_in_holdout="true",
         privacy_verdict="approved",
         deidentified_query="Не получается отправить заявку на форум.",
+        reviewer=(
+            "codex-r1"
+            if review_mode == exporter.MODEL_ASSISTED_PRERUN_MODE
+            else "reviewer_01"
+        ),
     )
     _write_jsonl(source_path, [source])
     seed_path = _write_kb_seed(tmp_path, [row])
@@ -1774,6 +1927,7 @@ def test_seal_review_payload_hashes_is_explicit_and_deterministic(
         source_path,
         freeze_path,
         review_workbook,
+        review_mode=review_mode,
     )
     with manifest_path.open(
         "r",
@@ -1789,14 +1943,23 @@ def test_seal_review_payload_hashes_is_explicit_and_deterministic(
         review_workbook.read_bytes()
     ).hexdigest()
     assert sealed_row["review_payload_sha256"] == (
-        holdout_review_payload_sha256(sealed_row)
+        holdout_review_payload_sha256(
+            sealed_row,
+            review_mode=review_mode,
+        )
     )
+    assert stats["review_mode"] == review_mode
+    assert stats["human_reviewed"] is (
+        review_mode == exporter.HUMAN_REVIEW_MODE
+    )
+    assert stats["product_verdict_eligible"] is stats["human_reviewed"]
     first_bytes = manifest_path.read_bytes()
     repeated_stats = seal_holdout_review_payload_hashes(
         manifest_path,
         source_path,
         freeze_path,
         review_workbook,
+        review_mode=review_mode,
     )
     assert manifest_path.read_bytes() == first_bytes
     assert repeated_stats["review_manifest_sha256"] == stats[

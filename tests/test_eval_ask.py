@@ -34,9 +34,11 @@ def _holdout_contract(
         ("\n".join(sorted(case_ids)) + "\n").encode("utf-8")
     ).hexdigest()
     contract: dict[str, object] = {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "baseline_id": "independent_holdout_80_v1",
         "runtime_git_sha": "1" * 40,
+        "review_mode": "human_reviewed",
+        "product_verdict_eligible": True,
         "freeze_contract_sha256": "2" * 64,
         "review_manifest_sha256": "3" * 64,
         "selected_case_ids_sha256": selected_case_ids_sha256,
@@ -56,8 +58,27 @@ def _private_holdout_cases(
     case_ids: list[str],
     *,
     contract: dict[str, object] | None = None,
+    review_mode: str | None = None,
 ) -> list[dict[str, object]]:
-    shared_contract = dict(contract or _holdout_contract(case_ids))
+    if review_mode is not None:
+        effective_review_mode = review_mode
+    elif contract is not None:
+        effective_review_mode = str(contract["review_mode"])
+    else:
+        effective_review_mode = run_ask_module.HUMAN_REVIEW_MODE
+    shared_contract = dict(
+        contract
+        or _holdout_contract(
+            case_ids,
+            review_mode=effective_review_mode,
+            product_verdict_eligible=(
+                effective_review_mode == run_ask_module.HUMAN_REVIEW_MODE
+            ),
+        )
+    )
+    requires_human_review = (
+        effective_review_mode != run_ask_module.HUMAN_REVIEW_MODE
+    )
     cases = [
         {
             "id": case_id,
@@ -65,9 +86,13 @@ def _private_holdout_cases(
             "user_id": f"reviewed-holdout-{case_id}",
             "privacy_class": "private_ticket_derived",
             "split": "holdout",
-            "label_status": "human_reviewed",
-            "requires_human_review": False,
-            "tags": ["label_verdict:approved", "split:holdout"],
+            "label_status": effective_review_mode,
+            "requires_human_review": requires_human_review,
+            "tags": [
+                "label_verdict:approved",
+                "split:holdout",
+                f"review_mode:{effective_review_mode}",
+            ],
             "source_provenance": {
                 "case_fingerprint": f"fingerprint-{index}",
             },
@@ -231,6 +256,45 @@ def test_normalize_case_preserves_valid_private_holdout_contract() -> None:
     assert case["holdout_contract"] == raw["holdout_contract"]
 
 
+def test_normalize_case_accepts_model_assisted_prerun_only_with_opt_in() -> None:
+    contract = _holdout_contract(
+        ["case-1"],
+        review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+        product_verdict_eligible=False,
+    )
+    raw = _private_holdout_cases(
+        ["case-1"],
+        contract=contract,
+        review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+    )[0]
+
+    with pytest.raises(ValueError, match="explicit runner opt-in"):
+        _normalize_case(raw)
+
+    case = _normalize_case(raw, allow_model_assisted_prerun=True)
+
+    assert case["split"] == "holdout"
+    assert case["holdout_contract"]["review_mode"] == (
+        run_ask_module.MODEL_ASSISTED_PRERUN_MODE
+    )
+
+
+def test_normalize_case_rejects_model_assisted_contract_label_mismatch() -> None:
+    contract = _holdout_contract(
+        ["case-1"],
+        review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+        product_verdict_eligible=False,
+    )
+    raw = _private_holdout_cases(
+        ["case-1"],
+        contract=contract,
+        review_mode=run_ask_module.HUMAN_REVIEW_MODE,
+    )[0]
+
+    with pytest.raises(ValueError, match="review_mode must match"):
+        _normalize_case(raw, allow_model_assisted_prerun=True)
+
+
 def test_holdout_cases_payload_hash_is_order_independent() -> None:
     raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
     original_digest = holdout_cases_payload_sha256(raw_cases)
@@ -262,6 +326,18 @@ def test_holdout_cases_payload_hash_is_order_independent() -> None:
         (
             _holdout_contract(["case-1"], runtime_git_sha="abc123"),
             "full lowercase 40-hex",
+        ),
+        (
+            _holdout_contract(["case-1"], review_mode="unknown"),
+            "review_mode",
+        ),
+        (
+            _holdout_contract(
+                ["case-1"],
+                review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+                product_verdict_eligible=True,
+            ),
+            "product_verdict_eligible conflicts",
         ),
         (
             _holdout_contract(["case-1"], freeze_contract_sha256="bad"),
@@ -1890,6 +1966,119 @@ async def test_run_eval_executes_sealed_private_holdout_after_matching_ready(
     assert requests == requests_before_rerun
     assert not copied_output_path.exists()
     assert list(ledger_dir.glob("*.rejected.json"))
+
+
+@pytest.mark.asyncio
+async def test_run_eval_marks_model_assisted_prerun_as_provisional(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(
+        HOLDOUT_CASE_IDS,
+        review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+    )
+    cases_path = cases_dir / "model-assisted-holdout.json"
+    output_path = cases_dir / "model-assisted-result.json"
+    markdown_path = cases_dir / "model-assisted-result.md"
+    cases_path.write_text(
+        json.dumps(raw_cases, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"status": "ready", "release_git_sha": "1" * 40},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(ValueError, match="explicit runner opt-in"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            transport=httpx.MockTransport(handler),
+            bypass_cache=True,
+            **_sealed_holdout_kwargs(
+                ledger_dir,
+                raw_cases,
+                cases_path,
+            ),
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+    assert not ledger_dir.exists()
+
+    metrics = await run_eval(
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=markdown_path,
+        target="http://app-ml:8000/ask",
+        trace_lookup=True,
+        trace_dsn="postgresql://trace.test/db",
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+        allow_model_assisted_prerun=True,
+        **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+    )
+
+    classification = metrics["report_classification"]
+    assert classification["review_mode"] == (
+        run_ask_module.MODEL_ASSISTED_PRERUN_MODE
+    )
+    assert classification["report_status"] == (
+        run_ask_module.MODEL_ASSISTED_REPORT_STATUS
+    )
+    assert classification["provisional"] is True
+    assert classification["product_verdict_eligible"] is False
+    assert classification["human_product_verdict"] is False
+    assert metrics["holdout_run"]["provisional"] is True
+    assert metrics["holdout_run"]["human_product_verdict"] is False
+    assert output_path.is_file()
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "PROVISIONAL MODEL-ASSISTED PRE-RUN DIAGNOSTIC" in markdown
+    assert "must not be reported as product conversion" in markdown
+
+    contract = raw_cases[0]["holdout_contract"]
+    receipt_key = run_ask_module._derive_holdout_receipt_key(
+        contract["selected_case_ids_sha256"]
+    )
+    started = json.loads(
+        (ledger_dir / f"{receipt_key}.started.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    completed = json.loads(
+        (ledger_dir / f"{receipt_key}.completed.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for receipt in (started, completed):
+        assert receipt["review_mode"] == (
+            run_ask_module.MODEL_ASSISTED_PRERUN_MODE
+        )
+        assert receipt["provisional"] is True
+        assert receipt["product_verdict_eligible"] is False
+        assert receipt["human_product_verdict"] is False
 
 
 @pytest.mark.asyncio
