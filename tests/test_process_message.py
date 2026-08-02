@@ -92,9 +92,18 @@ class FakeSemanticCache:
         self.response = response
         self.check_calls: list[tuple[str, str | None]] = []
         self.save_calls: list[tuple[str, CachedResponse]] = []
+        self.check_identity_calls: list[str | None] = []
+        self.save_identity_calls: list[str | None] = []
 
-    async def check(self, query: str, forum: str | None) -> CachedResponse | None:
+    async def check(
+        self,
+        query: str,
+        forum: str | None,
+        *,
+        query_identity: str | None = None,
+    ) -> CachedResponse | None:
         self.check_calls.append((query, forum))
+        self.check_identity_calls.append(query_identity)
         if isinstance(self.response, str):
             return CachedResponse(
                 response=self.response,
@@ -110,8 +119,15 @@ class FakeSemanticCache:
             )
         return self.response
 
-    async def save(self, query: str, cached_response: CachedResponse) -> None:
+    async def save(
+        self,
+        query: str,
+        cached_response: CachedResponse,
+        *,
+        query_identity: str | None = None,
+    ) -> None:
         self.save_calls.append((query, cached_response))
+        self.save_identity_calls.append(query_identity)
         return None
 
 
@@ -423,6 +439,49 @@ async def test_process_message_operator_request_escalates_before_cache_and_graph
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Я подал заявку. На каком этапе её рассмотрение?",
+        "Я уже всё перепробовал, но проблема так и не решилась.",
+    ],
+)
+async def test_process_message_operator_review_skips_cache_but_keeps_graph_routing(
+    configured_llm_settings: None,
+    text: str,
+) -> None:
+    class CacheableGraph(CapturingGraph):
+        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+            result = await super().ainvoke(state)
+            result.update(
+                {
+                    "analysis": QueryAnalysis(category="форумы"),
+                    "cited_sources": ["operator_policy_source"],
+                    "reranked_chunks": [
+                        ScoredChunk(
+                            chunk_id="operator_policy_source",
+                            text="Подтверждённый ответ из Yonote.",
+                            reranker_score=0.9,
+                        )
+                    ],
+                }
+            )
+            return result
+
+    graph = CacheableGraph("Ответ из graph routing")
+    app = _app(cached_response="Ответ из кэша", graph=graph)
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Ответ из graph routing"
+    assert graph.seen_state is not None
+    assert graph.seen_state["cache_allowed"] is False
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+
+
+@pytest.mark.asyncio
 async def test_process_message_returns_semantic_cache_hit(
     no_llm_settings: None,
     captured_logs: list[dict[str, Any]],
@@ -574,6 +633,39 @@ async def test_save_cache_rejects_temporally_bounded_sources() -> None:
 
 
 @pytest.mark.asyncio
+async def test_save_cache_rejects_conditional_cited_sources() -> None:
+    cache = FakeSemanticCache()
+    app = SimpleNamespace(state=SimpleNamespace(semantic_cache=cache))
+    analysis = QueryAnalysis(
+        forum="Машук",
+        forum_normalized="Машук",
+        category="форумы",
+    )
+    chunk = ScoredChunk(
+        chunk_id="mashuk_dates_by_age",
+        text="14–17 лет: 8–22 августа. 18–35 лет: 8–15 августа.",
+        metadata={
+            "source_type": "yonote",
+            "has_conditional_logic": True,
+        },
+        reranker_score=0.99,
+    )
+
+    await _save_cache(
+        app,  # type: ignore[arg-type]
+        "Когда проходит первая смена Машука?",
+        "Первая смена проходит с 8 по 15 августа.",
+        {
+            "analysis": analysis,
+            "cited_sources": [chunk.chunk_id],
+            "reranked_chunks": [chunk],
+        },
+    )
+
+    assert cache.save_calls == []
+
+
+@pytest.mark.asyncio
 async def test_process_message_skips_cache_for_registration_deadline_query(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],
@@ -592,6 +684,34 @@ async def test_process_message_skips_cache_for_registration_deadline_query(
     response = await process_message(message, app)  # type: ignore[arg-type]
 
     assert response == "Свежий ответ с проверкой срока регистрации"
+    assert app.state.semantic_cache.check_calls == []
+    assert app.state.semantic_cache.save_calls == []
+    assert graph.seen_state is not None
+    assert graph.seen_state["cache_allowed"] is False
+    assert captured_logs[0]["cache_hit"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Мне 20 лет, когда проходит форум Машук?",
+        "Когда проходит первая смена форума Машук?",
+        "Когда программа для наставников на Машуке?",
+    ],
+)
+async def test_process_message_skips_cache_for_conditional_fact_scope(
+    configured_llm_settings: None,
+    captured_logs: list[dict[str, Any]],
+    text: str,
+) -> None:
+    graph = CapturingGraph("Свежий ответ из graph")
+    app = _app(cached_response="Ответ для другой группы", graph=graph)
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text=text)
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Свежий ответ из graph"
     assert app.state.semantic_cache.check_calls == []
     assert app.state.semantic_cache.save_calls == []
     assert graph.seen_state is not None
@@ -699,6 +819,9 @@ async def test_process_message_scopes_cache_by_detected_forum_before_graph(
     assert response == "Ответ из кэша"
     assert app.state.semantic_cache.check_calls == [
         ("[ИМЯ] Вышлите положение", "Амур")
+    ]
+    assert app.state.semantic_cache.check_identity_calls == [
+        "Амур Вышлите положение"
     ]
 
 

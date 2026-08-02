@@ -119,6 +119,40 @@ OPERATOR_ONLY_MARKERS = (
     "подали в суд",
     "судебный иск",
 )
+PERSONAL_WORKFLOW_OBJECT_MARKERS = (
+    "моя заявк",
+    "мою заявк",
+    "моей заявк",
+    "свою заявк",
+    "мой сертификат",
+    "моего сертификат",
+    "мое удостовер",
+    "моё удостовер",
+    "моего удостовер",
+)
+PERSONAL_WORKFLOW_FAILURE_MARKERS = (
+    "пропал",
+    "пропала",
+    "исчез",
+    "не отображ",
+    "не вид",
+    "не приш",
+    "не получил",
+    "не получила",
+    "восстанов",
+)
+REGISTERED_APPEAL_MARKERS = (
+    "зарегистрировать обращение",
+    "зарегистрируйте обращение",
+    "зарегистрировать входящ",
+    "зарегистрируйте входящ",
+    "регистрационный номер обращения",
+    "номер обращения",
+    "номер входящего",
+    "входящий номер",
+    "присвоить номер",
+    "присвойте номер",
+)
 REPEATED_SUPPORT_FAILURE_MARKERS = (
     "третий раз никто не помог",
     "никто не помог",
@@ -146,13 +180,19 @@ def is_operator_request(text: str) -> bool:
     ) and not any(marker in normalized for marker in ("оператор", "поддержк", "сотрудник")):
         return False
     has_direct_target = any(marker in normalized for marker in TARGET_MARKERS)
-    has_support_target = "поддержк" in normalized and any(
+    has_support_target = any(
         marker in normalized
-        for marker in ("служба поддерж", "техподдерж", "сотрудник поддерж", "оператор поддерж")
+        for marker in (
+            "служба поддерж",
+            "службой поддерж",
+            "техподдерж",
+            "сотрудник поддерж",
+            "оператор поддерж",
+        )
     )
     if not has_direct_target and not has_support_target:
         return False
-    if any(marker in normalized for marker in EMPLOYMENT_MARKERS):
+    if _is_operator_employment_request(normalized):
         return False
     return any(marker in normalized for marker in ACTION_MARKERS)
 
@@ -167,6 +207,10 @@ def operator_review_reason(text: str) -> str | None:
         return "operator_requested"
     if _is_personal_status_request(normalized):
         return "personal_status"
+    if _is_personal_workflow_failure(normalized):
+        return "personal_status"
+    if _is_registered_appeal_request(normalized):
+        return "operator_requested"
     # Yonote first-line policy requires troubleshooting guidance before escalation.
     # Repeated failures are handled below; a first technical report stays in RAG.
     if _is_press_accreditation_request(normalized):
@@ -208,9 +252,103 @@ def _is_personal_status_request(normalized: str) -> bool:
         return True
     if re.search(r"\bзаявк[аи]\s*[№#]\s*\d+", normalized):
         return True
+    if any(
+        marker in normalized
+        for marker in ("моя заявк", "мою заявк", "моей заявк", "свою заявк")
+    ) and any(
+        marker in normalized
+        for marker in ("на каком этапе", "где сейчас", "что с заяв", "находится")
+    ):
+        return True
+    submitted_own_application = any(
+        marker in normalized
+        for marker in (
+            "я подал заяв",
+            "я подала заяв",
+            "я подавал заяв",
+            "я подавала заяв",
+            "я отправил заяв",
+            "я отправила заяв",
+        )
+    )
+    if submitted_own_application and any(
+        marker in normalized
+        for marker in (
+            "на каком этапе",
+            "этап рассмотр",
+            "когда ждать подтвержд",
+            "ее нет в аккаунте",
+            "ее нет в кабинете",
+            "пропала из аккаунта",
+            "пропала из кабинета",
+        )
+    ):
+        return True
+    if any(
+        marker in normalized
+        for marker in ("моя заявк", "мою заявк", "моей заявк")
+    ) and any(
+        marker in normalized
+        for marker in ("не приняли", "не принята", "до сих пор не принят")
+    ) and any(
+        marker in normalized
+        for marker in (
+            "сколько еще",
+            "сколько ждать",
+            "займет рассмотр",
+            "займёт рассмотр",
+        )
+    ):
+        return True
     if "вопрос по заявке" in normalized and len(normalized) < 120:
         return True
     return False
+
+
+def _is_operator_employment_request(normalized: str) -> bool:
+    return any(
+        marker in normalized
+        for marker in (
+            "работать оператор",
+            "работа оператор",
+            "вакансия оператор",
+            "вакансии оператор",
+            "устроиться оператор",
+            "стать оператором",
+            "побыть оператор",
+            "побыть у вас оператор",
+            "работать специалистом поддерж",
+            "вакансия специалиста поддерж",
+            "отправить резюме",
+        )
+    )
+
+
+def _is_personal_workflow_failure(normalized: str) -> bool:
+    """Route only an individual failed object, not a general how-to question."""
+
+    has_personal_object = any(
+        marker in normalized for marker in PERSONAL_WORKFLOW_OBJECT_MARKERS
+    )
+    if not has_personal_object:
+        return False
+    return any(marker in normalized for marker in PERSONAL_WORKFLOW_FAILURE_MARKERS)
+
+
+def _is_registered_appeal_request(normalized: str) -> bool:
+    if not any(marker in normalized for marker in REGISTERED_APPEAL_MARKERS):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "зарегистр",
+            "присво",
+            "сообщ",
+            "предостав",
+            "дать",
+            "нужен",
+        )
+    )
 
 
 def _is_technical_review_request(normalized: str) -> bool:

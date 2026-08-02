@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
@@ -12,7 +15,7 @@ from src.config import get_settings
 from src.models import QueryAnalysis
 from src.rag.embedder import Embedder
 
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 5
 GLOBAL_CACHE_SCOPE = "__global__"
 
 
@@ -33,16 +36,30 @@ class SemanticCache:
         self.embedder = embedder
         self.settings = get_settings()
 
-    async def check(self, query: str, forum: str | None) -> CachedResponse | None:
+    async def check(
+        self,
+        query: str,
+        forum: str | None,
+        *,
+        query_identity: str | None = None,
+    ) -> CachedResponse | None:
         dense, _ = await asyncio.to_thread(self.embedder.encode, query)
+        scope_key = _scope_key(forum)
+        query_fingerprint = _query_fingerprint(
+            query if query_identity is None else query_identity
+        )
         must: list[models.Condition] = [
             models.FieldCondition(
                 key="scope_key",
-                match=models.MatchValue(value=_scope_key(forum)),
+                match=models.MatchValue(value=scope_key),
             ),
             models.FieldCondition(
                 key="cache_schema_version",
                 match=models.MatchValue(value=CACHE_SCHEMA_VERSION),
+            ),
+            models.FieldCondition(
+                key="query_fingerprint",
+                match=models.MatchValue(value=query_fingerprint),
             ),
         ]
 
@@ -65,20 +82,40 @@ class SemanticCache:
         )
         if not result.points:
             return None
+        payload = result.points[0].payload or {}
+        if (
+            payload.get("cache_schema_version") != CACHE_SCHEMA_VERSION
+            or payload.get("scope_key") != scope_key
+            or payload.get("query_fingerprint") != query_fingerprint
+        ):
+            return None
         try:
-            return CachedResponse.model_validate(result.points[0].payload or {})
+            return CachedResponse.model_validate(payload)
         except ValidationError:
             return None
 
-    async def save(self, query: str, cached_response: CachedResponse) -> None:
+    async def save(
+        self,
+        query: str,
+        cached_response: CachedResponse,
+        *,
+        query_identity: str | None = None,
+    ) -> None:
         dense, _ = await asyncio.to_thread(self.embedder.encode, query)
         forum = cached_response.forum_normalized
-        point_id = str(uuid5(NAMESPACE_URL, f"{_scope_key(forum)}:{query}"))
+        scope_key = _scope_key(forum)
+        query_fingerprint = _query_fingerprint(
+            query if query_identity is None else query_identity
+        )
+        point_id = str(
+            uuid5(NAMESPACE_URL, f"{scope_key}:{query_fingerprint}")
+        )
         payload = cached_response.model_dump(mode="json")
         payload.update(
             {
                 "cache_schema_version": CACHE_SCHEMA_VERSION,
-                "scope_key": _scope_key(forum),
+                "scope_key": scope_key,
+                "query_fingerprint": query_fingerprint,
                 "cached_at": datetime.now(UTC).isoformat(),
                 "query_text": query,
             }
@@ -112,3 +149,10 @@ class SemanticCache:
 
 def _scope_key(forum: str | None) -> str:
     return str(forum or "").strip() or GLOBAL_CACHE_SCOPE
+
+
+def _query_fingerprint(query: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(query or ""))
+    normalized = normalized.casefold().replace("ё", "е")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

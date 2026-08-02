@@ -473,6 +473,51 @@ def test_release_summary_requires_every_requested_section() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    (
+        "http://app-ml:8000/ask",
+        "http://rosmol-app-ml:8000/ask",
+        "http://172.20.0.9:8000/ask",
+    ),
+)
+async def test_non_loopback_followup_rejects_old_runtime_before_first_ask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-eval-secret")
+    cases_path = tmp_path / "reviewed_followup.json"
+    output_path = tmp_path / "followup_result.json"
+    _write_followup_payload(cases_path, _reviewed_ticket_followup())
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json={
+                "status": "ready",
+                "release_git_sha": "old-runtime",
+                "checks": {},
+            },
+        )
+
+    with pytest.raises(ValueError, match="did not authorize signed cache bypass"):
+        await suite.run_followup_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target=target,
+            trace_lookup=False,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_followup_turn_sends_eval_trace_headers() -> None:
     captured_headers: dict[str, str] = {}
 
@@ -506,3 +551,64 @@ async def test_followup_turn_sends_eval_trace_headers() -> None:
     assert captured_headers["x-eval-run-id"] == "followup-eval-test"
     assert captured_headers["x-eval-case-id"] == "followup-turn-1"
     assert result["conversation_id"] == "conversation-1"
+
+
+@pytest.mark.asyncio
+async def test_followup_turn_signs_server_local_cache_bypass_payload() -> None:
+    captured_headers: dict[str, str] = {}
+    captured_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_headers.update(request.headers)
+        captured_payload.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={"request_id": "request-1", "response": "Тестовый ответ"},
+        )
+
+    case = suite._normalize_case(
+        {
+            "id": "followup-turn-signed",
+            "query": "Когда начинается мероприятие?",
+            "user_id": "eval-user",
+            "channel": "api",
+            "expected_behavior": "answer",
+            "expected_escalated": False,
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await suite._run_followup_turn(
+            client=client,
+            target="http://app-ml:8000/ask",
+            headers={
+                "X-Eval-Run-Id": "followup-eval-test",
+                "X-Bypass-Cache": "1",
+            },
+            case=case,
+            trace_pool=None,
+            conversation_id="conversation-1",
+            cache_bypass_secret="test-eval-secret",
+        )
+
+    timestamp = captured_headers["x-eval-cache-bypass-timestamp"]
+    nonce = captured_headers["x-eval-cache-bypass-nonce"]
+    expected_signature = suite.eval_cache_bypass.signature(
+        "test-eval-secret",
+        method="POST",
+        path="/ask",
+        eval_run_id="followup-eval-test",
+        eval_case_id="followup-turn-signed",
+        timestamp=timestamp,
+        nonce=nonce,
+        payload_sha256=suite.eval_cache_bypass.canonical_payload_sha256(
+            suite.eval_cache_bypass.canonical_ask_payload(captured_payload)
+        ),
+    )
+    assert (
+        captured_headers["x-eval-cache-bypass-version"]
+        == suite.eval_cache_bypass.SCHEME
+    )
+    assert (
+        captured_headers["x-eval-cache-bypass-signature"]
+        == expected_signature
+    )

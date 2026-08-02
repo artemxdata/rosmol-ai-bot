@@ -118,6 +118,7 @@ def _request(
     transport_repository: FakeTransportRepository | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
+        headers={},
         app=SimpleNamespace(
             state=SimpleNamespace(
                 redis=FakeRedis(redis_fail),

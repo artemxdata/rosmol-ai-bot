@@ -9,9 +9,15 @@ from src.graph.context import (
     build_contextual_message,
     last_forum_from_session,
 )
-from src.graph.response_profiles import infer_response_profile
+from src.graph.response_profiles import (
+    has_explicit_application_action,
+    has_explicit_event_timing,
+    has_explicit_technical_failure,
+    infer_response_profile,
+    should_suppress_event_date_question,
+)
 from src.graph.state import BotState
-from src.kb.forum_registry import detect_forums_from_text
+from src.kb.forum_registry import detect_forums_from_text, forum_filter_values
 from src.llm.cascade import select_analyzer_model
 from src.llm.json_utils import parse_llm_json
 from src.llm.prompts import QUERY_ANALYZER_SYSTEM, build_analyzer_user
@@ -2082,6 +2088,11 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             (
                 "подать заяв",
                 "подача заяв",
+                "подачи заяв",
+                "подачу заяв",
+                "прием заяв",
+                "приём заяв",
+                "срок подачи",
                 "подать проект",
                 "хочу попасть на",
                 "как попасть на форум",
@@ -2140,7 +2151,16 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "Будет ли трансфер?",
             ("трансфер", "шаттл"),
         ),
-        ("pismo_vyzov", "Где получить письмо-вызов?", ("письмо-вызов", "письмо вызов")),
+        (
+            "pismo_vyzov",
+            "Где получить письмо-вызов или приглашение?",
+            (
+                "письмо-вызов",
+                "письмо вызов",
+                "приглашение",
+                "пригласительное",
+            ),
+        ),
         ("kogda_budet_sertifikat", "Когда будет сертификат?", ("сертификат",)),
         (
             "spisok_veschey_i_dokumentov",
@@ -2267,6 +2287,25 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
         "cifrovaya_nedelya",
     }
     for topic, text, markers in candidates:
+        has_event_timing_focus = has_explicit_event_timing(
+            normalized
+        ) or _has_named_event_timing_clause(normalized, str(forum or ""))
+        has_event_location_focus = (
+            topic == "daty_nachala_meropriyatiya"
+            and any(
+                marker in normalized
+                for marker in (
+                    "место проведения",
+                    "где проходит",
+                    "где пройдет",
+                    "где пройдёт",
+                    "где будет проходить",
+                    "где проводится",
+                    "адрес площадки",
+                    "локац",
+                )
+            )
+        )
         if topic in seen_topics:
             continue
         if topic in forum_only_topics and category != "форумы":
@@ -2275,18 +2314,56 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             continue
         if topic == "podacha_zayavki_na_proekt" and "волонтер" in normalized:
             continue
+        if (
+            topic == "podacha_zayavki_na_proekt"
+            and _has_grant_reporting_deadline_context(normalized)
+            and not any(
+                marker in normalized
+                for marker in ("заяв", "регистрац", "анкет")
+            )
+        ):
+            continue
+        if (
+            topic == "podacha_zayavki_na_proekt"
+            and has_explicit_technical_failure(normalized)
+            and not has_explicit_application_action(normalized)
+        ):
+            continue
         if topic == "daty_nachala_meropriyatiya" and _has_personal_date_without_event_context(
             normalized
         ):
             continue
+        if (
+            topic == "daty_nachala_meropriyatiya"
+            and should_suppress_event_date_question(normalized)
+        ):
+            continue
+        if topic == "daty_nachala_meropriyatiya":
+            inferred_profile = infer_response_profile(
+                QueryAnalysis(category=category),
+                normalized,
+            )
+            if (
+                inferred_profile
+                not in {ResponseProfileName.DATES, ResponseProfileName.GENERIC}
+                and not has_event_timing_focus
+                and not has_event_location_focus
+            ):
+                continue
         if topic == "podtverzhdenie_uchastiya_i_org_momenty" and _has_decline_context(
             normalized
         ):
             continue
         if any(marker in normalized for marker in markers):
+            question_text = text
+            if (
+                has_event_location_focus
+                and not has_event_timing_focus
+            ):
+                question_text = "Где проходит мероприятие?"
             questions.append(
                 {
-                    "text": text,
+                    "text": question_text,
                     "topic": topic,
                     "category": category,
                     "forum_normalized": forum,
@@ -2312,6 +2389,49 @@ def _build_deterministic_questions(payload: dict, message: str) -> list[dict]:
             "forum_normalized": forum,
         }
     ]
+
+
+def _has_grant_reporting_deadline_context(normalized: str) -> bool:
+    has_reporting_subject = any(
+        marker in normalized
+        for marker in (
+            "отчет",
+            "отчетност",
+            "отчёт",
+            "отчётност",
+            "соглашен",
+            "закрывающ",
+            "контрольн",
+        )
+    )
+    has_deadline = any(
+        marker in normalized
+        for marker in ("срок", "дедлайн", "до какого", "когда подать")
+    )
+    return has_reporting_subject and has_deadline
+
+
+def _has_named_event_timing_clause(normalized: str, forum: str) -> bool:
+    """Recognize ``когда Машук`` without borrowing timing from another clause."""
+
+    if not forum:
+        return False
+    clauses = re.split(r"[,;.!?]+|\s+(?:и|а|но)\s+", normalized)
+    for alias in forum_filter_values(forum):
+        normalized_alias = " ".join(alias.casefold().replace("ё", "е").split())
+        if not normalized_alias:
+            continue
+        escaped_alias = re.escape(normalized_alias)
+        if any(
+            re.search(
+                rf"\bкогда\s+(?:сам\w*\s+)?(?:форум\w*\s+)?{escaped_alias}\b",
+                clause,
+                flags=re.UNICODE,
+            )
+            for clause in clauses
+        ):
+            return True
+    return False
 
 
 def _build_exact_grant_questions(normalized: str) -> list[dict]:

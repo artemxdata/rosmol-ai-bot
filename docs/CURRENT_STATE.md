@@ -1134,3 +1134,58 @@ prompts, routing, thresholds и KB не менялись. Строгий factual
 runtime-SHA gate, complete PostgreSQL traces и one-shot ledger. Codex сервер не трогает.
 HDE/VK остаются выключенными и не используются как массовый транспорт. До получения и
 классификации результата запрещено менять Yonote, индекс, KB или runtime behavior.
+
+## 14. Systemic calibration quality-cycle 2 августа 2026
+
+Локальный release candidate подготовлен поверх trusted repository commit `980d44f`; до
+commit/push и отдельного ручного SHA-bound обновления он не deployed. Последний известный runtime
+остаётся `4c6262455d1338c6e0f26b8900a5f66e64a97489`. Сервер, HDE/VK, Yonote, versioned seed,
+Qdrant и production-конфигурация в этом цикле не затрагивались. Product80 больше не считается
+sealed holdout: один semantic-cache hit нарушил независимость прогона, поэтому набор используется
+только как calibration/regression evidence.
+
+Что закрыто системно:
+
+- общий parser связывает возраст и смену внутри исходной clause, поддерживает именованные и
+  числовые смены и не создаёт all-to-all комбинации неоднозначных условий;
+- единый ticket resolver различает транспортный билет и admission/MAX/QR/почтовый билет;
+  event dates, program и application/reporting deadlines классифицируются clause-local;
+- generation contract проверяет каждый cited claim против конкретного source, включая точный
+  возрастной диапазон, payer/responsibility, роль, разрешение/запрет и обязательность;
+- adjacent-section date разрешается только при валидном exact named anchor; clean exact Yonote
+  source остаётся extractive, mixed contextual source проходит synthesis, а неполное покрытие
+  возвращает подтверждённую partial-часть без выдумывания отсутствующего аспекта;
+- signed cache bypass стал одноразовым: HMAC validation отделена от Redis `SET NX EX 190`, replay
+  и Redis failure закрываются fail-closed, в том числе на loopback;
+- completed eval receipt требует точной cardinality PostgreSQL traces по `eval_run_id` и
+  `eval_case_id`; duplicate, unknown, missing и error traces создают только rejection evidence;
+- operator-required routes обходят semantic cache до lookup; cache schema поднята до v5 и
+  изолирует forum scope и SHA-256 fingerprint исходного NFKC/casefold query. Старые v4 records
+  автоматически игнорируются.
+
+Публичный `/ask`, response payload и capability object `/ready` не изменены. Новые nonce keys и
+cache fields внутренние; миграция БД, Yonote Apply и reindex не требуются.
+
+Проверки release candidate:
+
+- затронутые suites: generation contract `75 passed`, graph `262 passed`, analysis/profiles
+  `259 passed`, security/eval/cache/process `361 passed`;
+- `.venv\\Scripts\\ruff.exe check .` — успешно;
+- `.venv\\Scripts\\python.exe -m pytest` — `2054 passed, 1 skipped`;
+- `.venv\\Scripts\\python.exe scripts\\index_kb.py --validate-only` —
+  `2186 valid / 2152 published`;
+- adversarial security review: P0/P1-блокеров не осталось. Принятые P2: небольшое TOCTOU-окно
+  между trace-cardinality SELECT и receipt, общий `API_AUTH_TOKEN` как HMAC key и возможность
+  dictionary guessing SHA-256 для низкоэнтропийного PII; для текущего server-local threat model
+  они не блокируют calibration-релиз.
+
+Точный следующий шаг после commit/push: пользователь вручную обновляет только runtime-сервисы до
+полного SHA этого change set через `pull --ff-only`, rebuild и `/ready` gate. Не выполнять
+миграции, Yonote Apply, индексацию KB или изменение Qdrant. Затем один раз повторить Product80
+server-local через signed bypass: требуется `0/80` cache hits, ровно один trace на каждый case,
+отсутствие unknown/duplicate traces и разбор причин до/после без заявления независимой
+конверсии. Переход к новой независимой выборке разрешён только при calibration closure/behavior
+не ниже 65%, critical off-aspect `0`, unsupported critical facts `0`, приемлемых D-035
+precision/recall и заметном снижении citation failures; иначе выполнить ещё один системный top-20
+correction cycle. Финальные 60% доказываются только на новой human-reviewed sanity-выборке
+100–150 тикетов и затем sealed holdout не менее 400 полных тикетов.

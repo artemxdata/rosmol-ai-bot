@@ -34,12 +34,15 @@ from eval.run_ask import (
     _fetch_trace,
     _llm_cost_rub_total,
     _normalize_case,
+    _requires_signed_cache_bypass,
     _trace_dsn_candidates,
+    _verify_cache_bypass_runtime,
     score_case,
 )
 from eval.run_ask import (
     run_eval as run_ask_eval,
 )
+from src.security import eval_cache_bypass
 
 DEFAULT_OUTPUT_DIR = Path("reports/pre_pilot_quality_suite")
 DEFAULT_SECTIONS = (
@@ -255,19 +258,42 @@ async def run_followup_eval(
     trace_dsn: str | None = None,
     bypass_cache: bool = True,
     max_llm_cost_rub: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
     conversations = _load_followup_cases(cases_path)
     trace_pool = await _open_trace_pool(trace_dsn) if trace_lookup else None
     headers = _auth_headers("API_AUTH_TOKEN")
     eval_run_id = f"followup-eval-{uuid4()}"
     headers["X-Eval-Run-Id"] = eval_run_id
+    cache_bypass_secret = ""
+    signed_bypass_required = (
+        bypass_cache and _requires_signed_cache_bypass(target)
+    )
     if bypass_cache:
-        headers["X-Bypass-Cache"] = "1"
+        headers[eval_cache_bypass.HEADER_BYPASS] = "1"
+        cache_bypass_secret = headers.get("X-API-Key", "").strip()
+        if signed_bypass_required and not cache_bypass_secret:
+            raise RuntimeError(
+                "non-loopback follow-up cache bypass requires API_AUTH_TOKEN"
+            )
 
     results: list[dict[str, Any]] = []
     budget_stopped = False
     run_namespace = uuid4().hex[:12]
-    async with httpx.AsyncClient(timeout=request_timeout, trust_env=False) as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        timeout=request_timeout,
+        trust_env=False,
+    ) as client:
+        if signed_bypass_required:
+            await _verify_cache_bypass_runtime(
+                client=client,
+                target=target,
+                headers=headers,
+                expected_git_sha=None,
+                eval_run_id=eval_run_id,
+                cache_bypass_secret=cache_bypass_secret,
+            )
         for conversation_index, conversation in enumerate(conversations, start=1):
             user_id = f"pre-pilot-followup-{run_namespace}-{conversation_index}"
             turns = conversation.get("turns") or []
@@ -280,6 +306,7 @@ async def run_followup_eval(
                     case=case,
                     trace_pool=trace_pool,
                     conversation_id=str(conversation.get("id") or conversation_index),
+                    cache_bypass_secret=cache_bypass_secret,
                 )
                 results.append(result)
                 if max_llm_cost_rub is not None and _llm_cost_rub_total(results) > max_llm_cost_rub:
@@ -319,18 +346,39 @@ async def _run_followup_turn(
     case: dict[str, Any],
     trace_pool: asyncpg.Pool | None,
     conversation_id: str,
+    cache_bypass_secret: str = "",
 ) -> dict[str, Any]:
     started_at = perf_counter()
     request_id = ""
     try:
+        request_payload = {
+            "user_id": case["user_id"],
+            "channel": case["channel"],
+            "text": case["query"],
+        }
+        request_headers = {
+            **headers,
+            "X-Eval-Case-Id": str(case["id"]),
+        }
+        if cache_bypass_secret:
+            request_headers.update(
+                eval_cache_bypass.build_signed_headers(
+                    cache_bypass_secret,
+                    method="POST",
+                    path=urlsplit(target).path or "/",
+                    eval_run_id=str(headers["X-Eval-Run-Id"]),
+                    eval_case_id=str(case["id"]),
+                    payload_sha256=eval_cache_bypass.canonical_payload_sha256(
+                        eval_cache_bypass.canonical_ask_payload(
+                            request_payload
+                        )
+                    ),
+                )
+            )
         response = await client.post(
             target,
-            headers={**headers, "X-Eval-Case-Id": str(case["id"])},
-            json={
-                "user_id": case["user_id"],
-                "channel": case["channel"],
-                "text": case["query"],
-            },
+            headers=request_headers,
+            json=request_payload,
         )
         payload = response.json() if response.content else {}
         request_id = str(payload.get("request_id") or "")

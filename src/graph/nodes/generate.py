@@ -6,11 +6,16 @@ from time import perf_counter
 from src.config import get_settings
 from src.graph.nodes.respond import normalize_final_response
 from src.graph.query_normalization import expand_query_aliases
-from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
+from src.graph.question_utils import (
+    FALLBACK_QUESTION_MARKERS,
+    build_effective_questions,
+    named_section_entities,
+)
 from src.graph.response_profiles import (
     DATE_VALUE_RE,
     LEGACY_EVENT_DATE_TOPICS,
     chunk_has_event_date_evidence,
+    detect_response_profiles,
     infer_response_profile,
     response_has_cross_aspect_drift,
     response_has_cross_aspect_drift_for_profiles,
@@ -26,8 +31,88 @@ from src.response_contract import ResponseProfileName, get_response_contract
 
 _RESPONSE_CONTRACT = get_response_contract()
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
-SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
+SOURCE_RE = re.compile(r"\[src:([^\]]+)\]", re.IGNORECASE)
+SOURCE_GROUP_RE = re.compile(r"(?:\s*\[src:[^\]]+\])+", re.IGNORECASE)
+FACT_NUMBER_RE = re.compile(r"(?<![\w])\d+(?![\w])", re.UNICODE)
+FACT_DATE_RE = re.compile(
+    r"(?<!\d)(\d{1,2})\s*[./]\s*(\d{1,2})"
+    r"(?:\s*[./]\s*(\d{2,4}))?(?!\d)"
+)
+RUSSIAN_MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+WORD_DATE_RANGE_RE = re.compile(
+    r"(?<!\d)(\d{1,2})\s*(?:[-–—]|\s+по\s+)\s*(\d{1,2})\s+"
+    rf"({'|'.join(RUSSIAN_MONTHS)})(?:\s+(\d{{4}}))?",
+    re.IGNORECASE,
+)
+WORD_DATE_RE = re.compile(
+    rf"(?<!\d)(\d{{1,2}})\s+({'|'.join(RUSSIAN_MONTHS)})"
+    r"(?:\s+(\d{4}))?",
+    re.IGNORECASE,
+)
+AGE_RANGE_RE = re.compile(
+    r"(?<!\d)(?:от\s+)?(\d{1,2})\s*(?:[-–—]|\s+до\s+)\s*"
+    r"(\d{1,2})\s*(?:лет|года?)\b",
+    re.IGNORECASE,
+)
+EXPLICIT_AGE_RE = re.compile(
+    r"\b(?:мне|участнику|участнице)\s+(\d{1,2})\s*(?:лет|года?|год)\b|"
+    r"\bвозраст(?:\s+участника|\s+участницы)?\s*[:=–—-]?\s*"
+    r"(\d{1,2})\s*(?:лет|года?|год)?\b|"
+    r"\b(\d{1,2})\s*[-‑–—]?\s*летн(?:ий|яя|ие|их|им|ими|его|ему|ей|ую)\b|"
+    r"\bмне\s+(\d{1,2})(?=\s*(?:[,.;!?]|когда\b|могу\b|можно\b|"
+    r"подхожу\b|$))",
+    re.IGNORECASE,
+)
+MINOR_AGE_ALIAS_RE = re.compile(
+    r"\b(?:несовершеннолетн|подрост|дет(?:ск|и\b|ей\b)|реб[её]н)\w*\b",
+    re.IGNORECASE,
+)
+ADULT_AGE_ALIAS_RE = re.compile(
+    r"\b(?:совершеннолетн|взросл)\w*\b",
+    re.IGNORECASE,
+)
+AUDIENCE_ROLE_STEMS = {
+    "настав": "mentors",
+    "школьн": "school_students",
+    "студент": "students",
+    "очн": "in_person",
+    "заочн": "remote",
+    "педагог": "teachers",
+    "учител": "teachers",
+    "волонт": "volunteers",
+}
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+TECHNICAL_ACTION_MARKERS = (
+    "очисти кеш",
+    "очистить кеш",
+    "очисти кэш",
+    "очистить кэш",
+    "cookie",
+    "куки",
+    "другой браузер",
+    "другом браузере",
+    "режим инкогнито",
+    "другое устройство",
+    "другом устройстве",
+    "обнови страницу",
+    "перезагрузи страницу",
+    "проверь интернет",
+    "проверь соединение",
+    "попробуй позднее",
+)
 EMOJI_RE = re.compile(
     "["
     "\U0001f1e6-\U0001f1ff"
@@ -95,6 +180,14 @@ SAFE_CROSS_CATEGORY_ANSWER_BANK_TOPICS = {
     "регистрация_и_заявка",
     "статус_заявки",
 }
+APPLICATION_RESPONSE_TOPIC_FAMILIES = frozenset(
+    {
+        "otkaz_ot_uchastiya",
+        "kolichestvo_person_otmena_registracii",
+        "poluchenie_i_naznachenie_bileta",
+        "bilet_ne_prishel_povtornoe_poluchenie",
+    }
+)
 
 
 async def generate(state: BotState) -> dict:
@@ -384,6 +477,19 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                 result,
                 reason="source_response_contract_failed",
             )
+        if result.get("partial_source_missing_coverage"):
+            if (
+                _visible_response_length(sanitized) > response_limit
+                or _response_url_count(sanitized) > 1
+                or not result.get("cited_sources")
+            ):
+                return _generation_contract_failure(
+                    result,
+                    reason="source_response_contract_failed",
+                )
+            guarded = dict(result)
+            guarded["generated_response"] = sanitized
+            return _without_internal_generation_markers(guarded)
         cited_ids = list(result.get("cited_sources") or [])
         requires_synthesis = (
             len(cited_ids) > 1
@@ -454,6 +560,7 @@ async def _generate_with_llm_or_source_fallback(
 ) -> dict:
     tracer = state.get("trace")
     last_result: dict = {}
+    retry_reason: str | None = None
     for attempt in range(2):
         result = await _generate_with_llm(
             state=state,
@@ -462,6 +569,7 @@ async def _generate_with_llm_or_source_fallback(
             source_chunks=source_chunks,
             started_at=started_at,
             response_limit=response_limit,
+            retry_reason=retry_reason,
         )
         last_result = result
         invalid_coverage = (
@@ -479,23 +587,23 @@ async def _generate_with_llm_or_source_fallback(
         )
         if not result.get("should_escalate") and not invalid_coverage:
             return result
+        retry_reason = (
+            str(result.get("escalation_reason") or "")
+            or "llm_source_coverage_failed"
+        )
         if attempt == 0:
             if tracer:
                 tracer.add(
                     "generate_retry",
                     int((perf_counter() - started_at) * 1000),
-                    reason=(
-                        str(result.get("escalation_reason") or "")
-                        or "llm_source_coverage_failed"
-                    ),
+                    reason=retry_reason,
                     chunks=len(source_chunks),
                 )
             continue
 
     return _generation_contract_failure(
         last_result,
-        reason=str(last_result.get("escalation_reason") or "")
-        or "llm_response_contract_failed",
+        reason=retry_reason or "llm_response_contract_failed",
     )
 
 
@@ -620,6 +728,7 @@ async def _generate_with_llm(
     source_chunks: list[ScoredChunk],
     started_at: float,
     response_limit: int | None = None,
+    retry_reason: str | None = None,
 ) -> dict:
     tracer = state.get("trace")
     generator_complexity = _generator_complexity(
@@ -643,6 +752,7 @@ async def _generate_with_llm(
                 max_chars=effective_limit,
                 response_profile=response_profile.name.value,
                 profile_guidance=response_profile.guidance,
+                retry_reason=retry_reason,
             ),
             response_format="text",
             temperature=0.1,
@@ -678,12 +788,38 @@ async def _generate_with_llm(
             {"generator_model": model},
             reason="llm_response_contract_failed",
         )
+    if _response_signals_insufficient_sources(content):
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_response_contract_failed",
+        )
+    cited_sources = _known_source_refs(content, source_chunks)
+    if (
+        not cited_sources
+        or _has_unknown_source_refs(content, source_chunks)
+        or (
+            len(source_chunks) == 1
+            and cited_sources != [source_chunks[0].chunk_id]
+        )
+    ):
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_source_citation_failed",
+        )
     if _violates_response_profile(content, analysis, questions):
         return _generation_contract_failure(
             {"generator_model": model},
             reason="llm_response_profile_failed",
         )
-    cited_sources = _known_source_refs(content, source_chunks)
+    if not _llm_claims_have_bound_source_facts(
+        content,
+        source_chunks,
+        questions,
+    ):
+        return _generation_contract_failure(
+            {"generator_model": model},
+            reason="llm_source_fact_binding_failed",
+        )
     if tracer:
         tracer.add(
             "generate",
@@ -732,15 +868,507 @@ def _repair_source_refs(response: str, chunks: list[ScoredChunk]) -> str:
         aliases[key] = chunk_id if key not in aliases else None
 
     def replace(match: re.Match[str]) -> str:
-        source_id = match.group(1)
+        source_id = match.group(1).strip()
         if source_id in known:
-            return match.group(0)
+            return f"[src:{source_id}]"
         repaired = aliases.get(_source_ref_key(source_id))
         if not repaired:
             return match.group(0)
         return f"[src:{repaired}]"
 
     return SOURCE_RE.sub(replace, response)
+
+
+def _llm_claims_have_bound_source_facts(
+    response: str,
+    source_chunks: list[ScoredChunk],
+    questions: list[Question] | None = None,
+) -> bool:
+    """Require every cited claim to be bound to one relevant source.
+
+    A union-of-sources check cannot detect swapped facts. Requiring one source per
+    claim makes conditional associations verifiable. With multiple retrieved
+    sources, the cited source must also cover at least one of the questions that
+    the answer is supposed to resolve.
+    """
+
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in source_chunks}
+    previous_end = 0
+    found_claim = False
+    for marker_group in SOURCE_GROUP_RE.finditer(response):
+        claim = response[previous_end : marker_group.start()]
+        previous_end = marker_group.end()
+        if not SOURCE_RE.sub("", claim).strip():
+            return False
+        found_claim = True
+        cited_ids = list(dict.fromkeys(SOURCE_RE.findall(marker_group.group(0))))
+        if len(cited_ids) != 1:
+            return False
+        cited_chunk = chunks_by_id.get(cited_ids[0])
+        if cited_chunk is None:
+            return False
+        relevant_questions = (
+            _questions_for_cited_claim(claim, questions) if questions else []
+        )
+        if not _chunk_supports_claim_facts(
+            cited_chunk,
+            claim,
+            relevant_questions,
+        ):
+            return False
+        coverage_questions = relevant_questions or list(questions or [])
+        if (
+            coverage_questions
+            and len(source_chunks) > 1
+            and not any(
+                _source_chunk_covers_question(question, cited_chunk)
+                for question in coverage_questions
+            )
+        ):
+            return False
+
+    trailing_claim = response[previous_end:]
+    if re.sub(r"[\s.!?…,:;—–-]+", "", SOURCE_RE.sub("", trailing_claim)):
+        return False
+    return found_claim
+
+
+def _questions_for_cited_claim(
+    claim: str,
+    questions: list[Question],
+) -> list[Question]:
+    claim_profile = infer_response_profile(QueryAnalysis(), claim)
+    if claim_profile == ResponseProfileName.GENERIC:
+        return questions
+    matching = [
+        question
+        for question in questions
+        if _question_response_profile(question) == claim_profile
+    ]
+    return matching or questions
+
+
+def _question_response_profile(question: Question) -> ResponseProfileName:
+    topic_group = _question_topic_group(question)
+    if topic_group and any(
+        topic_group == _equivalent_topic_group(topic)
+        for topic in APPLICATION_RESPONSE_TOPIC_FAMILIES
+    ):
+        return ResponseProfileName.APPLICATION
+    return infer_response_profile(
+        QueryAnalysis(
+            category=question.category,
+            forum_normalized=question.forum_normalized,
+            questions=[question],
+        ),
+        question.text,
+    )
+
+
+def _claim_fact_numbers(text: str) -> set[str]:
+    without_list_marker = re.sub(
+        r"^\s*(?:[-*•]\s+|\d+[.)]\s+)",
+        "",
+        text,
+    )
+    return {
+        str(int(value))
+        for value in FACT_NUMBER_RE.findall(without_list_marker)
+    }
+
+
+def _chunk_supports_claim_facts(
+    chunk: ScoredChunk,
+    claim: str,
+    questions: list[Question] | None = None,
+) -> bool:
+    claim_numbers = _claim_fact_numbers(claim)
+    metadata = chunk.metadata or {}
+    conditions_summary = metadata.get("conditions_summary")
+    summary_text = (
+        "\n".join(str(item) for item in conditions_summary)
+        if isinstance(conditions_summary, list)
+        else str(conditions_summary or "")
+    )
+    metadata_fact_text = "\n".join(
+        (
+            "\n".join(str(item) for item in value)
+            if isinstance(value, list)
+            else str(value)
+        )
+        for key in (
+            "forum_normalized",
+            "topic",
+            "source_category",
+            "intent_name",
+            "dates_mentioned",
+            "parent_chunk_id",
+            "source_heading_path",
+            "linked_section_names",
+        )
+        if (value := metadata.get(key)) not in (None, "", [], {})
+    )
+    source_text = f"{chunk.text}\n{summary_text}\n{metadata_fact_text}".strip()
+    source_numbers = _claim_fact_numbers(source_text)
+    if not claim_numbers.issubset(source_numbers):
+        return False
+    if not set(_date_signatures(claim)).issubset(_date_signatures(source_text)):
+        return False
+    if not _typed_fact_dimensions_match(
+        _critical_nonnumeric_fact_keys(claim),
+        _critical_nonnumeric_fact_keys(source_text),
+    ):
+        return False
+    if not bool(metadata.get("has_conditional_logic")):
+        return True
+
+    groups = _conditional_fact_groups(source_text)
+    if len(groups) <= 1:
+        return True
+    required_condition_keys = _condition_keys(claim)
+    claim_dimensions = {
+        _condition_dimension(key) for key in required_condition_keys
+    }
+    for question in questions or []:
+        required_condition_keys.update(
+            key
+            for key in _condition_keys(question.text)
+            if _condition_dimension(key) not in claim_dimensions
+        )
+    explicit_age_text = claim
+    if not _explicit_age_values(explicit_age_text):
+        explicit_age_text = " ".join(
+            question.text
+            for question in questions or []
+            if _explicit_age_values(question.text)
+        )
+    claim_typed_facts = _critical_nonnumeric_fact_keys(claim)
+    return any(
+        claim_numbers.issubset(_claim_fact_numbers(group))
+        and set(_date_signatures(claim)).issubset(_date_signatures(group))
+        and _condition_dimensions_match(
+            required_condition_keys,
+            _condition_keys(group),
+        )
+        and (
+            not explicit_age_text
+            or _source_matches_explicit_age_constraints(explicit_age_text, group)
+        )
+        and _typed_fact_dimensions_match(
+            claim_typed_facts,
+            _critical_nonnumeric_fact_keys(group),
+        )
+        for group in groups
+    )
+
+
+def _critical_nonnumeric_fact_keys(text: str) -> set[str]:
+    normalized = _normalize(text)
+    keys: set[str] = set()
+
+    payer_context = any(
+        marker in normalized
+        for marker in (
+            "оплач",
+            "компенс",
+            "возмещ",
+            "за счет",
+            "за счёт",
+        )
+    )
+    responsibility_context = any(
+        marker in normalized
+        for marker in (
+            "предостав",
+            "организован",
+            "организует",
+            "организуют",
+            "организовы",
+            "обеспеч",
+            "отвечает за",
+            "обязан",
+            "должен",
+        )
+    )
+    actors = _fact_actor_keys(normalized)
+    if payer_context:
+        keys.update(f"payer:{actor}" for actor in actors)
+    if responsibility_context:
+        keys.update(f"responsible:{actor}" for actor in actors)
+
+    if re.search(r"\b(?:нельзя|запрещен\w*|не допуска\w*)\b", normalized):
+        keys.add("permission:forbidden")
+    elif re.search(
+        r"\b(?:разрешен\w*|допуска\w*|можно\s+(?:участв\w*|приех\w*|"
+        r"прийти|проход\w*|войти|брать|взять|принес\w*|принос\w*|подать|измен\w*))\b",
+        normalized,
+    ):
+        keys.add("permission:allowed")
+
+    if re.search(r"\b(?:не нужно|не требуется|не обязательно)\b", normalized):
+        keys.add("requirement:not_required")
+    elif re.search(
+        r"\b(?:обязательно|необходимо|требуется|"
+        r"нужно\s+(?:предоставить|приложить|взять|подать|загрузить|оформить))\b",
+        normalized,
+    ):
+        keys.add("requirement:required")
+
+    if any(marker in normalized for marker in ("может участв", "могут участв", "допуска")):
+        keys.update(
+            f"eligible:{audience.partition(':')[2]}"
+            for audience in _audience_condition_keys(normalized)
+        )
+    return keys
+
+
+def _fact_actor_keys(normalized: str) -> set[str]:
+    actors: set[str] = set()
+    if any(
+        marker in normalized
+        for marker in (
+            "участник оплач",
+            "участники оплач",
+            "участником",
+            "самостоятельно",
+            "за свой счет",
+            "за свой счёт",
+        )
+    ):
+        actors.add("participant")
+    if any(
+        marker in normalized
+        for marker in (
+            "организатор",
+            "организующая сторона",
+            "за счет организатор",
+            "за счёт организатор",
+        )
+    ):
+        actors.add("organizer")
+    if "направляющ" in normalized and "сторон" in normalized:
+        actors.add("sending_party")
+    return actors
+
+
+def _typed_fact_dimensions_match(
+    required_keys: set[str],
+    source_keys: set[str],
+) -> bool:
+    for dimension in {key.partition(":")[0] for key in required_keys}:
+        required = {
+            key for key in required_keys if key.partition(":")[0] == dimension
+        }
+        available = {key for key in source_keys if key.partition(":")[0] == dimension}
+        if not available or not required & available:
+            return False
+    return True
+
+
+def _condition_dimensions_match(
+    required_keys: set[str],
+    group_keys: set[str],
+) -> bool:
+    if not required_keys:
+        return True
+
+    required_dimensions = {_condition_dimension(key) for key in required_keys}
+    return all(
+        bool(
+            {
+                key
+                for key in required_keys
+                if _condition_dimension(key) == required_dimension
+            }
+            & {
+                key
+                for key in group_keys
+                if _condition_dimension(key) == required_dimension
+            }
+        )
+        for required_dimension in required_dimensions
+    )
+
+
+def _condition_dimension(key: str) -> str:
+    prefix = key.partition(":")[0]
+    return "age" if prefix in {"age", "age_group"} else prefix
+
+
+def _date_signatures(text: str) -> set[str]:
+    signatures: set[str] = set()
+    years = set(re.findall(r"\b20\d{2}\b", text))
+    inherited_year = next(iter(years)) if len(years) == 1 else ""
+
+    def add(day: str, month: int | str, year: str | None = None) -> None:
+        normalized_year = str(year or inherited_year or "")
+        if normalized_year and len(normalized_year) == 2:
+            normalized_year = f"20{normalized_year}"
+        signatures.add(
+            f"{int(day):02d}.{int(month):02d}"
+            + (f".{normalized_year}" if normalized_year else "")
+        )
+
+    for day, month, year in FACT_DATE_RE.findall(text):
+        add(day, month, year)
+    for start_day, end_day, month_name, year in WORD_DATE_RANGE_RE.findall(text):
+        month = RUSSIAN_MONTHS[month_name.casefold()]
+        add(start_day, month, year)
+        add(end_day, month, year)
+    for day, month_name, year in WORD_DATE_RE.findall(text):
+        add(day, RUSSIAN_MONTHS[month_name.casefold()], year)
+    return signatures
+
+
+def _conditional_fact_groups(text: str) -> list[str]:
+    text = re.sub(
+        r",\s+(?=(?:для\s+|участник\w*\s+(?:от\s+)?\d|"
+        r"(?:перв|втор|трет|четверт|пят|шест|седьм|восьм|девят|десят)\w*"
+        r"\s+смен))",
+        "\n",
+        text,
+        flags=re.IGNORECASE,
+    )
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"\n+|(?<=[.!?;])\s+", text)
+        if clause.strip()
+    ]
+    condition_keys = {
+        key
+        for clause in clauses
+        for key in _condition_keys(clause)
+    }
+    numeric_clauses = [
+        clause for clause in clauses if _claim_fact_numbers(clause)
+    ]
+    if len(condition_keys) <= 1 and len(numeric_clauses) <= 1:
+        return [text]
+
+    groups: list[str] = []
+    current: list[str] = []
+    for clause in clauses:
+        if _condition_keys(clause) and current:
+            groups.append(" ".join(current))
+            current = []
+        current.append(clause)
+    if current:
+        groups.append(" ".join(current))
+    if condition_keys and groups:
+        return groups
+
+    return [
+        " ".join(
+            [
+                *(
+                    [clauses[index - 1]]
+                    if index > 0
+                    and not _claim_fact_numbers(clauses[index - 1])
+                    else []
+                ),
+                clause,
+            ]
+        )
+        for index, clause in enumerate(clauses)
+        if _claim_fact_numbers(clause)
+    ] or [text]
+
+
+def _condition_keys(text: str) -> set[str]:
+    normalized = _normalize(text)
+    age_ranges = [
+        (int(start), int(end))
+        for start, end in AGE_RANGE_RE.findall(normalized)
+    ]
+    keys = {f"age:{start}-{end}" for start, end in age_ranges}
+    if any(start <= 17 for start, _end in age_ranges):
+        keys.add("age_group:minor")
+    if any(end >= 18 for _start, end in age_ranges):
+        keys.add("age_group:adult")
+    if MINOR_AGE_ALIAS_RE.search(normalized):
+        keys.add("age_group:minor")
+    if ADULT_AGE_ALIAS_RE.search(normalized):
+        keys.add("age_group:adult")
+    for age in _explicit_age_values(normalized):
+        keys.add(f"age_group:{'minor' if age < 18 else 'adult'}")
+    keys.update(_audience_condition_keys(normalized))
+    ordinal_stems = {
+        1: "перв",
+        2: "втор",
+        3: "трет",
+        4: "четверт",
+        5: "пят",
+        6: "шест",
+        7: "седьм",
+        8: "восьм",
+        9: "девят",
+        10: "десят",
+    }
+    keys.update(
+        f"shift:{number}"
+        for number, stem in ordinal_stems.items()
+        if any(
+            re.search(pattern, normalized)
+            for pattern in (
+                rf"\b{stem}\w*\s+смен\w*\b",
+                rf"(?<!\d){number}\s*(?:[-–—]\s*(?:я|ая|й))?"
+                rf"\s+смен\w*\b",
+                rf"\bсмен\w*\s*(?:№|#|номер)?\s*{number}(?!\d)",
+            )
+        )
+    )
+    if not keys:
+        for raw_label in re.findall(
+            r"(?:^|[.!?\n])\s*((?:для\s+)?[а-яa-z][^:\n.!?]{0,60})\s*:",
+            normalized,
+        ):
+            label = re.sub(r"^для\s+", "", raw_label).strip(" -–—")
+            if label and label not in {
+                "условия запроса",
+                "дата",
+                "даты",
+                "участник",
+                "участники",
+            }:
+                keys.add(f"label:{label}")
+    return keys
+
+
+def _audience_condition_keys(text: str) -> set[str]:
+    normalized = _normalize(text)
+    ignored = {
+        "участия",
+        "регистрации",
+        "заявки",
+        "получения",
+        "поездки",
+        "смены",
+        "форума",
+        "мероприятия",
+        "проекта",
+    }
+    keys: set[str] = set()
+    for stem, canonical in AUDIENCE_ROLE_STEMS.items():
+        if re.search(rf"\b{re.escape(stem)}\w*\b", normalized):
+            keys.add(f"audience:{canonical}")
+    for token in re.findall(r"\bдля\s+([а-яё-]{3,40})\b", normalized):
+        if (
+            token in ignored
+            or token.startswith(("участник", "участниц"))
+            or MINOR_AGE_ALIAS_RE.fullmatch(token)
+            or ADULT_AGE_ALIAS_RE.fullmatch(token)
+        ):
+            continue
+        canonical = next(
+            (
+                value
+                for stem, value in AUDIENCE_ROLE_STEMS.items()
+                if token.startswith(stem)
+            ),
+            None,
+        )
+        keys.add(f"audience:{canonical or token}")
+    return keys
 
 
 def _source_ref_key(source_id: str) -> str:
@@ -776,9 +1404,12 @@ def _should_synthesize_with_llm(
 ) -> bool:
     if not source_chunks:
         return False
-    if _is_contextual_synthesis_case(state):
-        return True
     if len(source_chunks) > 1:
+        return True
+    if (
+        bool((source_chunks[0].metadata or {}).get("has_conditional_logic"))
+        and len(_conditional_fact_groups(source_chunks[0].text)) > 1
+    ):
         return True
     source_response = build_deterministic_source_response(source_chunks)
     if not source_response:
@@ -792,11 +1423,44 @@ def _should_synthesize_with_llm(
         return True
     if _violates_response_profile(source_response, analysis, questions):
         return True
+    if _is_contextual_synthesis_case(state) and _single_source_has_unrequested_clauses(
+        questions,
+        source_chunks,
+    ):
+        return True
     if _can_answer_from_single_official_source(questions, source_chunks):
         return False
+    if _is_contextual_synthesis_case(state):
+        return True
     if analysis.complexity == Complexity.COMPLEX:
         return True
     return False
+
+
+def _single_source_has_unrequested_clauses(
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+) -> bool:
+    if len(source_chunks) != 1 or not questions:
+        return False
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"\n+|(?<=[.!?])\s+", source_chunks[0].text)
+        if clause.strip()
+    ]
+    if len(clauses) <= 1:
+        return False
+
+    question_tokens = _content_tokens(" ".join(question.text for question in questions))
+    substantive_clauses = [
+        _content_tokens(clause)
+        for clause in clauses
+        if len(_content_tokens(clause)) >= 4
+    ]
+    return bool(substantive_clauses) and any(
+        not clause_tokens & question_tokens
+        for clause_tokens in substantive_clauses
+    )
 
 
 def _violates_response_profile(
@@ -807,13 +1471,7 @@ def _violates_response_profile(
     contract_questions = analysis.questions or questions
     if _has_multiple_distinct_questions(contract_questions):
         expected_profiles = {
-            infer_response_profile(
-                QueryAnalysis(
-                    category=question.category,
-                    forum_normalized=question.forum_normalized,
-                ),
-                question.text,
-            )
+            _question_response_profile(question)
             for question in contract_questions
         }
         return response_has_cross_aspect_drift_for_profiles(
@@ -822,6 +1480,22 @@ def _violates_response_profile(
         )
 
     visible = SOURCE_RE.sub("", response).strip()
+    if analysis.response_profile == ResponseProfileName.TECHNICAL:
+        detected = detect_response_profiles(visible)
+        critical_business = {
+            ResponseProfileName.DATES,
+            ResponseProfileName.APPLICATION,
+            ResponseProfileName.DOCUMENTS,
+            ResponseProfileName.SELECTION_STATUS,
+            ResponseProfileName.TRAVEL,
+        }
+        return bool(
+            detected & critical_business
+            and (
+                not _has_technical_resolution_action(visible)
+                or not _has_technical_recovery_context(visible)
+            )
+        )
     if analysis.response_profile != ResponseProfileName.DATES:
         return response_has_cross_aspect_drift(analysis.response_profile, visible)
 
@@ -843,6 +1517,57 @@ def _violates_response_profile(
         any(marker in response_text for marker in group)
         and not any(marker in question_text for marker in group)
         for group in unsolicited_groups
+    )
+
+
+def _has_technical_resolution_action(response: str) -> bool:
+    normalized = _normalize(response)
+    if any(marker in normalized for marker in TECHNICAL_ACTION_MARKERS):
+        return True
+    action_objects = (
+        (("заполн",), ("данн", "пол", "форм", "анкет")),
+        (("нажм",), ("кнопк", "подать заяв", "отправить")),
+        (("проверь",), ("пол", "данн", "форм", "почт", "даты регистрац")),
+        (("восстанов",), ("доступ", "парол")),
+        (("введ",), ("данн", "код", "парол")),
+        (("выбер",), ("пол", "значен", "мероприят")),
+        (("прикреп",), ("файл", "документ")),
+        (("повтор",), ("нажм", "отправ", "загруз", "авториз", "вход")),
+    )
+    return any(
+        any(action in normalized for action in actions)
+        and any(subject in normalized for subject in subjects)
+        for actions, subjects in action_objects
+    )
+
+
+def _has_technical_recovery_context(response: str) -> bool:
+    normalized = _normalize(response)
+    return any(
+        marker in normalized
+        for marker in (
+            "ошиб",
+            "не работа",
+            "не откры",
+            "не загруж",
+            "не груз",
+            "не получ",
+            "не приш",
+            "не отображ",
+            "недоста",
+            "обязательн",
+            "повтор",
+            "проверь",
+            "очист",
+            "обнов",
+            "перезагруз",
+            "восстанов",
+            "другой браузер",
+            "другое устройство",
+            "инкогнито",
+            "после авторизац",
+            "заново вой",
+        )
     )
 
 
@@ -936,7 +1661,9 @@ def _select_llm_source_chunks(
         if _selected_source_chunks_cover_question(question, selected):
             continue
 
-        source_chunk = _topic_source_for_question(analysis, question, candidates)
+        source_chunk = _linked_named_section_date_source(question, candidates)
+        if source_chunk is None:
+            source_chunk = _topic_source_for_question(analysis, question, candidates)
         if source_chunk is not None:
             if _should_skip_selected_source_chunk(source_chunk, selected, selected_ids):
                 continue
@@ -992,6 +1719,14 @@ def _known_source_refs(response: str, chunks: list[ScoredChunk]) -> list[str]:
     return cited
 
 
+def _has_unknown_source_refs(
+    response: str,
+    chunks: list[ScoredChunk],
+) -> bool:
+    known = {chunk.chunk_id for chunk in chunks}
+    return any(source_id not in known for source_id in SOURCE_RE.findall(response or ""))
+
+
 def select_deterministic_source_chunks(
     analysis: QueryAnalysis,
     questions: list[Question],
@@ -1011,6 +1746,13 @@ def select_deterministic_source_chunks(
     original_question = _original_question(analysis, message)
     if original_question is None and len(questions) == 1:
         original_question = questions[0]
+    if not has_multiple_questions and original_question is not None:
+        linked_named_source = _linked_named_section_date_source(
+            original_question,
+            chunks,
+        )
+        if linked_named_source is not None:
+            return [linked_named_source]
     if not has_multiple_questions and (
         _is_specific_technical_question(original_question)
         or _is_feedback_question(original_question)
@@ -1220,6 +1962,8 @@ def _selected_source_chunks_cover_question(
 
 
 def _source_chunk_strictly_covers_question(question: Question, chunk: ScoredChunk) -> bool:
+    if not _source_matches_explicit_question_constraints(question, chunk):
+        return False
     if _intent_example_matches_question(question, chunk):
         return True
 
@@ -1258,12 +2002,24 @@ def _is_redundant_source_chunk(chunk: ScoredChunk, selected: list[ScoredChunk]) 
     for existing in selected:
         if not _chunks_share_response_scope(chunk, existing):
             continue
+        if _chunk_has_conditional_fact_binding(chunk) or _chunk_has_conditional_fact_binding(
+            existing
+        ):
+            continue
         text_overlap = _source_text_overlap(chunk.text, existing.text)
         if text_overlap >= 0.72:
             return True
         if text_overlap >= 0.58 and _chunks_share_future_date_notice(chunk, existing):
             return True
     return False
+
+
+def _chunk_has_conditional_fact_binding(chunk: ScoredChunk) -> bool:
+    metadata = chunk.metadata or {}
+    return bool(
+        metadata.get("has_conditional_logic")
+        or metadata.get("conditions_summary")
+    )
 
 
 def _chunks_share_response_scope(left: ScoredChunk, right: ScoredChunk) -> bool:
@@ -1309,11 +2065,96 @@ def _content_tokens(text: str) -> set[str]:
     return {token for token in _tokens(text) if token not in stopwords}
 
 
+def _linked_named_section_date_source(
+    question: Question,
+    candidates: list[ScoredChunk],
+) -> ScoredChunk | None:
+    entities = _named_question_entities(question)
+    if not entities or not asks_profile_event_dates(_normalize(question.text)):
+        return None
+
+    anchors: list[ScoredChunk] = []
+    for chunk in candidates:
+        metadata = chunk.metadata or {}
+        anchor_text = _normalize(
+            " ".join(
+                [
+                    chunk.text,
+                    str(metadata.get("intent_name") or ""),
+                    str(metadata.get("topic") or "").replace("_", " "),
+                    " ".join(
+                        str(part or "")
+                        for part in metadata.get("source_heading_path") or []
+                    ),
+                ]
+            )
+        )
+        anchor_tokens = _tokens(anchor_text)
+        if all(_tokens(entity) and _tokens(entity) <= anchor_tokens for entity in entities):
+            anchors.append(chunk)
+    if not anchors:
+        return None
+
+    linked: list[tuple[int, float, ScoredChunk, ScoredChunk]] = []
+    for candidate in candidates:
+        metadata = candidate.metadata or {}
+        if not chunk_has_event_date_evidence(candidate.text, metadata):
+            continue
+        candidate_document = str(metadata.get("source_document_id") or "").strip()
+        candidate_parent = str(metadata.get("parent_chunk_id") or "").strip()
+        try:
+            candidate_row = int(metadata.get("source_row"))
+        except (TypeError, ValueError):
+            candidate_row = -1
+        for anchor in anchors:
+            anchor_metadata = anchor.metadata or {}
+            same_parent = candidate_parent == anchor.chunk_id
+            same_document = (
+                bool(candidate_document)
+                and candidate_document
+                == str(anchor_metadata.get("source_document_id") or "").strip()
+            )
+            try:
+                anchor_row = int(anchor_metadata.get("source_row"))
+            except (TypeError, ValueError):
+                anchor_row = -1
+            row_distance = candidate_row - anchor_row
+            if not same_parent and not (same_document and row_distance == 1):
+                continue
+            if question.forum_normalized:
+                candidate_forum = str(metadata.get("forum_normalized") or "").strip()
+                if candidate_forum and candidate_forum != question.forum_normalized:
+                    continue
+            linked.append(
+                (
+                    0 if same_parent else row_distance,
+                    -float(candidate.reranker_score or candidate.score or 0),
+                    candidate,
+                    anchor,
+                )
+            )
+    if not linked:
+        return None
+    _rank, _score, candidate, anchor = min(
+        linked,
+        key=lambda item: (item[0], item[1], item[2].chunk_id),
+    )
+    metadata = {
+        **(candidate.metadata or {}),
+        "linked_section_names": sorted(entities),
+        "linked_anchor_chunk_id": anchor.chunk_id,
+    }
+    return candidate.model_copy(update={"metadata": metadata})
+
+
 def _topic_source_for_question(
     analysis: QueryAnalysis,
     question: Question,
     candidates: list[ScoredChunk],
 ) -> ScoredChunk | None:
+    linked_named_source = _linked_named_section_date_source(question, candidates)
+    if linked_named_source is not None:
+        return linked_named_source
     if not str(question.topic or "").strip():
         return None
     matches = [
@@ -1321,6 +2162,7 @@ def _topic_source_for_question(
         for chunk in candidates
         if _source_topic_match_rank(question, chunk) <= 1
         and _chunk_matches_analysis_scope(chunk, analysis)
+        and _source_matches_explicit_question_constraints(question, chunk)
     ]
     if not matches:
         return None
@@ -1789,7 +2631,7 @@ def _source_candidate_priority(
     analysis: QueryAnalysis,
     question: Question,
     chunk: ScoredChunk,
-) -> tuple[float, int, int, int, int, float, int, int, float]:
+) -> tuple[float, int, int, int, int, int, float, int, int, float]:
     if (
         _is_specific_technical_question(question) or _is_feedback_question(question)
     ) and _metadata_matches_specific_question(analysis, question, chunk):
@@ -1800,6 +2642,7 @@ def _source_candidate_priority(
         grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
         topic_rank = _source_topic_match_rank(question, chunk)
         topic_preference_rank = _topic_source_preference_rank(question, chunk, topic_rank)
+        constraint_rank = _explicit_constraint_match_rank(question, chunk)
         freshness_rank = _source_freshness_rank(chunk)
         confidence = float(chunk.reranker_score or chunk.score or 0)
         return (
@@ -1807,6 +2650,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_preference_rank,
+            constraint_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1822,6 +2666,7 @@ def _source_candidate_priority(
     grant_source_category_rank = _grant_source_category_rank(analysis, question, chunk)
     topic_rank = _source_topic_match_rank(question, chunk)
     topic_preference_rank = _topic_source_preference_rank(question, chunk, topic_rank)
+    constraint_rank = _explicit_constraint_match_rank(question, chunk)
     freshness_rank = _source_freshness_rank(chunk)
     confidence = float(chunk.reranker_score or chunk.score or 0)
     if str(question.topic or "").strip() and topic_rank <= 1:
@@ -1830,6 +2675,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_preference_rank,
+            constraint_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1842,6 +2688,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_preference_rank,
+            constraint_rank,
             freshness_rank,
             -float(intent_score * 100) - field_score,
             source_rank,
@@ -1854,6 +2701,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_preference_rank,
+            constraint_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1866,6 +2714,7 @@ def _source_candidate_priority(
             unscoped_grant_rank,
             grant_source_category_rank,
             topic_preference_rank,
+            constraint_rank,
             freshness_rank,
             -field_score,
             source_rank,
@@ -1877,6 +2726,7 @@ def _source_candidate_priority(
         unscoped_grant_rank,
         grant_source_category_rank,
         topic_preference_rank,
+        constraint_rank,
         freshness_rank,
         0,
         source_rank,
@@ -1938,6 +2788,19 @@ def _exact_source_for_original_question(
         and _intent_example_match_score(original_question, chunk) >= min_intent_score
         and _adjusted_intent_example_match_score(original_question, chunk) > 0
     ]
+    if (
+        asks_profile_event_dates(_normalize(original_question.text))
+        and not _named_question_entities(original_question)
+    ):
+        unlinked_matches = [
+            match
+            for match in matches
+            if not str((match[2].metadata or {}).get("parent_chunk_id") or "").strip()
+        ]
+        if unlinked_matches:
+            # A generic date question must not inherit the date of a neighbouring
+            # named-section child while an event-level date source is available.
+            matches = unlinked_matches
     if not matches:
         return None
     return max(matches)[2]
@@ -1962,6 +2825,17 @@ def _specific_source_for_original_question(
         and _metadata_matches_specific_question(specific_analysis, original_question, chunk)
         and _source_chunk_covers_question(original_question, chunk)
     ]
+    if (
+        asks_profile_event_dates(_normalize(original_question.text))
+        and not _named_question_entities(original_question)
+    ):
+        unlinked_matches = [
+            chunk
+            for chunk in matches
+            if not str((chunk.metadata or {}).get("parent_chunk_id") or "").strip()
+        ]
+        if unlinked_matches:
+            matches = unlinked_matches
     if not matches:
         return None
     return _rank_source_candidates_for_question(analysis, original_question, matches)[0]
@@ -2042,6 +2916,16 @@ def _trusted_top_official_source(
     if float(top_chunk.reranker_score or 0) < threshold:
         return None
     if float(top_chunk.score or 0) < 0.95:
+        return None
+    if (
+        original_question is not None
+        and asks_profile_event_dates(_normalize(original_question.text))
+        and not _named_question_entities(original_question)
+        and str(metadata.get("parent_chunk_id") or "").strip()
+    ):
+        # A high-scoring child row may describe one named shift. For a generic
+        # event-date question, let topic-aware ranking prefer the overall period;
+        # the child remains available when it is the only grounded date source.
         return None
     if (
         original_question is not None
@@ -2152,6 +3036,186 @@ def _is_compatible_category(category: str | None, chunk: ScoredChunk) -> bool:
 
 def _intent_example_matches_question(question: Question, chunk: ScoredChunk) -> bool:
     return _intent_example_match_score(question, chunk) > 0
+
+
+def _source_matches_explicit_question_constraints(
+    question: Question,
+    chunk: ScoredChunk,
+) -> bool:
+    metadata = chunk.metadata or {}
+    source_haystack = " ".join(
+        [
+            chunk.text,
+            str(metadata.get("topic") or "").replace("_", " "),
+            str(metadata.get("intent_name") or ""),
+            " ".join(str(item) for item in metadata.get("linked_section_names") or []),
+        ]
+    )
+    if not _source_matches_explicit_age_constraints(
+        question.text,
+        source_haystack,
+    ):
+        return False
+    named_entities = (
+        _named_question_entities(question)
+        if asks_profile_event_dates(_normalize(question.text))
+        else set()
+    )
+    if named_entities:
+        source_tokens = _tokens(source_haystack)
+        if not all(
+            _tokens(entity) and _tokens(entity) <= source_tokens
+            for entity in named_entities
+        ):
+            return False
+    question_ranges = _age_ranges(question.text)
+    source_ranges = _age_ranges(source_haystack)
+    if question_ranges and (
+        not source_ranges
+        or not all(
+            any(
+                source_start <= requested_start
+                and requested_end <= source_end
+                for source_start, source_end in source_ranges
+            )
+            for requested_start, requested_end in question_ranges
+        )
+    ):
+        return False
+    raw_question_keys = _condition_keys(question.text)
+    raw_source_keys = _condition_keys(source_haystack)
+    question_audiences = {
+        key for key in raw_question_keys if key.startswith("audience:")
+    }
+    source_audiences = {
+        key for key in raw_source_keys if key.startswith("audience:")
+    }
+    if source_audiences and not question_audiences.issubset(source_audiences):
+        return False
+    question_keys = {
+        key
+        for key in raw_question_keys
+        if not key.startswith(("age:", "audience:"))
+    }
+    if not question_keys:
+        return True
+    source_keys = {
+        key
+        for key in raw_source_keys
+        if not key.startswith(("age:", "audience:"))
+    }
+    for dimension in {_condition_dimension(key) for key in question_keys}:
+        required = {
+            key for key in question_keys if _condition_dimension(key) == dimension
+        }
+        available = {
+            key for key in source_keys if _condition_dimension(key) == dimension
+        }
+        if available and not required & available:
+            return False
+    return True
+
+
+def _explicit_constraint_match_rank(question: Question, chunk: ScoredChunk) -> int:
+    question_keys = _condition_keys(question.text)
+    if not question_keys:
+        return 0
+    metadata = chunk.metadata or {}
+    source_haystack = " ".join(
+        [
+            chunk.text,
+            str(metadata.get("topic") or "").replace("_", " "),
+            str(metadata.get("intent_name") or ""),
+            " ".join(str(item) for item in metadata.get("linked_section_names") or []),
+        ]
+    )
+    source_keys = _condition_keys(source_haystack)
+    matched_dimensions = {
+        dimension
+        for dimension in {_condition_dimension(key) for key in question_keys}
+        if {
+            key for key in question_keys if _condition_dimension(key) == dimension
+        }
+        & {
+            key for key in source_keys if _condition_dimension(key) == dimension
+        }
+    }
+    return 0 if len(matched_dimensions) == len(
+        {_condition_dimension(key) for key in question_keys}
+    ) else 1
+
+
+def _named_question_entities(question: Question) -> set[str]:
+    return {
+        _normalize(entity)
+        for entity in named_section_entities(
+            str(question.text or ""),
+            str(question.forum_normalized or "") or None,
+        )
+        if _normalize(entity)
+    }
+
+
+def _source_matches_explicit_age_constraints(
+    question_text: str,
+    source_haystack: str,
+) -> bool:
+    requested_ages = _explicit_age_values(question_text)
+    requested_aliases = _age_audience_aliases(question_text)
+    if not requested_ages and not requested_aliases:
+        return True
+
+    source_ranges = _age_ranges(source_haystack)
+    source_aliases = _age_audience_aliases(source_haystack)
+
+    for age in requested_ages:
+        if source_ranges:
+            if not any(start <= age <= end for start, end in source_ranges):
+                return False
+            continue
+        expected_alias = "minor" if age < 18 else "adult"
+        if expected_alias not in source_aliases:
+            return False
+
+    for alias in requested_aliases:
+        if source_ranges:
+            if alias == "minor":
+                if not any(start <= 17 for start, _end in source_ranges):
+                    return False
+            elif not any(end >= 18 for _start, end in source_ranges):
+                return False
+            continue
+        if alias not in source_aliases:
+            return False
+    return True
+
+
+def _age_ranges(text: str) -> list[tuple[int, int]]:
+    return [
+        (int(start), int(end))
+        for start, end in AGE_RANGE_RE.findall(_normalize(text))
+    ]
+
+
+def _explicit_age_values(text: str) -> set[int]:
+    normalized = _normalize(text)
+    without_ranges = AGE_RANGE_RE.sub(" ", normalized)
+    values: set[int] = set()
+    for groups in EXPLICIT_AGE_RE.findall(without_ranges):
+        value = next((item for item in groups if item), "")
+        if value:
+            values.add(int(value))
+    return values
+
+
+def _age_audience_aliases(text: str) -> set[str]:
+    normalized = _normalize(text)
+    aliases: set[str] = set()
+    if MINOR_AGE_ALIAS_RE.search(normalized):
+        aliases.add("minor")
+    if ADULT_AGE_ALIAS_RE.search(normalized):
+        aliases.add("adult")
+    return aliases
 
 
 def _adjusted_intent_example_match_score(question: Question, chunk: ScoredChunk) -> int:
@@ -2489,6 +3553,8 @@ def _grant_source_category_rank(
 
 
 def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> bool:
+    if not _source_matches_explicit_question_constraints(question, chunk):
+        return False
     if _intent_example_matches_question(question, chunk):
         return True
 
@@ -2517,6 +3583,16 @@ def _source_chunk_covers_question(question: Question, chunk: ScoredChunk) -> boo
         if not any(marker in question_normalized for marker in markers):
             continue
         return any(marker in haystack for marker in markers)
+    requested_profile = infer_response_profile(
+        QueryAnalysis(
+            category=question.category,
+            forum_normalized=question.forum_normalized,
+            questions=[question],
+        ),
+        question.text,
+    )
+    if requested_profile != ResponseProfileName.GENERIC:
+        return False
     question_tokens = _tokens(question.text)
     if not question_tokens:
         return False

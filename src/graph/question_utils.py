@@ -2,10 +2,85 @@ from __future__ import annotations
 
 import re
 
+from src.graph.response_profiles import (
+    asks_event_dates,
+    has_explicit_application_action,
+    has_explicit_event_timing,
+    has_explicit_technical_failure,
+    should_suppress_event_date_question,
+)
 from src.kb.forum_registry import forum_filter_values
 from src.models import QueryAnalysis, Question
 
 FORUM_CLAUSE_NON_WORD_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
+SHARED_AGE_RANGE_RE = re.compile(
+    r"(?<!\d)(?:от\s+)?\d{1,2}\s*(?:[-–—]|\s+до\s+)\s*"
+    r"\d{1,2}\s*(?:лет|года?)\b",
+    re.IGNORECASE,
+)
+SHARED_EXPLICIT_AGE_RE = re.compile(
+    r"\bмне\s+(\d{1,2})\s*(?:лет|года?|год)?\b",
+    re.IGNORECASE,
+)
+SHARED_SHIFT_RE = re.compile(
+    r"\b(?:(?:перв|втор|трет|четверт|пят|шест|седьм|восьм|девят|десят)\w*"
+    r"\s+смен\w*|\d{1,2}\s*[-–—]?\s*(?:я|й|ю|е|ая|ый|ую|ой)\s+смен\w*"
+    r"|\d{1,2}\s+смен\w*|смен\w*\s*(?:№|#|номер)?\s*\d{1,2})\b",
+    re.IGNORECASE,
+)
+SHARED_NAMED_SECTION_RE = re.compile(
+    r"\b(?:смен(?:а|ы|у|е|ой)|профил(?:ь|я|ю|е)|трек(?:а|у|е)?|"
+    r"программ(?:а|ы|у|е))\s+"
+    r"(?:[«\"]([^»\"]{2,80})[»\"]|"
+    r"([а-яёa-z][а-яёa-z0-9 -]{1,50}?))"
+    r"(?=\s+(?:на\s+форум\w*|форум\w*|в\s+рамках|для\b|среди\b|"
+    r"пройд\w*|проход\w*|состо\w*|и\s+(?:кто|что|как|где|когда|"
+    r"будет|есть|можно|нужн\w*|какие|оплач\w*))|[?.!,;]|$)",
+    re.IGNORECASE | re.UNICODE,
+)
+SHARED_AUDIENCE_RE = re.compile(
+    r"\bдля\s+((?:настав|школьн|студент|педагог|учител|волонт|"
+    r"очн|заочн|подрост|взросл)\w*)\b",
+    re.IGNORECASE,
+)
+
+EVENT_CONSTRAINT_CLAUSE_RE = re.compile(
+    r"[;.!?]+|,\s*(?=(?:а|но)\s+)|\s+(?:а|но)\s+|"
+    r"\s+и\s+(?=(?:кто|что|как|где|когда|"
+    r"какие|какая|какой|есть|будет|можно|нужн|оплач|\d{1,2}\s*[-–—]?\s*"
+    r"(?:я|й|ю|е|ая|ый|ую|ой)?\s*смен))",
+    re.IGNORECASE | re.UNICODE,
+)
+
+_NAMED_SECTION_PREFIX_STOP_RE = re.compile(
+    r"^(?:для|среди|на|и|в|во|по|при|от|до)(?:\s|$)",
+    re.IGNORECASE | re.UNICODE,
+)
+_NAMED_SECTION_ORDINAL_RE = re.compile(
+    r"(?:(?:перв|втор|трет|четверт|пят|шест|седьм|восьм|девят|десят)\w*"
+    r"|\d{1,2}\s*[-–—]?\s*(?:я|й|ю|е|ая|ый|ую|ой))",
+    re.IGNORECASE | re.UNICODE,
+)
+_NAMED_SECTION_STOP_TOKENS = frozenset(
+    {
+        "форум",
+        "форума",
+        "форуме",
+        "мероприятие",
+        "мероприятия",
+        "мероприятии",
+        "смена",
+        "смены",
+        "программа",
+        "программы",
+        "участники",
+        "участников",
+        "студенты",
+        "студентов",
+        "очники",
+        "очников",
+    }
+)
 
 FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
@@ -145,6 +220,7 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
             "выезд",
             "когда проходит",
             "когда проводится",
+            "когда смена",
             "период проведения",
         ),
         "Какие даты и сроки?",
@@ -190,6 +266,12 @@ FALLBACK_QUESTION_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
             "не могу зайти",
             "авторизац",
             "баг",
+            "не отправляется",
+            "не сохраняется",
+            "не загружается",
+            "не прикрепляется",
+            "повторно не помогло",
+            "снова не помогло",
         ),
         "Что делать при технической ошибке или проблеме доступа?",
     ),
@@ -351,7 +433,320 @@ def build_effective_questions(analysis: QueryAnalysis, message: str | None) -> l
             message=message,
         )
 
-    return _base_questions(analysis, message)
+    return _preserve_shared_event_constraints(
+        _base_questions(analysis, message),
+        analysis,
+        message,
+    )
+
+
+def _preserve_shared_event_constraints(
+    questions: list[Question],
+    analysis: QueryAnalysis,
+    message: str | None,
+) -> list[Question]:
+    """Keep qualifiers that deterministic aspect decomposition would otherwise lose."""
+
+    text = str(message or "").strip()
+    if not questions or not text:
+        return questions
+    constraint_clauses = _event_constraint_clauses(
+        text,
+        analysis.forum_normalized,
+    )
+    if not constraint_clauses:
+        return questions
+
+    # More than one age or section in the same clause has no deterministic
+    # pairing.  Keep the original questions so retrieval cannot receive a
+    # fabricated all-to-all combination.
+    if any(ambiguous for _clause, _constraints, ambiguous in constraint_clauses):
+        return questions
+
+    scoped: list[Question] = []
+    for question in questions:
+        if not _question_accepts_event_constraints(question):
+            scoped.append(question)
+            continue
+
+        direct = [
+            constraints
+            for clause, constraints, _ambiguous in constraint_clauses
+            if _clause_matches_question_aspect(clause, question)
+        ]
+        direct = _unique_constraint_groups(direct)
+        is_application = _question_is_application(question)
+
+        if direct:
+            selected_groups = direct
+            if len(constraint_clauses) > 1:
+                orphan_groups = [
+                    constraints
+                    for clause, constraints, _ambiguous in constraint_clauses
+                    if _has_section_constraint(constraints)
+                    and not any(
+                        _clause_matches_question_aspect(clause, candidate)
+                        for candidate in questions
+                    )
+                ]
+                selected_groups = _unique_constraint_groups(
+                    [*selected_groups, *orphan_groups]
+                )
+        elif is_application:
+            # A shift/age from a neighbouring aspect must not silently narrow
+            # an application question.
+            selected_groups = []
+        elif len(constraint_clauses) == 1:
+            selected_groups = [constraint_clauses[0][1]]
+        else:
+            # Explicitly paired shift/age branches are safe to expand.  An
+            # aspect mentioned outside those clauses applies to every branch;
+            # constraints inside different aspect clauses stay local above.
+            selected_groups = _unique_constraint_groups(
+                [
+                    constraints
+                    for _clause, constraints, _ambiguous in constraint_clauses
+                    if _has_section_constraint(constraints)
+                ]
+            )
+
+        if not selected_groups:
+            scoped.append(question)
+            continue
+
+        appended = False
+        for constraints in selected_groups:
+            if _question_already_expresses_constraint(question, constraints):
+                if not appended:
+                    scoped.append(question)
+                    appended = True
+                continue
+            if _question_is_age_only(question) and not _has_section_constraint(constraints):
+                if not appended:
+                    scoped.append(question)
+                    appended = True
+                continue
+            scoped.append(_question_with_constraints(question, constraints))
+            appended = True
+    return scoped
+
+
+def named_section_entities(
+    message: str,
+    forum_normalized: str | None = None,
+) -> list[str]:
+    """Extract meaningful named shifts/tracks without audience/preposition noise."""
+
+    normalized_forum = str(forum_normalized or "").casefold().replace("ё", "е")
+    entities: list[str] = []
+    seen: set[str] = set()
+
+    for match in SHARED_NAMED_SECTION_RE.finditer(str(message or "")):
+        raw_entity = next((group for group in match.groups() if group), "")
+        entity = " ".join(raw_entity.strip(" \t\r\n.,;!?–—-").split())
+        normalized_entity = entity.casefold().replace("ё", "е")
+        if not entity or normalized_entity in seen:
+            continue
+        if normalized_entity.startswith(("форум", "мероприят")):
+            continue
+        if _NAMED_SECTION_PREFIX_STOP_RE.match(normalized_entity):
+            continue
+        if _NAMED_SECTION_ORDINAL_RE.fullmatch(normalized_entity):
+            continue
+        entity_tokens = set(re.findall(r"[0-9a-zа-я]+", normalized_entity))
+        if entity_tokens and entity_tokens <= _NAMED_SECTION_STOP_TOKENS:
+            continue
+        if normalized_forum and (
+            normalized_entity in normalized_forum
+            or normalized_forum in normalized_entity
+        ):
+            continue
+        entities.append(entity)
+        seen.add(normalized_entity)
+    return entities
+
+
+def _shared_event_constraints(
+    message: str,
+    forum_normalized: str | None,
+) -> list[str]:
+    constraints: list[str] = []
+
+    def append(value: str) -> None:
+        cleaned = " ".join(value.strip(" \t\r\n.,;!?–—-").split())
+        normalized = cleaned.casefold().replace("ё", "е")
+        if not cleaned or normalized in {
+            item.casefold().replace("ё", "е") for item in constraints
+        }:
+            return
+        constraints.append(cleaned)
+
+    for match in SHARED_SHIFT_RE.finditer(message):
+        append(match.group(0))
+    for entity in named_section_entities(message, forum_normalized):
+        append(f"смена «{entity}»")
+    for match in SHARED_AGE_RANGE_RE.finditer(message):
+        append(match.group(0))
+    for match in SHARED_EXPLICIT_AGE_RE.finditer(message):
+        append(f"возраст {int(match.group(1))} лет")
+    normalized_message = message.casefold().replace("ё", "е")
+    for marker in (
+        "несовершеннолетний",
+        "несовершеннолетняя",
+        "совершеннолетний",
+        "совершеннолетняя",
+        "подросток",
+        "взрослый",
+    ):
+        if marker in normalized_message:
+            append(marker)
+    for match in SHARED_AUDIENCE_RE.finditer(message):
+        append(f"для {match.group(1)}")
+    return constraints
+
+
+def _event_constraint_clauses(
+    message: str,
+    forum_normalized: str | None,
+) -> list[tuple[str, list[str], bool]]:
+    clauses = [
+        clause.strip()
+        for clause in EVENT_CONSTRAINT_CLAUSE_RE.split(message)
+        if clause.strip()
+    ]
+    result: list[tuple[str, list[str], bool]] = []
+    for clause in clauses or [message]:
+        constraints = _shared_event_constraints(clause, forum_normalized)
+        if not constraints:
+            continue
+        age_count = sum(_is_age_constraint(value) for value in constraints)
+        section_count = sum(_is_section_constraint(value) for value in constraints)
+        result.append((clause, constraints, age_count > 1 or section_count > 1))
+    return result
+
+
+def _unique_constraint_groups(groups: list[list[str]]) -> list[list[str]]:
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for group in groups:
+        key = tuple(value.casefold().replace("ё", "е") for value in group)
+        if not key or key in seen:
+            continue
+        unique.append(group)
+        seen.add(key)
+    return unique
+
+
+def _clause_matches_question_aspect(clause: str, question: Question) -> bool:
+    normalized_clause = clause.casefold().replace("ё", "е")
+    normalized_question = question.text.casefold().replace("ё", "е")
+    topic = str(question.topic or "").casefold()
+    if asks_event_dates(normalized_question) or "daty" in topic:
+        return has_explicit_event_timing(normalized_clause)
+    if _question_is_application(question):
+        return has_explicit_application_action(normalized_clause)
+    aspect_markers: tuple[str, ...] = ()
+    if any(marker in f"{normalized_question} {topic}" for marker in ("документ", "вещ")):
+        aspect_markers = ("документ", "паспорт", "справк", "вещ", "взять")
+    elif any(marker in f"{normalized_question} {topic}" for marker in ("программ", "расписан")):
+        aspect_markers = ("программ", "расписан", "афиш", "активност")
+    elif _question_is_age_only(question):
+        aspect_markers = ("возраст", "лет", "участв", "подхож", "допуска")
+    elif "положен" in f"{normalized_question} {topic}":
+        aspect_markers = ("положен",)
+    return bool(aspect_markers) and any(
+        marker in normalized_clause for marker in aspect_markers
+    )
+
+
+def _question_is_application(question: Question) -> bool:
+    normalized = f"{question.text} {question.topic or ''}".casefold().replace("ё", "е")
+    return any(marker in normalized for marker in ("заяв", "регистрац", "podach", "registr"))
+
+
+def _question_is_age_only(question: Question) -> bool:
+    normalized = f"{question.text} {question.topic or ''}".casefold().replace("ё", "е")
+    return any(marker in normalized for marker in ("возраст", "vozrast"))
+
+
+def _is_age_constraint(value: str) -> bool:
+    normalized = value.casefold().replace("ё", "е")
+    return "возраст" in normalized or bool(re.search(r"\b\d{1,2}\b.*\bлет\b", normalized))
+
+
+def _is_section_constraint(value: str) -> bool:
+    normalized = value.casefold().replace("ё", "е")
+    return "смен" in normalized and not normalized.startswith(("для ", "среди "))
+
+
+def _has_section_constraint(constraints: list[str]) -> bool:
+    return any(_is_section_constraint(value) for value in constraints)
+
+
+def _question_already_expresses_constraint(
+    question: Question,
+    constraints: list[str],
+) -> bool:
+    normalized_question = question.text.casefold().replace("ё", "е")
+    return all(
+        _constraint_is_already_bound(normalized_question, value)
+        for value in constraints
+    )
+
+
+def _question_with_constraints(
+    question: Question,
+    constraints: list[str],
+) -> Question:
+    normalized_question = question.text.casefold().replace("ё", "е")
+    missing = [
+        value
+        for value in constraints
+        if not _constraint_is_already_bound(normalized_question, value)
+    ]
+    if not missing:
+        return question
+    return question.model_copy(
+        update={
+            "text": f"{question.text.rstrip()} Условия запроса: {'; '.join(missing)}."
+        }
+    )
+
+
+def _constraint_is_already_bound(normalized_question: str, value: str) -> bool:
+    normalized_value = value.casefold().replace("ё", "е")
+    if normalized_value in normalized_question:
+        return True
+    existing = _shared_event_constraints(normalized_question, None)
+    if _is_age_constraint(value):
+        return any(_is_age_constraint(item) for item in existing)
+    if _is_section_constraint(value):
+        return any(_is_section_constraint(item) for item in existing)
+    return False
+
+
+def _question_accepts_event_constraints(question: Question) -> bool:
+    normalized = question.text.casefold().replace("ё", "е")
+    topic = str(question.topic or "").casefold()
+    if asks_event_dates(normalized):
+        return True
+    return any(
+        marker in f"{normalized} {topic}"
+        for marker in (
+            "документ",
+            "вещ",
+            "программ",
+            "расписан",
+            "участв",
+            "возраст",
+            "заяв",
+            "регистрац",
+            "положен",
+            "сертификат",
+            "daty",
+            "smena",
+        )
+    )
 
 
 def _base_questions(
@@ -946,6 +1341,16 @@ def _fallback_questions_from_message(
 
 def _has_any_marker(normalized: str, markers: tuple[str, ...]) -> bool:
     for marker in markers:
+        if marker == "когда смена":
+            if re.search(
+                r"\bкогда\s+(?:(?:(?:перв|втор|трет|четверт|пят|шест|седьм|"
+                r"восьм|девят|десят)\w*|\d{1,2}\s*[-–—]?\s*"
+                r"(?:я|й|ю|е|ая|ый|ую|ой)?)\s+)?смен\w*\b",
+                normalized,
+                flags=re.UNICODE,
+            ):
+                return True
+            continue
         if marker == "лет":
             if re.search(
                 r"(?<![\w])лет(?![\w])|(?<![\w])\d{1,3}-летн[а-я]*(?![\w])",
@@ -961,6 +1366,8 @@ def _has_any_marker(normalized: str, markers: tuple[str, ...]) -> bool:
 
 def _fallback_question_aspect_key(question: str) -> str:
     normalized = question.casefold().replace("ё", "е")
+    if asks_event_dates(normalized):
+        return "event_dates"
     if "результат" in normalized and "отбор" in normalized:
         return "selection_results"
     return normalized
@@ -1005,7 +1412,25 @@ def _should_skip_fallback_question(
         return _has_personal_document_context(
             normalized_message
         ) and not _has_event_document_context(normalized_message)
+    if question == "Какие возрастные ограничения?":
+        has_explicit_age_question = any(
+            marker in normalized_message
+            for marker in (
+                "возраст",
+                "огранич",
+                "подхож",
+                "допуска",
+                "могу участв",
+                "могу ли участв",
+                "можно участв",
+                "можно ли участв",
+            )
+        )
+        if asks_event_dates(normalized_message) and not has_explicit_age_question:
+            return True
     if question == "Какие даты и сроки?":
+        if should_suppress_event_date_question(normalized_message):
+            return True
         if "когда добав" in normalized_message and "чат" in normalized_message:
             return True
         if _has_selection_result_context(normalized_message):
@@ -1035,6 +1460,25 @@ def _should_skip_fallback_question(
 
     if question == "Что с подтверждением участия?":
         return _has_decline_participation_context(normalized_message)
+
+    if (
+        "результат" in normalized_question
+        or "отбор" in normalized_question
+    ) and has_explicit_technical_failure(normalized_message):
+        has_explicit_outcome_request = any(
+            marker in normalized_message
+            for marker in (
+                "результат",
+                "одобрен",
+                "отклонен",
+                "отклонён",
+                "резерв",
+                "прошел отбор",
+                "прошёл отбор",
+            )
+        )
+        if not has_explicit_outcome_request:
+            return True
 
     if question == "Кто оплачивает проезд?":
         if "возмещ" in normalized_message:
@@ -1072,6 +1516,11 @@ def _should_skip_fallback_question(
         return category == "гранты" and "расход" in normalized_message and not has_travel_context
 
     if question == "Как подать заявку или зарегистрироваться?":
+        if (
+            has_explicit_technical_failure(normalized_message)
+            and not has_explicit_application_action(normalized_message)
+        ):
+            return True
         if _has_decline_participation_context(
             normalized_message
         ) and not _has_explicit_application_context(normalized_message):
@@ -1082,7 +1531,6 @@ def _should_skip_fallback_question(
         return category == "гранты"
 
     return False
-
 
 def _has_decline_participation_context(normalized_message: str) -> bool:
     return any(

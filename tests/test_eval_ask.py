@@ -120,6 +120,8 @@ def _install_holdout_trace_stubs(
     trace_error: Exception | None = None,
     trace_record_error: object = None,
     binding_mismatch: bool = False,
+    cardinality_case_counts: dict[str, int] | None = None,
+    cardinality_error: Exception | None = None,
 ) -> None:
     async def fake_create_pool(*args: object, **kwargs: object) -> _FakeTracePool:
         return _FakeTracePool()
@@ -142,14 +144,49 @@ def _install_holdout_trace_stubs(
             "error": trace_record_error,
         }
 
+    async def fake_fetch_eval_trace_cardinality(
+        pool: object,
+        *,
+        eval_run_id: str,
+        expected_case_ids: list[str],
+    ) -> dict[str, object]:
+        if cardinality_error is not None:
+            raise cardinality_error
+        case_counts = (
+            dict(cardinality_case_counts)
+            if cardinality_case_counts is not None
+            else {case_id: 1 for case_id in expected_case_ids}
+        )
+        expected = set(expected_case_ids)
+        observed = set(case_counts)
+        return {
+            "eval_run_id": eval_run_id,
+            "expected_cases_total": len(expected_case_ids),
+            "traces_total": sum(case_counts.values()),
+            "case_counts": dict(sorted(case_counts.items())),
+            "missing_case_ids": sorted(expected - observed),
+            "duplicate_case_ids": sorted(
+                case_id
+                for case_id, trace_count in case_counts.items()
+                if trace_count != 1
+            ),
+            "unknown_case_ids": sorted(observed - expected),
+        }
+
     monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
     monkeypatch.setattr(run_ask_module, "_fetch_trace", fake_fetch_trace)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_fetch_eval_trace_cardinality",
+        fake_fetch_eval_trace_cardinality,
+    )
 
 
 def _holdout_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path, Path]:
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-eval-secret")
     private_root = tmp_path / "private"
     cases_dir = private_root / "cases" / "sealed"
     cases_dir.mkdir(parents=True)
@@ -181,6 +218,50 @@ def _request_id_for_case(request: httpx.Request) -> str:
     case_id = request.headers["X-Eval-Case-Id"]
     index = int(case_id.rsplit("-", maxsplit=1)[-1])
     return f"00000000-0000-0000-0000-{index:012d}"
+
+
+def _ready_payload(
+    *,
+    release_git_sha: str = "1" * 40,
+    authorized: bool = True,
+) -> dict[str, object]:
+    return {
+        "status": "ready",
+        "release_git_sha": release_git_sha,
+        "eval_cache_bypass": {
+            "scheme": run_ask_module.eval_cache_bypass.SCHEME,
+            "authorized": authorized,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_eval_trace_cardinality_groups_run_cases() -> None:
+    class CardinalityPool:
+        async def fetch(self, query: str, eval_run_id: str) -> list[dict[str, object]]:
+            assert "WHERE eval_run_id = $1" in query
+            assert "GROUP BY eval_case_id" in query
+            assert eval_run_id == "ask-eval-cardinality"
+            return [
+                {"eval_case_id": "case-001", "trace_count": 2},
+                {"eval_case_id": None, "trace_count": 1},
+            ]
+
+    summary = await run_ask_module._fetch_eval_trace_cardinality(
+        CardinalityPool(),  # type: ignore[arg-type]
+        eval_run_id="ask-eval-cardinality",
+        expected_case_ids=["case-001", "case-002"],
+    )
+
+    assert summary == {
+        "eval_run_id": "ask-eval-cardinality",
+        "expected_cases_total": 2,
+        "traces_total": 3,
+        "case_counts": {"<null>": 1, "case-001": 2},
+        "missing_case_ids": ["case-002"],
+        "duplicate_case_ids": ["case-001"],
+        "unknown_case_ids": ["<null>"],
+    }
 
 
 def test_normalize_case_accepts_common_fields() -> None:
@@ -1568,7 +1649,7 @@ def test_summarize_results_counts_core_metrics() -> None:
                 "llm_usage": [{"model": "m", "total_tokens": 15}],
             },
         ],
-        target="http://test/ask",
+        target="http://127.0.0.1:8001/ask",
         cases_path=Path("cases.json"),
     )
 
@@ -1605,7 +1686,7 @@ def test_summarize_results_marks_likely_infrastructure_failure() -> None:
                 "llm_usage": [],
             }
         ],
-        target="http://test/ask",
+        target="http://127.0.0.1:8001/ask",
         cases_path=Path("cases.json"),
     )
 
@@ -1650,7 +1731,7 @@ async def test_run_eval_writes_json_and_markdown_without_db(tmp_path: Path) -> N
     metrics = await run_eval(
         cases_path=cases,
         output_path=output,
-        target="http://test/ask",
+        target="http://127.0.0.1:8001/ask",
         trace_lookup=False,
         api_key_env=None,
         markdown_path=markdown,
@@ -1686,7 +1767,7 @@ async def test_run_eval_can_send_bypass_cache_header(tmp_path: Path) -> None:
     metrics = await run_eval(
         cases_path=cases,
         output_path=output,
-        target="http://test/ask",
+        target="http://127.0.0.1:8001/ask",
         trace_lookup=False,
         api_key_env=None,
         transport=httpx.MockTransport(handler),
@@ -1694,6 +1775,93 @@ async def test_run_eval_can_send_bypass_cache_header(tmp_path: Path) -> None:
     )
 
     assert metrics["cases_total"] == 1
+    assert metrics["http_success_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://app-ml:8000/ask",
+        "http://172.20.0.9:8000/ask",
+        "http://rosmol-app-ml:8000/ask",
+    ],
+)
+async def test_server_local_eval_rejects_old_runtime_before_first_ask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-eval-secret")
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps([{"id": "hello", "query": "Привет"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json={
+                "status": "ready",
+                "release_git_sha": "old-runtime",
+                "checks": {},
+            },
+        )
+
+    with pytest.raises(ValueError, match="did not authorize signed cache bypass"):
+        await run_eval(
+            cases_path=cases,
+            output_path=output,
+            target=target,
+            trace_lookup=False,
+            transport=httpx.MockTransport(handler),
+            bypass_cache=True,
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_server_local_eval_runs_after_authorized_capability_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-eval-secret")
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps([{"id": "hello", "query": "Привет"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, json=_ready_payload())
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "Здравствуйте!",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases,
+        output_path=output,
+        target="http://app-ml:8000/ask",
+        trace_lookup=False,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+    )
+
+    assert requests == [("GET", "/ready"), ("POST", "/ask")]
     assert metrics["http_success_rate"] == 1.0
 
 
@@ -1866,12 +2034,41 @@ async def test_run_eval_executes_sealed_private_holdout_after_matching_ready(
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append((request.method, request.url.path))
         if request.method == "GET":
+            assert request.headers["X-Bypass-Cache"] == "1"
+            assert request.headers["X-Eval-Cache-Bypass-Probe"] == "1"
+            assert (
+                request.headers["X-Eval-Cache-Bypass-Version"]
+                == run_ask_module.eval_cache_bypass.SCHEME
+            )
             return httpx.Response(
                 200,
-                json={"status": "ready", "release_git_sha": "1" * 40},
+                json=_ready_payload(),
             )
         assert receipt_path.is_file()
         assert request.headers["X-Bypass-Cache"] == "1"
+        timestamp = request.headers["X-Eval-Cache-Bypass-Timestamp"]
+        nonce = request.headers["X-Eval-Cache-Bypass-Nonce"]
+        payload = json.loads(request.content.decode("utf-8"))
+        expected_signature = run_ask_module.eval_cache_bypass.signature(
+            "test-eval-secret",
+            method="POST",
+            path="/ask",
+            eval_run_id=request.headers["X-Eval-Run-Id"],
+            eval_case_id=request.headers["X-Eval-Case-Id"],
+            timestamp=timestamp,
+            nonce=nonce,
+            payload_sha256=(
+                run_ask_module.eval_cache_bypass.canonical_payload_sha256(
+                    run_ask_module.eval_cache_bypass.canonical_ask_payload(
+                        payload
+                    )
+                )
+            ),
+        )
+        assert (
+            request.headers["X-Eval-Cache-Bypass-Signature"]
+            == expected_signature
+        )
         request_user_id = str(json.loads(request.content)["user_id"])
         sealed_user_ids.append(request_user_id)
         assert request_user_id.startswith("runner-holdout-")
@@ -1911,6 +2108,10 @@ async def test_run_eval_executes_sealed_private_holdout_after_matching_ready(
     assert metrics["holdout_run"]["completed"] is True
     assert metrics["holdout_run"]["status"] == "completed"
     assert metrics["holdout_run"]["integrity_failures"] == []
+    assert metrics["trace_cardinality"]["traces_total"] == 80
+    assert metrics["trace_cardinality"]["missing_case_ids"] == []
+    assert metrics["trace_cardinality"]["duplicate_case_ids"] == []
+    assert metrics["trace_cardinality"]["unknown_case_ids"] == []
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     expected_cases_file_sha256 = run_ask_module._file_sha256(cases_path)
     assert receipt["status"] == "started"
@@ -1996,7 +2197,7 @@ async def test_run_eval_marks_model_assisted_prerun_as_provisional(
         if request.method == "GET":
             return httpx.Response(
                 200,
-                json={"status": "ready", "release_git_sha": "1" * 40},
+                json=_ready_payload(),
             )
         return httpx.Response(
             200,
@@ -2490,12 +2691,11 @@ async def test_post_run_ready_failure_rejects_before_canonical_output(
                 raise httpx.ConnectError("runtime unavailable", request=request)
             return httpx.Response(
                 200,
-                json={
-                    "status": "ready",
-                    "release_git_sha": (
+                json=_ready_payload(
+                    release_git_sha=(
                         "1" * 40 if get_count == 1 else "9" * 40
-                    ),
-                },
+                    )
+                ),
             )
         post_count += 1
         return httpx.Response(
@@ -2588,6 +2788,53 @@ async def test_run_eval_writes_preflight_rejection_for_invalid_holdout_options(
 
 
 @pytest.mark.asyncio
+async def test_sealed_holdout_rejects_missing_cache_bypass_capability_before_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json={"status": "ready", "release_git_sha": "1" * 40},
+        )
+
+    with pytest.raises(ValueError, match="cache bypass capability"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert not list(ledger_dir.glob("*.started.json"))
+    assert not list(ledger_dir.glob("*.completed.json"))
+    assert not output_path.exists()
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert report["holdout_run"]["status"] == "runtime_rejected"
+    assert report["holdout_run"]["executed_cases_total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_run_eval_writes_but_rejects_partial_budget_stopped_holdout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2616,7 +2863,7 @@ async def test_run_eval_writes_but_rejects_partial_budget_stopped_holdout(
         if request.method == "GET":
             return httpx.Response(
                 200,
-                json={"status": "ready", "release_git_sha": "1" * 40},
+                json=_ready_payload(),
             )
         return httpx.Response(
             200,
@@ -2679,7 +2926,7 @@ async def test_run_eval_rejects_private_holdout_runtime_sha_mismatch_before_ask(
         requests.append((request.method, request.url.path))
         return httpx.Response(
             200,
-            json={"status": "ready", "release_git_sha": "9" * 40},
+            json=_ready_payload(release_git_sha="9" * 40),
         )
 
     with pytest.raises(ValueError, match="release_git_sha"):
@@ -2733,7 +2980,7 @@ async def test_run_eval_existing_receipt_rejects_holdout_rerun(
         requests.append((request.method, request.url.path))
         return httpx.Response(
             200,
-            json={"status": "ready", "release_git_sha": "1" * 40},
+            json=_ready_payload(),
         )
 
     with pytest.raises(ValueError, match="rerun is forbidden"):
@@ -2786,6 +3033,8 @@ async def test_run_eval_writes_and_rejects_holdout_integrity_failures(
         monkeypatch,
     )
     if failure_mode == "trace_missing":
+        _install_holdout_trace_stubs(monkeypatch)
+
         async def missing_trace(
             pool: object,
             request_id: str,
@@ -2793,13 +3042,6 @@ async def test_run_eval_writes_and_rejects_holdout_integrity_failures(
         ) -> None:
             return None
 
-        async def fake_create_pool(
-            *args: object,
-            **kwargs: object,
-        ) -> _FakeTracePool:
-            return _FakeTracePool()
-
-        monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
         monkeypatch.setattr(run_ask_module, "_fetch_trace", missing_trace)
     else:
         _install_holdout_trace_stubs(
@@ -2835,7 +3077,7 @@ async def test_run_eval_writes_and_rejects_holdout_integrity_failures(
         if request.method == "GET":
             return httpx.Response(
                 200,
-                json={"status": "ready", "release_git_sha": "1" * 40},
+                json=_ready_payload(),
             )
         post_count += 1
         return httpx.Response(
@@ -2874,6 +3116,109 @@ async def test_run_eval_writes_and_rejects_holdout_integrity_failures(
     assert report["holdout_run"]["status"] == expected_status
     assert expected_failure in report["holdout_run"]["integrity_failures"]
     assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("cardinality_mode", "expected_failures"),
+    [
+        (
+            "missing",
+            {
+                "trace_cardinality_total_mismatch",
+                "trace_cardinality_missing_case_ids",
+            },
+        ),
+        (
+            "duplicate",
+            {
+                "trace_cardinality_total_mismatch",
+                "trace_cardinality_duplicate_case_ids",
+            },
+        ),
+        (
+            "unknown",
+            {
+                "trace_cardinality_missing_case_ids",
+                "trace_cardinality_unknown_case_ids",
+            },
+        ),
+        ("lookup_error", {"trace_cardinality_lookup_error"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_sealed_holdout_rejects_non_exact_trace_cardinality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cardinality_mode: str,
+    expected_failures: set[str],
+) -> None:
+    _private_root, cases_dir, ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    case_counts = {case_id: 1 for case_id in HOLDOUT_CASE_IDS}
+    cardinality_error: Exception | None = None
+    if cardinality_mode == "missing":
+        case_counts.pop(HOLDOUT_CASE_IDS[-1])
+    elif cardinality_mode == "duplicate":
+        case_counts[HOLDOUT_CASE_IDS[0]] = 2
+    elif cardinality_mode == "unknown":
+        case_counts.pop(HOLDOUT_CASE_IDS[-1])
+        case_counts["case-unknown"] = 1
+    else:
+        cardinality_error = RuntimeError("cardinality query failed")
+
+    _install_holdout_trace_stubs(
+        monkeypatch,
+        cardinality_case_counts=case_counts,
+        cardinality_error=cardinality_error,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=_ready_payload())
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(RuntimeError, match="run-integrity"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_sealed_holdout_kwargs(ledger_dir, raw_cases, cases_path),
+        )
+
+    report = json.loads(
+        next(ledger_dir.glob("*.rejected.json")).read_text(encoding="utf-8")
+    )
+    assert report["holdout_run"]["status"] == "trace_failed"
+    assert expected_failures <= set(
+        report["holdout_run"]["integrity_failures"]
+    )
+    assert report["holdout_run"]["completed"] is False
+    assert not output_path.exists()
+    assert not list(ledger_dir.glob("*.completed.json"))
+    if cardinality_error is None:
+        assert report["trace_cardinality"]["case_counts"] == dict(
+            sorted(case_counts.items())
+        )
+    else:
+        assert report["trace_cardinality"] is None
+        assert "RuntimeError" in report["trace_cardinality_error"]
 
 
 @pytest.mark.asyncio

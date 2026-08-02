@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from eval.ask_cases import build_seed_ask_cases
 from src.config import get_settings
 from src.response_contract import ResponseProfileName
+from src.security import eval_cache_bypass
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_DATA_ROOT = PROJECT_ROOT / "data" / "private"
@@ -559,6 +560,17 @@ async def run_eval(
     allow_model_assisted_prerun: bool = False,
 ) -> dict[str, Any]:
     eval_run_id = f"ask-eval-{uuid4()}"
+    effective_api_key_env = (
+        "API_AUTH_TOKEN"
+        if sealed_holdout and api_key_env is None
+        else api_key_env
+    )
+    headers = _auth_headers(effective_api_key_env)
+    cache_bypass_secret = (
+        headers.get("X-API-Key", "").strip()
+        if bypass_cache
+        else ""
+    )
     if allow_model_assisted_prerun and not sealed_holdout:
         raise ValueError(
             "allow_model_assisted_prerun requires sealed_holdout mode"
@@ -740,6 +752,8 @@ async def run_eval(
             preflight_failures.append("user_prefix_forbidden")
         if bypass_cache is not True:
             preflight_failures.append("bypass_cache_required")
+        if not cache_bypass_secret:
+            preflight_failures.append("cache_bypass_signature_secret_required")
         if trace_lookup is not True:
             preflight_failures.append("trace_lookup_required")
         if max_cases is not None:
@@ -851,91 +865,102 @@ async def run_eval(
             "sealed private holdout requires an available trace lookup connection"
         )
 
-    headers = _auth_headers(api_key_env)
     if bypass_cache:
-        headers["X-Bypass-Cache"] = "1"
+        headers[eval_cache_bypass.HEADER_BYPASS] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
     budget_stopped = False
+    holdout_trace_cardinality: dict[str, Any] | None = None
+    holdout_trace_cardinality_error: str | None = None
     try:
         async with httpx.AsyncClient(
             transport=transport,
             timeout=request_timeout,
             trust_env=False,
         ) as client:
-            if holdout_contract is not None:
+            if holdout_contract is not None or (
+                bypass_cache and _requires_signed_cache_bypass(target)
+            ):
                 try:
-                    await _verify_holdout_runtime(
+                    await _verify_cache_bypass_runtime(
                         client=client,
                         target=target,
                         headers=headers,
-                        expected_git_sha=holdout_contract["runtime_git_sha"],
+                        expected_git_sha=(
+                            holdout_contract["runtime_git_sha"]
+                            if holdout_contract is not None
+                            else None
+                        ),
+                        eval_run_id=eval_run_id,
+                        cache_bypass_secret=cache_bypass_secret,
                     )
                 except ValueError as exc:
-                    assert holdout_ledger is not None
-                    assert holdout_receipt_key is not None
-                    await _write_holdout_rejection_report(
-                        ledger_dir=holdout_ledger,
-                        receipt_key=holdout_receipt_key,
-                        target=target,
-                        cases_path=cases_path,
-                        eval_run_id=eval_run_id,
-                        contract=holdout_contract,
-                        expected_cases_file_sha256=expected_file_sha256,
-                        status="runtime_rejected",
-                        failures=["runtime_ready_check_failed"],
-                        executed_cases_total=0,
-                        receipt_path=holdout_receipt_path,
-                        detail=str(exc),
-                    )
+                    if holdout_contract is not None:
+                        assert holdout_ledger is not None
+                        assert holdout_receipt_key is not None
+                        await _write_holdout_rejection_report(
+                            ledger_dir=holdout_ledger,
+                            receipt_key=holdout_receipt_key,
+                            target=target,
+                            cases_path=cases_path,
+                            eval_run_id=eval_run_id,
+                            contract=holdout_contract,
+                            expected_cases_file_sha256=expected_file_sha256,
+                            status="runtime_rejected",
+                            failures=["runtime_ready_check_failed"],
+                            executed_cases_total=0,
+                            receipt_path=holdout_receipt_path,
+                            detail=str(exc),
+                        )
                     raise
-                assert holdout_receipt_path is not None
-                try:
-                    await asyncio.to_thread(
-                        _create_holdout_started_receipt,
-                        holdout_receipt_path,
-                        contract=holdout_contract,
-                        expected_cases_file_sha256=expected_file_sha256,
-                        eval_run_id=eval_run_id,
-                        cases_path=cases_path,
-                        output_path=output_path,
-                        receipt_key=holdout_receipt_key,
-                    )
-                except FileExistsError:
-                    await _write_holdout_rejection_report(
-                        ledger_dir=holdout_ledger,
-                        receipt_key=holdout_receipt_key,
-                        target=target,
-                        cases_path=cases_path,
-                        eval_run_id=eval_run_id,
-                        contract=holdout_contract,
-                        expected_cases_file_sha256=expected_file_sha256,
-                        status="rerun_rejected",
-                        failures=["started_receipt_exists"],
-                        executed_cases_total=0,
-                        receipt_path=holdout_receipt_path,
-                    )
-                    raise ValueError(
-                        "sealed private holdout already has a started receipt; "
-                        "rerun is forbidden"
-                    ) from None
-                except OSError as exc:
-                    await _write_holdout_rejection_report(
-                        ledger_dir=holdout_ledger,
-                        receipt_key=holdout_receipt_key,
-                        target=target,
-                        cases_path=cases_path,
-                        eval_run_id=eval_run_id,
-                        contract=holdout_contract,
-                        expected_cases_file_sha256=expected_file_sha256,
-                        status="receipt_rejected",
-                        failures=["started_receipt_create_failed"],
-                        executed_cases_total=0,
-                        receipt_path=holdout_receipt_path,
-                        detail=f"{type(exc).__name__}: {exc}",
-                    )
-                    raise RuntimeError(
-                        "sealed private holdout started receipt could not be created"
-                    ) from exc
+                if holdout_contract is not None:
+                    assert holdout_receipt_path is not None
+                    try:
+                        await asyncio.to_thread(
+                            _create_holdout_started_receipt,
+                            holdout_receipt_path,
+                            contract=holdout_contract,
+                            expected_cases_file_sha256=expected_file_sha256,
+                            eval_run_id=eval_run_id,
+                            cases_path=cases_path,
+                            output_path=output_path,
+                            receipt_key=holdout_receipt_key,
+                        )
+                    except FileExistsError:
+                        await _write_holdout_rejection_report(
+                            ledger_dir=holdout_ledger,
+                            receipt_key=holdout_receipt_key,
+                            target=target,
+                            cases_path=cases_path,
+                            eval_run_id=eval_run_id,
+                            contract=holdout_contract,
+                            expected_cases_file_sha256=expected_file_sha256,
+                            status="rerun_rejected",
+                            failures=["started_receipt_exists"],
+                            executed_cases_total=0,
+                            receipt_path=holdout_receipt_path,
+                        )
+                        raise ValueError(
+                            "sealed private holdout already has a started receipt; "
+                            "rerun is forbidden"
+                        ) from None
+                    except OSError as exc:
+                        await _write_holdout_rejection_report(
+                            ledger_dir=holdout_ledger,
+                            receipt_key=holdout_receipt_key,
+                            target=target,
+                            cases_path=cases_path,
+                            eval_run_id=eval_run_id,
+                            contract=holdout_contract,
+                            expected_cases_file_sha256=expected_file_sha256,
+                            status="receipt_rejected",
+                            failures=["started_receipt_create_failed"],
+                            executed_cases_total=0,
+                            receipt_path=holdout_receipt_path,
+                            detail=f"{type(exc).__name__}: {exc}",
+                        )
+                        raise RuntimeError(
+                            "sealed private holdout started receipt could not be created"
+                        ) from exc
             if max_llm_cost_rub is None:
                 tasks = [
                     _run_case(
@@ -947,6 +972,7 @@ async def run_eval(
                         semaphore=semaphore,
                         trace_pool=trace_pool,
                         sealed_holdout=sealed_holdout,
+                        cache_bypass_secret=cache_bypass_secret,
                     )
                     for case in cases
                 ]
@@ -966,6 +992,7 @@ async def run_eval(
                         semaphore=sequential_semaphore,
                         trace_pool=trace_pool,
                         sealed_holdout=sealed_holdout,
+                        cache_bypass_secret=cache_bypass_secret,
                     )
                     results.append(result)
                     if _llm_cost_rub_total(results) > max_llm_cost_rub:
@@ -973,11 +1000,13 @@ async def run_eval(
                         break
             if holdout_contract is not None:
                 try:
-                    await _verify_holdout_runtime(
+                    await _verify_cache_bypass_runtime(
                         client=client,
                         target=target,
                         headers=headers,
                         expected_git_sha=holdout_contract["runtime_git_sha"],
+                        eval_run_id=eval_run_id,
+                        cache_bypass_secret=cache_bypass_secret,
                     )
                 except ValueError as exc:
                     assert holdout_ledger is not None
@@ -1004,6 +1033,15 @@ async def run_eval(
                         ),
                     )
                     raise
+                assert trace_pool is not None
+                try:
+                    holdout_trace_cardinality = await _fetch_eval_trace_cardinality(
+                        trace_pool,
+                        eval_run_id=eval_run_id,
+                        expected_case_ids=[str(case["id"]) for case in cases],
+                    )
+                except Exception as exc:
+                    holdout_trace_cardinality_error = type(exc).__name__
     finally:
         if trace_pool:
             await trace_pool.close()
@@ -1021,6 +1059,9 @@ async def run_eval(
         metrics["report_classification"] = _holdout_report_classification(
             holdout_contract
         )
+        metrics["trace_cardinality"] = holdout_trace_cardinality
+        if holdout_trace_cardinality_error is not None:
+            metrics["trace_cardinality_error"] = holdout_trace_cardinality_error
     _apply_run_limits(
         metrics,
         original_cases_total=original_cases_total,
@@ -1039,6 +1080,8 @@ async def run_eval(
             results=results,
             expected_cases_total=holdout_contract["cases_total"],
             executed_cases_total=executed_cases_total,
+            trace_cardinality=holdout_trace_cardinality,
+            trace_cardinality_error=holdout_trace_cardinality_error,
         )
         status = _holdout_failure_status(
             holdout_failures,
@@ -1413,16 +1456,31 @@ def _path_lexists(path: Path) -> bool:
     return os.path.lexists(path)
 
 
-async def _verify_holdout_runtime(
+async def _verify_cache_bypass_runtime(
     *,
     client: httpx.AsyncClient,
     target: str,
     headers: dict[str, str],
-    expected_git_sha: str,
+    expected_git_sha: str | None,
+    eval_run_id: str,
+    cache_bypass_secret: str,
 ) -> None:
     ready_url = urlsplit(target)._replace(path="/ready", query="", fragment="").geturl()
+    ready_headers = {
+        **headers,
+        eval_cache_bypass.HEADER_BYPASS: "1",
+        eval_cache_bypass.HEADER_CAPABILITY_PROBE: "1",
+        **eval_cache_bypass.build_signed_headers(
+            cache_bypass_secret,
+            method="GET",
+            path="/ready",
+            eval_run_id=eval_run_id,
+            eval_case_id=eval_cache_bypass.CAPABILITY_PROBE_CASE_ID,
+            payload_sha256=eval_cache_bypass.EMPTY_PAYLOAD_SHA256,
+        ),
+    }
     try:
-        response = await client.get(ready_url, headers=headers)
+        response = await client.get(ready_url, headers=ready_headers)
     except httpx.HTTPError:
         raise ValueError(
             "sealed private holdout runtime /ready check failed"
@@ -1438,10 +1496,20 @@ async def _verify_holdout_runtime(
             "sealed private holdout runtime /ready payload is not ready"
         )
     release_git_sha = str(payload.get("release_git_sha") or "").strip()
-    if release_git_sha != expected_git_sha:
+    if expected_git_sha is not None and release_git_sha != expected_git_sha:
         raise ValueError(
             "sealed private holdout runtime release_git_sha does not match "
             "holdout_contract"
+        )
+    capability = payload.get("eval_cache_bypass")
+    if (
+        not isinstance(capability, dict)
+        or capability.get("scheme") != eval_cache_bypass.SCHEME
+        or capability.get("authorized") is not True
+    ):
+        raise ValueError(
+            "sealed private holdout runtime did not authorize signed "
+            "cache bypass capability"
         )
 
 
@@ -1650,6 +1718,8 @@ def _holdout_integrity_failures(
     results: list[dict[str, Any]],
     expected_cases_total: int,
     executed_cases_total: int,
+    trace_cardinality: dict[str, Any] | None,
+    trace_cardinality_error: str | None,
 ) -> list[str]:
     failures: list[str] = []
     if executed_cases_total != expected_cases_total:
@@ -1679,6 +1749,17 @@ def _holdout_integrity_failures(
         failures.append("trace_lookup_error")
     if any(item.get("trace_error") not in (None, "") for item in results):
         failures.append("trace_error_present")
+    if trace_cardinality_error is not None or trace_cardinality is None:
+        failures.append("trace_cardinality_lookup_error")
+    else:
+        if trace_cardinality.get("traces_total") != expected_cases_total:
+            failures.append("trace_cardinality_total_mismatch")
+        if trace_cardinality.get("missing_case_ids"):
+            failures.append("trace_cardinality_missing_case_ids")
+        if trace_cardinality.get("duplicate_case_ids"):
+            failures.append("trace_cardinality_duplicate_case_ids")
+        if trace_cardinality.get("unknown_case_ids"):
+            failures.append("trace_cardinality_unknown_case_ids")
     return failures
 
 
@@ -1698,6 +1779,7 @@ def _holdout_failure_status(
         or "trace_lookup_error" in failures
         or "trace_binding_mismatch" in failures
         or "trace_error_present" in failures
+        or any(failure.startswith("trace_cardinality_") for failure in failures)
     ):
         return "trace_failed"
     if "cache_hit_not_exactly_false" in failures:
@@ -2319,6 +2401,7 @@ async def _run_case(
     semaphore: asyncio.Semaphore,
     trace_pool: asyncpg.Pool | None,
     sealed_holdout: bool = False,
+    cache_bypass_secret: str = "",
 ) -> dict[str, Any]:
     async with semaphore:
         started_at = perf_counter()
@@ -2341,6 +2424,23 @@ async def _run_case(
                 "X-Eval-Run-Id": eval_run_id,
                 "X-Eval-Case-Id": str(case["id"]),
             }
+            if cache_bypass_secret:
+                request_headers.update(
+                    eval_cache_bypass.build_signed_headers(
+                        cache_bypass_secret,
+                        method="POST",
+                        path=urlsplit(target).path or "/",
+                        eval_run_id=eval_run_id,
+                        eval_case_id=str(case["id"]),
+                        payload_sha256=(
+                            eval_cache_bypass.canonical_payload_sha256(
+                                eval_cache_bypass.canonical_ask_payload(
+                                    request_payload
+                                )
+                            )
+                        ),
+                    )
+                )
             response = await client.post(
                 target,
                 headers=request_headers,
@@ -2396,6 +2496,45 @@ async def _run_case(
         if case_trace_lookup_error:
             result["trace_lookup_error"] = case_trace_lookup_error
         return result
+
+
+async def _fetch_eval_trace_cardinality(
+    pool: asyncpg.Pool,
+    *,
+    eval_run_id: str,
+    expected_case_ids: list[str],
+) -> dict[str, Any]:
+    rows = await pool.fetch(
+        """
+        SELECT eval_case_id, COUNT(*) AS trace_count
+        FROM request_traces
+        WHERE eval_run_id = $1
+        GROUP BY eval_case_id
+        ORDER BY eval_case_id NULLS FIRST
+        """,
+        eval_run_id,
+    )
+    case_counts: dict[str, int] = {}
+    for row in rows:
+        raw_case_id = row["eval_case_id"]
+        case_id = str(raw_case_id) if raw_case_id is not None else "<null>"
+        case_counts[case_id] = int(row["trace_count"])
+
+    expected = set(expected_case_ids)
+    observed = set(case_counts)
+    return {
+        "eval_run_id": eval_run_id,
+        "expected_cases_total": len(expected_case_ids),
+        "traces_total": sum(case_counts.values()),
+        "case_counts": dict(sorted(case_counts.items())),
+        "missing_case_ids": sorted(expected - observed),
+        "duplicate_case_ids": sorted(
+            case_id
+            for case_id, trace_count in case_counts.items()
+            if trace_count != 1
+        ),
+        "unknown_case_ids": sorted(observed - expected),
+    }
 
 
 async def _fetch_trace(
@@ -2504,6 +2643,11 @@ def _auth_headers(api_key_env: str | None) -> dict[str, str]:
     if token:
         headers["X-API-Key"] = token
     return headers
+
+
+def _requires_signed_cache_bypass(target: str) -> bool:
+    hostname = (urlsplit(target).hostname or "").strip().casefold()
+    return hostname not in {"localhost", "127.0.0.1", "::1"}
 
 
 def _trace_dsn_candidates(trace_dsn: str | None = None) -> list[str]:

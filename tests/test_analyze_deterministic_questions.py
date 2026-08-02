@@ -449,6 +449,188 @@ def test_response_profile_prefers_explicit_aspect_over_temporal_word(
     assert _infer_response_profile(analysis, query) == ResponseProfileName(expected)
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_profile", "expected_topic"),
+    [
+        (
+            "Когда объявят результаты отбора на форум «Машук»?",
+            ResponseProfileName.SELECTION_STATUS,
+            "rezultaty_rm",
+        ),
+        (
+            "Какой дедлайн подачи заявки на форум «Машук»?",
+            ResponseProfileName.APPLICATION,
+            "podacha_zayavki_na_proekt",
+        ),
+    ],
+)
+def test_temporal_business_clause_does_not_create_event_date_question(
+    query: str,
+    expected_profile: ResponseProfileName,
+    expected_topic: str,
+) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.response_profile == expected_profile
+    assert expected_topic in {question.topic for question in analysis.questions}
+    assert "daty_nachala_meropriyatiya" not in {
+        question.topic for question in analysis.questions
+    }
+
+
+def test_technical_failure_overrides_application_noun_without_phantom_dates() -> None:
+    query = (
+        "На форуме «Машук» заявка не сохраняется, появляется ошибка. Что делать?"
+    )
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.response_profile == ResponseProfileName.TECHNICAL
+    assert "podacha_zayavki_na_proekt" not in {
+        question.topic for question in analysis.questions
+    }
+    assert "daty_nachala_meropriyatiya" not in {
+        question.topic for question in analysis.questions
+    }
+
+
+def test_legitimate_application_and_travel_clauses_remain_separate_questions() -> None:
+    query = "Как подать заявку на форум «Машук» и кто оплачивает проезд?"
+    analysis = _fallback_analysis(query, query, {"complexity": "complex"}, None)
+
+    assert analysis is not None
+    assert {
+        "podacha_zayavki_na_proekt",
+        "oplata_proezda",
+    }.issubset({question.topic for question in analysis.questions})
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "После отбора будет трансфер до площадки?",
+            ResponseProfileName.TRAVEL,
+        ),
+        (
+            "Когда заезд на форум «Машук»?",
+            ResponseProfileName.DATES,
+        ),
+        (
+            "Может ли волонтёр участвовать в форуме?",
+            ResponseProfileName.ELIGIBILITY,
+        ),
+        (
+            "Какие активности предусмотрены для гостей мероприятия?",
+            ResponseProfileName.PROGRAM,
+        ),
+        (
+            "В форме гранта поле с проектом не отображается.",
+            ResponseProfileName.TECHNICAL,
+        ),
+        (
+            "Как исправить ошибку в заявке до отправки?",
+            ResponseProfileName.APPLICATION,
+        ),
+        (
+            "Ссылка на регистрацию недоступна.",
+            ResponseProfileName.TECHNICAL,
+        ),
+        (
+            "Кнопка регистрации недоступна.",
+            ResponseProfileName.TECHNICAL,
+        ),
+        (
+            "Регистрация уже доступна?",
+            ResponseProfileName.APPLICATION,
+        ),
+        (
+            "Не получается приехать в день заезда.",
+            ResponseProfileName.TRAVEL,
+        ),
+        (
+            "Когда пришлют письмо с приглашением?",
+            ResponseProfileName.DOCUMENTS,
+        ),
+        (
+            "Сколько этапов отбора предусмотрено для заявки?",
+            ResponseProfileName.APPLICATION,
+        ),
+        (
+            "С утра не удаётся открыть заявление и подать заявку. Что делать?",
+            ResponseProfileName.TECHNICAL,
+        ),
+        (
+            "Сколько времени рассматривается заявка на мероприятие?",
+            ResponseProfileName.SELECTION_STATUS,
+        ),
+        (
+            "Когда рассматривают заявки на смены ТИМ «Бирюса»?",
+            ResponseProfileName.SELECTION_STATUS,
+        ),
+        (
+            "До форума мало времени, а заявка всё ещё на рассмотрении.",
+            ResponseProfileName.SELECTION_STATUS,
+        ),
+        (
+            "Если письмо о втором этапе не пришло, заявку не рассмотрели "
+            "или возможна ошибка?",
+            ResponseProfileName.SELECTION_STATUS,
+        ),
+        (
+            "Как отменить уже подтверждённое участие в форуме?",
+            ResponseProfileName.APPLICATION,
+        ),
+        (
+            "Как получить второй билет на День молодёжи для ребёнка?",
+            ResponseProfileName.APPLICATION,
+        ),
+        (
+            "Как получить официальное подтверждение для регионального ведомства?",
+            ResponseProfileName.DOCUMENTS,
+        ),
+        (
+            "Потерял доступ к почте в личном кабинете. Как сменить email?",
+            ResponseProfileName.TECHNICAL,
+        ),
+        (
+            "Кто оплачивает билет на поезд до форума?",
+            ResponseProfileName.TRAVEL,
+        ),
+    ],
+)
+def test_high_precision_aspect_phrase_families(
+    query: str,
+    expected: ResponseProfileName,
+) -> None:
+    assert _infer_response_profile(QueryAnalysis(category="форумы"), query) == expected
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "Когда опубликуют результаты второго этапа отбора?",
+            ResponseProfileName.SELECTION_STATUS,
+        ),
+        (
+            "Подача заявок пока не открыта.",
+            ResponseProfileName.APPLICATION,
+        ),
+        (
+            "Как волонтёру подать заявку?",
+            ResponseProfileName.APPLICATION,
+        ),
+    ],
+)
+def test_aspect_phrase_families_do_not_override_explicit_neighbor_intent(
+    query: str,
+    expected: ResponseProfileName,
+) -> None:
+    assert _infer_response_profile(QueryAnalysis(category="форумы"), query) == expected
+
+
 def test_response_profile_prefers_user_message_over_wrong_secondary_analysis() -> None:
     analysis = QueryAnalysis(
         category="форумы",
@@ -1570,3 +1752,71 @@ def test_travel_payment_without_event_name_requires_clarification() -> None:
     assert analysis.needs_clarification is True
     assert analysis.should_escalate is False
     assert analysis.clarification_question is not None
+
+
+def test_location_question_is_not_rewritten_as_event_dates() -> None:
+    query = "Где проходит форум Машук?"
+
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.response_profile == ResponseProfileName.GENERIC
+    assert [(question.text, question.topic) for question in analysis.questions] == [
+        ("Где проходит мероприятие?", "daty_nachala_meropriyatiya")
+    ]
+
+
+def test_invitation_delivery_is_not_rewritten_as_event_dates() -> None:
+    query = "Когда получу приглашение на Машук?"
+
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.response_profile == ResponseProfileName.DOCUMENTS
+    assert [question.topic for question in analysis.questions] == ["pismo_vyzov"]
+
+
+def test_application_deadline_and_event_dates_keep_both_aspects() -> None:
+    query = "До какого числа регистрация на Машук и когда сам форум?"
+
+    analysis = _fallback_analysis(query, query, {"complexity": "complex"}, None)
+
+    assert analysis is not None
+    assert analysis.response_profile == ResponseProfileName.APPLICATION
+    assert {question.topic for question in analysis.questions} == {
+        "kak_zaregistrirovatsya_na_fgais",
+        "daty_nachala_meropriyatiya",
+    }
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Какая программа и сроки форума Машук?",
+        "Когда Машук и какая программа?",
+    ],
+)
+def test_program_and_clause_local_event_dates_keep_both_aspects(query: str) -> None:
+    analysis = _fallback_analysis(query, query, {"complexity": "complex"}, None)
+
+    assert analysis is not None
+    assert {
+        "programma_i_artisty",
+        "programma_foruma",
+    } & {question.topic for question in analysis.questions}
+    assert "daty_nachala_meropriyatiya" in {
+        question.topic for question in analysis.questions
+    }
+
+
+def test_grant_reporting_deadline_does_not_create_application_question() -> None:
+    query = "Какой срок подачи отчётности по гранту?"
+
+    analysis = _fallback_analysis(query, query, {"complexity": "simple"}, None)
+
+    assert analysis is not None
+    assert analysis.response_profile == ResponseProfileName.GRANTS
+    assert "grant_reporting" in {question.topic for question in analysis.questions}
+    assert "podacha_zayavki_na_proekt" not in {
+        question.topic for question in analysis.questions
+    }

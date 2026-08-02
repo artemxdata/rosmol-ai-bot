@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from hmac import compare_digest
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from threading import Lock
 from time import perf_counter, time
@@ -80,8 +80,8 @@ from src.rag.errors import MLDependencyError
 from src.rag.reranker import Reranker
 from src.rag.retriever import Retriever
 from src.response_contract import get_response_contract
-from src.security import profanity, safety
-from src.security.operator_request import is_operator_request
+from src.security import eval_cache_bypass, profanity, safety
+from src.security.operator_request import is_operator_request, operator_review_reason
 from src.security.pii_masker import PIIMasker, PIIMaskingUnavailable
 from src.security.rate_limiter import RateLimiter
 from src.session.manager import SessionManager
@@ -103,6 +103,16 @@ _ATTACHMENT_WORD_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _MEANINGFUL_WORD_RE = re.compile(r"[а-яa-z0-9]{3,}", flags=re.IGNORECASE)
+_INTERNAL_EVAL_NETWORKS = tuple(
+    ip_network(cidr)
+    for cidr in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -755,6 +765,11 @@ async def ready(request: Request) -> dict[str, Any]:
         "release_git_sha": _setting_text(runtime_settings, "release_git_sha") or None,
         "checks": checks,
     }
+    if _cache_bypass_capability_requested(request):
+        response["eval_cache_bypass"] = {
+            "scheme": eval_cache_bypass.SCHEME,
+            "authorized": await _should_bypass_cache(request),
+        }
     if hde_transport_counts is not None:
         response["hde_transport_counts"] = hde_transport_counts
     return response
@@ -772,7 +787,19 @@ async def ask(payload: AskPayload, request: Request) -> dict[str, Any]:
         eval_run_id=_optional_trace_identifier(request.headers.get("x-eval-run-id")),
         eval_case_id=_optional_trace_identifier(request.headers.get("x-eval-case-id")),
     )
-    if _should_bypass_cache(request):
+    bypass_requested = _cache_bypass_requested(request)
+    bypass_authorized = await _should_bypass_cache(
+        request,
+        payload_sha256=eval_cache_bypass.canonical_payload_sha256(
+            payload.model_dump(mode="json")
+        ),
+    )
+    if bypass_requested and not bypass_authorized:
+        raise HTTPException(
+            status_code=403,
+            detail="cache bypass proof was not authorized",
+        )
+    if bypass_authorized:
         response = await process_message(message, request.app, bypass_cache=True)
     else:
         response = await process_message(message, request.app)
@@ -1533,23 +1560,130 @@ def _admin_quality_report_path() -> Path:
     return Path(getattr(get_settings(), "admin_quality_report_path", default))
 
 
-def _should_bypass_cache(request: Request) -> bool:
-    requested = (request.headers.get("x-bypass-cache") or "").strip().casefold()
-    if requested not in {"1", "true", "yes"}:
+async def _should_bypass_cache(
+    request: Request,
+    *,
+    payload_sha256: str = eval_cache_bypass.EMPTY_PAYLOAD_SHA256,
+) -> bool:
+    if not _cache_bypass_requested(request):
         return False
-    return get_settings().app_env == "local" or _is_loopback_request(request)
+    if _signed_cache_bypass_proof_present(request):
+        proof = _validated_signed_cache_bypass(
+            request,
+            payload_sha256=payload_sha256,
+        )
+        if proof is None:
+            return False
+        try:
+            redis = request.app.state.redis
+        except (AttributeError, KeyError):
+            return False
+        return await eval_cache_bypass.authorize_once(redis, proof)
+    if get_settings().app_env == "local":
+        return True
+    return _is_loopback_request(request)
+
+
+def _cache_bypass_requested(request: Request) -> bool:
+    requested = (request.headers.get("x-bypass-cache") or "").strip().casefold()
+    return requested in {"1", "true", "yes"}
 
 
 def _is_loopback_request(request: Request) -> bool:
-    host = (request.url.hostname or "").strip().casefold()
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return True
+    if any(
+        (request.headers.get(header_name) or "").strip()
+        for header_name in ("forwarded", "x-forwarded-for", "x-real-ip")
+    ):
+        return False
     if not request.client:
         return False
     try:
         return ip_address(request.client.host).is_loopback
     except ValueError:
         return False
+
+
+def _cache_bypass_capability_requested(request: Request) -> bool:
+    requested = (
+        request.headers.get(
+            eval_cache_bypass.HEADER_CAPABILITY_PROBE.casefold()
+        )
+        or ""
+    ).strip().casefold()
+    return requested in {"1", "true", "yes"}
+
+
+def _signed_cache_bypass_proof_present(request: Request) -> bool:
+    return any(
+        header_name.casefold() in request.headers
+        for header_name in (
+            eval_cache_bypass.HEADER_VERSION,
+            eval_cache_bypass.HEADER_TIMESTAMP,
+            eval_cache_bypass.HEADER_NONCE,
+            eval_cache_bypass.HEADER_SIGNATURE,
+            eval_cache_bypass.HEADER_RUN_ID,
+            eval_cache_bypass.HEADER_CASE_ID,
+        )
+    )
+
+
+def _validated_signed_cache_bypass(
+    request: Request,
+    *,
+    payload_sha256: str,
+) -> eval_cache_bypass.ValidatedProof | None:
+    if not _is_direct_internal_request(request):
+        return None
+    settings = get_settings()
+    secret = str(getattr(settings, "api_auth_token", "") or "").strip()
+
+    version = (
+        request.headers.get(eval_cache_bypass.HEADER_VERSION.casefold()) or ""
+    ).strip()
+    timestamp = (
+        request.headers.get(eval_cache_bypass.HEADER_TIMESTAMP.casefold()) or ""
+    ).strip()
+    nonce = (
+        request.headers.get(eval_cache_bypass.HEADER_NONCE.casefold()) or ""
+    ).strip()
+    provided_signature = (
+        request.headers.get(eval_cache_bypass.HEADER_SIGNATURE.casefold()) or ""
+    ).strip()
+    eval_run_id = (
+        request.headers.get(eval_cache_bypass.HEADER_RUN_ID.casefold()) or ""
+    ).strip()
+    eval_case_id = (
+        request.headers.get(eval_cache_bypass.HEADER_CASE_ID.casefold()) or ""
+    ).strip()
+    return eval_cache_bypass.validate_signed_proof(
+        secret,
+        method=request.method,
+        path=request.url.path,
+        version=version,
+        eval_run_id=eval_run_id,
+        eval_case_id=eval_case_id,
+        timestamp=timestamp,
+        nonce=nonce,
+        provided_signature=provided_signature,
+        payload_sha256=payload_sha256,
+    )
+
+
+def _is_direct_internal_request(request: Request) -> bool:
+    if any(
+        (request.headers.get(header_name) or "").strip()
+        for header_name in ("forwarded", "x-forwarded-for", "x-real-ip")
+    ):
+        return False
+    if not request.client:
+        return False
+    try:
+        client_ip = ip_address(request.client.host)
+    except ValueError:
+        return False
+    return client_ip.is_loopback or any(
+        client_ip in network for network in _INTERNAL_EVAL_NETWORKS
+    )
 
 
 async def process_message(
@@ -1613,6 +1747,7 @@ async def _process_message_unlocked(
     is_safe, safety_reason = safety.check(message.text)
     masked_text, _ = fastapi_app.state.pii_masker.mask(message.text)
     operator_requested = is_operator_request(message.text)
+    cache_operator_review_reason = operator_review_reason(message.text)
     session = await fastapi_app.state.sessions.get_or_create(
         message.channel.value,
         message.user_id,
@@ -1736,6 +1871,10 @@ async def _process_message_unlocked(
     cache_allowed = cache_allowed and not is_registration_query(graph_masked_text)
     cache_allowed = cache_allowed and not pending_context_applied
     cache_allowed = cache_allowed and len(detected_forums) <= 1
+    cache_allowed = cache_allowed and not _has_cache_sensitive_query_constraints(
+        graph_masked_text
+    )
+    cache_allowed = cache_allowed and cache_operator_review_reason is None
 
     tracer = Tracer()
     state = {
@@ -1763,6 +1902,7 @@ async def _process_message_unlocked(
             fastapi_app,
             graph_masked_text,
             detected_forum or session.forum_context,
+            query_identity=graph_message,
         )
     if cached_response:
         response = cached_response.response
@@ -1847,7 +1987,13 @@ async def _process_message_unlocked(
         session=session,
     )
     if not bypass_cache and cache_allowed:
-        await _save_cache(fastapi_app, graph_masked_text, response, result)
+        await _save_cache(
+            fastapi_app,
+            graph_masked_text,
+            response,
+            result,
+            query_identity=graph_message,
+        )
     await _safe_log(fastapi_app, result)
     return response
 
@@ -2124,12 +2270,48 @@ async def _check_cache(
     fastapi_app: FastAPI,
     query: str,
     forum: str | None,
+    *,
+    query_identity: str | None = None,
 ) -> CachedResponse | None:
     try:
-        return await fastapi_app.state.semantic_cache.check(query, forum)
+        return await fastapi_app.state.semantic_cache.check(
+            query,
+            forum,
+            query_identity=query_identity,
+        )
     except Exception as exc:
         logger.warning("semantic_cache_check_failed", error=str(exc))
         return None
+
+
+def _has_cache_sensitive_query_constraints(query: str) -> bool:
+    """Fail closed until semantic cache keys include conditional fact scope."""
+
+    normalized = str(query or "").casefold().replace("ё", "е")
+    if not normalized:
+        return False
+    if "смен" in normalized:
+        return True
+    if re.search(
+        r"\b(?:мне\s+)?\d{1,2}\s*(?:[-–—]\s*\d{1,2}\s*)?"
+        r"(?:лет|года?|год)\b",
+        normalized,
+    ):
+        return True
+    if re.search(r"\bмне\s+\d{1,2}(?=\s*(?:[,.;!?]|когда\b|могу\b|можно\b|$))", normalized):
+        return True
+    if re.search(
+        r"\b(?:несовершеннолетн|совершеннолетн|подрост|взросл|"
+        r"настав|школьн|студент|педагог|учител|волонт|заочн|очн)\w*\b",
+        normalized,
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\bдля\s+[а-яё-]{3,40}\b",
+            normalized,
+        )
+    )
 
 
 async def _save_cache(
@@ -2137,6 +2319,8 @@ async def _save_cache(
     query: str,
     response: str,
     state: dict[str, Any],
+    *,
+    query_identity: str | None = None,
 ) -> None:
     if (
         state.get("should_escalate")
@@ -2154,6 +2338,8 @@ async def _save_cache(
         return
     if _has_temporally_bounded_cited_source(state, cited_sources):
         return
+    if _has_conditional_cited_source(state, cited_sources):
+        return
     verification = state.get("verification")
     if verification is not None and getattr(verification, "has_hallucination", False):
         return
@@ -2167,7 +2353,11 @@ async def _save_cache(
         verifier_triggered=bool(state.get("verifier_triggered")),
     )
     try:
-        await fastapi_app.state.semantic_cache.save(query, cached_response)
+        await fastapi_app.state.semantic_cache.save(
+            query,
+            cached_response,
+            query_identity=query_identity,
+        )
     except Exception as exc:
         logger.warning("semantic_cache_save_failed", error=str(exc))
 
@@ -2205,6 +2395,21 @@ def _has_temporally_bounded_cited_source(
         if not isinstance(metadata, dict):
             continue
         if any(str(metadata.get(field) or "").strip() for field in ("valid_from", "valid_to")):
+            return True
+    return False
+
+
+def _has_conditional_cited_source(
+    state: dict[str, Any],
+    cited_sources: list[str],
+) -> bool:
+    cited_ids = set(cited_sources)
+    for chunk in state.get("reranked_chunks") or []:
+        chunk_id = str(getattr(chunk, "chunk_id", "") or "")
+        if chunk_id not in cited_ids:
+            continue
+        metadata = getattr(chunk, "metadata", {})
+        if isinstance(metadata, dict) and bool(metadata.get("has_conditional_logic")):
             return True
     return False
 

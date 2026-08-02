@@ -24,7 +24,7 @@ from src.graph.nodes.respond import normalize_final_response, respond
 from src.graph.nodes.retrieve import retrieve
 from src.graph.nodes.verify import UNKNOWN_FORUM_RESPONSE, verify
 from src.graph.query_normalization import expand_query_aliases
-from src.graph.question_utils import build_effective_questions
+from src.graph.question_utils import build_effective_questions, named_section_entities
 from src.models import (
     Channel,
     Chunk,
@@ -1294,6 +1294,143 @@ def test_fallback_questions_keep_other_aspects_with_event_place_and_dates() -> N
     assert [question.text for question in questions] == [
         "Где и когда проходит мероприятие?",
         "Как подать заявку или зарегистрироваться?",
+    ]
+
+
+def test_effective_questions_keep_shift_date_and_documents_without_phantom_section() -> None:
+    message = "Когда смена для очников на форуме Машук и какие документы нужны?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        message,
+    )
+
+    assert [question.text for question in questions] == [
+        "Какие документы нужны? Условия запроса: для очников.",
+        "Какие даты и сроки? Условия запроса: для очников.",
+    ]
+    assert {question.forum_normalized for question in questions} == {"Машук"}
+    assert all("смена «для очников»" not in question.text for question in questions)
+
+
+def test_effective_questions_keep_ordinal_shift_for_date_and_documents() -> None:
+    message = "Когда пятая смена форума Машук и какие документы нужны?"
+
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        message,
+    )
+
+    assert [question.text for question in questions] == [
+        "Какие документы нужны? Условия запроса: пятая смена.",
+        "Какие даты и сроки? Условия запроса: пятая смена.",
+    ]
+    assert {question.forum_normalized for question in questions} == {"Машук"}
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "Когда смена среди студентов на форуме Машук?",
+            ["Какие даты и сроки?"],
+        ),
+        (
+            "Когда смена на форуме Машук?",
+            ["Какие даты и сроки?"],
+        ),
+        (
+            "Когда смена и какие документы нужны на форуме Машук?",
+            ["Какие документы нужны?", "Какие даты и сроки?"],
+        ),
+    ],
+)
+def test_effective_questions_do_not_treat_shift_qualifiers_as_named_sections(
+    message: str,
+    expected: list[str],
+) -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        message,
+    )
+
+    assert [question.text for question in questions] == expected
+    assert all("смена «" not in question.text for question in questions)
+
+
+def test_named_section_entities_keep_title_and_reject_noise() -> None:
+    assert named_section_entities(
+        "Когда смена «Новые медиа» на форуме Машук?",
+        "Машук",
+    ) == ["Новые медиа"]
+    assert named_section_entities(
+        "Когда смена для очников среди студентов на форуме Машук?",
+        "Машук",
+    ) == []
+    assert named_section_entities("Когда смена на форуме Машук?", "Машук") == []
+
+
+def test_effective_questions_keep_numeric_prefix_shift() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        "Когда 9-я смена форума Машук и какие документы нужны?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Какие документы нужны? Условия запроса: 9-я смена.",
+        "Какие даты и сроки? Условия запроса: 9-я смена.",
+    ]
+
+
+def test_effective_questions_do_not_copy_shift_to_neighbor_application_clause() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        "Когда 5-я смена форума Машук и как подать заявку?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как подать заявку или зарегистрироваться?",
+        "Какие даты и сроки? Условия запроса: 5-я смена.",
+    ]
+
+
+def test_effective_questions_keep_shift_on_same_application_clause() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        "Как подать заявку на 5-ю смену форума Машук?",
+    )
+
+    assert [question.text for question in questions] == [
+        "Как подать заявку или зарегистрироваться? Условия запроса: 5-ю смену."
+    ]
+
+
+def test_effective_questions_expand_explicit_shift_age_branches() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        (
+            "Когда 1-я смена для 14-17 лет, а 2-я смена "
+            "для 18-25 лет на форуме Машук?"
+        ),
+    )
+
+    assert [question.text for question in questions] == [
+        "Какие даты и сроки? Условия запроса: 1-я смена; 14-17 лет.",
+        "Какие даты и сроки? Условия запроса: 2-я смена; 18-25 лет.",
+    ]
+
+
+def test_effective_questions_keep_comma_separated_constraints_in_one_branch() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Машук"),
+        "Когда смена «Новые медиа», для участников 14-17 лет на форуме Машук?",
+    )
+
+    assert [question.text for question in questions] == [
+        (
+            "Какие даты и сроки? Условия запроса: "
+            "смена «Новые медиа»; 14-17 лет."
+        )
     ]
 
 
@@ -8815,7 +8952,11 @@ async def test_generate_repairs_known_source_ref_transliteration_typo(
     chunk_id = "xlsx_category_r0218_podacha_zayavki_na_proekt"
     chunk = ScoredChunk(
         chunk_id=chunk_id,
-        text="После подачи заявки ты сможешь следить за её статусом в личном кабинете.",
+        text=(
+            "Сейчас регистрация на мероприятие ещё не доступна.\n"
+            "После подачи заявки ты сможешь следить за её статусом "
+            "в личном кабинете."
+        ),
         metadata={
             "category": "форумы",
             "forum_normalized": "Амур",
@@ -9384,11 +9525,11 @@ async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
         }
     )
 
-    assert llm.calls == 1
-    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert llm.calls == 0
+    assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == ["amur_decline"]
-    assert "не можешь поехать" in result["generated_response"]
-    assert "amur_travel" not in llm.kwargs[0]["user"]
+    assert "отказаться от участия" in result["generated_response"]
+    assert "amur_travel" not in result["cited_sources"]
 
 
 @pytest.mark.asyncio
