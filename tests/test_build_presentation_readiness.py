@@ -48,10 +48,15 @@ def test_build_readiness_report_marks_demo_ready(tmp_path: Path) -> None:
             "target": "http://localhost:8001/ask",
             "require_trace": True,
             "trace_error": None,
-            "cases_total": 12,
-            "passed": 12,
+            "cases_total": 10,
+            "executed_cases_total": 10,
+            "passed": 10,
             "pass_rate": 1.0,
             "llm_estimated_cost_rub": 0.0,
+            "llm_budget_rub": 30.0,
+            "llm_budget_stopped": False,
+            "llm_pricing_stopped": False,
+            "cost_reservation": "smoke.reservation.json",
             "failed": [],
         },
     )
@@ -66,6 +71,8 @@ def test_build_readiness_report_marks_demo_ready(tmp_path: Path) -> None:
     assert report["ready_for_leadership_demo"] is True
     assert all(gate["ok"] for gate in report["gates"])
     assert "--expected-git-sha" in report["commands"]["full_acceptance"]
+    assert "--max-cases 10" in report["commands"]["local_pre_demo_smoke"]
+    assert "OWNER-YYYYMMDD" not in report["commands"]["full_acceptance"]
     assert (output_dir / "summary.json").exists()
     markdown = (output_dir / "summary.md").read_text(encoding="utf-8")
     assert "Готово к презентации" in markdown
@@ -94,10 +101,15 @@ def test_build_readiness_report_marks_demo_not_ready_when_smoke_failed(tmp_path:
             "require_trace": True,
             "trace_error": None,
             "cases_total": 12,
+            "executed_cases_total": 12,
             "passed": 11,
             "pass_rate": 11 / 12,
             "failed": ["case"],
             "llm_estimated_cost_rub": 0.0,
+            "llm_budget_rub": 30.0,
+            "llm_budget_stopped": False,
+            "llm_pricing_stopped": False,
+            "cost_reservation": "smoke.reservation.json",
         },
     )
 

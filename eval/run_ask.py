@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
@@ -23,6 +23,16 @@ import httpx
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from eval.ask_cases import build_seed_ask_cases
+from eval.cost_governance import (
+    ROUTINE_LIVE_EVAL_MAX_CASES,
+    ROUTINE_LIVE_EVAL_MAX_COST_RUB,
+    CostGovernanceError,
+    LiveEvalCostReservation,
+    reserve_live_eval_cost,
+)
+from eval.cost_governance import (
+    approval_required as cost_approval_required,
+)
 from src.config import get_settings
 from src.response_contract import ResponseProfileName
 from src.security import eval_cache_bypass
@@ -70,6 +80,7 @@ HOLDOUT_CONTRACT_FIELDS = frozenset(
 FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 SAFE_BASELINE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+SAFE_COST_APPROVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}")
 HOLDOUT_MARKER_RE = re.compile(r"(?:^|[:_./-])holdout(?:$|[:_./-])")
 
 FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
@@ -563,6 +574,10 @@ async def run_eval(
     calibration_replay: bool = False,
     expected_runtime_git_sha: str | None = None,
     calibration_replay_ledger_dir: Path | None = None,
+    high_cost_approval_id: str | None = None,
+    cost_ledger_dir: Path | None = None,
+    cost_runtime_git_sha: str | None = None,
+    cost_reservation: LiveEvalCostReservation | None = None,
 ) -> dict[str, Any]:
     eval_run_id = f"ask-eval-{uuid4()}"
     if sealed_holdout and calibration_replay:
@@ -870,15 +885,26 @@ async def run_eval(
         if max_cases < 1:
             raise ValueError("--max-cases must be greater than zero")
         cases = cases[:max_cases]
+    validated_high_cost_approval_id: str | None = None
+    validated_cost_reservation = cost_reservation
     try:
-        _guard_large_live_run_budget(
+        validated_high_cost_approval_id = _guard_large_live_run_budget(
             cases=cases,
             target=target,
             transport=transport,
             max_llm_cost_rub=max_llm_cost_rub,
             require_budget=require_budget_for_large_runs,
             large_run_threshold=large_run_threshold,
+            trace_lookup=trace_lookup,
+            private_contract_run=private_contract_run,
+            high_cost_approval_id=high_cost_approval_id,
         )
+        if not _is_in_process_mock_transport(transport):
+            pricing_failure = _local_llm_pricing_preflight_failure()
+            if pricing_failure is not None:
+                raise ValueError(
+                    "Live ask eval pricing preflight failed: " + pricing_failure
+                )
     except ValueError as exc:
         if holdout_contract is not None:
             assert holdout_ledger is not None
@@ -892,7 +918,7 @@ async def run_eval(
                 contract=holdout_contract,
                 expected_cases_file_sha256=expected_file_sha256,
                 status="budget_preflight_rejected",
-                failures=["llm_budget_required"],
+                failures=[_cost_preflight_failure_code(exc)],
                 executed_cases_total=0,
                 receipt_path=holdout_receipt_path,
                 detail=str(exc),
@@ -929,9 +955,15 @@ async def run_eval(
                 errors.append(type(exc).__name__)
         if trace_pool is None and errors:
             trace_lookup_error = "; ".join(errors)
-    if holdout_contract is not None and (
-        trace_pool is None or trace_lookup_error is not None
+    trace_unavailable = trace_pool is None or trace_lookup_error is not None
+    if trace_lookup and trace_unavailable and (
+        holdout_contract is not None or not _is_in_process_mock_transport(transport)
     ):
+        if holdout_contract is None:
+            raise RuntimeError(
+                "Live ask eval requires an available PostgreSQL trace lookup "
+                "connection before the first request"
+            )
         failures = ["trace_lookup_unavailable"]
         assert holdout_ledger is not None
         assert holdout_receipt_key is not None
@@ -954,10 +986,84 @@ async def run_eval(
             f"{private_run_label} requires an available trace lookup connection"
         )
 
+    if not _is_in_process_mock_transport(transport) and cases:
+        try:
+            if validated_cost_reservation is None:
+                assert max_llm_cost_rub is not None
+                validated_cost_reservation = reserve_live_eval_cost(
+                    scope=(
+                        "calibration-replay"
+                        if calibration_replay
+                        else "sealed-holdout" if sealed_holdout else "ask-eval"
+                    ),
+                    run_id=eval_run_id,
+                    runtime_git_sha=_cost_governance_runtime_git_sha(
+                        explicit_sha=cost_runtime_git_sha,
+                        evaluation_runtime_git_sha=evaluation_runtime_git_sha,
+                    ),
+                    manifest_sha256=_file_sha256(cases_path),
+                    case_count=len(cases),
+                    approved_cap_rub=max_llm_cost_rub,
+                    private_full=private_contract_run,
+                    high_cost_approval_id=validated_high_cost_approval_id,
+                    ledger_dir=cost_ledger_dir,
+                )
+            else:
+                _validate_cost_reservation_for_child_run(
+                    validated_cost_reservation,
+                    case_count=len(cases),
+                    max_llm_cost_rub=max_llm_cost_rub,
+                    private_full=private_contract_run,
+                )
+            if private_contract_run:
+                assert holdout_contract is not None
+                assert holdout_ledger is not None
+                assert validated_high_cost_approval_id is not None
+                _reserve_private_full_eval(
+                    ledger_dir=holdout_ledger,
+                    eval_run_id=eval_run_id,
+                    run_mode=(
+                        "calibration_replay"
+                        if calibration_replay
+                        else "sealed_holdout"
+                    ),
+                    contract=holdout_contract,
+                    evaluation_runtime_git_sha=evaluation_runtime_git_sha,
+                    high_cost_approval_id=validated_high_cost_approval_id,
+                    max_llm_cost_rub=max_llm_cost_rub,
+                )
+        except (OSError, ValueError) as exc:
+            if trace_pool is not None:
+                await trace_pool.close()
+                trace_pool = None
+            if holdout_contract is not None:
+                assert holdout_ledger is not None
+                assert holdout_receipt_key is not None
+                await _write_holdout_rejection_report(
+                    ledger_dir=holdout_ledger,
+                    receipt_key=holdout_receipt_key,
+                    target=target,
+                    cases_path=cases_path,
+                    eval_run_id=eval_run_id,
+                    contract=holdout_contract,
+                    expected_cases_file_sha256=expected_file_sha256,
+                    status="cost_governance_rejected",
+                    failures=[_cost_preflight_failure_code(exc)],
+                    executed_cases_total=0,
+                    receipt_path=holdout_receipt_path,
+                    detail=f"{type(exc).__name__}: {exc}",
+                    **private_report_context,
+                )
+                raise ValueError(
+                    f"{private_run_label} cost-governance preflight failed: {exc}"
+                ) from exc
+            raise
+
     if bypass_cache:
         headers[eval_cache_bypass.HEADER_BYPASS] = "1"
     semaphore = asyncio.Semaphore(max(1, concurrency))
     budget_stopped = False
+    llm_pricing_failure: str | None = None
     holdout_trace_cardinality: dict[str, Any] | None = None
     holdout_trace_cardinality_error: str | None = None
     try:
@@ -1054,6 +1160,10 @@ async def run_eval(
                         raise RuntimeError(
                             f"{private_run_label} started receipt could not be created"
                         ) from exc
+            strict_live_cost_control = (
+                not _is_in_process_mock_transport(transport)
+                and max_llm_cost_rub is not None
+            )
             if max_llm_cost_rub is None:
                 tasks = [
                     _run_case(
@@ -1074,8 +1184,9 @@ async def run_eval(
                 # Budget enforcement needs trace usage after each response, so run cases
                 # sequentially.
                 results = []
+                strict_cost_total = 0.0
                 sequential_semaphore = asyncio.Semaphore(1)
-                for case in cases:
+                for case_index, case in enumerate(cases):
                     result = await _run_case(
                         client=client,
                         target=target,
@@ -1088,7 +1199,21 @@ async def run_eval(
                         cache_bypass_secret=cache_bypass_secret,
                     )
                     results.append(result)
-                    if _llm_cost_rub_total(results) > max_llm_cost_rub:
+                    if strict_live_cost_control:
+                        llm_pricing_failure = _llm_cost_accounting_failure(result)
+                        if llm_pricing_failure is not None:
+                            break
+                        strict_cost_total += float(
+                            result.get("llm_estimated_cost_rub") or 0.0
+                        )
+                        cases_remain = case_index < len(cases) - 1
+                        if strict_cost_total > max_llm_cost_rub or (
+                            cases_remain
+                            and strict_cost_total >= max_llm_cost_rub
+                        ):
+                            budget_stopped = True
+                            break
+                    elif _llm_cost_rub_total(results) > max_llm_cost_rub:
                         budget_stopped = True
                         break
             if holdout_contract is not None:
@@ -1168,10 +1293,27 @@ async def run_eval(
         max_cases=max_cases,
         max_llm_cost_rub=max_llm_cost_rub,
     )
+    metrics["cost_control"] = {
+        "strict_live": not _is_in_process_mock_transport(transport),
+        "routine_run_cap_rub": ROUTINE_LIVE_EVAL_MAX_COST_RUB,
+        "routine_run_max_cases": ROUTINE_LIVE_EVAL_MAX_CASES,
+        "high_cost_approval_id": validated_high_cost_approval_id,
+        "pricing_complete": llm_pricing_failure is None,
+        "reservation": (
+            validated_cost_reservation.path.name
+            if validated_cost_reservation is not None
+            else None
+        ),
+    }
     if budget_stopped:
         metrics["cases_original_total"] = original_cases_total
         metrics["cases_limited"] = True
         metrics["llm_budget_stopped"] = True
+    if llm_pricing_failure is not None:
+        metrics["cases_original_total"] = original_cases_total
+        metrics["cases_limited"] = True
+        metrics["llm_pricing_stopped"] = True
+        metrics["llm_pricing_failure"] = llm_pricing_failure
     holdout_failures: list[str] = []
     if holdout_contract is not None:
         executed_cases_total = len(results)
@@ -1183,6 +1325,8 @@ async def run_eval(
             trace_cardinality=holdout_trace_cardinality,
             trace_cardinality_error=holdout_trace_cardinality_error,
         )
+        if llm_pricing_failure is not None:
+            holdout_failures.append("llm_pricing_unavailable")
         status = _holdout_failure_status(
             holdout_failures,
             budget_stopped=budget_stopped,
@@ -1340,7 +1484,13 @@ def summarize_results(
         if item.get("allowed_cited_source_types")
     ]
     trace_scored = [item for item in results if item.get("trace_found")]
-    usage_events = [event for item in results for event in item.get("llm_usage", [])]
+    usage_events = [
+        event
+        for item in results
+        if isinstance(item.get("llm_usage"), list)
+        for event in item["llm_usage"]
+        if isinstance(event, dict)
+    ]
     reranker_scores = _numeric_values(results, "max_reranker_score")
     low_confidence_chunk_hits = [
         item
@@ -1452,15 +1602,17 @@ def summarize_results(
             )
         ),
         "likely_infrastructure_failure": _likely_infrastructure_failure(results),
-        "llm_prompt_tokens": sum(int(item.get("llm_prompt_tokens") or 0) for item in results),
+        "llm_prompt_tokens": sum(
+            _report_nonnegative_int(item.get("llm_prompt_tokens")) for item in results
+        ),
         "llm_completion_tokens": sum(
-            int(item.get("llm_completion_tokens") or 0) for item in results
+            _report_nonnegative_int(item.get("llm_completion_tokens"))
+            for item in results
         ),
-        "llm_total_tokens": sum(int(item.get("llm_total_tokens") or 0) for item in results),
-        "llm_estimated_cost_rub": round(
-            sum(float(item.get("llm_estimated_cost_rub") or 0.0) for item in results),
-            6,
+        "llm_total_tokens": sum(
+            _report_nonnegative_int(item.get("llm_total_tokens")) for item in results
         ),
+        "llm_estimated_cost_rub": round(_llm_cost_rub_total(results), 6),
         "llm_usage_events": usage_events,
         "results": results,
     }
@@ -1486,23 +1638,174 @@ def _guard_large_live_run_budget(
     max_llm_cost_rub: float | None,
     require_budget: bool,
     large_run_threshold: int,
-) -> None:
-    if not require_budget or transport is not None:
-        return
+    trace_lookup: bool,
+    private_contract_run: bool,
+    high_cost_approval_id: str | None,
+) -> str | None:
+    approval_id = str(high_cost_approval_id or "").strip()
+    if _is_in_process_mock_transport(transport):
+        return approval_id or None
     if large_run_threshold < 1:
         raise ValueError("--large-run-threshold must be greater than zero")
-    if max_llm_cost_rub is not None:
-        if max_llm_cost_rub < 0:
-            raise ValueError("--max-llm-cost-rub must be zero or greater")
-        return
-    if len(cases) <= large_run_threshold:
-        return
-    raise ValueError(
-        "Refusing to run a large live ask eval without an explicit LLM budget: "
-        f"{len(cases)} cases against {target}. "
-        "Pass --max-llm-cost-rub <rubles>, --max-cases <n>, or "
-        "--allow-unbounded-llm-cost for a deliberate full run."
+    if not require_budget:
+        raise ValueError(
+            "Unbounded live ask eval is forbidden; --allow-unbounded-llm-cost "
+            "may only be used with an in-process mock transport."
+        )
+    if max_llm_cost_rub is None:
+        raise ValueError(
+            "Refusing to run a live ask eval without an explicit LLM budget: "
+            f"{len(cases)} cases against {target}. Pass "
+            "--max-llm-cost-rub <rubles>."
+        )
+    if not math.isfinite(max_llm_cost_rub) or max_llm_cost_rub <= 0:
+        raise ValueError(
+            "--max-llm-cost-rub must be a finite value greater than zero"
+        )
+    if trace_lookup is not True:
+        raise ValueError(
+            "Live ask eval cost enforcement requires PostgreSQL trace lookup."
+        )
+    approval_required = bool(cases) and cost_approval_required(
+        case_count=len(cases),
+        budget_rub=max_llm_cost_rub,
+        private_full=private_contract_run,
     )
+    if approval_id and SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
+        raise ValueError(
+            "--high-cost-approval-id must contain 3-128 safe ASCII characters"
+        )
+    if approval_required and not approval_id:
+        reason = (
+            "a sealed/calibration full run"
+            if private_contract_run
+            else (
+                f"more than {ROUTINE_LIVE_EVAL_MAX_CASES} live cases"
+                if len(cases) > ROUTINE_LIVE_EVAL_MAX_CASES
+                else f"a budget above {ROUTINE_LIVE_EVAL_MAX_COST_RUB:.0f} RUB"
+            )
+        )
+        raise ValueError(
+            f"Refusing {reason} without a separate one-time owner approval. "
+            "Pass --high-cost-approval-id <non-secret-reference> only after "
+            "the runtime SHA, case set, forecast and hard cap are approved."
+        )
+    return approval_id or None
+
+
+def _cost_governance_runtime_git_sha(
+    *,
+    explicit_sha: str | None,
+    evaluation_runtime_git_sha: str | None,
+) -> str:
+    settings_sha = ""
+    try:
+        settings_sha = str(get_settings().release_git_sha or "").strip()
+    except Exception:
+        pass
+    for candidate in (
+        explicit_sha,
+        evaluation_runtime_git_sha,
+        os.getenv("RELEASE_GIT_SHA"),
+        settings_sha,
+    ):
+        value = str(candidate or "").strip().lower()
+        if FULL_GIT_SHA_RE.fullmatch(value) is not None and value != "0" * 40:
+            return value
+    raise CostGovernanceError(
+        "live eval cost reservation requires the target runtime Git SHA"
+    )
+
+
+def _validate_cost_reservation_for_child_run(
+    reservation: LiveEvalCostReservation,
+    *,
+    case_count: int,
+    max_llm_cost_rub: float | None,
+    private_full: bool,
+) -> None:
+    if max_llm_cost_rub is None:
+        raise CostGovernanceError("child live eval requires a finite reserved budget")
+    record = reservation.record
+    try:
+        reserved_cap = float(record["approved_cap_rub"])
+        reserved_cases = int(record["case_count"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CostGovernanceError("parent cost reservation is invalid") from exc
+    if not reservation.path.is_file():
+        raise CostGovernanceError("parent cost reservation evidence is missing")
+    if reserved_cap < max_llm_cost_rub or reserved_cases < case_count:
+        raise CostGovernanceError("child live eval exceeds its parent cost reservation")
+    if private_full and record.get("private_full") is not True:
+        raise CostGovernanceError("private full eval requires a private reservation")
+
+
+def _is_in_process_mock_transport(
+    transport: httpx.AsyncBaseTransport | None,
+) -> bool:
+    return isinstance(transport, httpx.MockTransport)
+
+
+def _cost_preflight_failure_code(exc: ValueError) -> str:
+    message = str(exc).casefold()
+    if "cost ledger" in message or "cost reservation" in message:
+        return "eval_cost_ledger_rejected"
+    if "already been consumed" in message or "placeholder token" in message:
+        return "high_cost_approval_rejected"
+    if "pricing preflight" in message:
+        return "llm_pricing_config_required"
+    if "unbounded" in message:
+        return "unbounded_llm_cost_forbidden"
+    if "trace lookup" in message:
+        return "llm_cost_trace_lookup_required"
+    if "approval" in message:
+        return "high_cost_approval_required"
+    if "finite" in message:
+        return "llm_budget_invalid"
+    return "llm_budget_required"
+
+
+def _local_llm_pricing_preflight_failure() -> str | None:
+    try:
+        settings = get_settings()
+    except Exception as exc:
+        return f"settings unavailable ({type(exc).__name__})"
+
+    price_fields = {
+        "simple_input": settings.cloud_ru_model_simple_input_price_rub_per_million,
+        "simple_output": settings.cloud_ru_model_simple_output_price_rub_per_million,
+        "complex_input": settings.cloud_ru_model_complex_input_price_rub_per_million,
+        "complex_output": settings.cloud_ru_model_complex_output_price_rub_per_million,
+    }
+    invalid_prices = []
+    for name, raw_value in price_fields.items():
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            invalid_prices.append(name)
+            continue
+        if not math.isfinite(value) or value <= 0:
+            invalid_prices.append(name)
+    if invalid_prices:
+        return "positive model prices are required: " + ", ".join(invalid_prices)
+
+    recognized_models = {
+        str(settings.cloud_ru_model_simple or "").strip(),
+        str(settings.cloud_ru_model_complex or "").strip(),
+        str(settings.cloud_ru_model or "").strip(),
+    }
+    recognized_models.discard("")
+    unknown_role_models = [
+        model
+        for model in (
+            str(settings.cloud_ru_model_analyzer or "").strip(),
+            str(settings.cloud_ru_model_judge or "").strip(),
+        )
+        if model and model not in recognized_models
+    ]
+    if unknown_role_models:
+        return "configured analyzer/judge model has no price mapping"
+    return None
 
 
 def _guard_eval_privacy(
@@ -1710,6 +2013,127 @@ def _validated_calibration_replay_ledger_dir(
     if not ledger.is_dir():
         raise ValueError("calibration replay ledger path must be a directory")
     return ledger
+
+
+def _parse_receipt_timestamp(value: Any, *, label: str) -> datetime:
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must contain a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{label} timestamp must include a timezone")
+    return parsed.astimezone(UTC)
+
+
+def _recent_private_full_eval_receipts(*, now: datetime) -> list[str]:
+    cutoff = now - timedelta(hours=24)
+    recent: list[str] = []
+    for dirname, label in (
+        (CANONICAL_HOLDOUT_LEDGER_DIRNAME, "sealed holdout started receipt"),
+        (
+            CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME,
+            "calibration replay started receipt",
+        ),
+    ):
+        ledger = PRIVATE_DATA_ROOT.resolve() / dirname
+        if not _path_lexists(ledger):
+            continue
+        if ledger.is_symlink() or not ledger.is_dir():
+            raise ValueError(f"{label} ledger must be a real directory")
+        for path in sorted(ledger.glob("*.started.json")):
+            payload = _validated_receipt_payload(path, label=label)
+            started_at = _parse_receipt_timestamp(
+                payload.get("started_at"),
+                label=label,
+            )
+            if started_at > now + timedelta(minutes=5):
+                raise ValueError(f"{label} timestamp is in the future")
+            if started_at >= cutoff:
+                recent.append(str(path))
+    return recent
+
+
+def _reserve_private_full_eval(
+    *,
+    ledger_dir: Path,
+    eval_run_id: str,
+    run_mode: str,
+    contract: dict[str, Any],
+    evaluation_runtime_git_sha: str | None,
+    high_cost_approval_id: str,
+    max_llm_cost_rub: float | None,
+    now: datetime | None = None,
+) -> Path:
+    reservation_time = (now or datetime.now(UTC)).astimezone(UTC)
+    if max_llm_cost_rub is None or not math.isfinite(max_llm_cost_rub):
+        raise ValueError("private full eval requires a finite hard cost cap")
+    if SAFE_COST_APPROVAL_ID_RE.fullmatch(high_cost_approval_id) is None:
+        raise ValueError("private full eval requires a valid cost approval id")
+    recent_receipts = _recent_private_full_eval_receipts(now=reservation_time)
+    if recent_receipts:
+        raise ValueError(
+            "another private full eval started within the previous 24 hours"
+        )
+
+    cutoff = reservation_time - timedelta(hours=24)
+    reservation_ledgers: list[Path] = []
+    for dirname in (
+        CANONICAL_HOLDOUT_LEDGER_DIRNAME,
+        CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME,
+    ):
+        candidate = PRIVATE_DATA_ROOT.resolve() / dirname
+        if not _path_lexists(candidate):
+            continue
+        if candidate.is_symlink() or not candidate.is_dir():
+            raise ValueError("private eval ledger must be a real directory")
+        reservation_ledgers.append(candidate)
+    if ledger_dir.resolve() not in {path.resolve() for path in reservation_ledgers}:
+        raise ValueError("cost reservation requires a canonical private eval ledger")
+    for ledger in reservation_ledgers:
+        for path in sorted(ledger.glob("full-eval-*.reserved.json")):
+            payload = _validated_receipt_payload(path, label="eval cost reservation")
+            if payload.get("schema_version") != "1.0.0":
+                raise ValueError("eval cost reservation has an invalid schema")
+            if payload.get("high_cost_approval_id") == high_cost_approval_id:
+                raise ValueError("high-cost approval id has already been consumed")
+            reserved_at = _parse_receipt_timestamp(
+                payload.get("reserved_at"),
+                label="eval cost reservation",
+            )
+            if reserved_at > reservation_time + timedelta(minutes=5):
+                raise ValueError("eval cost reservation timestamp is in the future")
+            if reserved_at >= cutoff:
+                raise ValueError(
+                    "another private full eval was reserved within the previous 24 hours"
+                )
+
+    marker_path = ledger_dir / (
+        f"full-eval-{reservation_time.strftime('%Y%m%d')}.reserved.json"
+    )
+    runtime_git_sha = str(
+        evaluation_runtime_git_sha or contract.get("runtime_git_sha") or ""
+    )
+    payload = {
+        "schema_version": "1.0.0",
+        "reservation_type": "private_full_eval_cost",
+        "reserved_at": reservation_time.isoformat(),
+        "eval_run_id": eval_run_id,
+        "run_mode": run_mode,
+        "baseline_id": contract.get("baseline_id"),
+        "runtime_git_sha": runtime_git_sha,
+        "selected_case_ids_sha256": contract.get("selected_case_ids_sha256"),
+        "high_cost_approval_id": high_cost_approval_id,
+        "hard_cost_cap_rub": max_llm_cost_rub,
+        "policy": "one_private_full_eval_per_rolling_24_hours",
+    }
+    try:
+        _write_json_exclusive(marker_path, payload)
+    except FileExistsError as exc:
+        raise ValueError(
+            "a private full eval reservation already exists for this UTC day"
+        ) from exc
+    return marker_path
 
 
 def _require_prior_sealed_exposure_receipts(
@@ -2238,6 +2662,8 @@ def _holdout_failure_status(
 ) -> str:
     if not failures:
         return "completed"
+    if "llm_pricing_unavailable" in failures:
+        return "cost_accounting_failed"
     if "case_count_incomplete" in failures:
         return "incomplete_budget_stop" if budget_stopped else "incomplete"
     if "http_success_below_100_percent" in failures:
@@ -2281,10 +2707,83 @@ def _llm_cost_rub_total(results: list[dict[str, Any]]) -> float:
     total = 0.0
     for item in results:
         try:
-            total += float(item.get("llm_estimated_cost_rub") or 0.0)
+            value = float(item.get("llm_estimated_cost_rub") or 0.0)
         except (TypeError, ValueError):
             continue
+        if math.isfinite(value) and value >= 0:
+            total += value
     return total
+
+
+def _llm_cost_accounting_failure(result: dict[str, Any]) -> str | None:
+    if result.get("trace_found") is not True:
+        return "llm_cost_trace_missing"
+    try:
+        aggregate_cost = float(result.get("llm_estimated_cost_rub"))
+    except (TypeError, ValueError):
+        return "llm_cost_invalid"
+    if not math.isfinite(aggregate_cost) or aggregate_cost < 0:
+        return "llm_cost_invalid"
+
+    usage = result.get("llm_usage")
+    if not isinstance(usage, list):
+        return "llm_usage_invalid"
+    try:
+        aggregate_tokens = _strict_nonnegative_int(result.get("llm_total_tokens"))
+    except ValueError:
+        return "llm_tokens_invalid"
+    if aggregate_tokens > 0 and not usage:
+        return "llm_usage_missing"
+    if not usage:
+        return None if aggregate_cost == 0 else "llm_usage_cost_mismatch"
+
+    event_cost_total = 0.0
+    event_tokens_total = 0
+    for event in usage:
+        if not isinstance(event, dict):
+            return "llm_usage_event_invalid"
+        try:
+            event_tokens = _strict_nonnegative_int(event.get("total_tokens"))
+            event_cost = float(event.get("estimated_cost_rub"))
+        except (TypeError, ValueError):
+            return "llm_usage_event_invalid"
+        if not math.isfinite(event_cost) or event_cost < 0:
+            return "llm_usage_event_invalid"
+        if event_tokens > 0 and (event.get("priced") is not True or event_cost <= 0):
+            return "llm_pricing_unavailable"
+        event_tokens_total += event_tokens
+        event_cost_total += event_cost
+
+    if aggregate_tokens != event_tokens_total:
+        return "llm_usage_token_mismatch"
+    if not math.isclose(
+        aggregate_cost,
+        event_cost_total,
+        rel_tol=1e-9,
+        abs_tol=1e-6,
+    ):
+        return "llm_usage_cost_mismatch"
+    return None
+
+
+def _strict_nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a token count")
+    try:
+        parsed = int(value)
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("token count must be numeric") from exc
+    if not math.isfinite(numeric) or parsed < 0 or parsed != numeric:
+        raise ValueError("token count must be a non-negative integer")
+    return parsed
+
+
+def _report_nonnegative_int(value: Any) -> int:
+    try:
+        return _strict_nonnegative_int(value or 0)
+    except ValueError:
+        return 0
 
 
 def score_case(
@@ -3494,6 +3993,10 @@ def _quality_gate_failures(
         and metrics.get("trace_coverage_rate") != 1.0
     ):
         failures.append("trace_coverage_below_100_percent")
+    if metrics.get("llm_pricing_stopped") is True:
+        failures.append("llm_cost_accounting_incomplete")
+    if metrics.get("llm_budget_stopped") is True:
+        failures.append("llm_budget_stopped")
     return failures
 
 
@@ -3542,7 +4045,17 @@ def main() -> None:
     parser.add_argument(
         "--allow-unbounded-llm-cost",
         action="store_true",
-        help="Allow a large live eval without --max-llm-cost-rub.",
+        help=(
+            "Test-only compatibility flag; live evals reject unbounded cost."
+        ),
+    )
+    parser.add_argument(
+        "--high-cost-approval-id",
+        default="",
+        help=(
+            "Non-secret one-time owner approval reference required for private "
+            "full runs or a live budget above 100 RUB."
+        ),
     )
     parser.add_argument("--user-prefix", default="")
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
@@ -3671,6 +4184,7 @@ def main() -> None:
                 if args.calibration_replay_ledger_dir
                 else None
             ),
+            high_cost_approval_id=args.high_cost_approval_id or None,
         )
     )
     quality_gate_failures = _quality_gate_failures(
@@ -3689,7 +4203,11 @@ def main() -> None:
             indent=2,
         )
     )
-    if metrics.get("llm_budget_exceeded") is True:
+    if (
+        metrics.get("llm_budget_exceeded") is True
+        or metrics.get("llm_budget_stopped") is True
+        or metrics.get("llm_pricing_stopped") is True
+    ):
         raise SystemExit(2)
     if quality_gate_failures:
         raise SystemExit(1)

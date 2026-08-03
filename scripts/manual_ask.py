@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -15,10 +16,17 @@ import httpx
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from eval.cost_governance import reserve_live_eval_cost  # noqa: E402
 from eval.run_ask import (  # noqa: E402
+    ROUTINE_LIVE_EVAL_MAX_CASES,
     _auth_headers,
     _collect_trace_chunk_ids,
+    _cost_governance_runtime_git_sha,
+    _guard_large_live_run_budget,
+    _is_in_process_mock_transport,
     _json_safe,
+    _llm_cost_accounting_failure,
+    _local_llm_pricing_preflight_failure,
     _safe_response_json,
     _trace_dsn_candidates,
 )
@@ -55,7 +63,28 @@ async def run_manual_ask(
     transport: httpx.AsyncBaseTransport | None = None,
     bypass_cache: bool = False,
     isolate_users: bool = False,
+    max_llm_cost_rub: float | None = None,
+    high_cost_approval_id: str | None = None,
 ) -> dict[str, Any]:
+    is_live_transport = not _is_in_process_mock_transport(transport)
+    approval_id = _guard_large_live_run_budget(
+        cases=cases,
+        target=target,
+        transport=transport,
+        max_llm_cost_rub=max_llm_cost_rub,
+        require_budget=True,
+        large_run_threshold=ROUTINE_LIVE_EVAL_MAX_CASES,
+        trace_lookup=trace_lookup,
+        private_contract_run=False,
+        high_cost_approval_id=high_cost_approval_id,
+    )
+    if is_live_transport:
+        pricing_failure = _local_llm_pricing_preflight_failure()
+        if pricing_failure is not None:
+            raise ValueError(
+                "Live manual ask pricing preflight failed: " + pricing_failure
+            )
+
     eval_run_id = f"manual-ask-{uuid4()}"
     trace_pool: asyncpg.Pool | None = None
     trace_lookup_error: str | None = None
@@ -66,45 +95,112 @@ async def run_manual_ask(
                 trace_pool = await asyncpg.create_pool(
                     candidate,
                     min_size=1,
-                    max_size=max(1, min(concurrency, 5)),
+                    max_size=1 if is_live_transport else max(1, min(concurrency, 5)),
                 )
                 break
             except Exception as exc:
                 errors.append(f"{type(exc).__name__}: {exc}")
         if trace_pool is None and errors:
             trace_lookup_error = "; ".join(errors)
+    if is_live_transport and trace_pool is None:
+        raise RuntimeError(
+            "Live manual ask cost enforcement requires an available PostgreSQL trace DB"
+        )
+
+    cost_reservation = None
+    if is_live_transport:
+        assert max_llm_cost_rub is not None
+        try:
+            cost_reservation = reserve_live_eval_cost(
+                scope="manual-ask",
+                run_id=eval_run_id,
+                runtime_git_sha=_cost_governance_runtime_git_sha(
+                    explicit_sha=None,
+                    evaluation_runtime_git_sha=None,
+                ),
+                manifest_sha256=_manual_cases_sha256(cases),
+                case_count=len(cases),
+                approved_cap_rub=max_llm_cost_rub,
+                private_full=False,
+                high_cost_approval_id=approval_id,
+            )
+        except ValueError:
+            if trace_pool is not None:
+                await trace_pool.close()
+            raise
 
     headers = _auth_headers(api_key_env)
     if bypass_cache:
         headers["X-Bypass-Cache"] = "1"
-    semaphore = asyncio.Semaphore(max(1, concurrency))
-    async with httpx.AsyncClient(transport=transport, timeout=request_timeout) as client:
-        results = await asyncio.gather(
-            *[
-                _run_manual_case(
-                    client=client,
-                    target=target,
-                    headers=headers,
-                    eval_run_id=eval_run_id,
-                    case=case,
-                    user_id=f"{user_id}-{index}" if isolate_users else user_id,
-                    channel=channel,
-                    semaphore=semaphore,
-                    trace_pool=trace_pool,
+    results: list[dict[str, Any]] = []
+    budget_stopped = False
+    pricing_stopped = False
+    pricing_failure: str | None = None
+    strict_cost_total = 0.0
+    try:
+        async with httpx.AsyncClient(transport=transport, timeout=request_timeout) as client:
+            if is_live_transport:
+                assert max_llm_cost_rub is not None
+                sequential_semaphore = asyncio.Semaphore(1)
+                for index, case in enumerate(cases, start=1):
+                    result = await _run_manual_case(
+                        client=client,
+                        target=target,
+                        headers=headers,
+                        eval_run_id=eval_run_id,
+                        case=case,
+                        user_id=f"{user_id}-{index}" if isolate_users else user_id,
+                        channel=channel,
+                        semaphore=sequential_semaphore,
+                        trace_pool=trace_pool,
+                    )
+                    results.append(result)
+                    pricing_failure = _llm_cost_accounting_failure(result)
+                    if pricing_failure is not None:
+                        pricing_stopped = True
+                        break
+                    strict_cost_total += float(
+                        result.get("llm_estimated_cost_rub") or 0.0
+                    )
+                    cases_remain = index < len(cases)
+                    if strict_cost_total > max_llm_cost_rub or (
+                        cases_remain and strict_cost_total >= max_llm_cost_rub
+                    ):
+                        budget_stopped = True
+                        break
+            else:
+                semaphore = asyncio.Semaphore(max(1, concurrency))
+                results = await asyncio.gather(
+                    *[
+                        _run_manual_case(
+                            client=client,
+                            target=target,
+                            headers=headers,
+                            eval_run_id=eval_run_id,
+                            case=case,
+                            user_id=f"{user_id}-{index}" if isolate_users else user_id,
+                            channel=channel,
+                            semaphore=semaphore,
+                            trace_pool=trace_pool,
+                        )
+                        for index, case in enumerate(cases, start=1)
+                    ]
                 )
-                for index, case in enumerate(cases, start=1)
-            ]
-        )
-
-    if trace_pool:
-        await trace_pool.close()
+    finally:
+        if trace_pool:
+            await trace_pool.close()
 
     report: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
         "eval_run_id": eval_run_id,
         "target": target,
+        "high_cost_approval_id": approval_id,
+        "cost_reservation": (
+            cost_reservation.path.name if cost_reservation is not None else None
+        ),
         "bypass_cache": bypass_cache,
         "isolate_users": isolate_users,
+        "cases_requested_total": len(cases),
         "cases_total": len(results),
         "http_success_count": sum(1 for item in results if item.get("http_success")),
         "trace_found_count": sum(1 for item in results if item.get("trace_found")),
@@ -116,6 +212,10 @@ async def run_manual_ask(
             sum(float(item.get("llm_estimated_cost_rub") or 0.0) for item in results),
             6,
         ),
+        "llm_budget_rub": max_llm_cost_rub,
+        "llm_budget_stopped": budget_stopped,
+        "llm_pricing_stopped": pricing_stopped,
+        "llm_pricing_failure": pricing_failure,
         "results": results,
     }
     if trace_lookup_error:
@@ -182,6 +282,9 @@ def format_report(report: dict[str, Any]) -> str:
         f"Verdicts: {json.dumps(report.get('verdict_counts') or {}, ensure_ascii=False)}",
         f"LLM tokens: {report.get('llm_total_tokens')}",
         f"Estimated cost, RUB: {report.get('llm_estimated_cost_rub')}",
+        f"LLM budget, RUB: {report.get('llm_budget_rub')}",
+        f"Budget stopped: {report.get('llm_budget_stopped')}",
+        f"Pricing stopped: {report.get('llm_pricing_stopped')}",
     ]
     if report.get("trace_lookup_error"):
         lines.append(f"Trace lookup error: {report['trace_lookup_error']}")
@@ -516,6 +619,16 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _manual_cases_sha256(cases: list[dict[str, Any]]) -> str:
+    encoded = json.dumps(
+        cases,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -545,6 +658,8 @@ def main() -> None:
     parser.add_argument("--output", default="reports/manual_ask.json")
     parser.add_argument("--no-output", action="store_true")
     parser.add_argument("--max-cases", type=int, default=None)
+    parser.add_argument("--max-llm-cost-rub", type=float, default=None)
+    parser.add_argument("--high-cost-approval-id", default=None)
     parser.add_argument(
         "--bypass-cache",
         action="store_true",
@@ -571,6 +686,8 @@ def main() -> None:
             trace_dsn=args.trace_dsn or None,
             bypass_cache=args.bypass_cache,
             isolate_users=args.isolate_users,
+            max_llm_cost_rub=args.max_llm_cost_rub,
+            high_cost_approval_id=args.high_cost_approval_id,
         )
         if not args.no_output:
             await asyncio.to_thread(_write_json, Path(args.output), report)
@@ -578,6 +695,8 @@ def main() -> None:
 
     report = asyncio.run(_run())
     print(format_report(report))
+    if report["llm_budget_stopped"] or report["llm_pricing_stopped"]:
+        raise SystemExit(2)
 
 
 def _configure_stdout() -> None:

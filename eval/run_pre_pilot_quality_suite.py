@@ -19,6 +19,7 @@ import httpx
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from eval.cost_governance import LiveEvalCostReservation, reserve_live_eval_cost
 from eval.pre_pilot_cases import (
     ASK_SECTION_FILES,
     DEFAULT_CASES_DIR,
@@ -31,11 +32,18 @@ from eval.release_provenance import (
 )
 from eval.run_ask import (
     _auth_headers,
+    _cost_governance_runtime_git_sha,
     _fetch_trace,
+    _file_sha256,
+    _guard_large_live_run_budget,
+    _is_in_process_mock_transport,
+    _llm_cost_accounting_failure,
     _llm_cost_rub_total,
+    _local_llm_pricing_preflight_failure,
     _normalize_case,
     _requires_signed_cache_bypass,
     _trace_dsn_candidates,
+    _validate_cost_reservation_for_child_run,
     _verify_cache_bypass_runtime,
     score_case,
 )
@@ -122,6 +130,7 @@ async def run_pre_pilot_quality_suite(
     bypass_cache: bool = True,
     max_llm_cost_rub: float | None = 200.0,
     allow_unbounded_llm_cost: bool = False,
+    high_cost_approval_id: str | None = None,
     release_run_id: str | None = None,
     expected_git_sha: str | None = None,
     provenance_file: Path | None = None,
@@ -184,10 +193,42 @@ async def run_pre_pilot_quality_suite(
         await _persist_summary(output_dir, summary)
         return summary
 
+    cost_reservation: LiveEvalCostReservation | None = None
+    if high_cost_approval_id:
+        if max_llm_cost_rub is None:
+            raise ValueError("A pre-pilot cost approval requires a finite suite budget")
+        pricing_failure = _local_llm_pricing_preflight_failure()
+        if pricing_failure is not None:
+            raise ValueError(
+                "Live pre-pilot pricing preflight failed: " + pricing_failure
+            )
+        if trace_lookup is not True:
+            raise ValueError("Live pre-pilot cost approval requires trace lookup")
+        preflight_trace_pool = await _open_trace_pool(trace_dsn)
+        if preflight_trace_pool is None:
+            raise RuntimeError(
+                "Live pre-pilot requires PostgreSQL trace lookup before cost reservation"
+            )
+        await preflight_trace_pool.close()
+        total_live_cases = _suite_live_case_count(case_paths)
+        cost_reservation = reserve_live_eval_cost(
+            scope="pre-pilot-quality-suite",
+            run_id=release_run_id,
+            runtime_git_sha=_cost_governance_runtime_git_sha(
+                explicit_sha=str(provenance.get("git_sha") or expected_git_sha or ""),
+                evaluation_runtime_git_sha=None,
+            ),
+            manifest_sha256=_suite_case_manifest_sha256(provenance),
+            case_count=total_live_cases,
+            approved_cap_rub=max_llm_cost_rub,
+            private_full=False,
+            high_cost_approval_id=high_cost_approval_id,
+        )
+
     section_reports: dict[str, dict[str, Any]] = {}
     total_cost = 0.0
     stopped_by_budget = False
-    for section in sections:
+    for section_index, section in enumerate(sections):
         if section == "followup":
             if _budget_exhausted(max_llm_cost_rub, total_cost):
                 stopped_by_budget = True
@@ -202,6 +243,9 @@ async def run_pre_pilot_quality_suite(
                 trace_dsn=trace_dsn,
                 bypass_cache=bypass_cache,
                 max_llm_cost_rub=_remaining_budget(max_llm_cost_rub, total_cost),
+                require_budget_for_large_runs=not allow_unbounded_llm_cost,
+                high_cost_approval_id=high_cost_approval_id,
+                cost_reservation=cost_reservation,
             )
         else:
             if _budget_exhausted(max_llm_cost_rub, total_cost):
@@ -220,13 +264,22 @@ async def run_pre_pilot_quality_suite(
                 bypass_cache=bypass_cache,
                 max_llm_cost_rub=_remaining_budget(max_llm_cost_rub, total_cost),
                 require_budget_for_large_runs=not allow_unbounded_llm_cost,
+                high_cost_approval_id=high_cost_approval_id,
+                cost_reservation=cost_reservation,
             )
         section_reports[section] = report
         total_cost += _section_cost(report)
         if (
+            report.get("llm_budget_stopped") is True
+            or report.get("llm_pricing_stopped") is True
+        ):
+            stopped_by_budget = True
+            break
+        if (
             max_llm_cost_rub is not None
-            and total_cost > max_llm_cost_rub
+            and total_cost >= max_llm_cost_rub
             and not allow_unbounded_llm_cost
+            and section_index < len(sections) - 1
         ):
             stopped_by_budget = True
             break
@@ -259,11 +312,71 @@ async def run_followup_eval(
     bypass_cache: bool = True,
     max_llm_cost_rub: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    require_budget_for_large_runs: bool = True,
+    high_cost_approval_id: str | None = None,
+    cost_reservation: LiveEvalCostReservation | None = None,
 ) -> dict[str, Any]:
     conversations = _load_followup_cases(cases_path)
-    trace_pool = await _open_trace_pool(trace_dsn) if trace_lookup else None
-    headers = _auth_headers("API_AUTH_TOKEN")
+    turns_total = sum(
+        len(conversation.get("turns") or []) for conversation in conversations
+    )
     eval_run_id = f"followup-eval-{uuid4()}"
+    _guard_large_live_run_budget(
+        cases=[{} for _ in range(turns_total)],
+        target=target,
+        transport=transport,
+        max_llm_cost_rub=max_llm_cost_rub,
+        require_budget=require_budget_for_large_runs,
+        large_run_threshold=20,
+        trace_lookup=trace_lookup,
+        private_contract_run=False,
+        high_cost_approval_id=high_cost_approval_id,
+    )
+    if not _is_in_process_mock_transport(transport):
+        pricing_failure = _local_llm_pricing_preflight_failure()
+        if pricing_failure is not None:
+            raise ValueError(
+                "Live follow-up eval pricing preflight failed: " + pricing_failure
+            )
+    trace_pool = await _open_trace_pool(trace_dsn) if trace_lookup else None
+    if (
+        trace_lookup
+        and trace_pool is None
+        and not _is_in_process_mock_transport(transport)
+    ):
+        raise RuntimeError(
+            "Live follow-up eval requires an available PostgreSQL trace lookup "
+            "connection before the first request"
+        )
+    if not _is_in_process_mock_transport(transport):
+        assert max_llm_cost_rub is not None
+        try:
+            if cost_reservation is None:
+                cost_reservation = reserve_live_eval_cost(
+                    scope="followup-eval",
+                    run_id=eval_run_id,
+                    runtime_git_sha=_cost_governance_runtime_git_sha(
+                        explicit_sha=None,
+                        evaluation_runtime_git_sha=None,
+                    ),
+                    manifest_sha256=_file_sha256(cases_path),
+                    case_count=turns_total,
+                    approved_cap_rub=max_llm_cost_rub,
+                    private_full=False,
+                    high_cost_approval_id=high_cost_approval_id,
+                )
+            else:
+                _validate_cost_reservation_for_child_run(
+                    cost_reservation,
+                    case_count=turns_total,
+                    max_llm_cost_rub=max_llm_cost_rub,
+                    private_full=False,
+                )
+        except ValueError:
+            if trace_pool is not None:
+                await trace_pool.close()
+            raise
+    headers = _auth_headers("API_AUTH_TOKEN")
     headers["X-Eval-Run-Id"] = eval_run_id
     cache_bypass_secret = ""
     signed_bypass_required = (
@@ -279,6 +392,12 @@ async def run_followup_eval(
 
     results: list[dict[str, Any]] = []
     budget_stopped = False
+    llm_pricing_failure: str | None = None
+    strict_live_cost_control = (
+        not _is_in_process_mock_transport(transport)
+        and max_llm_cost_rub is not None
+    )
+    strict_cost_total = 0.0
     run_namespace = uuid4().hex[:12]
     async with httpx.AsyncClient(
         transport=transport,
@@ -309,10 +428,27 @@ async def run_followup_eval(
                     cache_bypass_secret=cache_bypass_secret,
                 )
                 results.append(result)
-                if max_llm_cost_rub is not None and _llm_cost_rub_total(results) > max_llm_cost_rub:
+                if strict_live_cost_control:
+                    llm_pricing_failure = _llm_cost_accounting_failure(result)
+                    if llm_pricing_failure is not None:
+                        break
+                    strict_cost_total += float(
+                        result.get("llm_estimated_cost_rub") or 0.0
+                    )
+                    turns_remain = len(results) < turns_total
+                    if strict_cost_total > max_llm_cost_rub or (
+                        turns_remain
+                        and strict_cost_total >= max_llm_cost_rub
+                    ):
+                        budget_stopped = True
+                        break
+                elif (
+                    max_llm_cost_rub is not None
+                    and _llm_cost_rub_total(results) > max_llm_cost_rub
+                ):
                     budget_stopped = True
                     break
-            if budget_stopped:
+            if budget_stopped or llm_pricing_failure is not None:
                 break
 
     if trace_pool:
@@ -327,6 +463,12 @@ async def run_followup_eval(
         max_llm_cost_rub=max_llm_cost_rub,
         eval_run_id=eval_run_id,
     )
+    metrics["cost_reservation"] = (
+        cost_reservation.path.name if cost_reservation is not None else None
+    )
+    if llm_pricing_failure is not None:
+        metrics["llm_pricing_stopped"] = True
+        metrics["llm_pricing_failure"] = llm_pricing_failure
     await asyncio.to_thread(output_path.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(
         output_path.write_text,
@@ -694,7 +836,10 @@ def _section_passed(
     *,
     trace_required: bool = True,
 ) -> bool:
-    if report.get("llm_budget_stopped") is True:
+    if (
+        report.get("llm_budget_stopped") is True
+        or report.get("llm_pricing_stopped") is True
+    ):
         return False
     if trace_required and not _rate_meets(
         report.get("trace_coverage_rate"), RELEASE_MIN_TRACE_COVERAGE_RATE
@@ -773,6 +918,46 @@ def _case_paths(
         )
         for section in sections
     }
+
+
+def _suite_live_case_count(case_paths: dict[str, Path]) -> int:
+    total = 0
+    for section, path in case_paths.items():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError(f"Eval case file must contain a JSON array: {path}")
+        if section == "followup":
+            total += sum(
+                len(item.get("turns") or [])
+                for item in payload
+                if isinstance(item, dict)
+            )
+        else:
+            total += len(payload)
+    if total < 1:
+        raise ValueError("Pre-pilot suite contains no live requests")
+    return total
+
+
+def _suite_case_manifest_sha256(provenance: dict[str, Any]) -> str:
+    raw_case_files = provenance.get("case_files")
+    if not isinstance(raw_case_files, dict) or not raw_case_files:
+        raise ValueError("Pre-pilot provenance has no case file fingerprints")
+    manifest: dict[str, str] = {}
+    for name, raw_fingerprint in raw_case_files.items():
+        if not isinstance(raw_fingerprint, dict):
+            raise ValueError("Pre-pilot case fingerprint is invalid")
+        digest = str(raw_fingerprint.get("sha256") or "").lower()
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise ValueError("Pre-pilot case fingerprint is invalid")
+        manifest[str(name)] = digest
+    encoded = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _all_case_files_exist(cases_dir: Path) -> bool:
@@ -902,6 +1087,7 @@ def main() -> None:
     parser.add_argument("--use-cache", action="store_true")
     parser.add_argument("--max-llm-cost-rub", type=float, default=200.0)
     parser.add_argument("--allow-unbounded-llm-cost", action="store_true")
+    parser.add_argument("--high-cost-approval-id", default="")
     parser.add_argument("--release-run-id", default="")
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--provenance-file", type=Path)
@@ -933,6 +1119,7 @@ def main() -> None:
                 None if args.allow_unbounded_llm_cost else args.max_llm_cost_rub
             ),
             allow_unbounded_llm_cost=args.allow_unbounded_llm_cost,
+            high_cost_approval_id=args.high_cost_approval_id or None,
             release_run_id=args.release_run_id or None,
             expected_git_sha=args.expected_git_sha or None,
             provenance_file=args.provenance_file,

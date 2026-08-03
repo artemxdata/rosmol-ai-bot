@@ -307,6 +307,25 @@ def test_recovery_runbook_keeps_production_ml_off_host_ports() -> None:
     assert runbook.index("### Финальный acceptance") < runbook.index("## Gate 5")
 
 
+def test_quality_acceptance_receives_pricing_and_persistent_cost_ledger() -> None:
+    compose = _read("docker-compose.acceptance.yml")
+    runbook = _read("docs/recovery_test_production_runbook_20260720.md")
+
+    assert "EVAL_COST_LEDGER_DIR: /cost-ledger" in compose
+    assert "ACCEPTANCE_COST_LEDGER_DIR:?" in compose
+    assert "target: /cost-ledger" in compose
+    assert "RELEASE_GIT_SHA: ${RELEASE_GIT_SHA:?" in compose
+    for name in (
+        "CLOUD_RU_MODEL_SIMPLE_INPUT_PRICE_RUB_PER_MILLION",
+        "CLOUD_RU_MODEL_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION",
+        "CLOUD_RU_MODEL_COMPLEX_INPUT_PRICE_RUB_PER_MILLION",
+        "CLOUD_RU_MODEL_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION",
+    ):
+        assert f"{name}: ${{{name}" in compose
+    assert 'ACCEPTANCE_COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"' in runbook
+    assert 'ACCEPTANCE_COST_LEDGER_DIR="$ACCEPTANCE_COST_LEDGER_DIR"' in runbook
+
+
 def test_recovery_correction_skips_reindex_when_inputs_are_unchanged() -> None:
     runbook = _read("docs/recovery_test_production_runbook_20260720.md")
 

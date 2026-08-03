@@ -14,7 +14,9 @@
 3. Отчёт готовности: `reports/presentation_readiness/summary.md`.
 4. Большой отчёт качества: `reports/presentation_quality/presentation_quality_report.md`.
 5. Пакет живых примеров: `reports/presentation_quality/demo_pack.md`.
-6. Быстрый smoke: `reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.md`.
+6. Свежий bounded smoke максимум на 10 кейсах. Старый
+   `reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.md` использовать только как
+   исторический артефакт; актуальный отчёт создаётся только новым guarded-запуском.
 
 Если показываешь локально, используй `http://127.0.0.1/admin/kb`.
 
@@ -117,13 +119,15 @@ manual Preview показывает diff актуальных документо
 
 ## Команды перед презентацией
 
-Быстрый smoke:
+Быстрый smoke теперь fail-closed: по умолчанию выполняется не более 10 кейсов, требует явный
+бюджет, доступный PostgreSQL trace, полную тарификацию и резервирует стоимость в общем
+`eval-cost-ledger-v1` до первого `/ask`.
 
 ```powershell
 .venv\Scripts\python.exe scripts\run_pre_demo_smoke.py `
   --target http://localhost:8001/ask `
-  --output-dir reports/presentation_quality/pre_demo_smoke_latest `
-  --fail-under 1.0
+  --max-cases 10 `
+  --max-llm-cost-rub 30
 ```
 
 Сборка readiness-отчёта:
@@ -135,13 +139,23 @@ manual Preview показывает diff актуальных документо
 Полный локальный acceptance, если есть время:
 
 ```powershell
+$HIGH_COST_APPROVAL_ID = $env:HIGH_COST_APPROVAL_ID
+if ([string]::IsNullOrWhiteSpace($HIGH_COST_APPROVAL_ID)) {
+  throw "STOP: obtain the one-time approval ID from the external owner record; do not invent it"
+}
 .venv\Scripts\python.exe scripts\run_acceptance.py `
   --expected-git-sha <40_LOWERCASE_HEX_TRUSTED_SHA> `
   --target http://localhost:8001/ask `
-  --max-llm-cost-rub 80
+  --max-llm-cost-rub 80 `
+  --high-cost-approval-id $HIGH_COST_APPROVAL_ID
 ```
 
-Критерий допуска к показу: `reports/presentation_readiness/summary.md` должен содержать `Готово к презентации`, а smoke должен быть `12/12`.
+Approval ID не является секретом, но он должен быть выдан во внешней owner-записи для точного
+runtime SHA, набора, прогноза и расчётного stop-limit; придумывать ID запрещено.
+
+Критерий допуска к показу: `reports/presentation_readiness/summary.md` должен содержать
+`Готово к презентации`, а свежий bounded smoke максимум из 10 кейсов должен пройти на 100%.
+Исторический 16-кейсный pre-demo report этот критерий не закрывает.
 
 ## Если на встрече что-то пошло не так
 

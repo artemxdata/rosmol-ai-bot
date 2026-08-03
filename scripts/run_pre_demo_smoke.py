@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
+import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -15,6 +17,19 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from eval.cost_governance import reserve_live_eval_cost  # noqa: E402
+from eval.run_ask import (  # noqa: E402
+    ROUTINE_LIVE_EVAL_MAX_CASES,
+    _cost_governance_runtime_git_sha,
+    _guard_large_live_run_budget,
+    _is_in_process_mock_transport,
+    _json_safe,
+    _llm_cost_accounting_failure,
+    _local_llm_pricing_preflight_failure,
+)
 
 DEFAULT_TARGET = "http://127.0.0.1:8001/ask"
 DEFAULT_OUTPUT_DIR = Path("reports/presentation_quality/pre_demo_smoke_latest")
@@ -240,13 +255,14 @@ async def _fetch_trace(pool: asyncpg.Pool | None, request_id: str) -> dict[str, 
         """
         select request_id, timestamp, message_masked, response_text,
                was_escalated, escalation_reason, generator_model, cited_sources,
-               total_latency_ms, llm_total_tokens, llm_estimated_cost_rub
+               total_latency_ms, llm_usage, llm_total_tokens,
+               llm_estimated_cost_rub
         from request_traces
         where request_id = $1
         """,
         request_uuid,
     )
-    return dict(row) if row else {}
+    return {key: _json_safe(row[key]) for key in row.keys()} if row else {}
 
 
 async def _run_case(
@@ -379,7 +395,32 @@ async def run_smoke(
     *,
     require_trace: bool = True,
     transport: httpx.AsyncBaseTransport | None = None,
+    max_cases: int = ROUTINE_LIVE_EVAL_MAX_CASES,
+    max_llm_cost_rub: float | None = None,
+    high_cost_approval_id: str | None = None,
 ) -> dict[str, Any]:
+    if max_cases < 1:
+        raise ValueError("--max-cases must be greater than zero")
+    selected_cases = list(CASES[:max_cases])
+    is_live_transport = not _is_in_process_mock_transport(transport)
+    approval_id = _guard_large_live_run_budget(
+        cases=selected_cases,
+        target=target,
+        transport=transport,
+        max_llm_cost_rub=max_llm_cost_rub,
+        require_budget=True,
+        large_run_threshold=ROUTINE_LIVE_EVAL_MAX_CASES,
+        trace_lookup=require_trace,
+        private_contract_run=False,
+        high_cost_approval_id=high_cost_approval_id,
+    )
+    if is_live_transport:
+        pricing_failure = _local_llm_pricing_preflight_failure()
+        if pricing_failure is not None:
+            raise ValueError(
+                "Live pre-demo smoke pricing preflight failed: " + pricing_failure
+            )
+
     eval_run_id = f"pre-demo-smoke-{uuid4()}"
     env = _read_dotenv()
     trace_dsn = _host_trace_dsn(env)
@@ -390,36 +431,104 @@ async def run_smoke(
             pool = await asyncpg.create_pool(trace_dsn, min_size=1, max_size=1)
         except Exception as exc:  # pragma: no cover - smoke diagnostics
             trace_error = f"{type(exc).__name__}: {exc}"
+    if is_live_transport and pool is None:
+        raise RuntimeError(
+            "Live pre-demo smoke cost enforcement requires an available "
+            "PostgreSQL trace DB"
+        )
+
+    cost_reservation = None
+    if is_live_transport:
+        assert max_llm_cost_rub is not None
+        try:
+            cost_reservation = reserve_live_eval_cost(
+                scope="pre-demo-smoke",
+                run_id=eval_run_id,
+                runtime_git_sha=_cost_governance_runtime_git_sha(
+                    explicit_sha=None,
+                    evaluation_runtime_git_sha=None,
+                ),
+                manifest_sha256=_smoke_cases_sha256(selected_cases),
+                case_count=len(selected_cases),
+                approved_cap_rub=max_llm_cost_rub,
+                private_full=False,
+                high_cost_approval_id=approval_id,
+            )
+        except ValueError:
+            if pool is not None:
+                await pool.close()
+            raise
 
     headers = _auth_headers(env)
-    async with httpx.AsyncClient(timeout=request_timeout, transport=transport) as client:
-        results = [
-            await _run_case(
-                client,
-                target=target,
-                headers=headers,
-                case=case,
-                pool=pool,
-                require_trace=require_trace,
-                eval_run_id=eval_run_id,
-            )
-            for case in CASES
-        ]
-    if pool:
-        await pool.close()
+    results: list[dict[str, Any]] = []
+    budget_stopped = False
+    pricing_stopped = False
+    pricing_failure: str | None = None
+    strict_cost_total = 0.0
+    try:
+        async with httpx.AsyncClient(timeout=request_timeout, transport=transport) as client:
+            if is_live_transport:
+                assert max_llm_cost_rub is not None
+            for index, case in enumerate(selected_cases, start=1):
+                result = await _run_case(
+                    client,
+                    target=target,
+                    headers=headers,
+                    case=case,
+                    pool=pool,
+                    require_trace=require_trace,
+                    eval_run_id=eval_run_id,
+                )
+                results.append(result)
+                if not is_live_transport:
+                    continue
+                trace = result.get("trace") or {}
+                pricing_failure = _llm_cost_accounting_failure(
+                    {"trace_found": bool(trace), **trace}
+                )
+                if pricing_failure is not None:
+                    pricing_stopped = True
+                    break
+                strict_cost_total += float(trace.get("llm_estimated_cost_rub") or 0.0)
+                cases_remain = index < len(selected_cases)
+                if strict_cost_total > max_llm_cost_rub or (
+                    cases_remain and strict_cost_total >= max_llm_cost_rub
+                ):
+                    budget_stopped = True
+                    break
+    finally:
+        if pool:
+            await pool.close()
 
     passed = sum(1 for item in results if item["passed"])
+    executed_ids = {str(item["id"]) for item in results}
+    failed_ids = [str(item["id"]) for item in results if not item["passed"]]
+    failed_ids.extend(
+        str(case["id"])
+        for case in selected_cases
+        if str(case["id"]) not in executed_ids
+    )
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "eval_run_id": eval_run_id,
         "target": target,
+        "high_cost_approval_id": approval_id,
+        "cost_reservation": (
+            cost_reservation.path.name if cost_reservation is not None else None
+        ),
         "require_trace": require_trace,
         "trace_error": trace_error,
-        "cases_total": len(results),
+        "cases_available_total": len(CASES),
+        "cases_total": len(selected_cases),
+        "executed_cases_total": len(results),
         "passed": passed,
-        "pass_rate": passed / len(results) if results else 0.0,
+        "pass_rate": passed / len(selected_cases) if selected_cases else 0.0,
         "llm_estimated_cost_rub": round(_cost_total(results), 6),
-        "failed": [item["id"] for item in results if not item["passed"]],
+        "llm_budget_rub": max_llm_cost_rub,
+        "llm_budget_stopped": budget_stopped,
+        "llm_pricing_stopped": pricing_stopped,
+        "llm_pricing_failure": pricing_failure,
+        "failed": failed_ids,
         "results": results,
     }
     return summary
@@ -434,11 +543,29 @@ def write_summary(output_dir: Path, summary: dict[str, Any]) -> None:
     _write_markdown(output_dir / "pre_demo_smoke.md", summary)
 
 
+def _smoke_cases_sha256(cases: list[dict[str, Any]]) -> str:
+    encoded = json.dumps(
+        cases,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--timeout", type=float, default=240.0)
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=ROUTINE_LIVE_EVAL_MAX_CASES,
+        help="Run at most this many smoke cases (routine default: 10).",
+    )
+    parser.add_argument("--max-llm-cost-rub", type=float, default=None)
+    parser.add_argument("--high-cost-approval-id", default=None)
     parser.add_argument(
         "--allow-missing-trace",
         action="store_true",
@@ -461,6 +588,9 @@ def main() -> None:
             target=args.target,
             request_timeout=args.timeout,
             require_trace=not args.allow_missing_trace,
+            max_cases=args.max_cases,
+            max_llm_cost_rub=args.max_llm_cost_rub,
+            high_cost_approval_id=args.high_cost_approval_id,
         )
     )
     write_summary(output_dir, summary)
@@ -471,6 +601,8 @@ def main() -> None:
                 "passed": summary["passed"],
                 "pass_rate": summary["pass_rate"],
                 "llm_estimated_cost_rub": summary["llm_estimated_cost_rub"],
+                "llm_budget_stopped": summary["llm_budget_stopped"],
+                "llm_pricing_stopped": summary["llm_pricing_stopped"],
                 "json": str(output_dir / "pre_demo_smoke.json"),
                 "md": str(output_dir / "pre_demo_smoke.md"),
                 "failed": summary["failed"],
@@ -479,6 +611,8 @@ def main() -> None:
             indent=2,
         )
     )
+    if summary["llm_budget_stopped"] or summary["llm_pricing_stopped"]:
+        raise SystemExit(2)
     if summary["pass_rate"] < args.fail_under:
         raise SystemExit(1)
 

@@ -92,6 +92,9 @@ def test_run_acceptance_main_writes_custom_report_path(
             target = command[command.index("--target") + 1]
             kb_seed_path = Path(command[command.index("--kb-seed") + 1])
             expected_git_sha = command[command.index("--expected-git-sha") + 1]
+            assert command[command.index("--high-cost-approval-id") + 1] == (
+                "OWNER-20260803-ACCEPTANCE"
+            )
             provenance = run_acceptance.build_release_provenance(
                 release_run_id=release_run_id,
                 target=target,
@@ -161,6 +164,8 @@ def test_run_acceptance_main_writes_custom_report_path(
             "http://localhost:8001/ask",
             "--expected-git-sha",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--high-cost-approval-id",
+            "OWNER-20260803-ACCEPTANCE",
             "--ruff-timeout-sec",
             "11",
             "--pytest-timeout-sec",
@@ -195,6 +200,35 @@ def test_run_acceptance_main_writes_custom_report_path(
     assert stored["release_run_id"] == compact["release_run_id"]
     assert stored["provenance"]["kb_seed"]["sha256"]
     assert "Final Acceptance Report" in (output_dir / "summary.md").read_text(encoding="utf-8")
+
+
+def test_run_acceptance_requires_owner_approval_before_full_quality(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    commands_run: list[str] = []
+    monkeypatch.setattr(
+        run_acceptance,
+        "_run_command",
+        lambda name, command, *, timeout_sec: commands_run.append(name),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_acceptance.py",
+            "--output-dir",
+            str(tmp_path / "acceptance"),
+            "--expected-git-sha",
+            "a" * 40,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_acceptance.main()
+
+    assert exc_info.value.code == 2
+    assert commands_run == []
 
 
 def test_run_acceptance_main_exits_when_required_step_fails(

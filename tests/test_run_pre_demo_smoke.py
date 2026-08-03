@@ -9,6 +9,41 @@ import pytest
 from scripts import run_pre_demo_smoke
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_cost_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVAL_COST_LEDGER_DIR", str(tmp_path / "eval-cost-ledger"))
+    monkeypatch.setenv("RELEASE_GIT_SHA", "a" * 40)
+
+
+class _CountingLiveTransport(httpx.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "Known answer.",
+            },
+        )
+
+
+class _StaticTracePool:
+    def __init__(self, trace: dict[str, object]) -> None:
+        self.trace = trace
+
+    async def fetchrow(self, *args: object) -> dict[str, object]:
+        return self.trace
+
+    async def close(self) -> None:
+        return None
+
+
 def test_pre_demo_cases_cover_launch_boundary_failures() -> None:
     case_ids = {case["id"] for case in run_pre_demo_smoke.CASES}
 
@@ -198,3 +233,238 @@ def test_write_summary_creates_json_and_markdown(tmp_path: Path) -> None:
     markdown = (tmp_path / "pre_demo_smoke.md").read_text(encoding="utf-8")
     assert "Pre-demo smoke 2026-07-03" in markdown
     assert "Known answer." in markdown
+
+
+@pytest.mark.asyncio
+async def test_live_pre_demo_db_unavailable_sends_zero_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+
+    async def fail_create_pool(*args: object, **kwargs: object) -> object:
+        raise OSError("db unavailable")
+
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "_read_dotenv",
+        lambda: {"POSTGRES_DSN": "postgresql://placeholder/rosmol"},
+    )
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+    monkeypatch.setattr(run_pre_demo_smoke.asyncpg, "create_pool", fail_create_pool)
+
+    with pytest.raises(RuntimeError, match="requires an available PostgreSQL"):
+        await run_pre_demo_smoke.run_smoke(
+            target="http://live/ask",
+            request_timeout=1,
+            transport=transport,
+            max_llm_cost_rub=10.0,
+        )
+
+    assert transport.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_live_pre_demo_over_ten_cases_requires_approval_before_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "CASES",
+        tuple(
+            {
+                "id": f"case-{index}",
+                "behavior": "answer",
+                "query": "Question",
+                "must_contain": ("Known",),
+            }
+            for index in range(11)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="one-time owner approval"):
+        await run_pre_demo_smoke.run_smoke(
+            target="http://live/ask",
+            request_timeout=1,
+            transport=transport,
+            max_cases=11,
+            max_llm_cost_rub=50.0,
+        )
+
+    assert transport.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_demo_mock_default_runs_at_most_ten_cases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    monkeypatch.setattr(run_pre_demo_smoke, "_read_dotenv", lambda: {})
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "CASES",
+        tuple(
+            {
+                "id": f"case-{index}",
+                "behavior": "answer",
+                "query": "Question",
+                "must_contain": ("Known",),
+            }
+            for index in range(11)
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "Known answer.",
+            },
+        )
+
+    summary = await run_pre_demo_smoke.run_smoke(
+        target="http://test/ask",
+        request_timeout=1,
+        require_trace=False,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert calls == 10
+    assert summary["cases_available_total"] == 11
+    assert summary["cases_total"] == 10
+
+
+@pytest.mark.asyncio
+async def test_live_pre_demo_stops_before_next_case_at_exact_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+    pool = _StaticTracePool(
+        {
+            "was_escalated": False,
+            "llm_usage": [
+                {
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 1.0,
+                    "priced": True,
+                }
+            ],
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 1.0,
+        }
+    )
+
+    async def create_pool(*args: object, **kwargs: object) -> _StaticTracePool:
+        return pool
+
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "CASES",
+        (
+            {
+                "id": "one",
+                "behavior": "answer",
+                "query": "Question",
+                "must_contain": ("Known",),
+            },
+            {
+                "id": "two",
+                "behavior": "answer",
+                "query": "Question",
+                "must_contain": ("Known",),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "_read_dotenv",
+        lambda: {"POSTGRES_DSN": "postgresql://placeholder/rosmol"},
+    )
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+    monkeypatch.setattr(run_pre_demo_smoke.asyncpg, "create_pool", create_pool)
+
+    summary = await run_pre_demo_smoke.run_smoke(
+        target="http://live/ask",
+        request_timeout=1,
+        transport=transport,
+        max_cases=2,
+        max_llm_cost_rub=1.0,
+    )
+
+    assert transport.calls == 1
+    assert summary["cases_total"] == 2
+    assert summary["executed_cases_total"] == 1
+    assert summary["llm_budget_stopped"] is True
+    assert summary["failed"] == ["two"]
+
+
+@pytest.mark.asyncio
+async def test_live_pre_demo_exact_budget_on_final_case_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+    pool = _StaticTracePool(
+        {
+            "was_escalated": False,
+            "llm_usage": [
+                {
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 1.0,
+                    "priced": True,
+                }
+            ],
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 1.0,
+        }
+    )
+
+    async def create_pool(*args: object, **kwargs: object) -> _StaticTracePool:
+        return pool
+
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "CASES",
+        (
+            {
+                "id": "one",
+                "behavior": "answer",
+                "query": "Question",
+                "must_contain": ("Known",),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "_read_dotenv",
+        lambda: {"POSTGRES_DSN": "postgresql://placeholder/rosmol"},
+    )
+    monkeypatch.setattr(
+        run_pre_demo_smoke,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+    monkeypatch.setattr(run_pre_demo_smoke.asyncpg, "create_pool", create_pool)
+
+    summary = await run_pre_demo_smoke.run_smoke(
+        target="http://live/ask",
+        request_timeout=1,
+        transport=transport,
+        max_cases=1,
+        max_llm_cost_rub=1.0,
+    )
+
+    assert transport.calls == 1
+    assert summary["executed_cases_total"] == 1
+    assert summary["llm_budget_stopped"] is False
+    assert summary["llm_pricing_stopped"] is False

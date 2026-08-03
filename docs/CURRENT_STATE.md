@@ -1297,3 +1297,54 @@ Qdrant. Следующий Product80 допускается только как 
 сразу создать safe summary. Решение о clause-level fallback принимается по
 `generate_retry_reason_counts`; спорные operator reason и forbidden-profile labels исправляются
 только после человеческой проверки, без передачи raw текстов Codex.
+
+## 17. Cost governance после Product80 3 августа 2026
+
+Пользователь вручную развернул runtime `c38f0e055630fae2af50720fae81acee20ff4f6a`:
+`app`, `app-ml` и `nginx` healthy, проверка вернула
+`READY=PASS c38f0e055630fae2af50720fae81acee20ff4f6a`. Codex к серверу не подключался.
+На этом runtime новый Product80 не запускался.
+
+Обнаружен отдельный P0-дефект cost accounting предыдущего calibration-run: фактический расход по
+данным пользователя составил около `700 RUB`, тогда как raw runner report записал только
+`39.828752 RUB` — расхождение примерно `17.6x`. Причина: часть вызовов simple-модели имела
+`priced=false` и нулевую внутреннюю цену, поэтому прежний `--max-llm-cost-rub` не был надёжным
+финансовым ограничителем.
+
+В tooling change set вводится D-036 и независимые fail-closed барьеры:
+
+- любой live `/ask` eval требует конечный budget и PostgreSQL trace lookup; unbounded запрещён;
+- обычный live-run ограничен максимум 10 кейсами и расчётным budget `100 RUB`;
+- более 10 кейсов, budget выше `100 RUB` и любой private full run требуют отдельный одноразовый
+  non-secret owner approval reference;
+- missing trace, `NaN/inf`, несогласованная сумма usage и token-bearing event с `priced != true`
+  останавливают run после первого такого кейса и до следующего `/ask`;
+- каждый live-run атомарно резервирует расчётный budget в едином persistent
+  `eval-cost-ledger-v1`; routine reservations ограничены суммой `300 RUB` за скользящие 24 часа;
+- approval ID расходуется один раз глобально; второй private full run запрещён за скользящие
+  24 часа и навсегда для того же release candidate, включая concurrent sealed/calibration start;
+- `run_quality_suite` и pre-pilot делят один общий budget между секциями; `manual_ask` и pre-demo
+  также закрыты теми же trace/pricing/case/budget guards, pre-demo по умолчанию выполняет 10 кейсов;
+- acceptance-контейнер получает четыре non-secret тарифа моделей и отдельный persistent ledger
+  mount; нулевой/неполный тариф или недоступный PostgreSQL блокируют запуск до первого `/ask`;
+- остановленный exact private run остаётся rejection-only evidence без canonical report и
+  completed receipt.
+
+Расчётный stop-limit не выдаётся за provider hard cap: уже начатый запрос может превысить остаток.
+После каждого paid run владелец вручную сверяет exact UTC window с provider billing; расхождение
+выше `10%`, неоднозначная атрибуция или неготовый bill означают `STOP` для следующих paid eval.
+
+Платный Product80 на `c38f0e0...` заблокирован. После полного бесплатного локального gate и push
+первой проверкой этого runtime будет отдельный targeted manifest максимум на 10 кейсов, с
+расчётным budget не выше `100 RUB` и обязательной ручной billing-сверкой. Полный replay возможен
+только после доказанной точности тарификации, нового прогноза и отдельного разрешения владельца;
+автоматический повтор запрещён.
+
+Полный бесплатный локальный gate change set зелёный:
+
+- `.venv\Scripts\ruff.exe check .` — успешно;
+- единый Windows-процесс pytest перестал продвигаться и был остановлен; все 113 test-файлов
+  затем выполнены детерминированными непересекающимися file-shards:
+  `2156 passed, 1 skipped, 0 failed`;
+- `.venv\Scripts\python.exe scripts\index_kb.py --validate-only` —
+  `2186 valid / 2152 published`.

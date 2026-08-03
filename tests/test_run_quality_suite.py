@@ -121,11 +121,11 @@ async def test_run_quality_suite_can_include_forum_smoke(
             "avg_expected_rank": 1.0,
         }
 
-    ask_calls: list[Path] = []
+    ask_calls: list[tuple[Path, float | None]] = []
 
     async def fake_ask_eval(**kwargs):
         assert kwargs["bypass_cache"] is True
-        ask_calls.append(kwargs["output_path"])
+        ask_calls.append((kwargs["output_path"], kwargs["max_llm_cost_rub"]))
         await asyncio.to_thread(kwargs["output_path"].write_text, "{}", encoding="utf-8")
         await asyncio.to_thread(
             kwargs["markdown_path"].write_text,
@@ -139,7 +139,7 @@ async def test_run_quality_suite_can_include_forum_smoke(
             "http_success_rate": 1.0,
             "trace_coverage_rate": 1.0,
             "low_confidence_expected_chunk_hit_rate": 0.0,
-            "llm_estimated_cost_rub": 0.0,
+            "llm_estimated_cost_rub": 2.0 if len(ask_calls) == 1 else 1.0,
             "results": [],
         }
 
@@ -194,11 +194,103 @@ async def test_run_quality_suite_can_include_forum_smoke(
         auto_smoke_cases=True,
         max_smoke_cases=1,
         forum_smoke=True,
+        max_llm_cost_rub=10.0,
     )
 
     assert summary["passed"] is True
     assert summary["forum_smoke"]["pass_rate"] == 1.0
-    assert ask_calls == [tmp_path / "ask_eval.json", tmp_path / "forum_ask_eval.json"]
+    assert ask_calls == [
+        (tmp_path / "ask_eval.json", 10.0),
+        (tmp_path / "forum_ask_eval.json", 8.0),
+    ]
+    assert summary["llm_estimated_cost_rub"] == 3.0
+    assert summary["forum_smoke"]["llm_estimated_cost_rub"] == 1.0
     assert (tmp_path / "forum_smoke_set.json").exists()
     assert (tmp_path / "forum_ask_summary.json").exists()
     assert "Forum smoke" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_run_quality_suite_does_not_start_forum_after_budget_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_retrieval_eval(*args, **kwargs):
+        await asyncio.to_thread(Path(args[1]).write_text, "{}", encoding="utf-8")
+        await asyncio.to_thread(
+            Path(kwargs["markdown_path"]).write_text,
+            "# retrieval\n",
+            encoding="utf-8",
+        )
+        return {
+            "backend": "lexical",
+            "cases_total": 1,
+            "cases_scored": 1,
+            "recall_at_5": 1.0,
+            "recall_at_10": 1.0,
+            "recall_at_k": 1.0,
+            "mrr": 1.0,
+            "avg_expected_rank": 1.0,
+        }
+
+    ask_calls = 0
+
+    async def fake_ask_eval(**kwargs):
+        nonlocal ask_calls
+        ask_calls += 1
+        await asyncio.to_thread(
+            Path(kwargs["output_path"]).write_text,
+            "{}",
+            encoding="utf-8",
+        )
+        await asyncio.to_thread(
+            Path(kwargs["markdown_path"]).write_text,
+            "# ask\n",
+            encoding="utf-8",
+        )
+        return {
+            "cases_total": 1,
+            "pass_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "http_success_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+            "low_confidence_expected_chunk_hit_rate": 0.0,
+            "llm_estimated_cost_rub": 10.0,
+            "llm_budget_stopped": False,
+            "results": [],
+        }
+
+    def fake_generation_eval(_cases_path, output_path, markdown_path):
+        output_path.write_text("{}", encoding="utf-8")
+        markdown_path.write_text("# generation\n", encoding="utf-8")
+        return {
+            "cases_total": 1,
+            "pass_rate": 1.0,
+            "source_context_rate": 1.0,
+            "expected_chunk_hit_rate": 1.0,
+            "verifier_hallucination_rate": 0.0,
+        }
+
+    def unexpected_forum_build(*_args, **_kwargs):
+        raise AssertionError("forum smoke must not start after budget exhaustion")
+
+    monkeypatch.setattr(suite, "run_retrieval_eval", fake_retrieval_eval)
+    monkeypatch.setattr(suite, "run_ask_eval", fake_ask_eval)
+    monkeypatch.setattr(suite, "run_generation_eval", fake_generation_eval)
+    monkeypatch.setattr(suite, "build_forum_smoke_set", unexpected_forum_build)
+
+    summary = await suite.run_quality_suite(
+        output_dir=tmp_path,
+        golden_path=Path("golden.json"),
+        ask_cases_path=Path("ask.json"),
+        kb_seed_path=Path("kb.json"),
+        retrieval_backend="lexical",
+        forum_smoke=True,
+        max_llm_cost_rub=10.0,
+    )
+
+    assert ask_calls == 1
+    assert summary["passed"] is False
+    assert summary["llm_budget_stopped"] is True
+    assert summary["forum_smoke"]["skipped"] is True
+    assert summary["forum_smoke"]["skip_reason"] == "suite_budget_exhausted"

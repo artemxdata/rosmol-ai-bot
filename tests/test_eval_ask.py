@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -26,6 +29,15 @@ from eval.run_ask import (
 
 HOLDOUT_CASE_IDS = [f"case-{index:03d}" for index in range(1, 81)]
 CALIBRATION_REPLAY_RUNTIME_SHA = "9" * 40
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_cost_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVAL_COST_LEDGER_DIR", str(tmp_path / "eval-cost-ledger"))
+    monkeypatch.setenv("RELEASE_GIT_SHA", "a" * 40)
 
 
 def _holdout_contract(
@@ -318,6 +330,136 @@ def test_calibration_replay_receipt_key_binds_selection_file_and_runtime() -> No
         assert (
             run_ask_module._derive_calibration_replay_receipt_key(**changed)
             != baseline
+        )
+
+
+def test_private_full_eval_reservation_enforces_rolling_day_and_one_time_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    ledger = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    ledger.mkdir(parents=True)
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    contract = _holdout_contract(HOLDOUT_CASE_IDS)
+    first_started_at = datetime(2026, 8, 3, 8, tzinfo=UTC)
+
+    first = run_ask_module._reserve_private_full_eval(
+        ledger_dir=ledger,
+        eval_run_id="ask-eval-first",
+        run_mode="calibration_replay",
+        contract=contract,
+        evaluation_runtime_git_sha=CALIBRATION_REPLAY_RUNTIME_SHA,
+        high_cost_approval_id="OWNER-20260803-FIRST",
+        max_llm_cost_rub=800.0,
+        now=first_started_at,
+    )
+
+    assert first.exists()
+    with pytest.raises(ValueError, match="previous 24 hours"):
+        run_ask_module._reserve_private_full_eval(
+            ledger_dir=ledger,
+            eval_run_id="ask-eval-too-soon",
+            run_mode="calibration_replay",
+            contract=contract,
+            evaluation_runtime_git_sha="8" * 40,
+            high_cost_approval_id="OWNER-20260803-SECOND",
+            max_llm_cost_rub=800.0,
+            now=first_started_at + timedelta(hours=23),
+        )
+
+    second = run_ask_module._reserve_private_full_eval(
+        ledger_dir=ledger,
+        eval_run_id="ask-eval-next-day",
+        run_mode="calibration_replay",
+        contract=contract,
+        evaluation_runtime_git_sha="8" * 40,
+        high_cost_approval_id="OWNER-20260804-SECOND",
+        max_llm_cost_rub=800.0,
+        now=first_started_at + timedelta(hours=25),
+    )
+
+    assert second.exists()
+    with pytest.raises(ValueError, match="already been consumed"):
+        run_ask_module._reserve_private_full_eval(
+            ledger_dir=ledger,
+            eval_run_id="ask-eval-reused-approval",
+            run_mode="calibration_replay",
+            contract=contract,
+            evaluation_runtime_git_sha="7" * 40,
+            high_cost_approval_id="OWNER-20260803-FIRST",
+            max_llm_cost_rub=800.0,
+            now=first_started_at + timedelta(hours=50),
+        )
+
+
+def test_private_full_eval_reservation_is_atomic_for_concurrent_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    ledger = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    ledger.mkdir(parents=True)
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    contract = _holdout_contract(HOLDOUT_CASE_IDS)
+    started_at = datetime(2026, 8, 3, 8, tzinfo=UTC)
+
+    def reserve(index: int) -> bool:
+        try:
+            run_ask_module._reserve_private_full_eval(
+                ledger_dir=ledger,
+                eval_run_id=f"ask-eval-{index}",
+                run_mode="calibration_replay",
+                contract=contract,
+                evaluation_runtime_git_sha=str(index + 1) * 40,
+                high_cost_approval_id=f"OWNER-20260803-{index}",
+                max_llm_cost_rub=800.0,
+                now=started_at,
+            )
+        except ValueError:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(reserve, (1, 2)))
+
+    assert sorted(outcomes) == [False, True]
+    assert len(list(ledger.glob("full-eval-*.reserved.json"))) == 1
+
+
+def test_private_full_eval_reservation_honors_prior_started_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "private"
+    ledger = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    ledger.mkdir(parents=True)
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    started_at = datetime(2026, 8, 3, 8, tzinfo=UTC)
+    (ledger / f"{'a' * 64}.started.json").write_text(
+        json.dumps({"started_at": started_at.isoformat()}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="started within the previous 24 hours"):
+        run_ask_module._reserve_private_full_eval(
+            ledger_dir=ledger,
+            eval_run_id="ask-eval-blocked",
+            run_mode="calibration_replay",
+            contract=_holdout_contract(HOLDOUT_CASE_IDS),
+            evaluation_runtime_git_sha=CALIBRATION_REPLAY_RUNTIME_SHA,
+            high_cost_approval_id="OWNER-20260803-BLOCKED",
+            max_llm_cost_rub=800.0,
+            now=started_at + timedelta(hours=1),
         )
 
 
@@ -792,6 +934,133 @@ def test_llm_cost_rub_total_ignores_missing_and_invalid_values() -> None:
             {},
         ]
     ) == 3.25
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_failure"),
+    [
+        (
+            {
+                "trace_found": False,
+                "llm_estimated_cost_rub": 0.0,
+                "llm_total_tokens": 0,
+                "llm_usage": [],
+            },
+            "llm_cost_trace_missing",
+        ),
+        (
+            {
+                "trace_found": True,
+                "llm_estimated_cost_rub": float("nan"),
+                "llm_total_tokens": 10,
+                "llm_usage": [],
+            },
+            "llm_cost_invalid",
+        ),
+        (
+            {
+                "trace_found": True,
+                "llm_estimated_cost_rub": 0.0,
+                "llm_total_tokens": 10,
+                "llm_usage": [
+                    {
+                        "model": "ai-sage/GigaChat3-10B-A1.8B",
+                        "total_tokens": 10,
+                        "estimated_cost_rub": 0.0,
+                        "priced": False,
+                    }
+                ],
+            },
+            "llm_pricing_unavailable",
+        ),
+        (
+            {
+                "trace_found": True,
+                "llm_estimated_cost_rub": 1.0,
+                "llm_total_tokens": 10,
+                "llm_usage": [
+                    {
+                        "model": "priced-model",
+                        "total_tokens": 10,
+                        "estimated_cost_rub": 0.5,
+                        "priced": True,
+                    }
+                ],
+            },
+            "llm_usage_cost_mismatch",
+        ),
+    ],
+)
+def test_llm_cost_accounting_fails_closed(
+    result: dict[str, object],
+    expected_failure: str,
+) -> None:
+    assert (
+        run_ask_module._llm_cost_accounting_failure(result)
+        == expected_failure
+    )
+
+
+def test_llm_cost_accounting_accepts_direct_and_priced_llm_results() -> None:
+    assert (
+        run_ask_module._llm_cost_accounting_failure(
+            {
+                "trace_found": True,
+                "llm_estimated_cost_rub": 0.0,
+                "llm_total_tokens": 0,
+                "llm_usage": [],
+            }
+        )
+        is None
+    )
+    assert (
+        run_ask_module._llm_cost_accounting_failure(
+            {
+                "trace_found": True,
+                "llm_estimated_cost_rub": 0.25,
+                "llm_total_tokens": 10,
+                "llm_usage": [
+                    {
+                        "model": "priced-model",
+                        "total_tokens": 10,
+                        "estimated_cost_rub": 0.25,
+                        "priced": True,
+                    }
+                ],
+            }
+        )
+        is None
+    )
+
+
+def test_local_llm_pricing_preflight_requires_complete_positive_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        cloud_ru_model="",
+        cloud_ru_model_simple="simple",
+        cloud_ru_model_complex="complex",
+        cloud_ru_model_analyzer="",
+        cloud_ru_model_judge="",
+        cloud_ru_model_simple_input_price_rub_per_million=0.0,
+        cloud_ru_model_simple_output_price_rub_per_million=1.0,
+        cloud_ru_model_complex_input_price_rub_per_million=2.0,
+        cloud_ru_model_complex_output_price_rub_per_million=2.0,
+    )
+    monkeypatch.setattr(run_ask_module, "get_settings", lambda: settings)
+
+    assert run_ask_module._local_llm_pricing_preflight_failure() == (
+        "positive model prices are required: simple_input"
+    )
+
+    settings.cloud_ru_model_simple_input_price_rub_per_million = 1.0
+    settings.cloud_ru_model_analyzer = "unmapped-analyzer"
+    assert run_ask_module._local_llm_pricing_preflight_failure() == (
+        "configured analyzer/judge model has no price mapping"
+    )
+
+    settings.cloud_ru_model_analyzer = "simple"
+    assert run_ask_module._local_llm_pricing_preflight_failure() is None
 
 
 def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:
@@ -1769,6 +2038,19 @@ def test_quality_gate_accepts_only_exact_complete_rates() -> None:
     ) == []
 
 
+def test_quality_gate_rejects_cost_control_stop() -> None:
+    assert _quality_gate_failures(
+        {
+            "pass_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+            "llm_pricing_stopped": True,
+            "llm_budget_stopped": True,
+        },
+        fail_on_any_case=False,
+        require_complete_traces=False,
+    ) == ["llm_cost_accounting_incomplete", "llm_budget_stopped"]
+
+
 def test_score_case_classifies_infrastructure_http_error() -> None:
     case = _normalize_case(
         {
@@ -2127,6 +2409,451 @@ async def test_run_eval_blocks_large_live_run_without_budget(tmp_path: Path) -> 
         )
 
     assert not output.exists()
+
+
+def test_live_cost_guard_requires_budget_even_for_small_run() -> None:
+    with pytest.raises(ValueError, match="explicit LLM budget"):
+        run_ask_module._guard_large_live_run_budget(
+            cases=[{"id": "one"}],
+            target="http://localhost:8001/ask",
+            transport=None,
+            max_llm_cost_rub=None,
+            require_budget=True,
+            large_run_threshold=20,
+            trace_lookup=True,
+            private_contract_run=False,
+            high_cost_approval_id=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("cases_total", "budget", "require_budget", "error"),
+    [
+        (1, 50.0, False, "Unbounded"),
+        (11, 50.0, True, "owner approval"),
+        (1, 100.01, True, "owner approval"),
+        (1, 0.0, True, "greater than zero"),
+        (1, float("nan"), True, "finite"),
+        (1, float("inf"), True, "finite"),
+    ],
+)
+def test_live_cost_guard_rejects_unsafe_run_shape(
+    cases_total: int,
+    budget: float,
+    require_budget: bool,
+    error: str,
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        run_ask_module._guard_large_live_run_budget(
+            cases=[{"id": str(index)} for index in range(cases_total)],
+            target="http://localhost:8001/ask",
+            transport=None,
+            max_llm_cost_rub=budget,
+            require_budget=require_budget,
+            large_run_threshold=20,
+            trace_lookup=True,
+            private_contract_run=False,
+            high_cost_approval_id=None,
+        )
+
+
+def test_live_cost_guard_accepts_explicit_safe_and_approved_runs() -> None:
+    common = {
+        "target": "http://localhost:8001/ask",
+        "transport": None,
+        "require_budget": True,
+        "large_run_threshold": 20,
+        "trace_lookup": True,
+        "private_contract_run": False,
+    }
+    assert (
+        run_ask_module._guard_large_live_run_budget(
+            cases=[{"id": str(index)} for index in range(10)],
+            max_llm_cost_rub=100.0,
+            high_cost_approval_id=None,
+            **common,
+        )
+        is None
+    )
+    assert (
+        run_ask_module._guard_large_live_run_budget(
+            cases=[{"id": str(index)} for index in range(11)],
+            max_llm_cost_rub=150.0,
+            high_cost_approval_id="OWNER-20260803-RC1",
+            **common,
+        )
+        == "OWNER-20260803-RC1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_eval_requires_trace_connection_before_first_post(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps([{"id": "case-1", "query": "Тестовый вопрос"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    post_count = 0
+
+    class CountingTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(
+            self,
+            request: httpx.Request,
+        ) -> httpx.Response:
+            nonlocal post_count
+            post_count += 1
+            return httpx.Response(200, json={"request_id": "request-1", "response": "OK"})
+
+    async def fail_create_pool(*_args: object, **_kwargs: object) -> None:
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fail_create_pool)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    with pytest.raises(RuntimeError, match="before the first request"):
+        await run_eval(
+            cases_path=cases,
+            output_path=output,
+            target="http://localhost:8001/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            transport=CountingTransport(),
+            max_llm_cost_rub=50.0,
+        )
+
+    assert post_count == 0
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_live_eval_exact_budget_on_last_case_is_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps(
+            [
+                {"id": "case-1", "query": "Первый вопрос"},
+                {"id": "case-2", "query": "Второй вопрос"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    post_count = 0
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            nonlocal post_count
+            post_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "request_id": f"00000000-0000-0000-0000-{post_count:012d}",
+                    "response": "OK",
+                },
+            )
+
+    class FakePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> FakePool:
+        return FakePool()
+
+    async def fake_fetch_trace(
+        _pool: object,
+        _request_id: str,
+        *,
+        expected_eval_run_id: str = "",
+        expected_eval_case_id: str = "",
+    ) -> dict[str, object]:
+        return {
+            "eval_run_id": expected_eval_run_id,
+            "eval_case_id": expected_eval_case_id,
+            "cache_hit": False,
+            "llm_prompt_tokens": 8,
+            "llm_completion_tokens": 2,
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 1.0,
+            "llm_usage": [
+                {
+                    "model": "priced-model",
+                    "prompt_tokens": 8,
+                    "completion_tokens": 2,
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 1.0,
+                    "priced": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "_fetch_trace", fake_fetch_trace)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    metrics = await run_eval(
+        cases_path=cases,
+        output_path=output,
+        target="http://localhost:8001/ask",
+        trace_lookup=True,
+        api_key_env=None,
+        max_llm_cost_rub=2.0,
+    )
+
+    assert post_count == 2
+    assert metrics["cases_total"] == 2
+    assert metrics.get("llm_budget_stopped") is not True
+    assert metrics["llm_budget_exceeded"] is False
+
+
+@pytest.mark.asyncio
+async def test_live_eval_consumes_non_private_high_cost_approval_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases = tmp_path / "ask_cases.json"
+    cases.write_text(
+        json.dumps([{"id": "case-1", "query": "Тестовый вопрос"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    post_count = 0
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            nonlocal post_count
+            post_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "request_id": "11111111-1111-1111-1111-111111111111",
+                    "response": "OK",
+                },
+            )
+
+    class FakePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> FakePool:
+        return FakePool()
+
+    async def fake_fetch_trace(
+        _pool: object,
+        _request_id: str,
+        *,
+        expected_eval_run_id: str = "",
+        expected_eval_case_id: str = "",
+    ) -> dict[str, object]:
+        return {
+            "eval_run_id": expected_eval_run_id,
+            "eval_case_id": expected_eval_case_id,
+            "cache_hit": False,
+            "llm_prompt_tokens": 8,
+            "llm_completion_tokens": 2,
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 1.0,
+            "llm_usage": [
+                {
+                    "model": "priced-model",
+                    "prompt_tokens": 8,
+                    "completion_tokens": 2,
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 1.0,
+                    "priced": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "_fetch_trace", fake_fetch_trace)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+    approval_id = "OWNER-20260803-HIGH-001"
+
+    await run_eval(
+        cases_path=cases,
+        output_path=tmp_path / "first.json",
+        target="http://localhost:8001/ask",
+        trace_lookup=True,
+        api_key_env=None,
+        max_llm_cost_rub=150.0,
+        high_cost_approval_id=approval_id,
+    )
+
+    with pytest.raises(ValueError, match="already been consumed"):
+        await run_eval(
+            cases_path=cases,
+            output_path=tmp_path / "second.json",
+            target="http://localhost:8001/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            max_llm_cost_rub=150.0,
+            high_cost_approval_id=approval_id,
+        )
+
+    assert post_count == 1
+
+
+def test_private_live_eval_requires_trace_budget_and_owner_approval() -> None:
+    common = {
+        "cases": [{"id": str(index)} for index in range(80)],
+        "target": "http://app-ml:8000/ask",
+        "transport": None,
+        "require_budget": True,
+        "large_run_threshold": 20,
+        "private_contract_run": True,
+    }
+    with pytest.raises(ValueError, match="trace lookup"):
+        run_ask_module._guard_large_live_run_budget(
+            max_llm_cost_rub=800.0,
+            trace_lookup=False,
+            high_cost_approval_id="OWNER-20260803-PRODUCT80",
+            **common,
+        )
+    with pytest.raises(ValueError, match="owner approval"):
+        run_ask_module._guard_large_live_run_budget(
+            max_llm_cost_rub=800.0,
+            trace_lookup=True,
+            high_cost_approval_id=None,
+            **common,
+        )
+
+
+@pytest.mark.asyncio
+async def test_live_eval_stops_before_second_case_when_pricing_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases = tmp_path / "ask_cases.json"
+    output = tmp_path / "ask_metrics.json"
+    cases.write_text(
+        json.dumps(
+            [
+                {"id": "case-1", "query": "Первый вопрос"},
+                {"id": "case-2", "query": "Второй вопрос"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    post_count = 0
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            nonlocal post_count
+            post_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "request_id": "11111111-1111-1111-1111-111111111111",
+                    "response": "OK",
+                },
+            )
+
+    class FakePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> FakePool:
+        return FakePool()
+
+    async def fake_fetch_trace(
+        _pool: object,
+        _request_id: str,
+        *,
+        expected_eval_run_id: str = "",
+        expected_eval_case_id: str = "",
+    ) -> dict[str, object]:
+        return {
+            "eval_run_id": expected_eval_run_id,
+            "eval_case_id": expected_eval_case_id,
+            "cache_hit": False,
+            "llm_prompt_tokens": 8,
+            "llm_completion_tokens": 2,
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 0.0,
+            "llm_usage": [
+                {
+                    "model": "ai-sage/GigaChat3-10B-A1.8B",
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 0.0,
+                    "priced": False,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "_fetch_trace", fake_fetch_trace)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    metrics = await run_eval(
+        cases_path=cases,
+        output_path=output,
+        target="http://localhost:8001/ask",
+        trace_lookup=True,
+        api_key_env=None,
+        max_llm_cost_rub=50.0,
+    )
+
+    assert post_count == 1
+    assert metrics["cases_total"] == 1
+    assert metrics["cases_limited"] is True
+    assert metrics["llm_pricing_stopped"] is True
+    assert metrics["llm_pricing_failure"] == "llm_pricing_unavailable"
+    assert metrics["cost_control"]["pricing_complete"] is False
 
 
 @pytest.mark.asyncio
@@ -3287,6 +4014,8 @@ def test_cli_forwards_calibration_replay_options(
             CALIBRATION_REPLAY_RUNTIME_SHA,
             "--calibration-replay-ledger-dir",
             str(ledger_dir),
+            "--high-cost-approval-id",
+            "OWNER-20260803-PRODUCT80",
         ],
     )
 
@@ -3298,6 +4027,7 @@ def test_cli_forwards_calibration_replay_options(
         == CALIBRATION_REPLAY_RUNTIME_SHA
     )
     assert captured["calibration_replay_ledger_dir"] == ledger_dir
+    assert captured["high_cost_approval_id"] == "OWNER-20260803-PRODUCT80"
 
 
 @pytest.mark.asyncio

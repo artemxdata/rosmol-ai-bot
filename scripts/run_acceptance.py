@@ -123,6 +123,7 @@ def main() -> None:
     parser.add_argument("--kb-seed", default=str(DEFAULT_KB_SEED_PATH))
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--max-llm-cost-rub", type=float, default=80.0)
+    parser.add_argument("--high-cost-approval-id", default="")
     parser.add_argument("--ready-url", action="append", dest="ready_urls")
     parser.add_argument("--ruff-timeout-sec", type=int, default=DEFAULT_RUFF_TIMEOUT_SEC)
     parser.add_argument("--pytest-timeout-sec", type=int, default=DEFAULT_PYTEST_TIMEOUT_SEC)
@@ -134,6 +135,10 @@ def main() -> None:
     parser.add_argument("--skip-ready", action="store_true")
     parser.add_argument("--skip-quality", action="store_true")
     args = parser.parse_args()
+    if not args.skip_quality and not args.high_cost_approval_id.strip():
+        parser.error(
+            "--high-cost-approval-id is required for the full live quality suite"
+        )
 
     try:
         target, ready_urls = _resolve_endpoints(
@@ -226,6 +231,10 @@ def main() -> None:
         ]
         if expected_git_sha:
             quality_cmd.extend(["--expected-git-sha", expected_git_sha])
+        if args.high_cost_approval_id:
+            quality_cmd.extend(
+                ["--high-cost-approval-id", args.high_cost_approval_id]
+            )
         quality_result = _run_command(
             "pre_pilot_quality_suite",
             quality_cmd,

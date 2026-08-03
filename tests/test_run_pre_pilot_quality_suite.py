@@ -9,6 +9,15 @@ import pytest
 from eval import run_pre_pilot_quality_suite as suite
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_cost_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVAL_COST_LEDGER_DIR", str(tmp_path / "eval-cost-ledger"))
+    monkeypatch.setenv("RELEASE_GIT_SHA", "a" * 40)
+
+
 def _reviewed_ticket_followup() -> list[dict[str, object]]:
     return [
         {
@@ -514,6 +523,139 @@ async def test_non_loopback_followup_rejects_old_runtime_before_first_ask(
         )
 
     assert requests == [("GET", "/ready")]
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_live_followup_stops_before_second_unpriced_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases_path = tmp_path / "reviewed_followup.json"
+    output_path = tmp_path / "followup_result.json"
+    _write_followup_payload(cases_path, _reviewed_ticket_followup())
+    post_count = 0
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            nonlocal post_count
+            post_count += 1
+            return httpx.Response(
+                200,
+                json={
+                    "request_id": "11111111-1111-1111-1111-111111111111",
+                    "response": "OK",
+                },
+            )
+
+    class FakePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_open_trace_pool(_trace_dsn: str | None) -> FakePool:
+        return FakePool()
+
+    async def fake_fetch_trace(
+        _pool: object,
+        _request_id: str,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        return {
+            "cache_hit": False,
+            "llm_prompt_tokens": 8,
+            "llm_completion_tokens": 2,
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 0.0,
+            "llm_usage": [
+                {
+                    "model": "ai-sage/GigaChat3-10B-A1.8B",
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 0.0,
+                    "priced": False,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(suite.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(suite, "_open_trace_pool", fake_open_trace_pool)
+    monkeypatch.setattr(suite, "_fetch_trace", fake_fetch_trace)
+    monkeypatch.setattr(
+        suite,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    metrics = await suite.run_followup_eval(
+        cases_path=cases_path,
+        output_path=output_path,
+        target="http://localhost:8001/ask",
+        trace_lookup=True,
+        bypass_cache=False,
+        max_llm_cost_rub=50.0,
+    )
+
+    assert post_count == 1
+    assert metrics["turns_total"] == 1
+    assert metrics["llm_pricing_stopped"] is True
+    assert metrics["llm_pricing_failure"] == "llm_pricing_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_live_followup_requires_trace_connection_before_first_post(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases_path = tmp_path / "followup.json"
+    output_path = tmp_path / "followup-output.json"
+    _write_followup_payload(cases_path, _reviewed_ticket_followup())
+    post_count = 0
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> httpx.Response:
+            nonlocal post_count
+            post_count += 1
+            return httpx.Response(200, json={"request_id": "request-1", "response": "OK"})
+
+    async def no_trace_pool(_trace_dsn: str | None) -> None:
+        return None
+
+    monkeypatch.setattr(suite.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(suite, "_open_trace_pool", no_trace_pool)
+    monkeypatch.setattr(
+        suite,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    with pytest.raises(RuntimeError, match="before the first request"):
+        await suite.run_followup_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://localhost:8001/ask",
+            trace_lookup=True,
+            bypass_cache=False,
+            max_llm_cost_rub=20.0,
+        )
+
+    assert post_count == 0
     assert not output_path.exists()
 
 

@@ -27,7 +27,14 @@
   existing Redis sessions expire normally and old memory rows are removed by the retention job.
   Startup fails outside `local`/`test` when the variable is empty; operational API/webhook/admin
   tokens are intentionally not reused as the pseudonymization key.
-- Run LLM evals with an explicit budget: `--max-llm-cost-rub` or `--max-cases`.
+- Run live LLM evals only with `--max-llm-cost-rub`; routine runs use at most 10 cases.
+  Larger/full runs additionally require a non-secret one-time `--high-cost-approval-id`.
+  The ID must come from an external owner approval record for the exact runtime SHA, set,
+  forecast and calculated stop-limit; it is non-secret but must never be invented for a command example.
+  The persistent global `eval-cost-ledger-v1` reserves every live run before `/ask`, consumes
+  approval IDs once, limits routine reservations to 300 RUB per rolling 24 hours and permits at
+  most one full run per rolling 24 hours and release candidate. Missing/corrupt/unwritable ledger
+  means STOP; it does not provide provider-billing data.
 - Run KB validation before indexing:
   `python scripts/index_kb.py --validate-only`.
 - For production indexing, require a passed quality gate:
@@ -46,7 +53,7 @@ Invoke-RestMethod -Uri http://localhost:8080/ready
 Run quality suite with a bounded LLM budget:
 
 ```powershell
-.venv\Scripts\python.exe -m eval.run_quality_suite --max-llm-cost-rub 100 --ask-max-cases 50
+.venv\Scripts\python.exe -m eval.run_quality_suite --max-llm-cost-rub 100 --ask-max-cases 10
 .venv\Scripts\python.exe -m eval.build_demo_quality_report --metrics reports\quality_suite\ask_eval.json --output reports\demo_quality.md
 ```
 
@@ -54,23 +61,36 @@ Run a transparent manual inspection against the ML app without semantic cache
 or shared Redis session context:
 
 ```powershell
-.venv\Scripts\python.exe scripts\manual_ask.py --file data\manual_complex_queries.json --target http://localhost:8001/ask --max-cases 10 --bypass-cache --isolate-users --output reports\manual_complex_inspection.json
+.venv\Scripts\python.exe scripts\manual_ask.py --file data\manual_complex_queries.json --target http://localhost:8001/ask --max-cases 10 --max-llm-cost-rub 30 --bypass-cache --isolate-users --output reports\manual_complex_inspection.json
 ```
 
 The `app-ml` profile uses a longer local timeout than the lightweight app
 because CPU rerank plus Max synthesis can exceed 90 seconds on cold runs.
 
 Run the permanent clarification and long-dialog memory regression against the
-live ML container. Clarification count must never be the sole escalation reason:
+live ML container. This scenario contains 19 turns, so it is not a routine `<=10` run and requires
+a real one-time approval reference supplied from the external owner record. Clarification count
+must never be the sole escalation reason:
 
 ```powershell
+$HIGH_COST_APPROVAL_ID = $env:HIGH_COST_APPROVAL_ID
+if ([string]::IsNullOrWhiteSpace($HIGH_COST_APPROVAL_ID)) {
+  throw "STOP: obtain the one-time approval ID from the external owner record; do not invent it"
+}
 .venv\Scripts\python.exe -m eval.run_pre_pilot_quality_suite `
   --target http://127.0.0.1:8001/ask `
   --sections followup `
   --followup-cases eval\cases\dialog_memory_regression.json `
   --output-dir reports\dialog_memory_regression `
-  --max-llm-cost-rub 20
+  --max-llm-cost-rub 20 `
+  --high-cost-approval-id $HIGH_COST_APPROVAL_ID
 ```
+
+After every live run, the budget owner manually reconciles `llm_estimated_cost_rub` with provider
+billing for the exact UTC window and records run ID, runtime SHA, set/version, approval ID, both
+amounts, percentage difference and verdict in private or external owner evidence. This is not
+automated. Absolute variance above 10%, ambiguous attribution or missing final billing evidence
+means STOP for further paid evals until pricing/attribution is fixed and newly approved.
 
 Interpret first-turn conversion and multi-turn resolution separately. A
 clarification keeps the user in the bot flow but does not count as a closed

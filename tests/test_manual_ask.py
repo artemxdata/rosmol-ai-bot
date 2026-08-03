@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
+from pathlib import Path
 
 import httpx
 import pytest
 
+from scripts import manual_ask
 from scripts.manual_ask import (
     _load_cases_from_args,
     build_manual_report_item,
@@ -14,6 +16,41 @@ from scripts.manual_ask import (
     normalize_manual_case,
     run_manual_ask,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_cost_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVAL_COST_LEDGER_DIR", str(tmp_path / "eval-cost-ledger"))
+    monkeypatch.setenv("RELEASE_GIT_SHA", "a" * 40)
+
+
+class _CountingLiveTransport(httpx.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "OK",
+            },
+        )
+
+
+class _StaticTracePool:
+    def __init__(self, trace: dict[str, object]) -> None:
+        self.trace = trace
+
+    async def fetchrow(self, *args: object) -> dict[str, object]:
+        return self.trace
+
+    async def close(self) -> None:
+        return None
 
 
 def test_normalize_manual_case_accepts_string_and_object() -> None:
@@ -214,3 +251,129 @@ async def test_load_cases_from_args_applies_max_cases() -> None:
     )
 
     assert [case["query"] for case in cases] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_live_manual_ask_db_unavailable_sends_zero_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+
+    async def fail_create_pool(*args: object, **kwargs: object) -> object:
+        raise OSError("db unavailable")
+
+    monkeypatch.setattr(manual_ask, "_local_llm_pricing_preflight_failure", lambda: None)
+    monkeypatch.setattr(manual_ask.asyncpg, "create_pool", fail_create_pool)
+
+    with pytest.raises(RuntimeError, match="requires an available PostgreSQL"):
+        await run_manual_ask(
+            [{"id": "one", "query": "Question", "tags": []}],
+            target="http://live/ask",
+            trace_dsn="postgresql://placeholder/rosmol",
+            transport=transport,
+            max_llm_cost_rub=1.0,
+        )
+
+    assert transport.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_live_manual_ask_over_ten_cases_requires_approval_before_post() -> None:
+    transport = _CountingLiveTransport()
+    cases = [
+        {"id": f"case-{index}", "query": "Question", "tags": []}
+        for index in range(11)
+    ]
+
+    with pytest.raises(ValueError, match="one-time owner approval"):
+        await run_manual_ask(
+            cases,
+            target="http://live/ask",
+            trace_dsn="postgresql://placeholder/rosmol",
+            transport=transport,
+            max_llm_cost_rub=50.0,
+        )
+
+    assert transport.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_live_manual_ask_stops_before_second_unpriced_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+    pool = _StaticTracePool(
+        {
+            "llm_usage": [
+                {
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 0.0,
+                    "priced": False,
+                }
+            ],
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 0.0,
+        }
+    )
+
+    async def create_pool(*args: object, **kwargs: object) -> _StaticTracePool:
+        return pool
+
+    monkeypatch.setattr(manual_ask, "_local_llm_pricing_preflight_failure", lambda: None)
+    monkeypatch.setattr(manual_ask.asyncpg, "create_pool", create_pool)
+
+    report = await run_manual_ask(
+        [
+            {"id": "one", "query": "Question", "tags": []},
+            {"id": "two", "query": "Question", "tags": []},
+        ],
+        target="http://live/ask",
+        trace_dsn="postgresql://placeholder/rosmol",
+        transport=transport,
+        max_llm_cost_rub=5.0,
+    )
+
+    assert transport.calls == 1
+    assert report["cases_requested_total"] == 2
+    assert report["cases_total"] == 1
+    assert report["llm_pricing_stopped"] is True
+    assert report["llm_pricing_failure"] == "llm_pricing_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_live_manual_ask_exact_budget_on_final_case_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _CountingLiveTransport()
+    pool = _StaticTracePool(
+        {
+            "llm_usage": [
+                {
+                    "total_tokens": 10,
+                    "estimated_cost_rub": 1.0,
+                    "priced": True,
+                }
+            ],
+            "llm_total_tokens": 10,
+            "llm_estimated_cost_rub": 1.0,
+        }
+    )
+
+    async def create_pool(*args: object, **kwargs: object) -> _StaticTracePool:
+        return pool
+
+    monkeypatch.setattr(manual_ask, "_local_llm_pricing_preflight_failure", lambda: None)
+    monkeypatch.setattr(manual_ask.asyncpg, "create_pool", create_pool)
+
+    report = await run_manual_ask(
+        [{"id": "one", "query": "Question", "tags": []}],
+        target="http://live/ask",
+        trace_dsn="postgresql://placeholder/rosmol",
+        transport=transport,
+        max_llm_cost_rub=1.0,
+    )
+
+    assert transport.calls == 1
+    assert report["cases_total"] == 1
+    assert report["llm_budget_stopped"] is False
+    assert report["llm_pricing_stopped"] is False

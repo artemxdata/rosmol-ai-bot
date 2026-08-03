@@ -36,25 +36,35 @@ Invoke-RestMethod -Uri http://localhost:8001/ready
 Quality suite:
 
 ```powershell
+$HIGH_COST_APPROVAL_ID = $env:HIGH_COST_APPROVAL_ID
+if ([string]::IsNullOrWhiteSpace($HIGH_COST_APPROVAL_ID)) {
+  throw "STOP: obtain the one-time approval ID from the external owner record; do not invent it"
+}
 .venv\Scripts\python.exe -m eval.run_pre_pilot_quality_suite `
   --target http://localhost:8001/ask `
   --output-dir reports/pre_pilot_quality_suite `
-  --max-llm-cost-rub 80
+  --max-llm-cost-rub 80 `
+  --high-cost-approval-id $HIGH_COST_APPROVAL_ID
 ```
 
 Критерий: `summary.json` должен иметь `passed=true`, без остановки по бюджету.
+Approval ID не является секретом, но он должен быть заранее выдан владельцем для точного runtime
+SHA, набора, прогноза и расчётного stop-limit. Генерировать или подставлять правдоподобный ID самостоятельно
+запрещено.
 
 Быстрый преддемо smoke после локального Docker-запуска:
 
 ```powershell
 .venv\Scripts\python.exe scripts\run_pre_demo_smoke.py `
   --target http://localhost:8001/ask `
-  --output-dir reports/presentation_quality/pre_demo_smoke_latest `
-  --fail-under 1.0
+  --max-cases 10 `
+  --max-llm-cost-rub 30
 ```
 
-Он проверяет короткий набор показательных сценариев: составные вопросы по форумам, ФГАИС,
-гранты, off-topic, operator requested, safety и PII masking. Отчёты появляются в:
+Guard проверяет явный бюджет, доступный PostgreSQL trace, полные тарифы и атомарную reservation в
+`eval-cost-ledger-v1` до первого `/ask`. Скрипт проверяет bounded-набор показательных сценариев: составные
+вопросы по форумам, ФГАИС, гранты, off-topic, operator requested, safety и PII masking. Отчёты
+появляются в:
 
 - `reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.md`;
 - `reports/presentation_quality/pre_demo_smoke_latest/pre_demo_smoke.json`.
@@ -202,10 +212,15 @@ git pull --ff-only
 Перед демонстрацией можно прогнать весь локальный release gate одной командой:
 
 ```powershell
+$HIGH_COST_APPROVAL_ID = $env:HIGH_COST_APPROVAL_ID
+if ([string]::IsNullOrWhiteSpace($HIGH_COST_APPROVAL_ID)) {
+  throw "STOP: obtain the one-time approval ID from the external owner record; do not invent it"
+}
 .venv\Scripts\python.exe scripts\run_acceptance.py `
   --expected-git-sha <40_LOWERCASE_HEX_TRUSTED_SHA> `
   --target http://localhost:8001/ask `
-  --max-llm-cost-rub 80
+  --max-llm-cost-rub 80 `
+  --high-cost-approval-id $HIGH_COST_APPROVAL_ID
 ```
 
 `--expected-git-sha` обязателен: это заранее зафиксированный trusted commit, а не значение,

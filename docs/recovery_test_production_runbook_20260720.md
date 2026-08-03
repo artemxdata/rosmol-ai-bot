@@ -926,6 +926,10 @@ API-запросы идут прямо к `app-ml` внутри Docker; TLS/Ngin
 отдельную direct-Git аттестацию, а one-shot повторно сверяет её SHA и все KB/case fingerprints с
 файлами неизменяемого snapshot.
 
+До команды `HIGH_COST_APPROVAL_ID` экспортируется из внешней одноразовой owner-записи для точного
+runtime SHA, набора, прогноза и расчётного stop-limit. ID не является секретом, но придумывать его на сервере
+или копировать из примера запрещено; отсутствие реальной записи означает `STOP`.
+
 ```bash
 set -Eeuo pipefail
 cd /opt/rosmol-ai-bot
@@ -940,17 +944,21 @@ test ! -e "$CLEAN_ACCEPTANCE_SOURCE/.env"
 test ! -e "$CLEAN_ACCEPTANCE_SOURCE/.env.production"
 
 ACCEPTANCE_RUN_ID="quality-${TRUSTED_GIT_SHA}-$(date -u +%Y%m%dT%H%M%SZ)"
+: "${HIGH_COST_APPROVAL_ID:?STOP: set the one-time owner approval reference}"
 QUALITY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 QUALITY_EVIDENCE_DIR="/var/lib/rosmol/acceptance/${ACCEPTANCE_RUN_ID}"
 QUALITY_ATTESTATION_DIR="/var/lib/rosmol/acceptance-attestations/${ACCEPTANCE_RUN_ID}"
 QUALITY_ATTESTATION_FILE="$QUALITY_ATTESTATION_DIR/source-provenance.json"
 ACCEPTANCE_SOURCE_SNAPSHOT="/var/lib/rosmol/acceptance-source/${ACCEPTANCE_RUN_ID}"
+ACCEPTANCE_COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"
 test ! -e "$QUALITY_EVIDENCE_DIR"
 test ! -e "$QUALITY_ATTESTATION_DIR"
 test ! -e "$ACCEPTANCE_SOURCE_SNAPSHOT"
 sudo install -d -m 0700 -o 10001 -g 10001 "$QUALITY_EVIDENCE_DIR"
 sudo install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" \
   "$QUALITY_ATTESTATION_DIR"
+sudo install -d -m 0700 -o 10001 -g 10001 "$ACCEPTANCE_COST_LEDGER_DIR"
+test ! -L "$ACCEPTANCE_COST_LEDGER_DIR"
 sudo -u "$DEPLOY_USER" env \
   CLEAN_ACCEPTANCE_SOURCE="$CLEAN_ACCEPTANCE_SOURCE" \
   QUALITY_ATTESTATION_FILE="$QUALITY_ATTESTATION_FILE" \
@@ -1026,6 +1034,7 @@ acceptance_dc=(sudo env \
   ACCEPTANCE_SOURCE_DIR="$ACCEPTANCE_SOURCE_SNAPSHOT" \
   ACCEPTANCE_OUTPUT_DIR="$QUALITY_EVIDENCE_DIR" \
   ACCEPTANCE_PROVENANCE_DIR="$QUALITY_ATTESTATION_DIR" \
+  ACCEPTANCE_COST_LEDGER_DIR="$ACCEPTANCE_COST_LEDGER_DIR" \
   docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml \
   -f docker-compose.acceptance.yml)
@@ -1038,6 +1047,7 @@ echo 'quality_acceptance_import_preflight=PASS'
   --output-dir /evidence \
   --target http://app-ml:8000/ask \
   --max-llm-cost-rub 80 \
+  --high-cost-approval-id "$HIGH_COST_APPROVAL_ID" \
   --release-run-id "$ACCEPTANCE_RUN_ID" \
   --expected-git-sha "$TRUSTED_GIT_SHA" \
   --provenance-file /provenance/source-provenance.json \
@@ -1121,13 +1131,20 @@ jq -e --arg sha "$TRUSTED_GIT_SHA" --arg since "$QUALITY_STARTED_AT" '
 ' "$POST_QUALITY_SECURITY_REPORT" >/dev/null
 test "$(stat -c '%a' "$POST_QUALITY_SECURITY_REPORT")" = 600
 git check-ignore -q "$POST_QUALITY_SECURITY_REPORT"
-unset ACCEPTANCE_RUN_ID ACCEPTANCE_SOURCE_SNAPSHOT ADMIN_PUBLIC_HOST \
+unset ACCEPTANCE_COST_LEDGER_DIR ACCEPTANCE_RUN_ID ACCEPTANCE_SOURCE_SNAPSHOT ADMIN_PUBLIC_HOST \
+  HIGH_COST_APPROVAL_ID \
   CLEAN_ACCEPTANCE_SOURCE \
   EXPECTED_PUBLIC_IPV4 POST_QUALITY_SECURITY_REPORT \
   QUALITY_ATTESTATION_DIR QUALITY_ATTESTATION_FILE \
   QUALITY_EVIDENCE_DIR QUALITY_STARTED_AT acceptance_dc
 echo 'post_quality_runtime_security=PASS'
 ```
+
+До следующего платного eval владелец бюджета вручную сверяет `llm_estimated_cost_rub` этого
+`ACCEPTANCE_RUN_ID` с provider billing за точное UTC-окно и сохраняет private/external evidence:
+run ID, runtime SHA, набор/версию, approval ID, оценку, фактическую сумму, процент расхождения и
+verdict. Автоматической provider-billing сверки нет. Расхождение по модулю свыше 10%, неоднозначная
+атрибуция или отсутствующий финальный счёт означает `STOP` до исправления и нового owner approval.
 
 ## Gate 5 — ограниченный HDE/VK smoke
 

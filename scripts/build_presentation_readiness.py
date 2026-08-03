@@ -110,6 +110,15 @@ def build_readiness_report(
             and not smoke_data.get("trace_error"),
             "Pre-demo smoke должен проверять trace, источники, эскалации и PII masking.",
         ),
+        _gate(
+            "pre_demo_smoke_cost_control",
+            loaded["pre_demo_smoke"]["exists"]
+            and _smoke_cost_control_ok(smoke_data),
+            (
+                "Pre-demo smoke должен выполнить не более 10 кейсов под явным "
+                "бюджетом и сохранить cost-reservation evidence."
+            ),
+        ),
     ]
 
     ready = all(item["ok"] for item in gates)
@@ -156,6 +165,7 @@ def build_readiness_report(
                 ".venv\\Scripts\\python.exe scripts\\run_pre_demo_smoke.py "
                 "--target http://localhost:8001/ask "
                 "--output-dir reports/presentation_quality/pre_demo_smoke_latest "
+                "--max-cases 10 --max-llm-cost-rub 30 "
                 "--fail-under 1.0"
             ),
             "build_readiness": (
@@ -165,7 +175,8 @@ def build_readiness_report(
                 ".venv\\Scripts\\python.exe scripts\\run_acceptance.py "
                 "--expected-git-sha <40_LOWERCASE_HEX_TRUSTED_SHA> "
                 "--target http://localhost:8001/ask "
-                "--max-llm-cost-rub 80"
+                "--max-llm-cost-rub 80 "
+                "--high-cost-approval-id $env:HIGH_COST_APPROVAL_ID"
             ),
         },
     }
@@ -257,7 +268,26 @@ def _smoke_metrics(data: dict[str, Any]) -> dict[str, Any]:
         "trace_error": data.get("trace_error"),
         "failed": data.get("failed") or [],
         "llm_estimated_cost_rub": _float(data.get("llm_estimated_cost_rub")),
+        "llm_budget_rub": _float(data.get("llm_budget_rub")),
+        "cost_reservation": data.get("cost_reservation"),
     }
+
+
+def _smoke_cost_control_ok(data: dict[str, Any]) -> bool:
+    try:
+        cases_total = int(data.get("cases_total"))
+        executed_cases_total = int(data.get("executed_cases_total"))
+        budget_rub = float(data.get("llm_budget_rub"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        1 <= cases_total <= 10
+        and executed_cases_total == cases_total
+        and 0 < budget_rub <= 100
+        and data.get("llm_budget_stopped") is False
+        and data.get("llm_pricing_stopped") is False
+        and bool(str(data.get("cost_reservation") or "").strip())
+    )
 
 
 def _nested_float(data: dict[str, Any], section: str, key: str) -> float:

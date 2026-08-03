@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import math
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import asyncpg
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -21,7 +25,16 @@ from eval.check_quality_gate import (
 from eval.check_quality_gate import (
     write_report as write_gate_report,
 )
-from eval.run_ask import run_eval as run_ask_eval
+from eval.cost_governance import LiveEvalCostReservation, reserve_live_eval_cost
+from eval.run_ask import (
+    _cost_governance_runtime_git_sha,
+    _file_sha256,
+    _local_llm_pricing_preflight_failure,
+    _trace_dsn_candidates,
+)
+from eval.run_ask import (
+    run_eval as run_ask_eval,
+)
 from eval.run_generation import run_generation_eval
 from eval.run_retrieval import run_eval as run_retrieval_eval
 from eval.suggest_rag_thresholds import (
@@ -60,11 +73,72 @@ async def run_quality_suite(
     max_llm_cost_rub: float | None = None,
     ask_max_cases: int | None = None,
     allow_unbounded_llm_cost: bool = False,
+    high_cost_approval_id: str | None = None,
     gate_config: GateConfig | None = None,
 ) -> dict[str, Any]:
     await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
     paths = _suite_paths(output_dir)
     run_prefix = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+    cost_reservation: LiveEvalCostReservation | None = None
+    forum_cases_prebuilt = False
+    if high_cost_approval_id:
+        if max_llm_cost_rub is None:
+            raise ValueError("A quality-suite cost approval requires a finite budget")
+        pricing_failure = _local_llm_pricing_preflight_failure()
+        if pricing_failure is not None:
+            raise ValueError(
+                "Live quality-suite pricing preflight failed: " + pricing_failure
+            )
+        if trace_lookup is not True:
+            raise ValueError("Live quality-suite cost approval requires trace lookup")
+        preflight_trace_pool = None
+        for candidate in _trace_dsn_candidates(trace_dsn):
+            try:
+                preflight_trace_pool = await asyncpg.create_pool(
+                    candidate,
+                    min_size=1,
+                    max_size=1,
+                )
+                break
+            except Exception:
+                continue
+        if preflight_trace_pool is None:
+            raise RuntimeError(
+                "Live quality suite requires PostgreSQL trace lookup before cost reservation"
+            )
+        await preflight_trace_pool.close()
+        if forum_smoke:
+            await asyncio.to_thread(
+                build_forum_smoke_set,
+                kb_seed_path,
+                paths["forum_cases_json"],
+                per_forum=forum_smoke_per_forum,
+                user_prefix=f"forum-smoke-{run_prefix}",
+            )
+            forum_cases_prebuilt = True
+        reservation_inputs = await asyncio.to_thread(
+            _quality_suite_reservation_inputs,
+            ask_cases_path=ask_cases_path,
+            kb_seed_path=kb_seed_path,
+            forum_cases_path=(paths["forum_cases_json"] if forum_smoke else None),
+            ask_max_cases=ask_max_cases,
+            auto_smoke_cases=auto_smoke_cases,
+            max_smoke_cases=max_smoke_cases,
+            forum_smoke_per_forum=forum_smoke_per_forum,
+        )
+        cost_reservation = reserve_live_eval_cost(
+            scope="quality-suite",
+            run_id=f"quality-suite-{run_prefix}",
+            runtime_git_sha=_cost_governance_runtime_git_sha(
+                explicit_sha=None,
+                evaluation_runtime_git_sha=None,
+            ),
+            manifest_sha256=reservation_inputs["manifest_sha256"],
+            case_count=reservation_inputs["case_count"],
+            approved_cap_rub=max_llm_cost_rub,
+            private_full=False,
+            high_cost_approval_id=high_cost_approval_id,
+        )
 
     retrieval_metrics = await run_retrieval_eval(
         golden_path,
@@ -93,6 +167,13 @@ async def run_quality_suite(
         max_cases=ask_max_cases,
         max_llm_cost_rub=max_llm_cost_rub,
         require_budget_for_large_runs=not allow_unbounded_llm_cost,
+        high_cost_approval_id=high_cost_approval_id,
+        cost_reservation=cost_reservation,
+    )
+    ask_cost_rub = _validated_reported_cost(ask_metrics, label="ask eval")
+    suite_budget_stopped = bool(
+        ask_metrics.get("llm_budget_stopped")
+        or ask_metrics.get("llm_pricing_stopped")
     )
     threshold_report = analyze_thresholds(
         ask_metrics,
@@ -110,35 +191,60 @@ async def run_quality_suite(
     )
 
     forum_summary: dict[str, Any] | None = None
+    forum_ask_metrics: dict[str, Any] | None = None
+    forum_skip_reason: str | None = None
     if forum_smoke:
-        await asyncio.to_thread(
-            build_forum_smoke_set,
-            kb_seed_path,
-            paths["forum_cases_json"],
-            per_forum=forum_smoke_per_forum,
-            user_prefix=f"forum-smoke-{run_prefix}",
-        )
-        await run_ask_eval(
-            cases_path=paths["forum_cases_json"],
-            output_path=paths["forum_ask_json"],
-            target=target,
-            concurrency=ask_concurrency,
-            request_timeout=ask_timeout,
-            trace_lookup=trace_lookup,
-            trace_dsn=trace_dsn,
-            kb_seed_path=kb_seed_path,
-            markdown_path=paths["forum_ask_md"],
-            bypass_cache=bypass_cache,
-            max_llm_cost_rub=max_llm_cost_rub,
-            require_budget_for_large_runs=not allow_unbounded_llm_cost,
-        )
-        forum_summary = await asyncio.to_thread(
-            summarize_forum_ask,
-            paths["forum_ask_json"],
-            kb_seed_path,
-            paths["forum_summary_json"],
-            paths["forum_summary_md"],
-        )
+        remaining_budget = _remaining_budget(max_llm_cost_rub, ask_cost_rub)
+        if suite_budget_stopped:
+            forum_skip_reason = "ask_cost_control_stopped"
+        elif remaining_budget is not None and remaining_budget <= 0:
+            suite_budget_stopped = True
+            forum_skip_reason = "suite_budget_exhausted"
+        else:
+            if not forum_cases_prebuilt:
+                await asyncio.to_thread(
+                    build_forum_smoke_set,
+                    kb_seed_path,
+                    paths["forum_cases_json"],
+                    per_forum=forum_smoke_per_forum,
+                    user_prefix=f"forum-smoke-{run_prefix}",
+                )
+            forum_ask_metrics = await run_ask_eval(
+                cases_path=paths["forum_cases_json"],
+                output_path=paths["forum_ask_json"],
+                target=target,
+                concurrency=ask_concurrency,
+                request_timeout=ask_timeout,
+                trace_lookup=trace_lookup,
+                trace_dsn=trace_dsn,
+                kb_seed_path=kb_seed_path,
+                markdown_path=paths["forum_ask_md"],
+                bypass_cache=bypass_cache,
+                max_llm_cost_rub=remaining_budget,
+                require_budget_for_large_runs=not allow_unbounded_llm_cost,
+                high_cost_approval_id=high_cost_approval_id,
+                cost_reservation=cost_reservation,
+            )
+            suite_budget_stopped = bool(
+                forum_ask_metrics.get("llm_budget_stopped")
+                or forum_ask_metrics.get("llm_pricing_stopped")
+            )
+            forum_summary = await asyncio.to_thread(
+                summarize_forum_ask,
+                paths["forum_ask_json"],
+                kb_seed_path,
+                paths["forum_summary_json"],
+                paths["forum_summary_md"],
+            )
+
+    forum_cost_rub = (
+        _validated_reported_cost(forum_ask_metrics, label="forum ask eval")
+        if forum_ask_metrics is not None
+        else 0.0
+    )
+    total_cost_rub = ask_cost_rub + forum_cost_rub
+    if max_llm_cost_rub is not None and total_cost_rub > max_llm_cost_rub:
+        suite_budget_stopped = True
 
     gate_report = build_quality_gate_report(
         retrieval_metrics=retrieval_metrics,
@@ -148,12 +254,33 @@ async def run_quality_suite(
         generation_metrics=generation_metrics,
         config=gate_config,
     )
+    if suite_budget_stopped or forum_skip_reason is not None:
+        gate_report["checks"].append(
+            {
+                "name": "suite_llm_cost_control",
+                "status": "fail",
+                "actual": round(total_cost_rub, 6),
+                "expected": (
+                    f"<= {max_llm_cost_rub} and all requested suites completed"
+                ),
+            }
+        )
+        gate_report["passed"] = False
+        gate_report["failed_checks"] = sum(
+            1 for item in gate_report["checks"] if item.get("status") == "fail"
+        )
     write_gate_report(paths["gate_json"], gate_report)
     write_gate_markdown(paths["gate_md"], gate_report)
 
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "passed": gate_report["passed"],
+        "llm_estimated_cost_rub": round(total_cost_rub, 6),
+        "llm_budget_rub": max_llm_cost_rub,
+        "llm_budget_stopped": suite_budget_stopped,
+        "cost_reservation": (
+            cost_reservation.path.name if cost_reservation is not None else None
+        ),
         "retrieval": _summary_subset(
             retrieval_metrics,
             (
@@ -196,16 +323,21 @@ async def run_quality_suite(
             "warning_checks": gate_report["warning_checks"],
         },
         "forum_smoke": (
-            _summary_subset(
-                forum_summary or {},
-                (
-                    "cases_total",
-                    "forums_total",
-                    "pass_rate",
-                    "expected_chunk_hit_rate",
-                    "escalation_rate",
+            {
+                **_summary_subset(
+                    forum_summary or {},
+                    (
+                        "cases_total",
+                        "forums_total",
+                        "pass_rate",
+                        "expected_chunk_hit_rate",
+                        "escalation_rate",
+                    ),
                 ),
-            )
+                "llm_estimated_cost_rub": round(forum_cost_rub, 6),
+                "skipped": forum_skip_reason is not None,
+                "skip_reason": forum_skip_reason,
+            }
             if forum_smoke
             else None
         ),
@@ -242,8 +374,82 @@ def _suite_paths(output_dir: Path) -> dict[str, Path]:
     }
 
 
+def _quality_suite_reservation_inputs(
+    *,
+    ask_cases_path: Path,
+    kb_seed_path: Path,
+    forum_cases_path: Path | None,
+    ask_max_cases: int | None,
+    auto_smoke_cases: bool,
+    max_smoke_cases: int,
+    forum_smoke_per_forum: int,
+) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "ask_max_cases": ask_max_cases,
+        "auto_smoke_cases": auto_smoke_cases,
+        "max_smoke_cases": max_smoke_cases,
+        "forum_smoke_per_forum": forum_smoke_per_forum,
+        "kb_seed_sha256": _file_sha256(kb_seed_path),
+    }
+    if ask_cases_path.exists():
+        ask_payload = json.loads(ask_cases_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(ask_payload, list):
+            raise ValueError("Ask eval cases file must contain a JSON array")
+        ask_count = len(ask_payload)
+        manifest["ask_cases_sha256"] = _file_sha256(ask_cases_path)
+        if ask_count == 0 and auto_smoke_cases:
+            ask_count = max_smoke_cases
+    elif auto_smoke_cases:
+        ask_count = max_smoke_cases
+        manifest["ask_cases_sha256"] = None
+    else:
+        raise FileNotFoundError(f"ask eval cases file not found: {ask_cases_path}")
+    if ask_max_cases is not None:
+        if ask_max_cases < 1:
+            raise ValueError("--ask-max-cases must be greater than zero")
+        ask_count = min(ask_count, ask_max_cases)
+
+    forum_count = 0
+    if forum_cases_path is not None:
+        forum_payload = json.loads(forum_cases_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(forum_payload, list):
+            raise ValueError("Forum smoke cases file must contain a JSON array")
+        forum_count = len(forum_payload)
+        manifest["forum_cases_sha256"] = _file_sha256(forum_cases_path)
+
+    case_count = ask_count + forum_count
+    if case_count < 1:
+        raise ValueError("Quality suite contains no live requests")
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {"case_count": case_count, "manifest_sha256": manifest_sha256}
+
+
 def _summary_subset(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: payload.get(key) for key in keys}
+
+
+def _validated_reported_cost(payload: dict[str, Any], *, label: str) -> float:
+    raw = payload.get("llm_estimated_cost_rub")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{label} did not report a valid LLM cost") from exc
+    if not math.isfinite(value) or value < 0:
+        raise RuntimeError(f"{label} reported an invalid LLM cost")
+    return value
+
+
+def _remaining_budget(maximum: float | None, spent: float) -> float | None:
+    if maximum is None:
+        return None
+    return max(0.0, maximum - spent)
 
 
 def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
@@ -255,6 +461,9 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Passed: `{summary.get('passed')}`",
         f"- Failed checks: `{summary['quality_gate'].get('failed_checks')}`",
         f"- Warning checks: `{summary['quality_gate'].get('warning_checks')}`",
+        f"- Estimated LLM cost, RUB: `{summary.get('llm_estimated_cost_rub')}`",
+        f"- LLM budget, RUB: `{summary.get('llm_budget_rub')}`",
+        f"- Stopped by cost control: `{summary.get('llm_budget_stopped')}`",
         "",
         "| Area | Cases | Main metric | Secondary metric |",
         "|---|---:|---:|---:|",
@@ -340,6 +549,7 @@ def main() -> None:
     parser.add_argument("--max-latency-p95-ms", type=int, default=None)
     parser.add_argument("--max-llm-cost-rub", type=float, default=None)
     parser.add_argument("--allow-unbounded-llm-cost", action="store_true")
+    parser.add_argument("--high-cost-approval-id", default="")
     parser.add_argument("--min-forum-pass-rate", type=float, default=1.0)
     parser.add_argument("--min-forum-expected-chunk-hit-rate", type=float, default=1.0)
     parser.add_argument("--max-problem-forums", type=int, default=0)
@@ -392,6 +602,7 @@ def main() -> None:
             bypass_cache=not args.use_cache,
             max_llm_cost_rub=args.max_llm_cost_rub,
             allow_unbounded_llm_cost=args.allow_unbounded_llm_cost,
+            high_cost_approval_id=args.high_cost_approval_id or None,
             gate_config=gate_config,
         )
     )
