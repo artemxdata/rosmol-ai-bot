@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,7 @@ from eval.run_ask import (
 )
 
 HOLDOUT_CASE_IDS = [f"case-{index:03d}" for index in range(1, 81)]
+CALIBRATION_REPLAY_RUNTIME_SHA = "9" * 40
 
 
 def _holdout_contract(
@@ -135,8 +137,13 @@ def _install_holdout_trace_stubs(
     ) -> dict[str, object]:
         if trace_error is not None:
             raise trace_error
+        resolved_cache_hit = (
+            cache_hit.get(expected_eval_case_id, False)
+            if isinstance(cache_hit, dict)
+            else cache_hit
+        )
         return {
-            "cache_hit": cache_hit,
+            "cache_hit": resolved_cache_hit,
             "eval_run_id": (
                 "wrong-eval-run" if binding_mismatch else expected_eval_run_id
             ),
@@ -214,6 +221,60 @@ def _sealed_holdout_kwargs(
     }
 
 
+def _calibration_replay_kwargs(
+    ledger_dir: Path,
+    cases_path: Path,
+    *,
+    runtime_git_sha: str | None = CALIBRATION_REPLAY_RUNTIME_SHA,
+) -> dict[str, object]:
+    raw_cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    contract = raw_cases[0]["holdout_contract"]
+    return {
+        "calibration_replay": True,
+        "expected_runtime_git_sha": runtime_git_sha,
+        "expected_holdout_freeze_sha256": contract[
+            "freeze_contract_sha256"
+        ],
+        "expected_cases_payload_sha256": contract[
+            "cases_payload_sha256"
+        ],
+        "expected_cases_file_sha256": run_ask_module._file_sha256(cases_path),
+        "calibration_replay_ledger_dir": ledger_dir,
+    }
+
+
+def _seed_sealed_exposure_receipt(
+    sealed_ledger_dir: Path,
+    cases_path: Path,
+    source_contract: dict[str, object],
+) -> dict[str, bytes]:
+    sealed_ledger_dir.mkdir(parents=True, exist_ok=True)
+    receipt_key = run_ask_module._derive_holdout_receipt_key(
+        str(source_contract["selected_case_ids_sha256"])
+    )
+    receipt_path = sealed_ledger_dir / f"{receipt_key}.started.json"
+    run_ask_module._create_holdout_started_receipt(
+        receipt_path,
+        contract=source_contract,
+        expected_cases_file_sha256=run_ask_module._file_sha256(cases_path),
+        eval_run_id="ask-eval-original-exposure",
+        cases_path=cases_path,
+        output_path=cases_path.with_name("original-holdout-result.json"),
+        receipt_key=receipt_key,
+    )
+    return _ledger_file_bytes(sealed_ledger_dir)
+
+
+def _ledger_file_bytes(ledger_dir: Path) -> dict[str, bytes]:
+    if not ledger_dir.exists():
+        return {}
+    return {
+        path.name: path.read_bytes()
+        for path in sorted(ledger_dir.iterdir())
+        if path.is_file()
+    }
+
+
 def _request_id_for_case(request: httpx.Request) -> str:
     case_id = request.headers["X-Eval-Case-Id"]
     index = int(case_id.rsplit("-", maxsplit=1)[-1])
@@ -233,6 +294,67 @@ def _ready_payload(
             "authorized": authorized,
         },
     }
+
+
+def test_calibration_replay_receipt_key_binds_selection_file_and_runtime() -> None:
+    inputs = {
+        "selected_case_ids_sha256": "1" * 64,
+        "cases_file_sha256": "2" * 64,
+        "runtime_git_sha": "3" * 40,
+    }
+    baseline = run_ask_module._derive_calibration_replay_receipt_key(
+        **inputs
+    )
+
+    assert baseline == run_ask_module._derive_calibration_replay_receipt_key(
+        **inputs
+    )
+    for field, replacement in (
+        ("selected_case_ids_sha256", "4" * 64),
+        ("cases_file_sha256", "5" * 64),
+        ("runtime_git_sha", "6" * 40),
+    ):
+        changed = {**inputs, field: replacement}
+        assert (
+            run_ask_module._derive_calibration_replay_receipt_key(**changed)
+            != baseline
+        )
+
+
+def test_sealed_started_receipt_keeps_v1_schema_without_replay_markers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    _seed_sealed_exposure_receipt(
+        sealed_ledger_dir,
+        cases_path,
+        raw_cases[0]["holdout_contract"],
+    )
+    receipt_path = next(sealed_ledger_dir.glob("*.started.json"))
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    assert receipt["schema_version"] == "1.0.0"
+    assert receipt["status"] == "started"
+    assert receipt["runtime_git_sha"] == "1" * 40
+    assert receipt["product_verdict_eligible"] is True
+    assert {
+        "receipt_type",
+        "run_mode",
+        "source_runtime_git_sha",
+        "evaluation_runtime_git_sha",
+        "source_holdout_contract",
+        "prior_sealed_exposure_receipts",
+        "calibration_only",
+        "independent_evaluation",
+        "previously_exposed",
+    }.isdisjoint(receipt)
 
 
 @pytest.mark.asyncio
@@ -2280,6 +2402,784 @@ async def test_run_eval_marks_model_assisted_prerun_as_provisional(
         assert receipt["provisional"] is True
         assert receipt["product_verdict_eligible"] is False
         assert receipt["human_product_verdict"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_eval_executes_exposed_holdout_as_calibration_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(
+        HOLDOUT_CASE_IDS,
+        review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+    )
+    source_contract = json.loads(
+        json.dumps(raw_cases[0]["holdout_contract"])
+    )
+    cases_path = cases_dir / "exposed-holdout-calibration.json"
+    output_path = cases_dir / "calibration-result.json"
+    markdown_path = cases_dir / "calibration-result.md"
+    cases_bytes = json.dumps(raw_cases, ensure_ascii=False)
+    cases_path.write_text(cases_bytes, encoding="utf-8")
+    sealed_ledger_before = _seed_sealed_exposure_receipt(
+        sealed_ledger_dir,
+        cases_path,
+        source_contract,
+    )
+    requests: list[tuple[str, str]] = []
+    ready_nonces: list[str] = []
+    all_nonces: list[str] = []
+    calibration_user_ids: list[str] = []
+    exported_user_ids = {str(case["user_id"]) for case in raw_cases}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        assert request.headers["X-Bypass-Cache"] == "1"
+        timestamp = request.headers["X-Eval-Cache-Bypass-Timestamp"]
+        nonce = request.headers["X-Eval-Cache-Bypass-Nonce"]
+        all_nonces.append(nonce)
+        if request.method == "GET":
+            ready_nonces.append(nonce)
+            assert request.headers["X-Eval-Cache-Bypass-Probe"] == "1"
+            expected_signature = run_ask_module.eval_cache_bypass.signature(
+                "test-eval-secret",
+                method="GET",
+                path="/ready",
+                eval_run_id=request.headers["X-Eval-Run-Id"],
+                eval_case_id=(
+                    run_ask_module.eval_cache_bypass.CAPABILITY_PROBE_CASE_ID
+                ),
+                timestamp=timestamp,
+                nonce=nonce,
+                payload_sha256=(
+                    run_ask_module.eval_cache_bypass.EMPTY_PAYLOAD_SHA256
+                ),
+            )
+            assert (
+                request.headers["X-Eval-Cache-Bypass-Signature"]
+                == expected_signature
+            )
+            return httpx.Response(
+                200,
+                json=_ready_payload(
+                    release_git_sha=CALIBRATION_REPLAY_RUNTIME_SHA
+                ),
+            )
+
+        assert list(calibration_ledger_dir.glob("*.started.json"))
+        payload = json.loads(request.content.decode("utf-8"))
+        expected_signature = run_ask_module.eval_cache_bypass.signature(
+            "test-eval-secret",
+            method="POST",
+            path="/ask",
+            eval_run_id=request.headers["X-Eval-Run-Id"],
+            eval_case_id=request.headers["X-Eval-Case-Id"],
+            timestamp=timestamp,
+            nonce=nonce,
+            payload_sha256=(
+                run_ask_module.eval_cache_bypass.canonical_payload_sha256(
+                    run_ask_module.eval_cache_bypass.canonical_ask_payload(
+                        payload
+                    )
+                )
+            ),
+        )
+        assert (
+            request.headers["X-Eval-Cache-Bypass-Signature"]
+            == expected_signature
+        )
+        request_user_id = str(payload["user_id"])
+        calibration_user_ids.append(request_user_id)
+        assert request_user_id not in exported_user_ids
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=markdown_path,
+        target="http://app-ml:8000/ask",
+        trace_lookup=True,
+        trace_dsn="postgresql://trace.test/db",
+        api_key_env=None,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+        allow_model_assisted_prerun=True,
+        **_calibration_replay_kwargs(
+            calibration_ledger_dir,
+            cases_path,
+        ),
+    )
+
+    assert requests[0] == ("GET", "/ready")
+    assert requests[-1] == ("GET", "/ready")
+    assert requests.count(("GET", "/ready")) == 2
+    assert requests.count(("POST", "/ask")) == 80
+    assert len(ready_nonces) == 2
+    assert len(set(ready_nonces)) == 2
+    assert len(all_nonces) == 82
+    assert len(set(all_nonces)) == 82
+    assert len(calibration_user_ids) == 80
+    assert len(set(calibration_user_ids)) == 80
+    assert metrics["cases_total"] == 80
+    assert metrics["http_success_rate"] == 1.0
+    assert metrics["trace_coverage_rate"] == 1.0
+    assert metrics["cache_hit_rate"] == 0.0
+    assert metrics["source_holdout_contract"] == source_contract
+    assert metrics["source_holdout_contract"]["runtime_git_sha"] == "1" * 40
+    replay = metrics["calibration_replay"]
+    assert replay["completed"] is True
+    assert replay["status"] == "completed"
+    assert replay["integrity_failures"] == []
+    assert replay["report_status"] == (
+        run_ask_module.CALIBRATION_REPLAY_REPORT_STATUS
+    )
+    assert replay["calibration_only"] is True
+    assert replay["independent_evaluation"] is False
+    assert replay["previously_exposed"] is True
+    assert replay["product_verdict_eligible"] is False
+    assert replay["source_runtime_git_sha"] == "1" * 40
+    assert (
+        replay["evaluation_runtime_git_sha"]
+        == CALIBRATION_REPLAY_RUNTIME_SHA
+    )
+    assert replay["prior_sealed_exposure_receipts"] == sorted(
+        sealed_ledger_before
+    )
+    assert metrics["trace_cardinality"]["traces_total"] == 80
+    assert metrics["trace_cardinality"]["missing_case_ids"] == []
+    assert metrics["trace_cardinality"]["duplicate_case_ids"] == []
+    assert metrics["trace_cardinality"]["unknown_case_ids"] == []
+    assert output_path.is_file()
+    markdown = markdown_path.read_text(encoding="utf-8")
+    normalized_markdown = " ".join(markdown.split())
+    assert "CALIBRATION REPLAY OF A PREVIOUSLY EXPOSED HOLDOUT" in markdown
+    assert "not an independent evaluation" in markdown
+    assert "must not be reported as product conversion" in normalized_markdown
+    assert _ledger_file_bytes(sealed_ledger_dir) == sealed_ledger_before
+
+    started_paths = list(calibration_ledger_dir.glob("*.started.json"))
+    completed_paths = list(calibration_ledger_dir.glob("*.completed.json"))
+    assert len(started_paths) == 1
+    assert len(completed_paths) == 1
+    expected_cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    started = json.loads(started_paths[0].read_text(encoding="utf-8"))
+    completed = json.loads(completed_paths[0].read_text(encoding="utf-8"))
+    for receipt in (started, completed):
+        assert receipt["schema_version"] == "1.0.0"
+        assert receipt["receipt_type"] == (
+            "exposed_holdout_calibration_replay"
+        )
+        assert receipt["run_mode"] == "calibration_replay"
+        assert "runtime_git_sha" not in receipt
+        assert receipt["report_status"] == (
+            run_ask_module.CALIBRATION_REPLAY_REPORT_STATUS
+        )
+        assert receipt["calibration_only"] is True
+        assert receipt["independent_evaluation"] is False
+        assert receipt["previously_exposed"] is True
+        assert receipt["product_verdict_eligible"] is False
+        assert receipt["source_runtime_git_sha"] == "1" * 40
+        assert (
+            receipt["evaluation_runtime_git_sha"]
+            == CALIBRATION_REPLAY_RUNTIME_SHA
+        )
+        assert (
+            receipt["expected_cases_file_sha256"]
+            == expected_cases_file_sha256
+        )
+    assert started["status"] == "started"
+    assert completed["status"] == "completed"
+    assert completed["output_sha256"] == run_ask_module._file_sha256(
+        output_path
+    )
+
+    copied_dir = private_root / "copied-calibration-cases"
+    copied_dir.mkdir()
+    copied_cases_path = copied_dir / "same-exposed-holdout.json"
+    copied_output_path = copied_dir / "calibration-result.json"
+    copied_cases_path.write_text(cases_bytes, encoding="utf-8")
+    requests_before_replay = list(requests)
+
+    with pytest.raises(ValueError, match="rerun is forbidden"):
+        await run_eval(
+            cases_path=copied_cases_path,
+            output_path=copied_output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            transport=httpx.MockTransport(handler),
+            bypass_cache=True,
+            allow_model_assisted_prerun=True,
+            **_calibration_replay_kwargs(
+                calibration_ledger_dir,
+                copied_cases_path,
+            ),
+        )
+
+    assert requests == requests_before_replay
+    assert not copied_output_path.exists()
+    assert len(list(calibration_ledger_dir.glob("*.rejected.json"))) == 1
+    assert _ledger_file_bytes(sealed_ledger_dir) == sealed_ledger_before
+
+
+@pytest.mark.asyncio
+async def test_run_eval_rejects_sealed_and_calibration_modes_together(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            calibration_replay=True,
+            expected_runtime_git_sha=CALIBRATION_REPLAY_RUNTIME_SHA,
+            calibration_replay_ledger_dir=calibration_ledger_dir,
+            **_sealed_holdout_kwargs(
+                sealed_ledger_dir,
+                raw_cases,
+                cases_path,
+            ),
+        )
+
+    assert requests == []
+    assert not sealed_ledger_dir.exists()
+    assert not calibration_ledger_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_calibration_replay_rejects_unexposed_holdout_before_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    raw_cases = _private_holdout_cases(
+        HOLDOUT_CASE_IDS,
+        review_mode=run_ask_module.MODEL_ASSISTED_PRERUN_MODE,
+    )
+    cases_path = cases_dir / "fresh-unexposed-holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="sealed.*receipt"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            allow_model_assisted_prerun=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_calibration_replay_kwargs(
+                calibration_ledger_dir,
+                cases_path,
+            ),
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+    assert not sealed_ledger_dir.exists()
+    assert not calibration_ledger_dir.exists()
+
+
+@pytest.mark.parametrize("receipt_status", ["started", "completed"])
+@pytest.mark.asyncio
+async def test_calibration_receipt_blocks_later_sealed_holdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt_status: str,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    calibration_ledger_dir.mkdir(parents=True)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "sealed-result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    source_contract = dict(raw_cases[0]["holdout_contract"])
+    cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    receipt_key = run_ask_module._derive_calibration_replay_receipt_key(
+        selected_case_ids_sha256=str(
+            source_contract["selected_case_ids_sha256"]
+        ),
+        cases_file_sha256=cases_file_sha256,
+        runtime_git_sha=CALIBRATION_REPLAY_RUNTIME_SHA,
+    )
+    sealed_receipt_key = run_ask_module._derive_holdout_receipt_key(
+        str(source_contract["selected_case_ids_sha256"])
+    )
+    receipt_path = (
+        calibration_ledger_dir / f"{receipt_key}.{receipt_status}.json"
+    )
+    receipt_kwargs = {
+        "contract": source_contract,
+        "expected_cases_file_sha256": cases_file_sha256,
+        "eval_run_id": "ask-eval-exposed-calibration",
+        "receipt_key": receipt_key,
+        "output_path": cases_dir / "calibration-result.json",
+        "calibration_replay": True,
+        "evaluation_runtime_git_sha": CALIBRATION_REPLAY_RUNTIME_SHA,
+        "prior_sealed_exposure_receipts": [
+            f"{sealed_receipt_key}.started.json"
+        ],
+    }
+    if receipt_status == "started":
+        run_ask_module._create_holdout_started_receipt(
+            receipt_path,
+            cases_path=cases_path,
+            **receipt_kwargs,
+        )
+    else:
+        run_ask_module._create_holdout_completed_receipt(
+            receipt_path,
+            output_sha256="a" * 64,
+            **receipt_kwargs,
+        )
+    calibration_ledger_before = _ledger_file_bytes(
+        calibration_ledger_dir
+    )
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="calibration.*(?:receipt|exposure)"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_sealed_holdout_kwargs(
+                sealed_ledger_dir,
+                raw_cases,
+                cases_path,
+            ),
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+    assert not sealed_ledger_dir.exists()
+    assert (
+        _ledger_file_bytes(calibration_ledger_dir)
+        == calibration_ledger_before
+    )
+
+
+@pytest.mark.parametrize("runtime_git_sha", [None, "not-a-full-git-sha"])
+@pytest.mark.asyncio
+async def test_calibration_replay_rejects_missing_or_invalid_runtime_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_git_sha: str | None,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="expected_runtime_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=cases_dir / "result.json",
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            **_calibration_replay_kwargs(
+                calibration_ledger_dir,
+                cases_path,
+                runtime_git_sha=runtime_git_sha,
+            ),
+        )
+
+    assert requests == []
+    assert not sealed_ledger_dir.exists()
+    assert not calibration_ledger_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_calibration_replay_rejects_runtime_sha_mismatch_before_ask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    sealed_ledger_before = _seed_sealed_exposure_receipt(
+        sealed_ledger_dir,
+        cases_path,
+        raw_cases[0]["holdout_contract"],
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json=_ready_payload(release_git_sha="8" * 40),
+        )
+
+    with pytest.raises(ValueError, match="release_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_calibration_replay_kwargs(
+                calibration_ledger_dir,
+                cases_path,
+            ),
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert not output_path.exists()
+    assert _ledger_file_bytes(sealed_ledger_dir) == sealed_ledger_before
+    assert not list(calibration_ledger_dir.glob("*.started.json"))
+    assert not list(calibration_ledger_dir.glob("*.completed.json"))
+    rejection_paths = list(calibration_ledger_dir.glob("*.rejected.json"))
+    assert len(rejection_paths) == 1
+    report = json.loads(rejection_paths[0].read_text(encoding="utf-8"))
+    replay = report["calibration_replay"]
+    assert replay["status"] == "runtime_rejected"
+    assert replay["source_runtime_git_sha"] == "1" * 40
+    assert (
+        replay["evaluation_runtime_git_sha"]
+        == CALIBRATION_REPLAY_RUNTIME_SHA
+    )
+    assert report["source_holdout_contract"] == raw_cases[0][
+        "holdout_contract"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calibration_replay_rejects_post_run_readiness_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    _install_holdout_trace_stubs(monkeypatch)
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    markdown_path = cases_dir / "result.md"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    sealed_ledger_before = _seed_sealed_exposure_receipt(
+        sealed_ledger_dir,
+        cases_path,
+        raw_cases[0]["holdout_contract"],
+    )
+    get_count = 0
+    post_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_count, post_count
+        if request.method == "GET":
+            get_count += 1
+            return httpx.Response(
+                200,
+                json=_ready_payload(
+                    release_git_sha=(
+                        CALIBRATION_REPLAY_RUNTIME_SHA
+                        if get_count == 1
+                        else "8" * 40
+                    )
+                ),
+            )
+        post_count += 1
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(ValueError, match="release_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            markdown_path=markdown_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_calibration_replay_kwargs(
+                calibration_ledger_dir,
+                cases_path,
+            ),
+        )
+
+    assert get_count == 2
+    assert post_count == 80
+    assert not output_path.exists()
+    assert not markdown_path.exists()
+    assert _ledger_file_bytes(sealed_ledger_dir) == sealed_ledger_before
+    assert len(list(calibration_ledger_dir.glob("*.started.json"))) == 1
+    assert not list(calibration_ledger_dir.glob("*.completed.json"))
+    rejection_paths = list(calibration_ledger_dir.glob("*.rejected.json"))
+    assert len(rejection_paths) == 1
+    report = json.loads(rejection_paths[0].read_text(encoding="utf-8"))
+    replay = report["calibration_replay"]
+    assert replay["status"] == "post_runtime_rejected"
+    assert replay["completed"] is False
+    assert replay["integrity_failures"] == [
+        "post_runtime_ready_check_failed"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_failures"),
+    [
+        ("cache", {"cache_hit_not_exactly_false"}),
+        (
+            "duplicate_trace",
+            {
+                "trace_cardinality_total_mismatch",
+                "trace_cardinality_duplicate_case_ids",
+            },
+        ),
+        (
+            "missing_unknown_trace",
+            {
+                "trace_cardinality_missing_case_ids",
+                "trace_cardinality_unknown_case_ids",
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_calibration_replay_integrity_failure_writes_only_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+    expected_failures: set[str],
+) -> None:
+    private_root, cases_dir, sealed_ledger_dir = _holdout_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    calibration_ledger_dir = (
+        private_root
+        / run_ask_module.CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    cardinality = {case_id: 1 for case_id in HOLDOUT_CASE_IDS}
+    if failure_mode == "duplicate_trace":
+        cardinality[HOLDOUT_CASE_IDS[0]] = 2
+    elif failure_mode == "missing_unknown_trace":
+        cardinality.pop(HOLDOUT_CASE_IDS[-1])
+        cardinality["case-unknown"] = 1
+    _install_holdout_trace_stubs(
+        monkeypatch,
+        cache_hit=(
+            {HOLDOUT_CASE_IDS[0]: True}
+            if failure_mode == "cache"
+            else False
+        ),
+        cardinality_case_counts=cardinality,
+    )
+    raw_cases = _private_holdout_cases(HOLDOUT_CASE_IDS)
+    cases_path = cases_dir / "holdout.json"
+    output_path = cases_dir / "result.json"
+    markdown_path = cases_dir / "result.md"
+    cases_path.write_text(json.dumps(raw_cases), encoding="utf-8")
+    sealed_ledger_before = _seed_sealed_exposure_receipt(
+        sealed_ledger_dir,
+        cases_path,
+        raw_cases[0]["holdout_contract"],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=_ready_payload(
+                    release_git_sha=CALIBRATION_REPLAY_RUNTIME_SHA
+                ),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "request_id": _request_id_for_case(request),
+                "response": "OK",
+            },
+        )
+
+    with pytest.raises(RuntimeError, match="run-integrity"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            markdown_path=markdown_path,
+            target="http://app-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://trace.test/db",
+            api_key_env=None,
+            bypass_cache=True,
+            transport=httpx.MockTransport(handler),
+            **_calibration_replay_kwargs(
+                calibration_ledger_dir,
+                cases_path,
+            ),
+        )
+
+    assert not output_path.exists()
+    assert not markdown_path.exists()
+    assert _ledger_file_bytes(sealed_ledger_dir) == sealed_ledger_before
+    assert len(list(calibration_ledger_dir.glob("*.started.json"))) == 1
+    assert not list(calibration_ledger_dir.glob("*.completed.json"))
+    rejection_paths = list(calibration_ledger_dir.glob("*.rejected.json"))
+    assert len(rejection_paths) == 1
+    report = json.loads(rejection_paths[0].read_text(encoding="utf-8"))
+    replay = report["calibration_replay"]
+    assert replay["completed"] is False
+    assert replay["calibration_only"] is True
+    assert replay["independent_evaluation"] is False
+    assert replay["product_verdict_eligible"] is False
+    assert expected_failures <= set(replay["integrity_failures"])
+    assert report["source_holdout_contract"] == raw_cases[0][
+        "holdout_contract"
+    ]
+    if failure_mode == "cache":
+        assert report["cache_hit_rate"] == pytest.approx(1 / 80)
+        assert sum(
+            item["cache_hit"] is True for item in report["results"]
+        ) == 1
+
+
+def test_cli_forwards_calibration_replay_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases_path = tmp_path / "cases.json"
+    output_path = tmp_path / "result.json"
+    ledger_dir = tmp_path / "calibration-replay-ledger-v1"
+    captured: dict[str, object] = {}
+
+    async def fake_run_eval(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "results": [],
+            "pass_rate": 1.0,
+            "trace_coverage_rate": 1.0,
+        }
+
+    monkeypatch.setattr(run_ask_module, "run_eval", fake_run_eval)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval.run_ask",
+            "--cases",
+            str(cases_path),
+            "--output",
+            str(output_path),
+            "--calibration-replay",
+            "--expected-runtime-git-sha",
+            CALIBRATION_REPLAY_RUNTIME_SHA,
+            "--calibration-replay-ledger-dir",
+            str(ledger_dir),
+        ],
+    )
+
+    run_ask_module.main()
+
+    assert captured["calibration_replay"] is True
+    assert (
+        captured["expected_runtime_git_sha"]
+        == CALIBRATION_REPLAY_RUNTIME_SHA
+    )
+    assert captured["calibration_replay_ledger_dir"] == ledger_dir
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from src.security import eval_cache_bypass
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_DATA_ROOT = PROJECT_ROOT / "data" / "private"
 CANONICAL_HOLDOUT_LEDGER_DIRNAME = "sealed-holdout-ledger-v1"
+CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME = "calibration-replay-ledger-v1"
 PRIVATE_TICKET_DERIVED = "private_ticket_derived"
 PRIVATE_HOLDOUT_SPLIT = "holdout"
 PRIVATE_EVAL_SPLITS = frozenset({"calibration", "validation", PRIVATE_HOLDOUT_SPLIT})
@@ -45,6 +46,7 @@ HOLDOUT_REVIEW_MODES = frozenset(
 )
 HOLDOUT_CONTRACT_SCHEMA_VERSION = "1.1.0"
 MODEL_ASSISTED_REPORT_STATUS = "provisional_model_assisted_prerun"
+CALIBRATION_REPLAY_REPORT_STATUS = "exposed_holdout_calibration_replay"
 EXPECTED_HOLDOUT_CASES_TOTAL = 80
 HOLDOUT_CONTRACT_FIELDS = frozenset(
     {
@@ -558,11 +560,17 @@ async def run_eval(
     expected_cases_file_sha256: str | None = None,
     holdout_ledger_dir: Path | None = None,
     allow_model_assisted_prerun: bool = False,
+    calibration_replay: bool = False,
+    expected_runtime_git_sha: str | None = None,
+    calibration_replay_ledger_dir: Path | None = None,
 ) -> dict[str, Any]:
     eval_run_id = f"ask-eval-{uuid4()}"
+    if sealed_holdout and calibration_replay:
+        raise ValueError("sealed_holdout and calibration_replay are mutually exclusive")
+    private_contract_run = sealed_holdout or calibration_replay
     effective_api_key_env = (
         "API_AUTH_TOKEN"
-        if sealed_holdout and api_key_env is None
+        if private_contract_run and api_key_env is None
         else api_key_env
     )
     headers = _auth_headers(effective_api_key_env)
@@ -571,9 +579,10 @@ async def run_eval(
         if bypass_cache
         else ""
     )
-    if allow_model_assisted_prerun and not sealed_holdout:
+    if allow_model_assisted_prerun and not private_contract_run:
         raise ValueError(
-            "allow_model_assisted_prerun requires sealed_holdout mode"
+            "allow_model_assisted_prerun requires sealed_holdout or "
+            "calibration_replay mode"
         )
     _guard_eval_artifact_aliases(
         cases_path=cases_path,
@@ -597,10 +606,10 @@ async def run_eval(
         cases,
         raw_cases_payload_sha256=raw_cases_payload_sha256,
     )
-    if (holdout_contract is not None) != sealed_holdout:
+    if (holdout_contract is not None) != private_contract_run:
         raise ValueError(
-            "holdout contract cases and explicit sealed_holdout mode are required "
-            "together"
+            "holdout contract cases and exactly one explicit private run mode "
+            "are required together"
         )
     if holdout_contract is not None:
         model_assisted_contract = (
@@ -612,14 +621,29 @@ async def run_eval(
                 "model_assisted_prerun contract and explicit runner opt-in "
                 "must be used together"
             )
-    if not sealed_holdout and (
+    if not private_contract_run and (
         expected_holdout_freeze_sha256 is not None
         or expected_cases_payload_sha256 is not None
         or expected_cases_file_sha256 is not None
         or holdout_ledger_dir is not None
+        or expected_runtime_git_sha is not None
+        or calibration_replay_ledger_dir is not None
     ):
         raise ValueError(
-            "holdout freeze identity and ledger options require sealed_holdout mode"
+            "private contract identity and ledger options require sealed_holdout "
+            "or calibration_replay mode"
+        )
+    if sealed_holdout and (
+        expected_runtime_git_sha is not None
+        or calibration_replay_ledger_dir is not None
+    ):
+        raise ValueError(
+            "calibration runtime identity and ledger options require "
+            "calibration_replay mode"
+        )
+    if calibration_replay and holdout_ledger_dir is not None:
+        raise ValueError(
+            "calibration_replay must not use or modify the sealed holdout ledger"
         )
     _guard_eval_privacy(
         cases=cases,
@@ -632,13 +656,33 @@ async def run_eval(
     holdout_receipt_key: str | None = None
     holdout_receipt_path: Path | None = None
     holdout_completed_receipt_path: Path | None = None
+    source_holdout_contract: dict[str, Any] | None = None
+    evaluation_runtime_git_sha: str | None = None
+    prior_sealed_exposure_receipts: list[str] = []
+    private_report_context: dict[str, Any] = {}
+    private_run_label = (
+        "calibration replay" if calibration_replay else "sealed private holdout"
+    )
     if holdout_contract is not None:
+        source_holdout_contract = dict(holdout_contract)
+        if calibration_replay:
+            evaluation_runtime_git_sha = str(
+                expected_runtime_git_sha or ""
+            ).strip()
+            if (
+                FULL_GIT_SHA_RE.fullmatch(evaluation_runtime_git_sha) is None
+                or evaluation_runtime_git_sha == "0" * 40
+            ):
+                raise ValueError(
+                    "calibration_replay requires expected_runtime_git_sha as a "
+                    "non-zero full lowercase Git SHA"
+                )
         expected_freeze_sha256 = str(
             expected_holdout_freeze_sha256 or ""
         ).strip()
         if SHA256_RE.fullmatch(expected_freeze_sha256) is None:
             raise ValueError(
-                "sealed private holdout requires "
+                "private contract run requires "
                 "expected_holdout_freeze_sha256 as lowercase SHA-256"
             )
         if expected_freeze_sha256 != holdout_contract["freeze_contract_sha256"]:
@@ -650,7 +694,7 @@ async def run_eval(
         ).strip()
         if SHA256_RE.fullmatch(expected_payload_sha256) is None:
             raise ValueError(
-                "sealed private holdout requires "
+                "private contract run requires "
                 "expected_cases_payload_sha256 as lowercase SHA-256"
             )
         if (
@@ -667,20 +711,60 @@ async def run_eval(
         ).strip()
         if SHA256_RE.fullmatch(expected_file_sha256) is None:
             raise ValueError(
-                "sealed private holdout requires "
+                "private contract run requires "
                 "expected_cases_file_sha256 as lowercase SHA-256"
             )
         if expected_file_sha256 != cases_file_sha256:
             raise ValueError(
                 "expected_cases_file_sha256 does not match the exact cases file"
             )
-        holdout_ledger = _validated_holdout_ledger_dir(
-            holdout_ledger_dir,
-            cases_path=cases_path,
-        )
-        holdout_receipt_key = _derive_holdout_receipt_key(
-            holdout_contract["selected_case_ids_sha256"]
-        )
+        if calibration_replay:
+            assert evaluation_runtime_git_sha is not None
+            assert source_holdout_contract is not None
+            prior_sealed_exposure_receipts = (
+                _require_prior_sealed_exposure_receipts(
+                    contract=source_holdout_contract,
+                    cases_file_sha256=expected_file_sha256,
+                )
+            )
+            holdout_ledger = _validated_calibration_replay_ledger_dir(
+                calibration_replay_ledger_dir,
+                cases_path=cases_path,
+            )
+            holdout_receipt_key = _derive_calibration_replay_receipt_key(
+                selected_case_ids_sha256=holdout_contract[
+                    "selected_case_ids_sha256"
+                ],
+                cases_file_sha256=expected_file_sha256,
+                runtime_git_sha=evaluation_runtime_git_sha,
+            )
+        else:
+            evaluation_runtime_git_sha = holdout_contract["runtime_git_sha"]
+            calibration_receipts = _calibration_replay_exposure_receipts(
+                selected_case_ids_sha256=holdout_contract[
+                    "selected_case_ids_sha256"
+                ]
+            )
+            if calibration_receipts:
+                raise ValueError(
+                    "sealed private holdout selection already has calibration "
+                    "replay exposure evidence; independent execution is "
+                    "forbidden"
+                )
+            holdout_ledger = _validated_holdout_ledger_dir(
+                holdout_ledger_dir,
+                cases_path=cases_path,
+            )
+            holdout_receipt_key = _derive_holdout_receipt_key(
+                holdout_contract["selected_case_ids_sha256"]
+            )
+        private_report_context = {
+            "calibration_replay": calibration_replay,
+            "evaluation_runtime_git_sha": evaluation_runtime_git_sha,
+            "prior_sealed_exposure_receipts": (
+                prior_sealed_exposure_receipts
+            ),
+        }
         holdout_receipt_path = holdout_ledger / (
             f"{holdout_receipt_key}.started.json"
         )
@@ -716,9 +800,10 @@ async def run_eval(
                 executed_cases_total=0,
                 receipt_path=holdout_receipt_path,
                 detail=", ".join(canonical_existing),
+                **private_report_context,
             )
             raise FileExistsError(
-                "sealed private holdout canonical output and markdown must be absent"
+                f"{private_run_label} canonical output and markdown must be absent"
             )
         existing_receipts = [
             path.name
@@ -742,9 +827,10 @@ async def run_eval(
                 executed_cases_total=0,
                 receipt_path=holdout_receipt_path,
                 detail=", ".join(existing_receipts),
+                **private_report_context,
             )
             raise ValueError(
-                "sealed private holdout already has a started or completed "
+                f"{private_run_label} already has a started or completed "
                 "receipt; rerun is forbidden"
             )
         preflight_failures: list[str] = []
@@ -771,15 +857,16 @@ async def run_eval(
                 failures=preflight_failures,
                 executed_cases_total=0,
                 receipt_path=holdout_receipt_path,
+                **private_report_context,
             )
             raise ValueError(
-                "sealed private holdout preflight failed: "
+                f"{private_run_label} preflight failed: "
                 + ", ".join(preflight_failures)
             )
     original_cases_total = len(cases)
     if max_cases is not None:
         if holdout_contract is not None:
-            raise ValueError("--max-cases is forbidden for a sealed private holdout")
+            raise ValueError(f"--max-cases is forbidden for {private_run_label}")
         if max_cases < 1:
             raise ValueError("--max-cases must be greater than zero")
         cases = cases[:max_cases]
@@ -809,6 +896,7 @@ async def run_eval(
                 executed_cases_total=0,
                 receipt_path=holdout_receipt_path,
                 detail=str(exc),
+                **private_report_context,
             )
         raise
     if not cases:
@@ -860,9 +948,10 @@ async def run_eval(
             executed_cases_total=0,
             receipt_path=holdout_receipt_path,
             trace_lookup_error=trace_lookup_error or "trace pool was not created",
+            **private_report_context,
         )
         raise RuntimeError(
-            "sealed private holdout requires an available trace lookup connection"
+            f"{private_run_label} requires an available trace lookup connection"
         )
 
     if bypass_cache:
@@ -886,7 +975,7 @@ async def run_eval(
                         target=target,
                         headers=headers,
                         expected_git_sha=(
-                            holdout_contract["runtime_git_sha"]
+                            evaluation_runtime_git_sha
                             if holdout_contract is not None
                             else None
                         ),
@@ -910,6 +999,7 @@ async def run_eval(
                             executed_cases_total=0,
                             receipt_path=holdout_receipt_path,
                             detail=str(exc),
+                            **private_report_context,
                         )
                     raise
                 if holdout_contract is not None:
@@ -924,6 +1014,7 @@ async def run_eval(
                             cases_path=cases_path,
                             output_path=output_path,
                             receipt_key=holdout_receipt_key,
+                            **private_report_context,
                         )
                     except FileExistsError:
                         await _write_holdout_rejection_report(
@@ -938,9 +1029,10 @@ async def run_eval(
                             failures=["started_receipt_exists"],
                             executed_cases_total=0,
                             receipt_path=holdout_receipt_path,
+                            **private_report_context,
                         )
                         raise ValueError(
-                            "sealed private holdout already has a started receipt; "
+                            f"{private_run_label} already has a started receipt; "
                             "rerun is forbidden"
                         ) from None
                     except OSError as exc:
@@ -957,9 +1049,10 @@ async def run_eval(
                             executed_cases_total=0,
                             receipt_path=holdout_receipt_path,
                             detail=f"{type(exc).__name__}: {exc}",
+                            **private_report_context,
                         )
                         raise RuntimeError(
-                            "sealed private holdout started receipt could not be created"
+                            f"{private_run_label} started receipt could not be created"
                         ) from exc
             if max_llm_cost_rub is None:
                 tasks = [
@@ -971,7 +1064,7 @@ async def run_eval(
                         case=case,
                         semaphore=semaphore,
                         trace_pool=trace_pool,
-                        sealed_holdout=sealed_holdout,
+                        sealed_holdout=private_contract_run,
                         cache_bypass_secret=cache_bypass_secret,
                     )
                     for case in cases
@@ -991,7 +1084,7 @@ async def run_eval(
                         case=case,
                         semaphore=sequential_semaphore,
                         trace_pool=trace_pool,
-                        sealed_holdout=sealed_holdout,
+                        sealed_holdout=private_contract_run,
                         cache_bypass_secret=cache_bypass_secret,
                     )
                     results.append(result)
@@ -1004,7 +1097,7 @@ async def run_eval(
                         client=client,
                         target=target,
                         headers=headers,
-                        expected_git_sha=holdout_contract["runtime_git_sha"],
+                        expected_git_sha=evaluation_runtime_git_sha,
                         eval_run_id=eval_run_id,
                         cache_bypass_secret=cache_bypass_secret,
                     )
@@ -1031,6 +1124,7 @@ async def run_eval(
                             generated_smoke_cases=generated_smoke_cases,
                             trace_lookup_error=trace_lookup_error,
                         ),
+                        **private_report_context,
                     )
                     raise
                 assert trace_pool is not None
@@ -1054,10 +1148,16 @@ async def run_eval(
         trace_lookup_error=trace_lookup_error,
     )
     metrics["eval_run_id"] = eval_run_id
+    private_run_key = "calibration_replay" if calibration_replay else "holdout_run"
     if holdout_contract is not None:
-        metrics["holdout_contract"] = holdout_contract
+        if calibration_replay:
+            assert source_holdout_contract is not None
+            metrics["source_holdout_contract"] = source_holdout_contract
+        else:
+            metrics["holdout_contract"] = holdout_contract
         metrics["report_classification"] = _holdout_report_classification(
-            holdout_contract
+            holdout_contract,
+            calibration_replay=calibration_replay,
         )
         metrics["trace_cardinality"] = holdout_trace_cardinality
         if holdout_trace_cardinality_error is not None:
@@ -1087,10 +1187,13 @@ async def run_eval(
             holdout_failures,
             budget_stopped=budget_stopped,
         )
-        metrics["holdout_run"] = {
+        metrics[private_run_key] = {
             "status": status,
             "completed": not holdout_failures,
-            **_holdout_report_classification(holdout_contract),
+            **_holdout_report_classification(
+                holdout_contract,
+                calibration_replay=calibration_replay,
+            ),
             "expected_cases_total": holdout_contract["cases_total"],
             "executed_cases_total": executed_cases_total,
             "expected_cases_file_sha256": expected_file_sha256,
@@ -1105,9 +1208,23 @@ async def run_eval(
                 "manual_pre_run_verification_required"
             ),
             "one_shot_scope": (
-                "enforced_while_canonical_persistent_ledger_is_preserved"
+                "one_calibration_replay_per_source_selection_file_and_runtime"
+                if calibration_replay
+                else "enforced_while_canonical_persistent_ledger_is_preserved"
             ),
         }
+        if calibration_replay:
+            assert source_holdout_contract is not None
+            assert evaluation_runtime_git_sha is not None
+            metrics[private_run_key]["source_runtime_git_sha"] = (
+                source_holdout_contract["runtime_git_sha"]
+            )
+            metrics[private_run_key]["evaluation_runtime_git_sha"] = (
+                evaluation_runtime_git_sha
+            )
+            metrics[private_run_key]["prior_sealed_exposure_receipts"] = (
+                prior_sealed_exposure_receipts
+            )
     if holdout_failures:
         assert holdout_ledger is not None
         assert holdout_receipt_key is not None
@@ -1119,15 +1236,16 @@ async def run_eval(
             eval_run_id=eval_run_id,
             contract=holdout_contract,
             expected_cases_file_sha256=expected_file_sha256,
-            status=str(metrics["holdout_run"]["status"]),
+            status=str(metrics[private_run_key]["status"]),
             failures=holdout_failures,
             executed_cases_total=len(results),
             receipt_path=holdout_receipt_path,
             trace_lookup_error=metrics.get("trace_lookup_error"),
             base_metrics=metrics,
+            **private_report_context,
         )
         raise RuntimeError(
-            "sealed private holdout failed run-integrity checks; rejection evidence "
+            f"{private_run_label} failed run-integrity checks; rejection evidence "
             "was written and the canonical report was not created: "
             + ", ".join(holdout_failures)
         )
@@ -1152,6 +1270,7 @@ async def run_eval(
                 receipt_key=holdout_receipt_key,
                 output_path=output_path,
                 output_sha256=output_sha256,
+                **private_report_context,
             )
         except OSError as exc:
             assert holdout_ledger is not None
@@ -1169,9 +1288,10 @@ async def run_eval(
                 receipt_path=holdout_receipt_path,
                 detail=type(exc).__name__,
                 base_metrics=metrics,
+                **private_report_context,
             )
             raise RuntimeError(
-                "sealed private holdout final report or completed receipt "
+                f"{private_run_label} final report or completed receipt "
                 "could not be created exclusively"
             ) from exc
     else:
@@ -1482,24 +1602,22 @@ async def _verify_cache_bypass_runtime(
     try:
         response = await client.get(ready_url, headers=ready_headers)
     except httpx.HTTPError:
-        raise ValueError(
-            "sealed private holdout runtime /ready check failed"
-        ) from None
+        raise ValueError("signed cache-bypass runtime /ready check failed") from None
     if response.status_code != 200:
         raise ValueError(
-            "sealed private holdout runtime /ready check returned "
+            "signed cache-bypass runtime /ready check returned "
             f"HTTP {response.status_code}"
         )
     payload = _safe_response_json(response)
     if not isinstance(payload, dict) or payload.get("status") != "ready":
         raise ValueError(
-            "sealed private holdout runtime /ready payload is not ready"
+            "signed cache-bypass runtime /ready payload is not ready"
         )
     release_git_sha = str(payload.get("release_git_sha") or "").strip()
     if expected_git_sha is not None and release_git_sha != expected_git_sha:
         raise ValueError(
-            "sealed private holdout runtime release_git_sha does not match "
-            "holdout_contract"
+            "signed cache-bypass runtime release_git_sha does not match the "
+            "expected evaluation runtime"
         )
     capability = payload.get("eval_cache_bypass")
     if (
@@ -1508,7 +1626,7 @@ async def _verify_cache_bypass_runtime(
         or capability.get("authorized") is not True
     ):
         raise ValueError(
-            "sealed private holdout runtime did not authorize signed "
+            "runtime did not authorize signed "
             "cache bypass capability"
         )
 
@@ -1544,6 +1662,169 @@ def _validated_holdout_ledger_dir(
     return ledger
 
 
+def _validated_calibration_replay_ledger_dir(
+    value: Path | None,
+    *,
+    cases_path: Path,
+) -> Path:
+    if value is None:
+        raise ValueError(
+            "calibration_replay requires calibration_replay_ledger_dir"
+        )
+    ledger = value.expanduser().resolve()
+    private_root = PRIVATE_DATA_ROOT.resolve()
+    cases_dir = cases_path.expanduser().resolve().parent
+    if not ledger.is_relative_to(private_root):
+        raise ValueError("calibration replay ledger must stay under data/private")
+    if ledger.is_relative_to(cases_dir) or cases_dir.is_relative_to(ledger):
+        raise ValueError(
+            "calibration replay ledger must be in a separate private directory "
+            "tree from the cases file"
+        )
+    canonical_ledger = (
+        private_root / CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    ).resolve()
+    if ledger != canonical_ledger:
+        raise ValueError(
+            "calibration replay ledger must use the canonical persistent private "
+            f"directory: {canonical_ledger}"
+        )
+    ledger.mkdir(parents=True, exist_ok=True)
+    if not ledger.is_dir():
+        raise ValueError("calibration replay ledger path must be a directory")
+    return ledger
+
+
+def _require_prior_sealed_exposure_receipts(
+    *,
+    contract: dict[str, Any],
+    cases_file_sha256: str,
+) -> list[str]:
+    ledger = (
+        PRIVATE_DATA_ROOT.resolve() / CANONICAL_HOLDOUT_LEDGER_DIRNAME
+    )
+    if ledger.is_symlink() or (
+        _path_lexists(ledger) and not ledger.is_dir()
+    ):
+        raise ValueError("canonical sealed exposure ledger must be a real directory")
+    receipt_key = _derive_holdout_receipt_key(
+        str(contract["selected_case_ids_sha256"])
+    )
+    expected_fields = {
+        "schema_version": "1.0.0",
+        "baseline_id": contract["baseline_id"],
+        "receipt_key": receipt_key,
+        "runtime_git_sha": contract["runtime_git_sha"],
+        "freeze_contract_sha256": contract["freeze_contract_sha256"],
+        "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
+        "cases_payload_sha256": contract["cases_payload_sha256"],
+        "cases_file_sha256": cases_file_sha256,
+    }
+    evidence: list[str] = []
+    for status in ("started", "completed"):
+        path = ledger / f"{receipt_key}.{status}.json"
+        if not _path_lexists(path):
+            continue
+        payload = _validated_receipt_payload(
+            path,
+            label="sealed exposure receipt",
+        )
+        if payload.get("status") != status or any(
+            payload.get(field) != expected
+            for field, expected in expected_fields.items()
+        ):
+            raise ValueError(
+                "calibration_replay prior sealed exposure receipt does not "
+                "match the exact source contract and cases file"
+            )
+        evidence.append(path.name)
+    if not evidence:
+        raise ValueError(
+            "calibration_replay requires an existing canonical sealed started "
+            "or completed receipt for the exact exposed source file"
+        )
+    return evidence
+
+
+def _calibration_replay_exposure_receipts(
+    *,
+    selected_case_ids_sha256: str,
+) -> list[str]:
+    ledger = (
+        PRIVATE_DATA_ROOT.resolve()
+        / CANONICAL_CALIBRATION_REPLAY_LEDGER_DIRNAME
+    )
+    if not _path_lexists(ledger):
+        return []
+    if ledger.is_symlink() or not ledger.is_dir():
+        raise ValueError(
+            "canonical calibration replay ledger must be a real directory"
+        )
+    receipt_paths = sorted(
+        {
+            *ledger.glob("*.started.json"),
+            *ledger.glob("*.completed.json"),
+        }
+    )
+    matching: list[str] = []
+    for path in receipt_paths:
+        status = "started" if path.name.endswith(".started.json") else "completed"
+        payload = _validated_receipt_payload(
+            path,
+            label="calibration replay exposure receipt",
+        )
+        receipt_selection = str(
+            payload.get("selected_case_ids_sha256") or ""
+        )
+        cases_file_sha256 = str(payload.get("cases_file_sha256") or "")
+        evaluation_runtime_git_sha = str(
+            payload.get("evaluation_runtime_git_sha") or ""
+        )
+        receipt_key = str(payload.get("receipt_key") or "")
+        valid = (
+            payload.get("schema_version") == "1.0.0"
+            and payload.get("receipt_type")
+            == "exposed_holdout_calibration_replay"
+            and payload.get("run_mode") == "calibration_replay"
+            and payload.get("status") == status
+            and SHA256_RE.fullmatch(receipt_selection) is not None
+            and SHA256_RE.fullmatch(cases_file_sha256) is not None
+            and FULL_GIT_SHA_RE.fullmatch(evaluation_runtime_git_sha)
+            is not None
+            and evaluation_runtime_git_sha != "0" * 40
+        )
+        if valid:
+            expected_key = _derive_calibration_replay_receipt_key(
+                selected_case_ids_sha256=receipt_selection,
+                cases_file_sha256=cases_file_sha256,
+                runtime_git_sha=evaluation_runtime_git_sha,
+            )
+            valid = (
+                receipt_key == expected_key
+                and path.name == f"{expected_key}.{status}.json"
+            )
+        if not valid:
+            raise ValueError(
+                "canonical calibration replay ledger contains an invalid "
+                "started or completed receipt"
+            )
+        if receipt_selection == selected_case_ids_sha256:
+            matching.append(path.name)
+    return matching
+
+
+def _validated_receipt_payload(path: Path, *, label: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} must be a regular file")
+    try:
+        payload = _read_json(path)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable or invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must contain a JSON object")
+    return payload
+
+
 def _derive_holdout_receipt_key(selected_case_ids_sha256: str) -> str:
     immutable_identity = {
         "domain": "rosmol-private-holdout-selection-v1",
@@ -1554,9 +1835,44 @@ def _derive_holdout_receipt_key(selected_case_ids_sha256: str) -> str:
     ).hexdigest()
 
 
+def _derive_calibration_replay_receipt_key(
+    *,
+    selected_case_ids_sha256: str,
+    cases_file_sha256: str,
+    runtime_git_sha: str,
+) -> str:
+    immutable_identity = {
+        "domain": "rosmol-exposed-holdout-calibration-replay-v1",
+        "selected_case_ids_sha256": selected_case_ids_sha256,
+        "cases_file_sha256": cases_file_sha256,
+        "runtime_git_sha": runtime_git_sha,
+    }
+    return hashlib.sha256(
+        _canonical_json(immutable_identity).encode("utf-8")
+    ).hexdigest()
+
+
 def _holdout_report_classification(
     contract: dict[str, Any],
+    *,
+    calibration_replay: bool = False,
 ) -> dict[str, Any]:
+    if calibration_replay:
+        return {
+            "review_mode": str(contract["review_mode"]),
+            "report_status": CALIBRATION_REPLAY_REPORT_STATUS,
+            "provisional": True,
+            "calibration_only": True,
+            "independent_evaluation": False,
+            "previously_exposed": True,
+            "product_verdict_eligible": False,
+            "human_product_verdict": False,
+            "measurement_disclaimer": (
+                "Calibration replay only. This previously exposed Product80 set "
+                "is not an independent holdout and cannot support a product "
+                "conversion claim."
+            ),
+        }
     review_mode = str(contract["review_mode"])
     provisional = review_mode == MODEL_ASSISTED_PRERUN_MODE
     return {
@@ -1591,29 +1907,83 @@ def _create_holdout_started_receipt(
     cases_path: Path,
     output_path: Path,
     receipt_key: str,
+    calibration_replay: bool = False,
+    evaluation_runtime_git_sha: str | None = None,
+    prior_sealed_exposure_receipts: list[str] | None = None,
 ) -> None:
-    payload = {
-        "schema_version": "1.0.0",
-        "status": "started",
-        "started_at": datetime.now(UTC).isoformat(),
-        "baseline_id": contract["baseline_id"],
-        "eval_run_id": eval_run_id,
-        "runtime_git_sha": contract["runtime_git_sha"],
-        **_holdout_report_classification(contract),
-        "freeze_contract_sha256": contract["freeze_contract_sha256"],
-        "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
-        "cases_payload_sha256": contract["cases_payload_sha256"],
-        "expected_cases_payload_sha256": contract["cases_payload_sha256"],
-        "cases_file_sha256": expected_cases_file_sha256,
-        "expected_cases_file_sha256": expected_cases_file_sha256,
-        "receipt_key": receipt_key,
-        "cases_path": str(cases_path.expanduser().resolve()),
-        "output_path": str(output_path.expanduser().resolve()),
-        "knowledge_base_identity_gate": "manual_pre_run_verification_required",
-        "one_shot_scope": (
-            "enforced_while_canonical_persistent_ledger_is_preserved"
-        ),
-    }
+    if calibration_replay:
+        if evaluation_runtime_git_sha is None:
+            raise ValueError(
+                "calibration replay receipt requires evaluation runtime SHA"
+            )
+        payload = {
+            "schema_version": "1.0.0",
+            "receipt_type": "exposed_holdout_calibration_replay",
+            "status": "started",
+            "started_at": datetime.now(UTC).isoformat(),
+            "run_mode": "calibration_replay",
+            "baseline_id": contract["baseline_id"],
+            "eval_run_id": eval_run_id,
+            "source_runtime_git_sha": contract["runtime_git_sha"],
+            "evaluation_runtime_git_sha": evaluation_runtime_git_sha,
+            **_holdout_report_classification(
+                contract,
+                calibration_replay=True,
+            ),
+            "freeze_contract_sha256": contract["freeze_contract_sha256"],
+            "selected_case_ids_sha256": contract[
+                "selected_case_ids_sha256"
+            ],
+            "cases_payload_sha256": contract["cases_payload_sha256"],
+            "expected_cases_payload_sha256": contract[
+                "cases_payload_sha256"
+            ],
+            "cases_file_sha256": expected_cases_file_sha256,
+            "expected_cases_file_sha256": expected_cases_file_sha256,
+            "receipt_key": receipt_key,
+            "cases_path": str(cases_path.expanduser().resolve()),
+            "output_path": str(output_path.expanduser().resolve()),
+            "source_holdout_contract": contract,
+            "prior_sealed_exposure_receipts": list(
+                prior_sealed_exposure_receipts or []
+            ),
+            "knowledge_base_identity_gate": (
+                "manual_pre_run_verification_required"
+            ),
+            "one_shot_scope": (
+                "one_calibration_replay_per_source_selection_file_and_runtime"
+            ),
+        }
+    else:
+        # Keep the sealed receipt v1 schema and fields byte-compatible.
+        payload = {
+            "schema_version": "1.0.0",
+            "status": "started",
+            "started_at": datetime.now(UTC).isoformat(),
+            "baseline_id": contract["baseline_id"],
+            "eval_run_id": eval_run_id,
+            "runtime_git_sha": contract["runtime_git_sha"],
+            **_holdout_report_classification(contract),
+            "freeze_contract_sha256": contract["freeze_contract_sha256"],
+            "selected_case_ids_sha256": contract[
+                "selected_case_ids_sha256"
+            ],
+            "cases_payload_sha256": contract["cases_payload_sha256"],
+            "expected_cases_payload_sha256": contract[
+                "cases_payload_sha256"
+            ],
+            "cases_file_sha256": expected_cases_file_sha256,
+            "expected_cases_file_sha256": expected_cases_file_sha256,
+            "receipt_key": receipt_key,
+            "cases_path": str(cases_path.expanduser().resolve()),
+            "output_path": str(output_path.expanduser().resolve()),
+            "knowledge_base_identity_gate": (
+                "manual_pre_run_verification_required"
+            ),
+            "one_shot_scope": (
+                "enforced_while_canonical_persistent_ledger_is_preserved"
+            ),
+        }
     _write_json_exclusive(path, payload)
 
 
@@ -1626,29 +1996,79 @@ def _create_holdout_completed_receipt(
     receipt_key: str,
     output_path: Path,
     output_sha256: str,
+    calibration_replay: bool = False,
+    evaluation_runtime_git_sha: str | None = None,
+    prior_sealed_exposure_receipts: list[str] | None = None,
 ) -> None:
-    payload = {
-        "schema_version": "1.0.0",
-        "status": "completed",
-        "completed_at": datetime.now(UTC).isoformat(),
-        "baseline_id": contract["baseline_id"],
-        "eval_run_id": eval_run_id,
-        "receipt_key": receipt_key,
-        "runtime_git_sha": contract["runtime_git_sha"],
-        **_holdout_report_classification(contract),
-        "freeze_contract_sha256": contract["freeze_contract_sha256"],
-        "selected_case_ids_sha256": contract["selected_case_ids_sha256"],
-        "cases_payload_sha256": contract["cases_payload_sha256"],
-        "expected_cases_payload_sha256": contract["cases_payload_sha256"],
-        "cases_file_sha256": expected_cases_file_sha256,
-        "expected_cases_file_sha256": expected_cases_file_sha256,
-        "output_path": str(output_path.expanduser().resolve()),
-        "output_sha256": output_sha256,
-        "cases_total": contract["cases_total"],
-        "one_shot_scope": (
-            "enforced_while_canonical_persistent_ledger_is_preserved"
-        ),
-    }
+    if calibration_replay:
+        if evaluation_runtime_git_sha is None:
+            raise ValueError(
+                "calibration replay receipt requires evaluation runtime SHA"
+            )
+        payload = {
+            "schema_version": "1.0.0",
+            "receipt_type": "exposed_holdout_calibration_replay",
+            "status": "completed",
+            "completed_at": datetime.now(UTC).isoformat(),
+            "run_mode": "calibration_replay",
+            "baseline_id": contract["baseline_id"],
+            "eval_run_id": eval_run_id,
+            "receipt_key": receipt_key,
+            "source_runtime_git_sha": contract["runtime_git_sha"],
+            "evaluation_runtime_git_sha": evaluation_runtime_git_sha,
+            **_holdout_report_classification(
+                contract,
+                calibration_replay=True,
+            ),
+            "freeze_contract_sha256": contract["freeze_contract_sha256"],
+            "selected_case_ids_sha256": contract[
+                "selected_case_ids_sha256"
+            ],
+            "cases_payload_sha256": contract["cases_payload_sha256"],
+            "expected_cases_payload_sha256": contract[
+                "cases_payload_sha256"
+            ],
+            "cases_file_sha256": expected_cases_file_sha256,
+            "expected_cases_file_sha256": expected_cases_file_sha256,
+            "output_path": str(output_path.expanduser().resolve()),
+            "output_sha256": output_sha256,
+            "cases_total": contract["cases_total"],
+            "source_holdout_contract": contract,
+            "prior_sealed_exposure_receipts": list(
+                prior_sealed_exposure_receipts or []
+            ),
+            "one_shot_scope": (
+                "one_calibration_replay_per_source_selection_file_and_runtime"
+            ),
+        }
+    else:
+        # Keep the sealed receipt v1 schema and fields byte-compatible.
+        payload = {
+            "schema_version": "1.0.0",
+            "status": "completed",
+            "completed_at": datetime.now(UTC).isoformat(),
+            "baseline_id": contract["baseline_id"],
+            "eval_run_id": eval_run_id,
+            "receipt_key": receipt_key,
+            "runtime_git_sha": contract["runtime_git_sha"],
+            **_holdout_report_classification(contract),
+            "freeze_contract_sha256": contract["freeze_contract_sha256"],
+            "selected_case_ids_sha256": contract[
+                "selected_case_ids_sha256"
+            ],
+            "cases_payload_sha256": contract["cases_payload_sha256"],
+            "expected_cases_payload_sha256": contract[
+                "cases_payload_sha256"
+            ],
+            "cases_file_sha256": expected_cases_file_sha256,
+            "expected_cases_file_sha256": expected_cases_file_sha256,
+            "output_path": str(output_path.expanduser().resolve()),
+            "output_sha256": output_sha256,
+            "cases_total": contract["cases_total"],
+            "one_shot_scope": (
+                "enforced_while_canonical_persistent_ledger_is_preserved"
+            ),
+        }
     _write_json_exclusive(path, payload)
 
 
@@ -1668,6 +2088,9 @@ async def _write_holdout_rejection_report(
     trace_lookup_error: str | None = None,
     detail: str | None = None,
     base_metrics: dict[str, Any] | None = None,
+    calibration_replay: bool = False,
+    evaluation_runtime_git_sha: str | None = None,
+    prior_sealed_exposure_receipts: list[str] | None = None,
 ) -> dict[str, Any]:
     metrics = (
         dict(base_metrics)
@@ -1680,22 +2103,38 @@ async def _write_holdout_rejection_report(
     )
     metrics["eval_run_id"] = eval_run_id
     metrics["cases_total"] = executed_cases_total
-    metrics["message"] = "sealed holdout rejected before valid completion"
-    metrics["holdout_contract"] = contract
+    metrics["message"] = (
+        "calibration replay rejected before valid completion"
+        if calibration_replay
+        else "sealed holdout rejected before valid completion"
+    )
+    if calibration_replay:
+        metrics["source_holdout_contract"] = contract
+    else:
+        metrics["holdout_contract"] = contract
     metrics["report_classification"] = _holdout_report_classification(
-        contract
+        contract,
+        calibration_replay=calibration_replay,
     )
     if trace_lookup_error:
         metrics["trace_lookup_error"] = trace_lookup_error
     if detail:
-        metrics["holdout_rejection_detail"] = detail
+        metrics[
+            "calibration_replay_rejection_detail"
+            if calibration_replay
+            else "holdout_rejection_detail"
+        ] = detail
     rejection_path = ledger_dir / (
         f"{receipt_key}.{eval_run_id}.rejected.json"
     )
-    metrics["holdout_run"] = {
+    run_key = "calibration_replay" if calibration_replay else "holdout_run"
+    metrics[run_key] = {
         "status": status,
         "completed": False,
-        **_holdout_report_classification(contract),
+        **_holdout_report_classification(
+            contract,
+            calibration_replay=calibration_replay,
+        ),
         "expected_cases_total": contract["cases_total"],
         "executed_cases_total": executed_cases_total,
         "cases_file_sha256": expected_cases_file_sha256,
@@ -1704,10 +2143,22 @@ async def _write_holdout_rejection_report(
         "started_receipt": receipt_path.name if receipt_path else None,
         "knowledge_base_identity_gate": "manual_pre_run_verification_required",
         "one_shot_scope": (
-            "enforced_while_canonical_persistent_ledger_is_preserved"
+            "one_calibration_replay_per_source_selection_file_and_runtime"
+            if calibration_replay
+            else "enforced_while_canonical_persistent_ledger_is_preserved"
         ),
         "rejection_evidence": rejection_path.name,
     }
+    if calibration_replay:
+        metrics[run_key]["source_runtime_git_sha"] = contract[
+            "runtime_git_sha"
+        ]
+        metrics[run_key]["evaluation_runtime_git_sha"] = (
+            evaluation_runtime_git_sha
+        )
+        metrics[run_key]["prior_sealed_exposure_receipts"] = list(
+            prior_sealed_exposure_receipts or []
+        )
     await asyncio.to_thread(_write_json_exclusive, rejection_path, metrics)
     return metrics
 
@@ -2772,7 +3223,18 @@ def _markdown_text(metrics: dict[str, Any]) -> str:
         "",
     ]
     report_classification = metrics.get("report_classification") or {}
-    if report_classification.get("provisional") is True:
+    if report_classification.get("calibration_only") is True:
+        lines.extend(
+            [
+                "> [!WARNING]",
+                "> CALIBRATION REPLAY OF A PREVIOUSLY EXPOSED HOLDOUT.",
+                "> This report is not an independent evaluation.",
+                "> It must not be reported as product conversion or a human "
+                "product verdict.",
+                "",
+            ]
+        )
+    elif report_classification.get("provisional") is True:
         lines.extend(
             [
                 "> [!WARNING]",
@@ -3041,18 +3503,27 @@ def main() -> None:
     parser.add_argument("--user-prefix", default="")
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--bypass-cache", action="store_true")
-    parser.add_argument(
+    private_run_group = parser.add_mutually_exclusive_group()
+    private_run_group.add_argument(
         "--sealed-holdout",
         action="store_true",
         help="Enable the one-shot sealed 80-case private holdout protocol.",
+    )
+    private_run_group.add_argument(
+        "--calibration-replay",
+        action="store_true",
+        help=(
+            "Replay an already exposed exact holdout as calibration-only "
+            "evidence without touching its sealed ledger."
+        ),
     )
     parser.add_argument(
         "--allow-model-assisted-prerun",
         action="store_true",
         help=(
-            "Allow a sealed private holdout whose pre-run labels were "
-            "model-assisted. The report remains provisional and cannot be "
-            "used as a human product verdict."
+            "Allow a sealed holdout or calibration replay whose pre-run "
+            "labels were model-assisted. The report remains provisional and "
+            "cannot be used as a human product verdict."
         ),
     )
     parser.add_argument(
@@ -3076,6 +3547,22 @@ def main() -> None:
         help=(
             "Canonical persistent private directory for one-shot holdout "
             "receipts; it must be preserved after the run."
+        ),
+    )
+    parser.add_argument(
+        "--expected-runtime-git-sha",
+        default="",
+        help=(
+            "Exact target runtime SHA required for an exposed holdout "
+            "calibration replay."
+        ),
+    )
+    parser.add_argument(
+        "--calibration-replay-ledger-dir",
+        default="",
+        help=(
+            "Canonical persistent private calibration replay receipt "
+            "directory; separate from the sealed holdout ledger."
         ),
     )
     parser.add_argument(
@@ -3131,6 +3618,15 @@ def main() -> None:
                 else None
             ),
             allow_model_assisted_prerun=args.allow_model_assisted_prerun,
+            calibration_replay=args.calibration_replay,
+            expected_runtime_git_sha=(
+                args.expected_runtime_git_sha or None
+            ),
+            calibration_replay_ledger_dir=(
+                Path(args.calibration_replay_ledger_dir)
+                if args.calibration_replay_ledger_dir
+                else None
+            ),
         )
     )
     quality_gate_failures = _quality_gate_failures(

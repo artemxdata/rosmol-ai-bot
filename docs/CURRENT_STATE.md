@@ -1189,3 +1189,48 @@ server-local через signed bypass: требуется `0/80` cache hits, р�
 precision/recall и заметном снижении citation failures; иначе выполнить ещё один системный top-20
 correction cycle. Финальные 60% доказываются только на новой human-reviewed sanity-выборке
 100–150 тикетов и затем sealed holdout не менее 400 полных тикетов.
+
+## 15. Безопасный calibration replay Product80 3 августа 2026
+
+Пользователь вручную развернул runtime
+`f29ee73f087ef5b40f446572c5ab6ac39f96a7d7`: контейнеры `app`, `app-ml` и `nginx` сообщили
+healthy, `/ready` вернул `true`. Codex к серверу не подключался. Runtime behavior, Yonote, KB seed,
+Qdrant, БД и production-конфигурация в этом tooling-этапе не менялись.
+
+Повторный запуск исходного Product80 штатным sealed/non-sealed CLI оказался корректно
+заблокирован: exact JSON привязан к исходному runtime `4c626245...`, старый sealed ledger уже
+имеет started receipt, а набор после cache contamination является только calibration evidence.
+Удалять ledger, переписывать freeze/contract или создавать второй sealed run запрещено.
+
+В `eval/run_ask.py` добавлен отдельный fail-closed режим `--calibration-replay`:
+
+- исходный holdout contract и exact file SHA остаются неизменными, а source/evaluation runtime SHA
+  записываются раздельно;
+- replay разрешается только при валидном прежнем started/completed receipt для exact source file в
+  каноническом sealed ledger; этот ledger остаётся byte-for-byte неизменным;
+- fresh/unexposed holdout нельзя запустить как calibration, а started/completed calibration receipt
+  навсегда запрещает последующую sealed-классификацию той же selection;
+- отдельный `calibration-replay-ledger-v1` связывает selection SHA, exact file SHA и evaluation
+  runtime SHA и разрешает один replay этого сочетания;
+- pre/post `/ready`, каждый `/ask`, signed bypass, изолированные user ID, `0/80` cache hits и точная
+  PostgreSQL trace cardinality остаются обязательными; любое нарушение создаёт только rejection
+  evidence;
+- JSON/Markdown явно получают статус `exposed_holdout_calibration_replay`,
+  `calibration_only=true`, `independent_evaluation=false` и `product_verdict_eligible=false`.
+
+Проверки tooling change set:
+
+- `tests/test_eval_ask.py` — `143 passed`;
+- `.venv\Scripts\ruff.exe check .` — успешно;
+- `.venv\Scripts\python.exe -m pytest` — `2069 passed, 1 skipped`;
+- `.venv\Scripts\python.exe scripts\index_kb.py --validate-only` —
+  `2186 valid / 2152 published`;
+- независимый review: P0/P1-блокеров не осталось; provenance finding calibration-first → sealed
+  закрыт отдельными двусторонними regression-тестами.
+
+Точный следующий шаг после commit/push tooling: runtime `f29ee73...` не пересобирать и не
+перезапускать. Пользователь создаёт read-only Git snapshot tooling commit и один раз запускает
+Product80 из отдельного acceptance-контейнера против уже healthy `app-ml`. Перед стартом должны
+совпасть exact JSON SHA и прежний sealed receipt; при их отсутствии выполнить `STOP`, ничего не
+восстанавливать вручную. После валидного результата сравнить behavior/routing/citation failures
+до/после. Этот replay не является независимым holdout и не доказывает конверсию.
