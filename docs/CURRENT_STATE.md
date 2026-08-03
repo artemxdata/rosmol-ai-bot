@@ -1234,3 +1234,66 @@ Product80 из отдельного acceptance-контейнера против
 совпасть exact JSON SHA и прежний sealed receipt; при их отсутствии выполнить `STOP`, ничего не
 восстанавливать вручную. После валидного результата сравнить behavior/routing/citation failures
 до/после. Этот replay не является независимым holdout и не доказывает конверсию.
+
+## 16. Диагностический correction cycle после Product80 3 августа 2026
+
+Исходная точка change set — trusted commit `8bdc21b`; release commit/push на момент записи этого
+блока ещё не выполнены. Последний подтверждённый пользователем runtime остаётся `f29ee73...`.
+Codex к серверу не подключался; сервер, HDE/VK, Yonote, KB seed, Qdrant, БД и production-конфиг
+не менялись.
+
+Приватный raw calibration report остался только на сервере. Локально разобрана allowlist-сводка
+без query/response/message/id/citations/trace content. Product80 остаётся exposed calibration, а
+не независимой оценкой:
+
+- strict intersection pass — `15/80`, но бот фактически выдал `25` ответов, `10` уточнений и
+  `45` эскалаций; `15/80` нельзя называть числом ответов или конверсией;
+- behavior match — `43/80` (`53.75%`), routing profile match — `69/80` (`86.25%`);
+- из 31 ожидаемого factual answer approved chunk наблюдался в retrieval/citation lineage у 24,
+  а ожидаемая citation — у 8; это не доказывает конкретную стадию потери source;
+- HTTP/traces — `80/80`, cache hits — `0/80`, unknown/duplicate traces и нарушения source-type
+  policy отсутствуют;
+- `33` reason mismatches включали 14 пропущенных эскалаций, ошибочно посчитанных второй раз;
+  ещё 19 exact reason mismatches и 2 forbidden-profile случая требуют human adjudication, потому
+  что pre-run labels были model-assisted.
+
+Закрытые общие дефекты:
+
+- verifier больше не заменяет пустой upstream generation failure общим
+  `missing_source_citations`; исходная причина `citation/profile/fact-binding/length` сохраняется
+  в trace и следующем safe aggregate;
+- retry prompt теперь адресно объясняет citation, response-profile, coverage и fact-binding
+  failures, включая payer/responsibility, роль, polarity, обязательность, возраст, смену и срок;
+- номера каждого пункта многострочного списка больше не считаются неподтверждёнными числовыми
+  фактами, при этом реальные числа внутри пунктов сохраняются для source binding;
+- удалены широкие operator shortcuts для общих вопросов про грантовое соглашение, записи,
+  заявку и регистрацию; status `Участие офлайн` эскалируется только при персональном lookup,
+  а общая просьба объяснить статус остаётся в RAG/clarification path;
+- eval сравнивает exact escalation reason только когда обе стороны действительно эскалировали,
+  отдельно выводит behavior confusion matrix и безопасный histogram `generate_retry.reason`;
+- добавлен `scripts/build_safe_ask_eval_summary.py`: raw report читается server-side, output
+  строится только по статическому allowlist, unknown enums/reasons, duplicate JSON keys,
+  symlink/hardlink alias и non-finite values закрываются fail-closed; файл пишется атомарно с
+  mode `0600`, CLI выводит только safe path и SHA-256.
+
+Полный source dump после LLM failure не добавлялся: mixed, multi-source и conditional chunks
+остаются fail-closed, потому что такой fallback мог бы вернуть чужой аспект или неверную ветку
+условия. Поведенческую fallback-оптимизацию разрешено делать только после нового histogram причин
+и отдельного clause-level proof.
+
+Локальный gate change set полностью зелёный:
+
+- `.venv\Scripts\ruff.exe check .` — успешно;
+- pytest выполнен детерминированными file-shards из-за зависания объединённого Windows-процесса:
+  `2094 passed, 1 skipped, 0 failed`; сумма ровно совпала с `2095 tests collected`;
+- `.venv\Scripts\python.exe scripts\index_kb.py --validate-only` —
+  `2186 valid / 2152 published`.
+
+Следующий шаг: выборочно stage только этот correction cycle, исключив `data/private/`, `tmp/`,
+research-документы и пользовательский research-hunk выше, затем проверить cached diff и создать
+release commit только из зелёного набора. После push пользователь вручную обновляет только runtime
+services до точного SHA и проверяет `/ready`; без миграций, Yonote Apply, KB indexing и изменения
+Qdrant. Следующий Product80 допускается только как calibration replay нового runtime и должен
+сразу создать safe summary. Решение о clause-level fallback принимается по
+`generate_retry_reason_counts`; спорные operator reason и forbidden-profile labels исправляются
+только после человеческой проверки, без передачи raw текстов Codex.

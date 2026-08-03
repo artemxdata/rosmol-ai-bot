@@ -1319,6 +1319,11 @@ def summarize_results(
     cited_scored = [item for item in results if item.get("expected_cited_chunk_ids")]
     answer_scored = [item for item in results if item.get("expected_answer_contains")]
     behavior_scored = [item for item in results if item.get("expected_behavior")]
+    escalation_reason_scored = [
+        item
+        for item in results
+        if item.get("escalation_reason_match") is not None
+    ]
     routing_profile_scored = [
         item
         for item in results
@@ -1368,6 +1373,11 @@ def summarize_results(
         ),
         "answer_contains_rate": _bool_rate(answer_scored, "answer_contains_match"),
         "behavior_match_rate": _bool_rate(behavior_scored, "behavior_match"),
+        "behavior_confusion_matrix": _behavior_confusion_matrix(behavior_scored),
+        "escalation_reason_match_rate": _bool_rate(
+            escalation_reason_scored,
+            "escalation_reason_match",
+        ),
         "routing_response_profile_match_rate": _bool_rate(
             routing_profile_scored,
             "routing_response_profile_match",
@@ -1407,6 +1417,13 @@ def summarize_results(
         ),
         "escalation_reason_counts": dict(
             Counter(str(item.get("escalation_reason") or "none") for item in results)
+        ),
+        "generate_retry_reason_counts": dict(
+            Counter(
+                reason
+                for item in results
+                for reason in item.get("generate_retry_reasons") or []
+            )
         ),
         "failure_reason_counts": _failure_reason_counts(results),
         "expected_behavior_counts": dict(
@@ -2405,9 +2422,9 @@ def score_case(
         )
         checks["escalation_match"] = escalation_match
         required_checks["escalation_match"] = escalation_match
-    if expected_escalation_reason:
+    if expected_escalation_reason and trace and trace.get("was_escalated") is True:
         escalation_reason_match = (
-            trace.get("escalation_reason") == expected_escalation_reason if trace else None
+            trace.get("escalation_reason") == expected_escalation_reason
         )
         checks["escalation_reason_match"] = escalation_reason_match
         required_checks["escalation_reason_match"] = escalation_reason_match
@@ -2528,6 +2545,7 @@ def score_case(
         "max_reranker_score": trace.get("max_reranker_score"),
         "trace_total_latency_ms": trace.get("total_latency_ms"),
         "llm_usage": trace.get("llm_usage") or [],
+        "generate_retry_reasons": _generate_retry_reasons(trace),
         "llm_prompt_tokens": trace.get("llm_prompt_tokens") or 0,
         "llm_completion_tokens": trace.get("llm_completion_tokens") or 0,
         "llm_total_tokens": trace.get("llm_total_tokens") or 0,
@@ -2752,6 +2770,32 @@ def _failure_reason_counts(results: list[dict[str, Any]]) -> dict[str, int]:
         for reason in item.get("failure_reasons") or []:
             counter[str(reason)] += 1
     return dict(counter)
+
+
+def _behavior_confusion_matrix(results: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    matrix: dict[str, Counter[str]] = {}
+    for item in results:
+        expected = str(item.get("expected_behavior") or "unscored")
+        observed = str(item.get("observed_behavior") or "unknown")
+        matrix.setdefault(expected, Counter())[observed] += 1
+    return {
+        expected: dict(sorted(observed.items()))
+        for expected, observed in sorted(matrix.items())
+    }
+
+
+def _generate_retry_reasons(trace: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    for event in trace.get("trace_events") or []:
+        if not isinstance(event, dict) or event.get("node") != "generate_retry":
+            continue
+        metadata = event.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        reason = str(metadata.get("reason") or "").strip()
+        if reason:
+            reasons.append(reason)
+    return reasons
 
 
 def _likely_infrastructure_failure(results: list[dict[str, Any]]) -> bool:

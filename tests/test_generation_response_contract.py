@@ -10,6 +10,7 @@ from src.graph.nodes.analyze import _fallback_analysis
 from src.graph.nodes.generate import (
     COMPLEX_RESPONSE_MAX_CHARS,
     SIMPLE_RESPONSE_MAX_CHARS,
+    _claim_fact_numbers,
     _condition_keys,
     _is_redundant_source_chunk,
     _linked_named_section_date_source,
@@ -55,6 +56,16 @@ class SequenceLLM(StubLLM):
         self.calls += 1
         self.requests.append(kwargs)
         return self.responses[self.calls - 1]
+
+
+def test_claim_fact_numbers_ignores_each_numbered_list_marker() -> None:
+    assert _claim_fact_numbers("1. Первый подтверждённый пункт\n2. Второй пункт") == set()
+
+
+def test_claim_fact_numbers_keeps_numbers_inside_numbered_list_items() -> None:
+    assert _claim_fact_numbers(
+        "1. Участники 18–35 лет\n2. Заявки принимают до 20 августа 2026 года"
+    ) == {"18", "20", "35", "2026"}
 
 
 def _source(text: str) -> ScoredChunk:

@@ -970,6 +970,7 @@ def _claim_fact_numbers(text: str) -> set[str]:
         r"^\s*(?:[-*•]\s+|\d+[.)]\s+)",
         "",
         text,
+        flags=re.MULTILINE,
     )
     return {
         str(int(value))

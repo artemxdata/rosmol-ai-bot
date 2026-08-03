@@ -71,3 +71,40 @@ def test_generator_prompt_preserves_conditional_metadata_and_citation_contract()
     assert "[src:yonote_conditional_dates]" in prompt
     assert "transport удалит их" in RESPONSE_GENERATOR_SYSTEM
     assert "Не раскрывай служебные метки." not in RESPONSE_GENERATOR_SYSTEM
+
+
+def test_generator_retry_prompt_explains_fact_binding_failure() -> None:
+    prompt = build_generator_user(
+        questions=[Question(text="Кто оплачивает проезд для наставников?")],
+        chunks=[
+            Chunk(
+                chunk_id="travel",
+                text="Проезд наставника оплачивает направляющая сторона.",
+                metadata={"source_type": "yonote"},
+            )
+        ],
+        session=None,
+        retry_reason="llm_source_fact_binding_failed",
+    )
+
+    assert "Не меняй плательщика" in prompt
+    assert "роль участника" in prompt
+    assert "Возраст, смену, дату и срок" in prompt
+
+
+def test_generator_retry_prompt_explains_profile_failure() -> None:
+    prompt = build_generator_user(
+        questions=[Question(text="Будет ли питание?")],
+        chunks=[
+            Chunk(
+                chunk_id="food",
+                text="Для участников предусмотрено питание.",
+                metadata={"source_type": "yonote"},
+            )
+        ],
+        session=None,
+        retry_reason="llm_response_profile_failed",
+    )
+
+    assert "только аспекты, которые прямо запрошены" in prompt
+    assert "Каждый запрошенный аспект сохрани" in prompt

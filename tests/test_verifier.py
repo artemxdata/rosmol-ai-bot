@@ -53,6 +53,41 @@ def test_allows_partial_source_response_only_with_explicit_missing_note() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_reason",
+    [
+        "llm_source_fact_binding_failed",
+        "llm_response_profile_failed",
+    ],
+)
+async def test_verifier_preserves_empty_upstream_generation_escalation(
+    upstream_reason: str,
+) -> None:
+    result = await verify(
+        {
+            "should_escalate": True,
+            "escalation_reason": upstream_reason,
+            "generated_response": "",
+            "generator_model": "GigaChat/GigaChat-2-Max",
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="travel",
+                    text="Проезд оплачивает участник.",
+                    metadata={},
+                    reranker_score=0.9,
+                )
+            ],
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result["verifier_triggered"] is False
+    assert "should_escalate" not in result
+    assert "escalation_reason" not in result
+    assert upstream_reason in str(result["verification"].details)
+
+
+@pytest.mark.asyncio
 async def test_verifier_rejects_unknown_source_marker() -> None:
     result = await verify(
         {

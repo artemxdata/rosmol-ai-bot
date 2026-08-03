@@ -819,6 +819,13 @@ def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:
         "generator_model": "source_chunk",
         "cache_hit": False,
         "total_latency_ms": 110,
+        "trace_events": [
+            {
+                "node": "generate_retry",
+                "latency_ms": 10,
+                "metadata": {"reason": "llm_source_citation_failed"},
+            }
+        ],
     }
 
     result = score_case(case, http_result, trace)
@@ -826,6 +833,7 @@ def test_score_case_uses_trace_for_chunk_model_and_escalation_checks() -> None:
     assert result["expected_chunk_hit"] is True
     assert result["escalation_match"] is True
     assert result["generator_model_match"] is True
+    assert result["generate_retry_reasons"] == ["llm_source_citation_failed"]
     assert result["passed"] is True
 
 
@@ -1221,6 +1229,65 @@ def test_score_case_accepts_escalate_behavior() -> None:
 
     assert result["observed_behavior"] == "escalate"
     assert result["passed"] is True
+
+
+def test_score_case_does_not_double_count_reason_when_escalation_is_missing() -> None:
+    case = _normalize_case(
+        {
+            "id": "personal-status-missed",
+            "query": "Проверь статус моей заявки",
+            "expected_behavior": "escalate",
+            "expected_escalated": True,
+            "expected_escalation_reason": "personal_status",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Статус можно посмотреть в личном кабинете.",
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(
+        case,
+        http_result,
+        {"was_escalated": False, "escalation_reason": None},
+    )
+
+    assert result["escalation_match"] is False
+    assert result["escalation_reason_match"] is None
+    assert "missing_escalation" in result["failure_reasons"]
+    assert "escalation_reason_mismatch" not in result["failure_reasons"]
+
+
+def test_score_case_compares_reason_when_both_sides_escalate() -> None:
+    case = _normalize_case(
+        {
+            "id": "personal-status-wrong-reason",
+            "query": "Проверь статус моей заявки",
+            "expected_behavior": "escalate",
+            "expected_escalated": True,
+            "expected_escalation_reason": "personal_status",
+        }
+    )
+    http_result = {
+        "http_status": 200,
+        "request_id": "11111111-1111-1111-1111-111111111111",
+        "response": "Передаю обращение специалисту.",
+        "latency_ms": 120,
+        "error": None,
+    }
+
+    result = score_case(
+        case,
+        http_result,
+        {"was_escalated": True, "escalation_reason": "insufficient_sources"},
+    )
+
+    assert result["escalation_match"] is True
+    assert result["escalation_reason_match"] is False
+    assert "escalation_reason_mismatch" in result["failure_reasons"]
 
 
 def test_score_case_can_require_masked_trace_text() -> None:
@@ -1788,6 +1855,57 @@ def test_summarize_results_counts_core_metrics() -> None:
     assert metrics["llm_estimated_cost_rub"] == 0.01
     assert metrics["failure_reason_counts"] == {"unexpected_escalation": 1}
     assert metrics["likely_infrastructure_failure"] is False
+
+
+def test_summarize_results_reports_behavior_matrix_and_retry_reasons() -> None:
+    metrics = summarize_results(
+        [
+            {
+                "passed": False,
+                "http_success": True,
+                "expected_behavior": "answer",
+                "observed_behavior": "escalate",
+                "behavior_match": False,
+                "trace_found": True,
+                "was_escalated": True,
+                "generate_retry_reasons": ["llm_source_fact_binding_failed"],
+                "llm_usage": [],
+            },
+            {
+                "passed": True,
+                "http_success": True,
+                "expected_behavior": "answer",
+                "observed_behavior": "answer",
+                "behavior_match": True,
+                "trace_found": True,
+                "was_escalated": False,
+                "generate_retry_reasons": ["llm_source_citation_failed"],
+                "llm_usage": [],
+            },
+            {
+                "passed": True,
+                "http_success": True,
+                "expected_behavior": "clarify",
+                "observed_behavior": "clarify",
+                "behavior_match": True,
+                "trace_found": True,
+                "was_escalated": False,
+                "generate_retry_reasons": [],
+                "llm_usage": [],
+            },
+        ],
+        target="http://127.0.0.1:8001/ask",
+        cases_path=Path("cases.json"),
+    )
+
+    assert metrics["behavior_confusion_matrix"] == {
+        "answer": {"answer": 1, "escalate": 1},
+        "clarify": {"clarify": 1},
+    }
+    assert metrics["generate_retry_reason_counts"] == {
+        "llm_source_fact_binding_failed": 1,
+        "llm_source_citation_failed": 1,
+    }
 
 
 def test_summarize_results_marks_likely_infrastructure_failure() -> None:

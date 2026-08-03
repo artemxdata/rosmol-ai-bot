@@ -46,11 +46,8 @@ PERSONAL_STATUS_MARKERS = (
     "статус все тот же",
     "статус всё тот же",
     "действительно ли я зарегистр",
-    "зарегистрирован на",
-    "зарегистрирована на",
     "проверить статус участия",
     "уточнить статус участия",
-    "участие офлайн",
     "могу уже покупать билеты",
     "убрать подтверждение",
     "снять подтверждение",
@@ -109,7 +106,6 @@ OPERATOR_ONLY_MARKERS = (
     "паспорт молодоости",
     "маркет молодых",
     "жареным мороженым",
-    "где можно найти записи",
     "организатор не подключился",
     "выдача удостоверений",
     "удостоверения задерж",
@@ -227,9 +223,6 @@ def operator_review_reason(text: str) -> str | None:
 def _is_personal_status_request(normalized: str) -> bool:
     if normalized in {
         "статус заявки",
-        "заявка на грант",
-        "грантовое соглашение",
-        "вопрос по грантовому конкурсу",
     }:
         return True
     if any(marker in normalized for marker in PERSONAL_STATUS_MARKERS):
@@ -238,8 +231,23 @@ def _is_personal_status_request(normalized: str) -> bool:
         marker in normalized for marker in ("прошел ли", "прошёл ли")
     ):
         return True
-    if "статус" in normalized and any(
-        marker in normalized for marker in ("участие офлайн", "в рассмотр", "покупать билет")
+    if any(
+        marker in normalized
+        for marker in (
+            "я зарегистрирован на",
+            "я зарегистрирована на",
+            "зарегистрирован ли я",
+            "зарегистрирована ли я",
+        )
+    ):
+        return True
+    if (
+        "статус" in normalized
+        and not _is_general_status_explanation(normalized)
+        and any(
+            marker in normalized
+            for marker in ("участие офлайн", "в рассмотр", "покупать билет")
+        )
     ):
         return True
     if "заяв" in normalized and "службу поддержки" in normalized and any(
@@ -300,9 +308,35 @@ def _is_personal_status_request(normalized: str) -> bool:
         )
     ):
         return True
-    if "вопрос по заявке" in normalized and len(normalized) < 120:
-        return True
     return False
+
+
+def _is_general_status_explanation(normalized: str) -> bool:
+    if not any(
+        marker in normalized
+        for marker in (
+            "что означает",
+            "что значит",
+            "как понимать",
+            "объясните статус",
+            "расшифруйте статус",
+        )
+    ):
+        return False
+    return not any(
+        marker in normalized
+        for marker in (
+            "у меня",
+            "мой статус",
+            "моя заявк",
+            "мою заявк",
+            "моей заявк",
+            "я подал",
+            "я подала",
+            "могу покупать",
+            "могу уже",
+        )
+    )
 
 
 def _is_operator_employment_request(normalized: str) -> bool:

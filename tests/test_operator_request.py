@@ -226,6 +226,39 @@ def test_operator_review_keeps_general_status_explanation_in_rag() -> None:
 @pytest.mark.parametrize(
     "text",
     [
+        "Заявка на грант",
+        "Грантовое соглашение",
+        "Вопрос по грантовому конкурсу",
+        "Что означает статус «Участие офлайн»?",
+        "Где можно найти записи мероприятия?",
+        "Вопрос по заявке на форум: какие документы нужны?",
+        "Кто может быть зарегистрирован на форум?",
+    ],
+)
+def test_operator_review_keeps_ambiguous_general_topics_in_rag(text: str) -> None:
+    assert operator_review_reason(text) is None
+
+
+def test_operator_review_still_routes_personal_offline_status_lookup() -> None:
+    text = "У меня статус «Участие офлайн». Могу уже покупать билеты?"
+
+    assert operator_review_reason(text) == "personal_status"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Я зарегистрирован на форум, но подтверждение не пришло.",
+        "Зарегистрирована ли я на смену?",
+    ],
+)
+def test_operator_review_still_routes_personal_registration_lookup(text: str) -> None:
+    assert operator_review_reason(text) == "personal_status"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "Как подать заявку на мероприятие?",
         "Можно ли исправить ответы в заявке до отправки?",
         "Где скачать сертификат участника?",

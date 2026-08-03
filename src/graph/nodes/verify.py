@@ -281,6 +281,22 @@ async def verify(state: BotState) -> dict:
     tracer = state.get("trace")
     response = state.get("generated_response") or ""
     chunks = state.get("reranked_chunks", [])
+    if state.get("should_escalate") and not response.strip():
+        upstream_reason = str(state.get("escalation_reason") or "upstream_escalation")
+        result = VerificationResult(
+            has_hallucination=False,
+            confidence=1.0,
+            details=f"Verification skipped after upstream escalation: {upstream_reason}.",
+        )
+        if tracer:
+            tracer.add(
+                "verify",
+                int((perf_counter() - started_at) * 1000),
+                skipped=True,
+                reason=upstream_reason,
+            )
+        return {"verification": result, "verifier_triggered": False}
+
     if _contradicts_present_question(response, state):
         result = VerificationResult(
             has_hallucination=True,
