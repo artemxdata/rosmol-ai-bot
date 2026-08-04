@@ -92,6 +92,30 @@ amounts, percentage difference and verdict in private or external owner evidence
 automated. Absolute variance above 10%, ambiguous attribution or missing final billing evidence
 means STOP for further paid evals until pricing/attribution is fixed and newly approved.
 
+## Local Human-Gold Quality Tooling
+
+Эти команды выполняются только на trusted workstation. Они не подключаются к серверу и не
+вызывают LLM:
+
+```powershell
+.venv\Scripts\python.exe scripts\manage_private_datasets.py inventory
+.venv\Scripts\python.exe scripts\manage_private_datasets.py validate
+.venv\Scripts\python.exe scripts\build_gold_ticket_dataset.py
+```
+
+Gold builder пишет selection, pending review queue и registry-entry только в
+`data/private/eval/gold150_sanity_v2`. Он публикует новую версию атомарно; существующий version
+directory нельзя перезаписать, вместо этого создаётся следующая immutable version. Завершение
+review и freeze разрешены только после filesystem-backed проверки sealed GoldTicket JSONL,
+selection membership, counts и hashes. Ticket-level файлы, registry и observations нельзя
+копировать в `reports/`, staging Git, Docker build context или server runtime.
+
+После human review safe stage report строится offline через `python -m eval.stage_funnel`.
+Отсутствующее evidence получает `unscored`; legacy union не считается точной attribution, а
+per-question source overlap остаётся coarse до явной claim binding. Multi-turn и неоднозначные
+graded qrels не запускаются через legacy ask projection. Подробный контракт и команды:
+`docs/human_gold_quality_workflow.md`.
+
 Interpret first-turn conversion and multi-turn resolution separately. A
 clarification keeps the user in the bot flow but does not count as a closed
 ticket until a later turn produces a grounded answer.

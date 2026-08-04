@@ -1,0 +1,40 @@
+{
+  "schema_version": "gold150-sampling.v1",
+  "dataset_id": "gold150_sanity",
+  "dataset_version": "v2",
+  "registry_created_at": "2026-08-04T00:00:00+00:00",
+  "purpose": "sanity_calibration",
+  "source_split": "calibration",
+  "measurement_unit": "full_ticket",
+  "target_total": 150,
+  "traffic_target": 100,
+  "risk_target": 50,
+  "traffic_strata": [
+    "expected_response_profile",
+    "expected_route"
+  ],
+  "risk_slot_quotas": {
+    "multi_turn": 15,
+    "time_sensitive": 10,
+    "critical_profile": 10,
+    "operator_route": 10,
+    "role_review_required": 5
+  },
+  "critical_profiles": [
+    "dates",
+    "application",
+    "selection_status",
+    "travel",
+    "eligibility",
+    "documents"
+  ],
+  "stable_rank_namespace": "rosmol-gold150-sanity-v2",
+  "operator_answers_used_as_facts": false,
+  "weak_labels_are_sampling_hints_only": true,
+  "review_policy": {
+    "primary_human_review_required": true,
+    "dual_review_all_critical": true,
+    "deterministic_secondary_audit_fraction": 0.25,
+    "adjudication_required_on_disagreement": true
+  }
+}

@@ -14,6 +14,11 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.config import get_settings
 
+PIPELINE_LINEAGE_SCHEMA_VERSION = "question-pipeline-provenance-v1"
+LINEAGE_STAGES = frozenset(
+    {"retrieve", "rerank", "source_selection", "citation", "verify"}
+)
+
 
 def build_trace_failure_report(
     *,
@@ -30,6 +35,9 @@ def build_trace_failure_report(
         rows.append(_build_row(result, trace))
 
     loss_stage_counts = Counter(row["loss_stage"] for row in rows)
+    attribution_confidence_counts = Counter(
+        row["attribution_confidence"] for row in rows
+    )
     analysis_category_counts = Counter(row["analysis"]["category"] for row in rows)
     analysis_forum_counts = Counter(row["analysis"]["forum_normalized"] for row in rows)
     return {
@@ -38,6 +46,7 @@ def build_trace_failure_report(
         "cases_total": metrics.get("cases_total"),
         "failed_cases": len(rows),
         "loss_stage_counts": dict(loss_stage_counts),
+        "attribution_confidence_counts": dict(attribution_confidence_counts),
         "analysis_category_counts": dict(analysis_category_counts),
         "analysis_forum_counts": dict(analysis_forum_counts),
         "rows": rows,
@@ -65,6 +74,7 @@ def write_markdown(report: dict[str, Any], output_path: Path) -> None:
         for row in rows[:200]:
             lines.append(
                 f"- `{row['loss_stage']}` case=`{row['case_id']}` "
+                f"attribution=`{row['attribution_confidence']}` "
                 f"expected=`{', '.join(row['expected_chunk_ids'])}` "
                 f"cited=`{', '.join(row['cited_source_ids'])}` "
                 f"observed_rank=`{row['expected_observed_ranks']}` "
@@ -91,7 +101,7 @@ async def fetch_traces(request_ids: list[str], dsn: str) -> dict[str, dict[str, 
                 metadata_filter,
                 retrieved_chunks,
                 reranker_scores,
-                cited_sources,
+                cited_sources, trace_events,
                 was_escalated,
                 escalation_reason,
                 generator_model
@@ -110,23 +120,82 @@ def _build_row(result: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
         result.get("expected_cited_chunk_ids") or result.get("expected_chunk_ids")
     )
     observed_ids = _string_list(result.get("observed_chunk_ids"))
-    cited_ids = _string_list(result.get("cited_source_ids") or trace.get("cited_sources"))
-    reranked_ids = _chunk_ids(trace.get("reranker_scores"))
+    stage_available = _validated_lineage_stages(result)
+    retrieved_available = stage_available["retrieve"]
+    reranked_available = stage_available["rerank"]
+    selected_available = stage_available["source_selection"]
+    citation_available = stage_available["citation"]
+    verify_available = stage_available["verify"]
+    cited_ids = (
+        _string_list(result.get("cited_source_ids") or trace.get("cited_sources"))
+        if citation_available
+        else []
+    )
+    retrieved_ids = _string_list(result.get("retrieved_chunk_ids"))
+    if retrieved_available and not retrieved_ids and "retrieved_chunk_ids" not in result:
+        retrieved_ids = _chunk_ids(trace.get("retrieved_chunks"))
+    reranked_ids = _string_list(result.get("reranked_chunk_ids"))
+    if reranked_available and not reranked_ids and "reranked_chunk_ids" not in result:
+        reranked_ids = _chunk_ids(trace.get("reranker_scores"))
+    generate_event = _trace_event_metadata(trace, "generate_selection")
+    verify_event = _trace_event_metadata(trace, "verify_decision")
+    selected_ids = (
+        _string_list(
+            result.get("selected_source_ids")
+            or generate_event.get("selected_source_ids")
+        )
+        if selected_available
+        else []
+    )
+    verification_ids = (
+        _string_list(
+            result.get("verification_source_ids")
+            or verify_event.get("referenced_source_ids")
+        )
+        if verify_available
+        else []
+    )
+    verification_decision = (
+        str(result.get("verification_decision") or verify_event.get("decision") or "")
+        if verify_available
+        else ""
+    )
     failure_reasons = _string_list(result.get("failure_reasons"))
+    attribution_confidence = _attribution_confidence(
+        retrieved_available=retrieved_available,
+        reranked_available=reranked_available,
+        selected_available=selected_available,
+        citation_available=citation_available,
+        verify_available=verify_available,
+    )
     return {
         "case_id": str(result.get("id") or ""),
         "request_id": str(result.get("request_id") or ""),
         "failure_reasons": failure_reasons,
+        "attribution_confidence": attribution_confidence,
         "loss_stage": _loss_stage(
             expected_ids=expected_ids,
-            observed_ids=observed_ids,
+            retrieved_ids=retrieved_ids,
             reranked_ids=reranked_ids,
+            selected_ids=selected_ids,
             cited_ids=cited_ids,
+            verification_decision=verification_decision,
+            retrieved_available=retrieved_available,
+            reranked_available=reranked_available,
+            selected_available=selected_available,
+            citation_available=citation_available,
+            verify_available=verify_available,
         ),
         "expected_chunk_ids": expected_ids,
+        "retrieved_chunk_ids": retrieved_ids,
+        "selected_source_ids": selected_ids,
         "cited_source_ids": cited_ids,
         "expected_observed_ranks": _ranks(expected_ids, observed_ids),
+        "expected_retrieved_ranks": _ranks(expected_ids, retrieved_ids),
         "expected_reranked_ranks": _ranks(expected_ids, reranked_ids),
+        "expected_selected_ranks": _ranks(expected_ids, selected_ids),
+        "verification_source_ids": verification_ids,
+        "verification_decision": verification_decision,
         "reranked_top_ids": reranked_ids[:8],
         "observed_count": len(observed_ids),
         "reranked_count": len(reranked_ids),
@@ -143,19 +212,137 @@ def _build_row(result: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
 def _loss_stage(
     *,
     expected_ids: list[str],
-    observed_ids: list[str],
+    retrieved_ids: list[str],
     reranked_ids: list[str],
+    selected_ids: list[str],
     cited_ids: list[str],
+    verification_decision: str,
+    retrieved_available: bool,
+    reranked_available: bool,
+    selected_available: bool,
+    citation_available: bool,
+    verify_available: bool,
 ) -> str:
     if not expected_ids:
         return "no_expected_label"
-    if any(chunk_id not in observed_ids for chunk_id in expected_ids):
+    if not any(
+        (
+            retrieved_available,
+            reranked_available,
+            selected_available,
+            citation_available,
+            verify_available,
+        )
+    ):
+        return "legacy_coarse"
+    if not retrieved_available:
+        return "partial_lineage"
+    if any(chunk_id not in retrieved_ids for chunk_id in expected_ids):
         return "retrieval"
-    if reranked_ids and any(chunk_id not in reranked_ids for chunk_id in expected_ids):
+    if not reranked_available:
+        return "partial_lineage"
+    if any(chunk_id not in reranked_ids for chunk_id in expected_ids):
         return "rerank"
+    if not selected_available:
+        return "partial_lineage"
+    if any(chunk_id not in selected_ids for chunk_id in expected_ids):
+        return "source_selection"
+    if not citation_available:
+        return "partial_lineage"
     if any(chunk_id not in cited_ids for chunk_id in expected_ids):
-        return "generate_or_verify"
+        return "citation_binding"
+    if not verify_available:
+        return "partial_lineage"
+    if verify_available and verification_decision not in {"", "pass", "partial"}:
+        return "verify"
     return "other_failure"
+
+
+def _attribution_confidence(
+    *,
+    retrieved_available: bool,
+    reranked_available: bool,
+    selected_available: bool,
+    citation_available: bool,
+    verify_available: bool,
+) -> str:
+    available = (
+        retrieved_available,
+        reranked_available,
+        selected_available,
+        citation_available,
+        verify_available,
+    )
+    if all(available):
+        return "exact"
+    if any(available):
+        return "partial"
+    return "legacy_coarse"
+
+
+def _validated_lineage_stages(result: dict[str, Any]) -> dict[str, bool]:
+    unavailable = {stage: False for stage in LINEAGE_STAGES}
+    if result.get("lineage_schema_version") != PIPELINE_LINEAGE_SCHEMA_VERSION:
+        return unavailable
+    attribution = result.get("lineage_attribution")
+    if attribution not in {"exact", "partial"}:
+        return unavailable
+    value = result.get("lineage_stage_available")
+    if not isinstance(value, dict) or set(value) != LINEAGE_STAGES:
+        return unavailable
+    if any(type(available) is not bool for available in value.values()):
+        return unavailable
+    expected_attribution = "exact" if all(value.values()) else "partial"
+    if attribution != expected_attribution:
+        return unavailable
+    evidence_fields = {
+        "retrieve": ("retrieved_chunk_ids",),
+        "rerank": ("reranked_chunk_ids",),
+        "source_selection": ("selected_source_ids",),
+        "citation": ("ordered_cited_source_ids", "cited_source_ids"),
+        "verify": ("verification_source_ids",),
+    }
+    if any(
+        available and not _has_ordered_evidence(result, evidence_fields[stage])
+        for stage, available in value.items()
+    ):
+        return unavailable
+    if value["verify"] and result.get("verification_decision") not in {
+        "pass",
+        "partial",
+        "escalate",
+        "reject",
+    }:
+        return unavailable
+    return dict(value)
+
+
+def _has_ordered_evidence(result: dict[str, Any], fields: tuple[str, ...]) -> bool:
+    for field in fields:
+        if field not in result:
+            continue
+        evidence = result[field]
+        return isinstance(evidence, (list, tuple)) and all(
+            isinstance(item, str) and bool(item.strip()) for item in evidence
+        )
+    return False
+
+
+def _trace_event_metadata(trace: dict[str, Any], node: str) -> dict[str, Any]:
+    events = _jsonish(trace.get("trace_events"))
+    if not isinstance(events, list):
+        return {}
+    for event in reversed(events):
+        if not isinstance(event, dict) or event.get("node") != node:
+            continue
+        metadata = event.get("metadata")
+        if (
+            isinstance(metadata, dict)
+            and metadata.get("schema_version") == PIPELINE_LINEAGE_SCHEMA_VERSION
+        ):
+            return metadata
+        return {}
+    return {}
 
 
 def _safe_analysis(value: Any) -> dict[str, Any]:

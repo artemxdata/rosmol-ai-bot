@@ -4,6 +4,13 @@ import re
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.provenance import (
+    MAX_PROVENANCE_SOURCE_IDS,
+    PROVENANCE_SCHEMA_VERSION,
+    bounded_id_sequence,
+    safe_reason,
+    truncation_counts,
+)
 from src.graph.question_utils import (
     ADDITIONAL_FALLBACK_QUESTION_MARKERS,
     FALLBACK_QUESTION_MARKERS,
@@ -277,6 +284,17 @@ SENSITIVE_DATA_REQUEST_RE = re.compile(
 
 
 async def verify(state: BotState) -> dict:
+    started_at = perf_counter()
+    result = await _verify_core(state)
+    _trace_verify_decision(
+        state,
+        result,
+        latency_ms=int((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+async def _verify_core(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     response = state.get("generated_response") or ""
@@ -564,6 +582,112 @@ async def verify(state: BotState) -> dict:
     if tracer:
         tracer.add("verify", int((perf_counter() - started_at) * 1000), judge=True)
     return {"verification": result, "verifier_triggered": True}
+
+
+def _trace_verify_decision(
+    state: BotState,
+    result: dict,
+    *,
+    latency_ms: int,
+) -> None:
+    tracer = state.get("trace")
+    if not tracer:
+        return
+    verification = result.get("verification")
+    has_hallucination = bool(getattr(verification, "has_hallucination", False))
+    if "should_escalate" in result:
+        should_escalate = bool(result.get("should_escalate"))
+    else:
+        should_escalate = bool(state.get("should_escalate"))
+    partial = bool(
+        result.get("partial_source_missing_coverage")
+        or state.get("partial_source_missing_coverage")
+    )
+    if has_hallucination:
+        decision = "reject"
+        reason = safe_reason(
+            result.get("escalation_reason"),
+            default="hallucination_detected",
+        )
+    elif should_escalate:
+        decision = "escalate"
+        reason = safe_reason(
+            result.get("escalation_reason") or state.get("escalation_reason"),
+            default="upstream_escalation",
+        )
+    elif partial:
+        decision = "partial"
+        reason = "partial_source_coverage"
+    else:
+        decision = "pass"
+        reason = "passed"
+
+    chunks = state.get("reranked_chunks", [])
+    known_source_ids = {str(chunk.chunk_id) for chunk in chunks if chunk.chunk_id}
+    original_response = str(state.get("generated_response") or "")
+    result_has_response = "generated_response" in result
+    response = str(
+        result.get("generated_response") if result_has_response else original_response
+    )
+    response_changed = result_has_response and response != original_response
+    inline_candidates = SOURCE_RE.findall(response)
+    explicit_candidates = [
+        chunk_id
+        for chunk_id in inline_candidates
+        if chunk_id in known_source_ids
+    ]
+    if inline_candidates:
+        candidates = explicit_candidates
+        reference_scope = (
+            "actual_response_explicit"
+            if explicit_candidates
+            else "actual_response_unknown_reference"
+        )
+    elif not response_changed:
+        candidates = [
+            str(value)
+            for value in state.get("cited_sources", [])
+            if str(value) in known_source_ids
+        ]
+        reference_scope = (
+            "inherited_state_coarse" if candidates else "actual_response_unreferenced"
+        )
+    else:
+        candidates = []
+        reference_scope = "actual_response_unreferenced"
+    referenced_source_ids, referenced_total = bounded_id_sequence(
+        candidates,
+        limit=MAX_PROVENANCE_SOURCE_IDS,
+    )
+
+    candidate_uncovered_question_ids: list[str] = []
+    for event in reversed(tracer.events):
+        if event.node != "generate_selection":
+            continue
+        value = event.metadata.get("candidate_uncovered_question_ids")
+        if isinstance(value, list):
+            candidate_uncovered_question_ids = [
+                item
+                for item in value
+                if isinstance(item, str) and re.fullmatch(r"q[1-9][0-9]*", item)
+            ]
+        break
+    tracer.add(
+        "verify_decision",
+        latency_ms,
+        schema_version=PROVENANCE_SCHEMA_VERSION,
+        decision=decision,
+        reason=reason,
+        referenced_source_ids=referenced_source_ids,
+        **truncation_counts(
+            total=referenced_total,
+            recorded=len(referenced_source_ids),
+            label="referenced_source_ids",
+        ),
+        reference_scope=reference_scope,
+        candidate_uncovered_question_ids=candidate_uncovered_question_ids,
+        verifier_triggered=bool(result.get("verifier_triggered")),
+    )
 
 
 def _contradicts_present_question(response: str, state: BotState) -> bool:

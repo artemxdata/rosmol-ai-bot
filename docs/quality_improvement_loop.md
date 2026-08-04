@@ -143,3 +143,18 @@ production KB автономно.
 - Массовые HDE-тесты через боевой канал.
 
 Эти ограничения нужны, чтобы не получить быстрый рост качества ценой риска для production и источников данных.
+
+## Human Gold и stage funnel
+
+Для новых системных циклов используется `GoldTicket v1` из
+`docs/human_gold_quality_workflow.md`. Weak labels выбирают кандидатов, но не оценивают продукт.
+Human review подтверждает полный тикет, action, aspect/constraints, claims и published Yonote
+qrels. Gold150 — calibration sanity; независимая конверсия по нему не заявляется.
+
+Каждый observation report обязан сохранять отдельные ordered stages. Legacy union разрешён только
+для coarse-аудита. Глобальный source selection может быть exact, но per-question candidate overlap
+не считается фактической claim binding. Multi-turn и graded source alternatives оцениваются
+canonical GoldTicket scorer, а не несовместимой legacy-проекцией. Offline `eval.stage_funnel`
+определяет первый доказуемый loss stage; отсутствие versioned telemetry или human verdict
+считается `unscored`. Платный targeted eval запускается только после этого отчёта и одной
+проверяемой гипотезы, в пределах D-036.

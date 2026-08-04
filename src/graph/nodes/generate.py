@@ -5,6 +5,14 @@ from time import perf_counter
 
 from src.config import get_settings
 from src.graph.nodes.respond import normalize_final_response
+from src.graph.provenance import (
+    MAX_PROVENANCE_SOURCE_IDS,
+    PROVENANCE_SCHEMA_VERSION,
+    bounded_id_sequence,
+    safe_reason,
+    source_selection_provenance,
+    truncation_counts,
+)
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import (
     FALLBACK_QUESTION_MARKERS,
@@ -192,7 +200,14 @@ APPLICATION_RESPONSE_TOPIC_FAMILIES = frozenset(
 
 async def generate(state: BotState) -> dict:
     result = await _generate_core(state)
-    return await _enforce_generation_contract(state, result)
+    selected_source_ids = _known_source_ids(
+        state,
+        result.get("_selected_source_ids") or result.get("cited_sources"),
+    )
+    guarded = await _enforce_generation_contract(state, result)
+    guarded = _without_internal_generation_markers(guarded)
+    _trace_generation_selection(state, guarded, selected_source_ids)
+    return guarded
 
 
 async def _generate_core(state: BotState) -> dict:
@@ -586,7 +601,7 @@ async def _generate_with_llm_or_source_fallback(
             )
         )
         if not result.get("should_escalate") and not invalid_coverage:
-            return result
+            return _with_selected_source_ids(result, source_chunks)
         retry_reason = (
             str(result.get("escalation_reason") or "")
             or "llm_source_coverage_failed"
@@ -601,9 +616,12 @@ async def _generate_with_llm_or_source_fallback(
                 )
             continue
 
-    return _generation_contract_failure(
-        last_result,
-        reason=retry_reason or "llm_response_contract_failed",
+    return _with_selected_source_ids(
+        _generation_contract_failure(
+            last_result,
+            reason=retry_reason or "llm_response_contract_failed",
+        ),
+        source_chunks,
     )
 
 
@@ -649,11 +667,106 @@ def _generation_contract_failure(result: dict, *, reason: str) -> dict:
 
 
 def _without_internal_generation_markers(result: dict) -> dict:
-    if "_llm_synthesis_attempted" not in result:
+    if not ({"_llm_synthesis_attempted", "_selected_source_ids"} & result.keys()):
         return result
     cleaned = dict(result)
     cleaned.pop("_llm_synthesis_attempted", None)
+    cleaned.pop("_selected_source_ids", None)
     return cleaned
+
+
+def _with_selected_source_ids(result: dict, chunks: list[ScoredChunk]) -> dict:
+    enriched = dict(result)
+    enriched["_selected_source_ids"] = [
+        str(chunk.chunk_id) for chunk in chunks if chunk.chunk_id
+    ]
+    return enriched
+
+
+def _known_source_ids(state: BotState, values: object) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        return []
+    known = {
+        str(chunk.chunk_id)
+        for chunk in state.get("reranked_chunks", [])
+        if chunk.chunk_id
+    }
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        chunk_id = str(value or "").strip()
+        if not chunk_id or chunk_id not in known or chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        result.append(chunk_id)
+    return result
+
+
+def _trace_generation_selection(
+    state: BotState,
+    result: dict,
+    selected_source_ids: list[str],
+) -> None:
+    tracer = state.get("trace")
+    if not tracer:
+        return
+    cited_source_ids = _known_source_ids(state, result.get("cited_sources"))
+    bounded_selected_source_ids, selected_total = bounded_id_sequence(
+        selected_source_ids,
+        limit=MAX_PROVENANCE_SOURCE_IDS,
+    )
+    bounded_cited_source_ids, cited_total = bounded_id_sequence(
+        cited_source_ids,
+        limit=MAX_PROVENANCE_SOURCE_IDS,
+    )
+    question_source_overlaps, candidate_uncovered_question_ids, overlap_counts = (
+        source_selection_provenance(
+            state.get("retrieval_provenance"),
+            selected_source_ids,
+        )
+    )
+    if result.get("should_escalate"):
+        contract_status = "failed"
+        reason = safe_reason(
+            result.get("escalation_reason"),
+            default="generation_failed",
+        )
+    elif result.get("partial_source_missing_coverage"):
+        contract_status = "partial"
+        reason = "partial_source_coverage"
+    else:
+        contract_status = "passed"
+        reason = "passed"
+    mode = "unknown"
+    for event in reversed(tracer.events):
+        if event.node != "generate":
+            continue
+        mode = safe_reason(event.metadata.get("mode"), default="unknown")
+        break
+    tracer.add(
+        "generate_selection",
+        0,
+        schema_version=PROVENANCE_SCHEMA_VERSION,
+        mode=mode,
+        selected_source_ids=bounded_selected_source_ids,
+        **truncation_counts(
+            total=selected_total,
+            recorded=len(bounded_selected_source_ids),
+            label="selected_source_ids",
+        ),
+        cited_source_ids=bounded_cited_source_ids,
+        **truncation_counts(
+            total=cited_total,
+            recorded=len(bounded_cited_source_ids),
+            label="cited_source_ids",
+        ),
+        selection_binding_scope="global_exact_question_unattributed",
+        question_source_overlaps=question_source_overlaps,
+        candidate_uncovered_question_ids=candidate_uncovered_question_ids,
+        **overlap_counts,
+        contract_status=contract_status,
+        reason=reason,
+    )
 
 
 def _response_signals_insufficient_sources(response: str) -> bool:

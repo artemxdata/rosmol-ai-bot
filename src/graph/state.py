@@ -26,7 +26,9 @@ class BotState(TypedDict, total=False):
     analyzer_fallback: bool
     metadata_filter: dict[str, Any]
     retrieved_chunks: list[Chunk]
+    retrieval_provenance: list[dict[str, Any]]
     reranked_chunks: list[ScoredChunk]
+    rerank_provenance: list[dict[str, Any]]
     max_confidence: float
     generated_response: str
     response_guard: str

@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any
 
 from src.config import get_settings
+from src.graph.provenance import rerank_question_provenance
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.response_profiles import (
@@ -152,6 +153,10 @@ async def rerank(state: BotState) -> dict:
         await _unload_model_owner(state.get("embedder"))
 
     if not chunks:
+        question_provenance = rerank_question_provenance(
+            state.get("retrieval_provenance"),
+            [],
+        )
         if tracer:
             tracer.add(
                 "rerank",
@@ -159,9 +164,11 @@ async def rerank(state: BotState) -> dict:
                 max_confidence=0.0,
                 confidence_source="none",
                 rejected_non_yonote_chunks=rejected_source_chunks,
+                question_provenance=question_provenance,
             )
         return {
             "reranked_chunks": [],
+            "rerank_provenance": question_provenance,
             "max_confidence": 0.0,
             "should_escalate": True,
             "escalation_reason": "no_relevant_chunks",
@@ -199,28 +206,44 @@ async def rerank(state: BotState) -> dict:
         if _should_unload_model(settings, "ml_unload_reranker_after_use"):
             await _unload_model_owner(state.get("reranker"))
 
-    max_confidence = max((chunk.reranker_score for chunk in reranked), default=0.0)
+    raw_reranker_max = max((chunk.reranker_score for chunk in reranked), default=0.0)
+    max_confidence = raw_reranker_max
     confidence_source = "reranker"
     retrieval_confidence_floor = _retrieval_confidence_floor(state, chunks)
     if retrieval_confidence_floor > max_confidence:
         max_confidence = retrieval_confidence_floor
         confidence_source = "retrieval_exact_filter"
+    question_provenance = rerank_question_provenance(
+        state.get("retrieval_provenance"),
+        reranked,
+    )
     if tracer:
         tracer.add(
             "rerank",
             int((perf_counter() - started_at) * 1000),
             max_confidence=max_confidence,
             confidence_source=confidence_source,
+            confidence_components={
+                "raw_reranker_max": raw_reranker_max,
+                "retrieval_exact_filter_floor": retrieval_confidence_floor,
+                "decision_confidence": max_confidence,
+            },
             rejected_non_yonote_chunks=rejected_source_chunks,
+            question_provenance=question_provenance,
         )
     if max_confidence <= 0:
         return {
             "reranked_chunks": reranked,
+            "rerank_provenance": question_provenance,
             "max_confidence": max_confidence,
             "should_escalate": True,
             "escalation_reason": "no_relevant_chunks",
         }
-    result = {"reranked_chunks": reranked, "max_confidence": max_confidence}
+    result = {
+        "reranked_chunks": reranked,
+        "rerank_provenance": question_provenance,
+        "max_confidence": max_confidence,
+    }
     if max_confidence < get_settings().reranker_threshold_low:
         result.update({"should_escalate": True, "escalation_reason": "low_confidence"})
     return result

@@ -81,7 +81,10 @@ FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 SAFE_BASELINE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 SAFE_COST_APPROVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}")
+SAFE_GOLD_TICKET_HASH_RE = re.compile(r"[0-9a-f]{12,64}")
+SAFE_GOLD_STEP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}")
 HOLDOUT_MARKER_RE = re.compile(r"(?:^|[:_./-])holdout(?:$|[:_./-])")
+PIPELINE_LINEAGE_SCHEMA_VERSION = "question-pipeline-provenance-v1"
 
 FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
     r"(ответ[а]?[^.!?]{0,120}\s+в\s+источник(?:е|ах)\s+нет|"
@@ -217,6 +220,14 @@ def _normalize_case(
     privacy_class = str(raw.get("privacy_class") or "standard").strip().casefold()
     split = str(raw.get("split") or "").strip().casefold()
     tags = _string_list(raw.get("tags") or [])
+    gold_ticket_case = "gold_ticket:v1" in {tag.casefold() for tag in tags}
+    gold_ticket_id_hash = str(raw.get("ticket_id_hash") or "").strip()
+    gold_step_id = str(raw.get("step_id") or "").strip()
+    if gold_ticket_case:
+        if SAFE_GOLD_TICKET_HASH_RE.fullmatch(gold_ticket_id_hash) is None:
+            raise ValueError("GoldTicket eval case requires a safe ticket_id_hash")
+        if SAFE_GOLD_STEP_ID_RE.fullmatch(gold_step_id) is None:
+            raise ValueError("GoldTicket eval case requires a safe step_id")
     user_id = str(raw.get("user_id") or "ask-eval")
     if privacy_class not in ALLOWED_PRIVACY_CLASSES:
         raise ValueError(
@@ -375,6 +386,9 @@ def _normalize_case(
     }
     if split:
         normalized["split"] = split
+    if gold_ticket_case:
+        normalized["ticket_id_hash"] = gold_ticket_id_hash
+        normalized["step_id"] = gold_step_id
     if holdout_contract is not None:
         normalized["holdout_contract"] = holdout_contract
     return normalized
@@ -2797,6 +2811,7 @@ def score_case(
     trace = trace or {}
 
     observed_chunk_ids = _collect_trace_chunk_ids(trace)
+    pipeline_lineage = _pipeline_lineage(trace)
     expected_chunk_ids = case.get("expected_chunk_ids") or []
     expected_cited_chunk_ids = case.get("expected_cited_chunk_ids") or []
     equivalent_chunk_ids = case.get("equivalent_chunk_ids") or {}
@@ -2972,6 +2987,8 @@ def score_case(
 
     return {
         "id": case["id"],
+        "ticket_id_hash": case.get("ticket_id_hash"),
+        "step_id": case.get("step_id"),
         "query": case["query"],
         "tags": case.get("tags", []),
         "request_id": http_result.get("request_id"),
@@ -2984,6 +3001,8 @@ def score_case(
         "expected_chunk_ids": expected_chunk_ids,
         "equivalent_chunk_ids": equivalent_chunk_ids,
         "observed_chunk_ids": sorted(observed_chunk_ids),
+        "observed_chunk_ids_scope": "union_retrieved_reranked_cited_legacy",
+        **pipeline_lineage,
         "expected_chunk_hit": checks.get("expected_chunk_hit"),
         "expected_or_equivalent_chunk_hit": checks.get("expected_or_equivalent_chunk_hit"),
         "missing_expected_chunk_ids": missing_expected_chunk_ids,
@@ -3579,6 +3598,303 @@ def _collect_trace_chunk_ids(trace: dict[str, Any]) -> set[str]:
             if chunk_id:
                 chunk_ids.add(str(chunk_id))
     return chunk_ids
+
+
+def _pipeline_lineage(trace: dict[str, Any]) -> dict[str, Any]:
+    retrieve_event = _latest_trace_event_metadata(trace, "retrieve")
+    rerank_event = _latest_trace_event_metadata(trace, "rerank")
+    generate_event = _latest_trace_event_metadata(trace, "generate_selection")
+    verify_event = _latest_trace_event_metadata(trace, "verify_decision")
+    retrieve_available = _valid_question_provenance_event(
+        retrieve_event,
+        stage="retrieve",
+    )
+    rerank_available = _valid_question_provenance_event(
+        rerank_event,
+        stage="rerank",
+    )
+    generate_available = _valid_generate_provenance_event(generate_event)
+    verify_available = _valid_verify_provenance_event(verify_event)
+    stage_available = {
+        "retrieve": retrieve_available,
+        "rerank": rerank_available,
+        "source_selection": generate_available,
+        "citation": _valid_citation_trace(trace),
+        "verify": verify_available,
+    }
+    provenance_available = (
+        retrieve_available,
+        rerank_available,
+        generate_available,
+        verify_available,
+    )
+    if all(stage_available.values()):
+        attribution = "exact"
+    elif any(provenance_available):
+        attribution = "partial"
+    else:
+        attribution = "legacy_coarse"
+    schema_version = (
+        PIPELINE_LINEAGE_SCHEMA_VERSION
+        if any(provenance_available)
+        else "legacy-union-v1"
+    )
+    return {
+        "lineage_schema_version": schema_version,
+        "lineage_attribution": attribution,
+        "lineage_stage_available": stage_available,
+        "retrieved_chunk_ids": _ordered_trace_chunk_ids(trace, "retrieved_chunks"),
+        "reranked_chunk_ids": _ordered_trace_chunk_ids(trace, "reranker_scores"),
+        "selected_source_ids": _ordered_string_ids(
+            generate_event.get("selected_source_ids") if generate_available else None
+        ),
+        "ordered_cited_source_ids": _ordered_string_ids(trace.get("cited_sources")),
+        "verification_source_ids": _ordered_string_ids(
+            verify_event.get("referenced_source_ids") if verify_available else None
+        ),
+        "question_lineage": _question_lineage(
+            retrieve_event=retrieve_event if retrieve_available else {},
+            rerank_event=rerank_event if rerank_available else {},
+            generate_event=generate_event if generate_available else {},
+        ),
+        "generation_mode": _safe_trace_label(generate_event.get("mode"))
+        if generate_available
+        else None,
+        "generation_contract_status": _safe_trace_label(
+            generate_event.get("contract_status")
+        )
+        if generate_available
+        else None,
+        "generation_contract_reason": _safe_trace_label(
+            generate_event.get("reason")
+        )
+        if generate_available
+        else None,
+        "verification_decision": _safe_trace_label(verify_event.get("decision"))
+        if verify_available
+        else None,
+        "verification_reason": _safe_trace_label(verify_event.get("reason"))
+        if verify_available
+        else None,
+        "rerank_confidence_source": _safe_trace_label(
+            rerank_event.get("confidence_source")
+        ),
+        "rerank_confidence_components": _numeric_trace_mapping(
+            rerank_event.get("confidence_components")
+        ),
+        "pipeline_node_sequence": _trace_node_sequence(trace),
+    }
+
+
+def _valid_question_provenance_event(
+    metadata: dict[str, Any],
+    *,
+    stage: str,
+) -> bool:
+    rows = metadata.get("question_provenance")
+    if not isinstance(rows, list):
+        return False
+    if not rows:
+        return metadata.get("schema_version") == PIPELINE_LINEAGE_SCHEMA_VERSION
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        if row.get("schema_version") != PIPELINE_LINEAGE_SCHEMA_VERSION:
+            return False
+        question_id = str(row.get("question_id") or "")
+        if not (question_id == "shared" or re.fullmatch(r"q[1-9][0-9]*", question_id)):
+            return False
+        if stage == "retrieve":
+            if not _is_ordered_id_array(row.get("retrieved_chunk_ids")):
+                return False
+        elif stage == "rerank":
+            output_chunks = row.get("output_chunks")
+            if not isinstance(output_chunks, list) or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("chunk_id"), str)
+                or not item["chunk_id"].strip()
+                for item in output_chunks
+            ):
+                return False
+        else:
+            return False
+    return True
+
+
+def _valid_generate_provenance_event(metadata: dict[str, Any]) -> bool:
+    if metadata.get("schema_version") != PIPELINE_LINEAGE_SCHEMA_VERSION:
+        return False
+    if not _is_ordered_id_array(metadata.get("selected_source_ids")):
+        return False
+    return _safe_trace_label(metadata.get("contract_status")) in {
+        "passed",
+        "partial",
+        "failed",
+    }
+
+
+def _valid_verify_provenance_event(metadata: dict[str, Any]) -> bool:
+    if metadata.get("schema_version") != PIPELINE_LINEAGE_SCHEMA_VERSION:
+        return False
+    if not _is_ordered_id_array(metadata.get("referenced_source_ids")):
+        return False
+    return _safe_trace_label(metadata.get("decision")) in {
+        "pass",
+        "partial",
+        "escalate",
+        "reject",
+    }
+
+
+def _valid_citation_trace(trace: dict[str, Any]) -> bool:
+    return "cited_sources" in trace and _is_ordered_id_array(trace.get("cited_sources"))
+
+
+def _is_ordered_id_array(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and all(
+        isinstance(item, str) and bool(item.strip()) for item in value
+    )
+
+
+def _question_lineage(
+    *,
+    retrieve_event: dict[str, Any],
+    rerank_event: dict[str, Any],
+    generate_event: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+
+    def ensure(question_id: str) -> dict[str, Any] | None:
+        if not (question_id == "shared" or re.fullmatch(r"q[1-9][0-9]*", question_id)):
+            return None
+        return rows.setdefault(
+            question_id,
+            {
+                "question_id": question_id,
+                "retrieved_chunk_ids": [],
+                "reranked_chunk_ids": [],
+                "candidate_overlap_source_ids": [],
+                "selection_binding_scope": None,
+            },
+        )
+
+    for raw in retrieve_event.get("question_provenance") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = ensure(str(raw.get("question_id") or ""))
+        if row is not None:
+            row["retrieved_chunk_ids"] = _ordered_string_ids(
+                raw.get("retrieved_chunk_ids")
+            )
+    for raw in rerank_event.get("question_provenance") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = ensure(str(raw.get("question_id") or ""))
+        if row is None:
+            continue
+        output_ids: list[str] = []
+        for item in raw.get("output_chunks") or []:
+            if isinstance(item, dict) and item.get("chunk_id"):
+                output_ids.append(str(item["chunk_id"]))
+        row["reranked_chunk_ids"] = _ordered_string_ids(output_ids)
+    for raw in generate_event.get("question_source_overlaps") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = ensure(str(raw.get("question_id") or ""))
+        if (
+            row is not None
+            and raw.get("binding_scope")
+            == "candidate_overlap_coarse_unattributed"
+        ):
+            row["candidate_overlap_source_ids"] = _ordered_string_ids(
+                raw.get("candidate_overlap_source_ids")
+            )
+            row["selection_binding_scope"] = str(raw["binding_scope"])
+    missing = set(
+        _ordered_string_ids(generate_event.get("candidate_uncovered_question_ids"))
+    )
+    for question_id, row in rows.items():
+        row["source_missing"] = question_id in missing
+    return [rows[key] for key in sorted(rows, key=_question_id_sort_key)]
+
+
+def _question_id_sort_key(value: str) -> tuple[int, int]:
+    if value == "shared":
+        return (1, 0)
+    return (0, int(value[1:]))
+
+
+def _latest_trace_event_metadata(trace: dict[str, Any], node: str) -> dict[str, Any]:
+    for event in reversed(trace.get("trace_events") or []):
+        if not isinstance(event, dict) or event.get("node") != node:
+            continue
+        metadata = event.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
+    return {}
+
+
+def _trace_node_sequence(trace: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    for event in trace.get("trace_events") or []:
+        if not isinstance(event, dict):
+            continue
+        node = _safe_trace_label(event.get("node"))
+        if node:
+            result.append(node)
+    return result
+
+
+def _ordered_trace_chunk_ids(trace: dict[str, Any], field: str) -> list[str]:
+    values: list[str] = []
+    for item in trace.get(field) or []:
+        if not isinstance(item, dict):
+            continue
+        chunk_id = item.get("chunk_id")
+        if not chunk_id and isinstance(item.get("metadata"), dict):
+            chunk_id = item["metadata"].get("chunk_id")
+        if chunk_id:
+            values.append(str(chunk_id))
+    return _ordered_string_ids(values)
+
+
+def _ordered_string_ids(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _safe_trace_label(value: object) -> str | None:
+    normalized = str(value or "").strip().casefold()
+    if re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", normalized):
+        return normalized
+    return None
+
+
+def _numeric_trace_mapping(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, float] = {}
+    for key, item in value.items():
+        label = _safe_trace_label(key)
+        if not label or isinstance(item, bool):
+            continue
+        try:
+            number = float(item)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(number):
+            result[label] = number
+    return result
 
 
 def _collect_trace_cited_chunk_ids(trace: dict[str, Any]) -> set[str]:

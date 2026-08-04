@@ -1348,3 +1348,86 @@ Qdrant. Следующий Product80 допускается только как 
   `2156 passed, 1 skipped, 0 failed`;
 - `.venv\Scripts\python.exe scripts\index_kb.py --validate-only` —
   `2186 valid / 2152 published`.
+
+## 18. Human Gold и точная stage attribution 4 августа 2026
+
+Исходная точка change set — trusted commit `14fbdc8`. Последний подтверждённый пользователем
+runtime остаётся `c38f0e055630fae2af50720fae81acee20ff4f6a`: `app`, `app-ml`, `nginx` healthy,
+`READY=PASS`. В этом цикле Codex к серверу не подключался; `/ask`, HDE/VK, Yonote, versioned KB
+seed, Qdrant, миграции и production-конфигурация не менялись. Платные LLM-вызовы не выполнялись.
+
+Создан новый offline-first quality spine:
+
+- строгий `GoldTicket v1` описывает полный тикет, human-reviewed роли, действия, аспекты,
+  constraints, qrels `0..3`, claims, source spans, KB snapshot, privacy/review provenance и
+  канонический record SHA;
+- required claim без grade-3 Yonote support, critical claim без второго reviewer, disagreement
+  без adjudication, unknown fields и post-seal mutation закрываются fail-closed;
+- детерминированный Gold150 выбирает 100 traffic + 50 risk кейсов из calibration, не смешивает
+  duplicate components и использует weak labels только как sampling hints;
+- Private Dataset Registry v1 хранит version, privacy/export class, hashes, review/freeze state,
+  hold и lineage; raw/safe-aggregate classification закрыта fail-closed, casefold/nested roots
+  запрещены, inventory читает только metadata, retention остаётся preview-only без удаления;
+- raw-ticket demo mode больше не может писать ticket-derived outputs в `reports/` или lookalike
+  directory: source и оба output обязаны оставаться в настоящем `data/private`;
+- trace получил безопасный question-level provenance без query/response/chunk text: filter values
+  hashed, telemetry ограничена caps/counters, глобальный selection exact, а per-question overlap
+  явно `coarse/unattributed` до настоящей claim binding;
+- `eval.run_ask` сохраняет отдельные ordered stage arrays и per-question lineage, а старый
+  `observed_chunk_ids` явно остаётся legacy union/coarse compatibility field;
+- offline `eval.stage_funnel` считает action confusion/macro-F1, Recall@1/3/5/10, MRR@10,
+  graded NDCG@10, survival, selection/citation recall, required-claim completeness и первый
+  доказуемый loss stage. Missing evidence считается `unscored`, а не нулём;
+- trace failure audit различает retrieval, rerank, source selection, citation binding и verify,
+  сохраняя coarse fallback для старых отчётов;
+- идентификаторы GoldTicket/step проходят через case normalization и ask scoring до stage funnel;
+  public `/ask` и response payload не изменены;
+- legacy ask projection теперь fail-closed блокирует multi-turn и неоднозначные graded qrels;
+  exact/partial stage attribution требует полной versioned telemetry, включая citation evidence;
+- новая private version публикуется через staging + atomic rename без overwrite; завершение review
+  и freeze проверяют реальные sealed JSONL/selection files, membership, counts, IDs, hashes и
+  запрещают links/hardlinks/tampering вместо доверия к self-attested metadata.
+
+Фактический private Gold150 v2 создан локально и зарегистрирован:
+
+- dataset: `gold150_sanity@v2`, state `draft`, review `pending`,
+  `independent_evaluation=false`;
+- `150` уникальных full-ticket duplicate components: `traffic=100`, `risk=50`;
+- selection file SHA-256:
+  `4b58e0bde8e5af5255d80266e593701a8fc1791d862bd567d1308cc527099116`;
+- pending review queue: `150` строк, SHA-256
+  `abed1010f70bb105b3f113944fed19ef9838bda7519b5b11354bd9ed2bef5dc0`;
+- registry entry file SHA-256:
+  `f2d4eb23fe4bf3a4a0433a8ae73cf1794392be18c29ca3c61d2d66d31702b88d`;
+- registry validation прошёл; попытка freeze ожидаемо заблокирована причиной
+  `human review is pending`;
+- все эти файлы находятся только в `data/private`, игнорируются Git/Docker и не staging.
+
+Первый `gold150_sanity_v1@v1` сохранён как исторический pending draft и не изменялся. Он был
+собран до canonical KB-hash binding, поэтому новым verifier не финализируется и не используется
+для review; миграция/overwrite вместо отдельной версии запрещены.
+
+Полный бесплатный gate:
+
+- `.venv\Scripts\ruff.exe check .` — успешно;
+- `.venv\Scripts\python.exe -m pytest` — `2239 passed, 1 skipped` из `2240`;
+- `.venv\Scripts\python.exe scripts\index_kb.py --validate-only` —
+  `2186 valid / 2152 published`;
+- объединённые Gold/registry/stage/provenance suites — `87 passed`; сквозная интеграция
+  GoldTicket → ask report → stage funnel проверена отдельно;
+- три независимых read-only review не нашли P0; все P1 по privacy/export, artifact freeze,
+  multi-turn/graded legacy projection, stage availability, raw filter telemetry, coarse
+  per-question binding и stale verifier citations закрыты regressions до полного gate.
+
+Точный следующий product step: человек проверяет все 150 тикетов до просмотра новых runtime
+ответов; critical cases проходят независимый second review, минимум 25% остальных — secondary
+audit, disagreement — adjudication. Для каждого `answer` required claim связывается только с
+точным published Yonote source span. До завершения review текущий draft нельзя freeze, запускать
+через `/ask` или использовать для заявления о качестве. Однозначные single-step cases можно
+проецировать только после review; multi-turn и source alternatives остаются в canonical offline
+GoldTicket scorer до появления ordered ticket runner. После human Gold строится первый полностью
+offline stage report; исправляется крупнейший системный loss stage и только затем допускается
+targeted live eval максимум 10 кейсов / 100 RUB по D-036. Полный Product80 сейчас не запускать:
+это exposed calibration без human-gold stage attribution. Deployment этого tooling/telemetry
+change set, если понадобится, выполняет пользователь отдельно по точному SHA; без миграций,
+Yonote Apply, KB indexing или изменения Qdrant.

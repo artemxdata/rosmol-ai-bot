@@ -456,3 +456,29 @@ verdict. Автоматическая provider-billing интеграция не
 модулю; превышение означает `STOP` для следующих платных eval до исправления pricing/атрибуции и
 нового согласования владельца. Неполученный или ещё не сформированный счёт не считается успешной
 сверкой.
+
+## D-037. Quality improvement опирается на human GoldTicket и точную stage attribution
+
+**Статус:** принято 4 августа 2026; дополняет D-010, D-011, D-013, D-035 и D-036.
+
+Реальные обращения сначала формируются в versioned private dataset и только после проверки
+ролей, privacy, route, аспектов, constraints, Yonote qrels и claims становятся `GoldTicket v1`.
+Операторские ответы остаются evidence поведения и не являются factual truth. Critical claims
+требуют независимого второго reviewer; disagreement требует adjudication. Calibration Gold150
+не считается независимым holdout и не доказывает конверсию.
+
+Pipeline измеряется раздельно: `routing -> retrieval -> rerank -> source selection -> generation
+contract -> citation -> claim support -> verification -> final behavior`. Отсутствующая стадия
+получает `unscored`, а legacy union источников — только coarse attribution. Для ranking обязательны
+настоящие Recall@k, MRR и graded NDCG по human qrels; нулём нельзя подменять отсутствующую label
+или telemetry. Global source selection является точным stage evidence, но совпадение выбранного
+источника с candidate set отдельного подвопроса остаётся coarse/unattributed до явной claim
+binding. Legacy ask projection fail-closed запрещена для multi-turn и неоднозначных graded qrels.
+
+Private Dataset Registry ведёт version, provenance hashes, review/freeze state, hold и retention.
+Registry и все ticket-level производные остаются в `data/private`, не входят в Git/Docker/runtime.
+Новая версия публикуется атомарно и не перезаписывается; review completion и freeze опираются на
+проверку реальных sealed artifacts, membership, counts и hashes, а не на self-attested flags.
+Retention по умолчанию fail-closed и только preview; автоматическое удаление не реализовано.
+Следующее платное измерение допускается только после offline stage report, конкретной гипотезы и
+полного бесплатного gate в рамках D-036.

@@ -17,6 +17,7 @@ def test_build_trace_failure_report_marks_rerank_loss_without_raw_text() -> None
                 "expected_cited_chunk_ids": ["expected"],
                 "observed_chunk_ids": ["expected", "neighbor"],
                 "cited_source_ids": ["neighbor"],
+                "verification_source_ids": [],
                 "query": "SECRET QUERY",
                 "response": "SECRET RESPONSE",
             }
@@ -41,8 +42,9 @@ def test_build_trace_failure_report_marks_rerank_loss_without_raw_text() -> None
 
     report = build_trace_failure_report(metrics=metrics, traces=traces)
 
-    assert report["loss_stage_counts"] == {"rerank": 1}
-    assert report["rows"][0]["reranked_top_ids"] == ["neighbor"]
+    assert report["loss_stage_counts"] == {"legacy_coarse": 1}
+    assert report["rows"][0]["attribution_confidence"] == "legacy_coarse"
+    assert report["rows"][0]["reranked_top_ids"] == []
     assert report["rows"][0]["analysis"] == {
         "category": "platform",
         "forum_normalized": "Forum A",
@@ -77,7 +79,7 @@ def test_build_trace_failure_report_marks_generate_loss() -> None:
 
     report = build_trace_failure_report(metrics=metrics, traces=traces)
 
-    assert report["loss_stage_counts"] == {"generate_or_verify": 1}
+    assert report["loss_stage_counts"] == {"legacy_coarse": 1}
 
 
 def test_build_trace_failure_report_accepts_missing_query_analysis() -> None:
@@ -106,7 +108,7 @@ def test_build_trace_failure_report_accepts_missing_query_analysis() -> None:
 
     assert report["rows"][0]["analysis"]["category"] == ""
     assert report["rows"][0]["metadata_filter"] == {}
-    assert report["loss_stage_counts"] == {"generate_or_verify": 1}
+    assert report["loss_stage_counts"] == {"legacy_coarse": 1}
 
 
 def test_build_trace_failure_report_marks_retrieval_loss() -> None:
@@ -125,4 +127,71 @@ def test_build_trace_failure_report_marks_retrieval_loss() -> None:
 
     report = build_trace_failure_report(metrics=metrics, traces={})
 
-    assert report["loss_stage_counts"] == {"retrieval": 1}
+    assert report["loss_stage_counts"] == {"legacy_coarse": 1}
+
+
+def test_build_trace_failure_report_marks_exact_source_selection_loss() -> None:
+    metrics = {
+        "results": [
+            {
+                "id": "case-exact",
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "failure_reasons": ["expected_chunk_not_cited"],
+                "expected_chunk_ids": ["expected"],
+                "retrieved_chunk_ids": ["expected", "neighbor"],
+                "reranked_chunk_ids": ["expected", "neighbor"],
+                "selected_source_ids": ["neighbor"],
+                "cited_source_ids": ["neighbor"],
+                "verification_source_ids": [],
+                "lineage_schema_version": "question-pipeline-provenance-v1",
+                "lineage_attribution": "exact",
+                "lineage_stage_available": {
+                    "retrieve": True,
+                    "rerank": True,
+                    "source_selection": True,
+                    "citation": True,
+                    "verify": True,
+                },
+                "verification_decision": "pass",
+            }
+        ]
+    }
+
+    report = build_trace_failure_report(metrics=metrics, traces={})
+
+    assert report["loss_stage_counts"] == {"source_selection": 1}
+    assert report["attribution_confidence_counts"] == {"exact": 1}
+    assert report["rows"][0]["expected_selected_ranks"] == {"expected": None}
+
+
+def test_build_trace_failure_report_marks_exact_citation_binding_loss() -> None:
+    metrics = {
+        "results": [
+            {
+                "id": "case-citation",
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "failure_reasons": ["expected_chunk_not_cited"],
+                "expected_chunk_ids": ["expected"],
+                "retrieved_chunk_ids": ["expected"],
+                "reranked_chunk_ids": ["expected"],
+                "selected_source_ids": ["expected"],
+                "cited_source_ids": [],
+                "verification_source_ids": [],
+                "lineage_schema_version": "question-pipeline-provenance-v1",
+                "lineage_attribution": "exact",
+                "lineage_stage_available": {
+                    "retrieve": True,
+                    "rerank": True,
+                    "source_selection": True,
+                    "citation": True,
+                    "verify": True,
+                },
+                "verification_decision": "reject",
+            }
+        ]
+    }
+
+    report = build_trace_failure_report(metrics=metrics, traces={})
+
+    assert report["loss_stage_counts"] == {"citation_binding": 1}
+    assert report["rows"][0]["attribution_confidence"] == "exact"

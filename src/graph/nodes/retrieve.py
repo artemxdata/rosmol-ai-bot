@@ -3,6 +3,18 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.provenance import (
+    MAX_PROVENANCE_ATTEMPTS,
+    MAX_PROVENANCE_FILTER_ATTEMPTS,
+    MAX_PROVENANCE_QUESTIONS,
+    PROVENANCE_SCHEMA_VERSION,
+    chunk_candidate_batch,
+    chunk_id_batch,
+    filter_scope,
+    question_id,
+    safe_filter,
+    truncation_counts,
+)
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import build_effective_questions
 from src.graph.state import BotState
@@ -164,10 +176,20 @@ async def retrieve(state: BotState) -> dict:
 
     chunks = []
     used_filters: list[dict] = []
+    question_provenance: list[dict] = []
     topic_question_count = sum(1 for question in questions if question.topic)
     needs_shared_broad_fallback = False
-    for question in questions:
+    for question_index, question in enumerate(questions):
+        provenance = {
+            "schema_version": PROVENANCE_SCHEMA_VERSION,
+            "question_id": question_id(question_index),
+            "attempts": [],
+            "retrieved_chunk_ids": [],
+        }
+        if len(question_provenance) < MAX_PROVENANCE_QUESTIONS:
+            question_provenance.append(provenance)
         if topic_question_count > 1 and not question.topic:
+            provenance["skipped_reason"] = "unscoped_multi_topic_question"
             continue
 
         question_filters = {
@@ -206,6 +228,33 @@ async def retrieve(state: BotState) -> dict:
                         tracer=tracer,
                         started_at=started_at,
                     )
+                candidate_rows, candidate_counts = chunk_candidate_batch(
+                    (
+                        (
+                            attempt_chunks,
+                            "metadata" if used_metadata_lookup else "hybrid",
+                        ),
+                        (keyword_chunks, "keyword"),
+                    )
+                )
+                if len(provenance["attempts"]) < MAX_PROVENANCE_ATTEMPTS:
+                    provenance["attempts"].append(
+                        {
+                            "attempt_no": attempt_index + 1,
+                            "scope": filter_scope(candidate_filters, question_filters),
+                            "filters": safe_filter(candidate_filters),
+                            "top_k": top_k,
+                            "candidates": candidate_rows,
+                            **candidate_counts,
+                        }
+                    )
+                provenance.update(
+                    truncation_counts(
+                        total=attempt_index + 1,
+                        recorded=len(provenance["attempts"]),
+                        label="attempts",
+                    )
+                )
                 if attempt_index == 0 and (attempt_chunks or keyword_chunks):
                     strict_found = True
                 found.extend(attempt_chunks)
@@ -221,6 +270,17 @@ async def retrieve(state: BotState) -> dict:
                     break
             if strict_topic_only and not strict_found and not requires_exact_topic:
                 needs_shared_broad_fallback = True
+            retrieved_ids, retrieved_counts = chunk_id_batch(found)
+            provenance["retrieved_chunk_ids"] = retrieved_ids
+            provenance.update(
+                {
+                    "retrieved_chunk_ids_total": retrieved_counts["chunk_ids_total"],
+                    "retrieved_chunk_ids_recorded": retrieved_counts["chunk_ids_recorded"],
+                    "retrieved_chunk_ids_truncated_count": retrieved_counts[
+                        "chunk_ids_truncated_count"
+                    ],
+                }
+            )
             chunks.extend(found)
         except MLDependencyError as exc:
             if tracer:
@@ -228,6 +288,7 @@ async def retrieve(state: BotState) -> dict:
             return {
                 "retrieved_chunks": [],
                 "metadata_filter": question_filters,
+                "retrieval_provenance": question_provenance,
                 "should_escalate": True,
                 "escalation_reason": "ml_dependency_missing",
                 "error": str(exc),
@@ -238,15 +299,25 @@ async def retrieve(state: BotState) -> dict:
             return {
                 "retrieved_chunks": [],
                 "metadata_filter": question_filters,
+                "retrieval_provenance": question_provenance,
                 "should_escalate": True,
                 "escalation_reason": "retrieval_failed",
                 "error": str(exc),
             }
 
     if needs_shared_broad_fallback:
+        shared_provenance = {
+            "schema_version": PROVENANCE_SCHEMA_VERSION,
+            "question_id": "shared",
+            "attempts": [],
+            "retrieved_chunk_ids": [],
+        }
+        if len(question_provenance) < MAX_PROVENANCE_QUESTIONS:
+            question_provenance.append(shared_provenance)
         try:
             fallback_query = expand_query_aliases(str(message or "").strip())
             fallback_filters = _compact_filter(filters)
+            shared_found = []
             for attempt_index, candidate_filters in enumerate(_filter_attempts(fallback_filters)):
                 used_filters.append(candidate_filters)
                 attempt_chunks = await state["retriever"].retrieve(
@@ -262,14 +333,52 @@ async def retrieve(state: BotState) -> dict:
                     tracer=tracer,
                     started_at=started_at,
                 )
+                candidate_rows, candidate_counts = chunk_candidate_batch(
+                    (
+                        (attempt_chunks, "shared_hybrid"),
+                        (keyword_chunks, "shared_keyword"),
+                    )
+                )
+                if len(shared_provenance["attempts"]) < MAX_PROVENANCE_ATTEMPTS:
+                    shared_provenance["attempts"].append(
+                        {
+                            "attempt_no": attempt_index + 1,
+                            "scope": filter_scope(candidate_filters, fallback_filters),
+                            "filters": safe_filter(candidate_filters),
+                            "top_k": BROAD_RETRIEVAL_TOP_K,
+                            "candidates": candidate_rows,
+                            **candidate_counts,
+                        }
+                    )
+                shared_provenance.update(
+                    truncation_counts(
+                        total=attempt_index + 1,
+                        recorded=len(shared_provenance["attempts"]),
+                        label="attempts",
+                    )
+                )
+                shared_found.extend(attempt_chunks)
+                shared_found.extend(keyword_chunks)
                 chunks.extend(attempt_chunks)
                 chunks.extend(keyword_chunks)
+            retrieved_ids, retrieved_counts = chunk_id_batch(shared_found)
+            shared_provenance["retrieved_chunk_ids"] = retrieved_ids
+            shared_provenance.update(
+                {
+                    "retrieved_chunk_ids_total": retrieved_counts["chunk_ids_total"],
+                    "retrieved_chunk_ids_recorded": retrieved_counts["chunk_ids_recorded"],
+                    "retrieved_chunk_ids_truncated_count": retrieved_counts[
+                        "chunk_ids_truncated_count"
+                    ],
+                }
+            )
         except MLDependencyError as exc:
             if tracer:
                 tracer.add_error("retrieve", int((perf_counter() - started_at) * 1000), exc)
             return {
                 "retrieved_chunks": [],
                 "metadata_filter": filters,
+                "retrieval_provenance": question_provenance,
                 "should_escalate": True,
                 "escalation_reason": "ml_dependency_missing",
                 "error": str(exc),
@@ -280,24 +389,52 @@ async def retrieve(state: BotState) -> dict:
             return {
                 "retrieved_chunks": [],
                 "metadata_filter": filters,
+                "retrieval_provenance": question_provenance,
                 "should_escalate": True,
                 "escalation_reason": "retrieval_failed",
                 "error": str(exc),
             }
 
+    provenance_question_total = len(questions) + int(needs_shared_broad_fallback)
+    provenance_question_counts = truncation_counts(
+        total=provenance_question_total,
+        recorded=len(question_provenance),
+        label="questions",
+    )
+    if question_provenance:
+        question_provenance[0].update(
+            {
+                **provenance_question_counts,
+                "attributable_questions_total": len(questions),
+            }
+        )
+
     deduped = {chunk.chunk_id: chunk for chunk in chunks}
     if tracer:
+        traced_filter_attempts = [
+            safe_filter(item)
+            for item in used_filters[:MAX_PROVENANCE_FILTER_ATTEMPTS]
+        ]
         tracer.add(
             "retrieve",
             int((perf_counter() - started_at) * 1000),
             chunks=len(deduped),
-            filters=filters,
-            filter_attempts=used_filters,
+            filters=safe_filter(filters),
+            filter_attempts=traced_filter_attempts,
+            **truncation_counts(
+                total=len(used_filters),
+                recorded=len(traced_filter_attempts),
+                label="filter_attempts",
+            ),
+            **provenance_question_counts,
+            attributable_questions_total=len(questions),
+            question_provenance=question_provenance,
         )
     return {
         "retrieved_chunks": list(deduped.values()),
         "metadata_filter": filters,
         "retrieval_filter_attempts": used_filters,
+        "retrieval_provenance": question_provenance,
     }
 
 

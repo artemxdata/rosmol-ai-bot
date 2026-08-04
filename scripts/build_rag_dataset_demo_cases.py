@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import html
 import json
+import os
 import re
+import tempfile
 import zipfile
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -13,6 +15,9 @@ from typing import Any
 from xml.etree import ElementTree
 
 NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_DATA_ROOT = (PROJECT_ROOT / "data" / "private").resolve()
 
 CURATED_CASE_EQUIVALENTS = {
     "seed_balanced::xlsx_category_r0045_podacha_zayavki_na_proekt": {
@@ -157,6 +162,14 @@ def main() -> None:
     args = parser.parse_args()
 
     source = Path(args.source)
+    output = Path(args.output)
+    profile_output = Path(args.profile_output)
+    validate_output_policy(
+        source=source,
+        output=output,
+        profile_output=profile_output,
+        raw_ticket_candidates=args.raw_ticket_candidates,
+    )
     rows = read_xlsx_rows(source)
     if args.raw_ticket_candidates:
         cases, profile = build_cases(
@@ -173,18 +186,123 @@ def main() -> None:
             atypical_limit=args.atypical,
         )
 
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(cases, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    profile_output = Path(args.profile_output)
-    profile_output.parent.mkdir(parents=True, exist_ok=True)
-    profile_output.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json_atomically(output, cases)
+    _write_json_atomically(profile_output, profile)
 
     print(
         f"cases={len(cases)} typical={profile['selected_counts'].get('typical', 0)} "
         f"atypical={profile['selected_counts'].get('atypical', 0)} output={output}"
     )
+
+
+def validate_output_policy(
+    *,
+    source: Path,
+    output: Path,
+    profile_output: Path,
+    raw_ticket_candidates: bool,
+    private_root: Path = PRIVATE_DATA_ROOT,
+) -> None:
+    """Keep ticket-derived prompts private even when their PII was best-effort masked."""
+
+    if not raw_ticket_candidates:
+        return
+    expanded_root = private_root.expanduser()
+    if _is_link_or_reparse_point(expanded_root) or not expanded_root.is_dir():
+        raise ValueError("private data root must be an existing regular directory")
+    root = expanded_root.resolve()
+    _reject_link_components(source, root=root, label="raw ticket candidate source")
+    source_resolved = source.expanduser().resolve(strict=False)
+    if not source_resolved.is_relative_to(root):
+        raise ValueError("raw ticket candidate source must stay under data/private")
+    _ensure_regular_single_link(source_resolved, label="raw ticket candidate source")
+
+    resolved_outputs: list[Path] = []
+    for path, label in ((output, "output"), (profile_output, "profile output")):
+        _reject_link_components(
+            path,
+            root=root,
+            label=f"raw ticket candidate {label}",
+        )
+        resolved = path.expanduser().resolve(strict=False)
+        if not resolved.is_relative_to(root):
+            raise ValueError(
+                f"raw ticket candidate {label} must stay under data/private"
+            )
+        if resolved.exists():
+            _ensure_regular_single_link(
+                resolved,
+                label=f"raw ticket candidate {label}",
+            )
+        resolved_outputs.append(resolved)
+    if resolved_outputs[0] == resolved_outputs[1]:
+        raise ValueError("raw ticket candidate outputs must be different files")
+    for resolved in resolved_outputs:
+        if resolved == source_resolved or (
+            resolved.exists() and os.path.samefile(resolved, source_resolved)
+        ):
+            raise ValueError("raw ticket candidate outputs must not alias the source")
+    if all(path.exists() for path in resolved_outputs) and os.path.samefile(
+        *resolved_outputs
+    ):
+        raise ValueError("raw ticket candidate outputs must not be hardlink aliases")
+
+
+def _write_json_atomically(path: Path, payload: Any) -> None:
+    if path.exists():
+        _ensure_regular_single_link(path, label="JSON output")
+    elif _is_link_or_reparse_point(path):
+        raise ValueError("JSON output must not be a link")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        try:
+            os.chmod(temporary, 0o600)
+            with os.fdopen(descriptor, "wb") as destination:
+                descriptor = -1
+                destination.write(encoded)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary, path)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _reject_link_components(path: Path, *, root: Path, label: str) -> None:
+    root_absolute = Path(os.path.abspath(root.expanduser()))
+    candidate = Path(os.path.abspath(path.expanduser()))
+    if not candidate.is_relative_to(root_absolute):
+        raise ValueError(f"{label} must stay under data/private")
+    current = root_absolute
+    for part in candidate.relative_to(root_absolute).parts:
+        current /= part
+        if current.exists() and _is_link_or_reparse_point(current):
+            raise ValueError(f"{label} must not traverse links")
+
+
+def _is_link_or_reparse_point(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    attributes = int(getattr(info, "st_file_attributes", 0))
+    return path.is_symlink() or bool(attributes & 0x400)
+
+
+def _ensure_regular_single_link(path: Path, *, label: str) -> None:
+    if _is_link_or_reparse_point(path) or not path.is_file():
+        raise ValueError(f"{label} must be a regular file")
+    if path.stat().st_nlink != 1:
+        raise ValueError(f"{label} must not be a hardlink")
 
 
 def read_xlsx_rows(path: Path) -> list[dict[str, str]]:
