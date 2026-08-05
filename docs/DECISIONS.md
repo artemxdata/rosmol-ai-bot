@@ -482,3 +482,71 @@ Registry и все ticket-level производные остаются в `data
 Retention по умолчанию fail-closed и только preview; автоматическое удаление не реализовано.
 Следующее платное измерение допускается только после offline stage report, конкретной гипотезы и
 полного бесплатного gate в рамках D-036.
+
+## D-038. Real-RAG проверяется как изолированный local/eval experiment
+
+**Статус:** принято 5 августа 2026; дополняет D-013, D-035, D-036 и D-037.
+
+На время измерительного цикла владелец разрешил ограниченное исключение из recovery freeze:
+изменения analysis/retrieval/rerank/generation допустимы только в выбираемом local/eval-контуре.
+Production default остаётся `deterministic`; HDE/VK webhook, Yonote, versioned KB seed, Qdrant,
+миграции и production-конфигурация не меняются. Переход default в `rag` требует отдельного
+решения владельца и нового security/release gate.
+
+Июльский private corpus фиксируется как `852` тикета ВК и MAX с SHA-256
+`bc669899e49638c6d196c3e552142372adfc73f4fce5b972f4350d6ab4252dd1`. Собственный текстовый
+флаг `social_only_v1` исключает тикеты, в которых все пользовательские ходы являются
+приветствием, благодарностью или startup-командой: `119` тикетов, из них `118` закрыты ботом.
+Это даёт собственную историческую метрику `263/733 = 35,88%`; она не называется
+воспроизведением ChatMe. Внешние `217/705 = 30,8%` остаются reference, а расхождение исходных
+знаменателей `852` против `872` показывается явно.
+
+Список владельца из `167 unique_id` описывает отсутствие содержательного продолжения, а не
+«только приветствие». После получения он присоединяется только точным private join: проверяются
+непустота и уникальность, сохраняются SHA и matched/unmatched counts; fuzzy matching и
+синтезирование membership запрещены. Отсутствие списка не блокирует Phase 0, а появление после
+live-run не требует повторного `/ask` — дополнительный slice строится из сохранённых private
+per-case результатов.
+
+Phase 0 использует фиксированные `30` first-content cases с seed `20260804` и квотами
+`VK/forum=11`, `VK/no-forum=11`, `MAX/forum=4`, `MAX/no-forum=4`. Approval
+`RAG-PHASE0-30-20260805` связывает telemetry SHA, ordered-selection SHA и cap `200 RUB`.
+До HTTP/SSH каждый выбранный ход локально и fail-closed проходит `PIIMasker` и повторный
+остаточный scan; наружу передаётся только один обезличенный ход, а исходный текст остаётся в
+`data/private`. Runtime подтверждает тот же Git SHA signed `/ready` до и после прогона, а
+reservation связывает approval, SHA, cases-file SHA, число кейсов и cap.
+Гипотеза оценивается по совместной bypass-сигнатуре одного кейса: deterministic/fallback
+analysis, успешный metadata-primary, synthetic high reranker score и `source_chunk` generation.
+При доле `>=60%` гипотеза подтверждена; `30–60%` — частично подтверждена; `<30%` — фазы 1–4
+не выполняются. Hybrid participation и реальный reranker показываются отдельно.
+
+Финальные запуски допускаются только на одном final SHA под approval
+`RAG-JULY-PAIR-20260805` и общим cap `200 RUB`: один multi-arm calibration на 30 кейсах, один
+deterministic population run и один full-RAG population run. Cache bypass обязателен, выборочные
+перезапуски запрещены, а расхождение runner ledger с provider billing больше `10%` означает
+`STOP`. Phase 0 не считается пройденной без отдельной provider-billing сверки, привязанной к
+`eval_run_id`, runtime/cases SHA, точному UTC-окну и выделенному eval credential; неполученный
+биллинг оставляет gate в статусе `pending`. Метрика называется
+`first_content_turn_resolution_proxy`; истинная ticket conversion без многоходового replay и
+human verdict не заявляется.
+
+Phase 0 дополнительно связан с точными байтами приватного runner-файла:
+`aff198bbc98d07894a3e1676e3457891e3a38f674315051505b681641fe9d02d`.
+Перед резервированием стоимости локальный runner повторно проверяет frozen source,
+ordered selection, exact case schema/digest, чистоту builder-зависимостей на telemetry HEAD,
+signed `/ready`, loopback `/ask` и loopback PostgreSQL DSN без multi-host/query override.
+Injected HTTP transport, injected reservation, альтернативный cost ledger, markdown-output,
+изменённый query/context и выборочный `max_cases` запрещены fail-closed.
+
+После резервирования любой execution/postflight/trace-pool/finalization failure создаёт
+отдельный приватный rejection-artifact и расходует разрешение без выборочного повтора.
+Успешный отчёт требует ровно одного trace на каждую пару request/case, `cache_hit=false`,
+полного SQL cost accounting и привязки к точному live manifest. Публичная проекция не содержит
+case ID, query, response или evidence; произвольные labels сворачиваются в allowlist/opaque groups.
+Если categorical/matrix/slice содержит хотя бы одну ячейку `n<5`, скрывается вся таблица;
+пересекающийся forum-presence margin и outcome rates внутри публичных slices не публикуются,
+чтобы исключить обратное восстановление малых ячеек.
+Для 30-case Phase 0 публично доступен только основной containment proxy под собственным
+binary suppression. Behavior table, auto-answer, clarification и escalation остаются в
+приватном per-case отчёте, а в public JSON всегда помечаются как withheld: их совместная
+публикация позволяет восстанавливать малые пересечения даже при безопасных маргиналах.

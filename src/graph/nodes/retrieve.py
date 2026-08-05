@@ -179,6 +179,11 @@ async def retrieve(state: BotState) -> dict:
     question_provenance: list[dict] = []
     topic_question_count = sum(1 for question in questions if question.topic)
     needs_shared_broad_fallback = False
+    retrieval_methods: set[str] = set()
+    metadata_lookup_attempted = False
+    metadata_lookup_succeeded = False
+    metadata_lookup_result_count = 0
+    hybrid_candidates_present = False
     for question_index, question in enumerate(questions):
         provenance = {
             "schema_version": PROVENANCE_SCHEMA_VERSION,
@@ -218,6 +223,27 @@ async def retrieve(state: BotState) -> dict:
                     candidate_filters,
                     top_k=top_k,
                 )
+                attempt_method = "metadata" if used_metadata_lookup else "hybrid"
+                retrieval_methods.add(attempt_method)
+                attempt_metadata_succeeded = bool(
+                    used_metadata_lookup and attempt_chunks
+                )
+                attempt_metadata_result_count = (
+                    len(attempt_chunks) if used_metadata_lookup else 0
+                )
+                metadata_lookup_attempted = (
+                    metadata_lookup_attempted or used_metadata_lookup
+                )
+                metadata_lookup_succeeded = (
+                    metadata_lookup_succeeded or attempt_metadata_succeeded
+                )
+                metadata_lookup_result_count += attempt_metadata_result_count
+                attempt_hybrid_candidates_present = bool(
+                    not used_metadata_lookup and attempt_chunks
+                )
+                hybrid_candidates_present = (
+                    hybrid_candidates_present or attempt_hybrid_candidates_present
+                )
                 keyword_chunks = []
                 if not (used_metadata_lookup and attempt_chunks):
                     keyword_chunks = await _keyword_recall_candidates(
@@ -244,6 +270,13 @@ async def retrieve(state: BotState) -> dict:
                             "scope": filter_scope(candidate_filters, question_filters),
                             "filters": safe_filter(candidate_filters),
                             "top_k": top_k,
+                            "retrieval_method": attempt_method,
+                            "metadata_lookup_attempted": used_metadata_lookup,
+                            "metadata_lookup_succeeded": attempt_metadata_succeeded,
+                            "metadata_lookup_result_count": attempt_metadata_result_count,
+                            "hybrid_candidates_present": (
+                                attempt_hybrid_candidates_present
+                            ),
                             "candidates": candidate_rows,
                             **candidate_counts,
                         }
@@ -325,6 +358,11 @@ async def retrieve(state: BotState) -> dict:
                     candidate_filters,
                     top_k=BROAD_RETRIEVAL_TOP_K,
                 )
+                retrieval_methods.add("hybrid")
+                attempt_hybrid_candidates_present = bool(attempt_chunks)
+                hybrid_candidates_present = (
+                    hybrid_candidates_present or attempt_hybrid_candidates_present
+                )
                 keyword_chunks = await _keyword_recall_candidates(
                     state["retriever"],
                     fallback_query,
@@ -346,6 +384,13 @@ async def retrieve(state: BotState) -> dict:
                             "scope": filter_scope(candidate_filters, fallback_filters),
                             "filters": safe_filter(candidate_filters),
                             "top_k": BROAD_RETRIEVAL_TOP_K,
+                            "retrieval_method": "hybrid",
+                            "metadata_lookup_attempted": False,
+                            "metadata_lookup_succeeded": False,
+                            "metadata_lookup_result_count": 0,
+                            "hybrid_candidates_present": (
+                                attempt_hybrid_candidates_present
+                            ),
                             "candidates": candidate_rows,
                             **candidate_counts,
                         }
@@ -411,6 +456,13 @@ async def retrieve(state: BotState) -> dict:
 
     deduped = {chunk.chunk_id: chunk for chunk in chunks}
     if tracer:
+        retrieval_method = (
+            next(iter(retrieval_methods))
+            if len(retrieval_methods) == 1
+            else "mixed"
+            if retrieval_methods
+            else "none"
+        )
         traced_filter_attempts = [
             safe_filter(item)
             for item in used_filters[:MAX_PROVENANCE_FILTER_ATTEMPTS]
@@ -419,6 +471,11 @@ async def retrieve(state: BotState) -> dict:
             "retrieve",
             int((perf_counter() - started_at) * 1000),
             chunks=len(deduped),
+            retrieval_method=retrieval_method,
+            metadata_lookup_attempted=metadata_lookup_attempted,
+            metadata_lookup_succeeded=metadata_lookup_succeeded,
+            metadata_lookup_result_count=metadata_lookup_result_count,
+            hybrid_candidates_present=hybrid_candidates_present,
             filters=safe_filter(filters),
             filter_attempts=traced_filter_attempts,
             **truncation_counts(

@@ -748,6 +748,10 @@ def _trace_generation_selection(
         0,
         schema_version=PROVENANCE_SCHEMA_VERSION,
         mode=mode,
+        generator_path=mode,
+        source_chunk_applied=(
+            str(result.get("generator_model") or "").strip() == "source_chunk"
+        ),
         selected_source_ids=bounded_selected_source_ids,
         **truncation_counts(
             total=selected_total,

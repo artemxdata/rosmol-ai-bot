@@ -219,9 +219,15 @@ async def analyze_query(state: BotState) -> dict:
         analysis = apply_session_context(analysis, masked_message, state.get("session"))
         analysis = _apply_response_profile(analysis, original_message)
         if tracer:
-            tracer.add("analyze", int((perf_counter() - started_at) * 1000), model=model)
+            tracer.add(
+                "analyze",
+                int((perf_counter() - started_at) * 1000),
+                mode="llm",
+                model=model,
+            )
         result = {
             "analysis": analysis,
+            "analyzer_mode": "llm",
             "contextual_message": build_contextual_message(
                 masked_message,
                 state.get("session"),
@@ -246,11 +252,13 @@ async def analyze_query(state: BotState) -> dict:
                 tracer.add(
                     "analyze",
                     int((perf_counter() - started_at) * 1000),
+                    mode="fallback",
                     fallback=True,
                     reason="deterministic_fallback",
                 )
             return {
                 "analysis": fallback,
+                "analyzer_mode": "fallback",
                 "analyzer_fallback": True,
                 "contextual_message": build_contextual_message(
                     masked_message,

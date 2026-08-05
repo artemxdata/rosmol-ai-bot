@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import math
 import re
 from time import perf_counter
 from typing import Any
 
 from src.config import get_settings
-from src.graph.provenance import rerank_question_provenance
+from src.graph.provenance import finite_score, rerank_question_provenance
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.response_profiles import (
@@ -22,6 +23,7 @@ from src.rag.errors import MLDependencyError
 from src.response_contract import get_response_contract
 
 MAX_RERANKED_CHUNKS = 8
+MAX_TRACE_RERANK_SCORES = 16
 QUESTION_CANDIDATE_LIMIT = 3
 QUERY_CANDIDATE_LIMIT = 3
 FACTUAL_SOURCE_TYPE = get_response_contract().fact_policy.source_type
@@ -163,6 +165,16 @@ async def rerank(state: BotState) -> dict:
                 int((perf_counter() - started_at) * 1000),
                 max_confidence=0.0,
                 confidence_source="none",
+                reranker_invoked=False,
+                raw_reranker_scores=[],
+                raw_reranker_scores_total=0,
+                raw_reranker_scores_recorded=0,
+                raw_reranker_scores_truncated_count=0,
+                raw_reranker_max=None,
+                score_origin="none",
+                synthetic_score_applied=False,
+                synthetic_high_score_applied=False,
+                floor_applied=False,
                 rejected_non_yonote_chunks=rejected_source_chunks,
                 question_provenance=question_provenance,
             )
@@ -174,6 +186,12 @@ async def rerank(state: BotState) -> dict:
             "escalation_reason": "no_relevant_chunks",
         }
 
+    execution: dict[str, Any] = {
+        "reranker_invoked": False,
+        "raw_scores": [],
+        "raw_scores_by_chunk": {},
+        "raw_scores_total": 0,
+    }
     try:
         reranked = await asyncio.to_thread(
             _rerank_for_state,
@@ -181,6 +199,7 @@ async def rerank(state: BotState) -> dict:
             state,
             query,
             chunks,
+            execution,
         )
     except MLDependencyError as exc:
         if tracer:
@@ -206,11 +225,37 @@ async def rerank(state: BotState) -> dict:
         if _should_unload_model(settings, "ml_unload_reranker_after_use"):
             await _unload_model_owner(state.get("reranker"))
 
-    raw_reranker_max = max((chunk.reranker_score for chunk in reranked), default=0.0)
-    max_confidence = raw_reranker_max
+    reranked_output_max = max((chunk.reranker_score for chunk in reranked), default=0.0)
+    raw_reranker_scores = list(execution["raw_scores"])
+    raw_reranker_max = max(raw_reranker_scores, default=None)
+    score_origins = [
+        _score_origin(chunk, execution["raw_scores_by_chunk"])
+        for chunk in reranked
+    ]
+    score_origin = (
+        score_origins[0]
+        if score_origins and len(set(score_origins)) == 1
+        else "mixed"
+        if score_origins
+        else "none"
+    )
+    synthetic_score_applied = "synthetic" in score_origins
+    high_threshold = float(getattr(settings, "reranker_threshold_high", 0.7))
+    synthetic_high_score_applied = any(
+        origin == "synthetic"
+        and math.isclose(
+            float(chunk.reranker_score),
+            high_threshold,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        for chunk, origin in zip(reranked, score_origins, strict=True)
+    )
+    max_confidence = reranked_output_max
     confidence_source = "reranker"
     retrieval_confidence_floor = _retrieval_confidence_floor(state, chunks)
-    if retrieval_confidence_floor > max_confidence:
+    floor_applied = retrieval_confidence_floor > max_confidence
+    if floor_applied:
         max_confidence = retrieval_confidence_floor
         confidence_source = "retrieval_exact_filter"
     question_provenance = rerank_question_provenance(
@@ -223,8 +268,22 @@ async def rerank(state: BotState) -> dict:
             int((perf_counter() - started_at) * 1000),
             max_confidence=max_confidence,
             confidence_source=confidence_source,
+            reranker_invoked=execution["reranker_invoked"],
+            raw_reranker_scores=raw_reranker_scores,
+            raw_reranker_scores_total=execution["raw_scores_total"],
+            raw_reranker_scores_recorded=len(raw_reranker_scores),
+            raw_reranker_scores_truncated_count=max(
+                0,
+                execution["raw_scores_total"] - len(raw_reranker_scores),
+            ),
+            raw_reranker_max=raw_reranker_max,
+            score_origin=score_origin,
+            synthetic_score_applied=synthetic_score_applied,
+            synthetic_high_score_applied=synthetic_high_score_applied,
+            floor_applied=floor_applied,
             confidence_components={
                 "raw_reranker_max": raw_reranker_max,
+                "reranked_output_max": reranked_output_max,
                 "retrieval_exact_filter_floor": retrieval_confidence_floor,
                 "decision_confidence": max_confidence,
             },
@@ -254,6 +313,7 @@ def _rerank_for_state(
     state: BotState,
     query: str,
     chunks: list[Chunk],
+    execution: dict[str, Any] | None = None,
 ) -> list[ScoredChunk]:
     query = expand_query_aliases(query)
     analysis = state.get("analysis")
@@ -313,7 +373,13 @@ def _rerank_for_state(
             return selected
         if _source_only_fast_path_allowed(analysis, questions, scoped_chunks):
             return _source_only_ranked_candidates(candidates, priority_candidate, 4)
-        ranked = reranker.rerank(rerank_query, candidates, 4)
+        ranked = _call_reranker(
+            reranker,
+            rerank_query,
+            candidates,
+            4,
+            execution,
+        )
         if priority_candidate and _is_promotable_priority_candidate(
             query,
             rerank_query,
@@ -362,7 +428,7 @@ def _rerank_for_state(
                 break
         return _boost_source_only_confidence(selected[:MAX_RERANKED_CHUNKS])
     group_specs.append((query, query_candidates, 4))
-    group_results = _rerank_groups(reranker, group_specs)
+    group_results = _rerank_groups(reranker, group_specs, execution)
 
     for ranked_chunks in group_results[:-1]:
         added_for_question = 0
@@ -588,11 +654,67 @@ def _protected_chunk_matches_analysis_scope(analysis: Any, chunk: Chunk) -> bool
 def _rerank_groups(
     reranker: Any,
     groups: list[tuple[str, list[Chunk], int]],
+    execution: dict[str, Any] | None = None,
 ) -> list[list[ScoredChunk]]:
     rerank_groups = getattr(reranker, "rerank_groups", None)
     if callable(rerank_groups):
-        return rerank_groups(groups)
-    return [reranker.rerank(query, chunks, top_k) for query, chunks, top_k in groups]
+        if execution is not None:
+            execution["reranker_invoked"] = True
+        results = rerank_groups(groups)
+        for result in results:
+            _record_raw_reranker_scores(execution, result)
+        return results
+    return [
+        _call_reranker(reranker, query, chunks, top_k, execution)
+        for query, chunks, top_k in groups
+    ]
+
+
+def _call_reranker(
+    reranker: Any,
+    query: str,
+    chunks: list[Chunk],
+    top_k: int,
+    execution: dict[str, Any] | None,
+) -> list[ScoredChunk]:
+    if execution is not None:
+        execution["reranker_invoked"] = True
+    result = reranker.rerank(query, chunks, top_k)
+    _record_raw_reranker_scores(execution, result)
+    return result
+
+
+def _record_raw_reranker_scores(
+    execution: dict[str, Any] | None,
+    chunks: list[ScoredChunk],
+) -> None:
+    if execution is None:
+        return
+    raw_scores = execution["raw_scores"]
+    raw_scores_by_chunk = execution["raw_scores_by_chunk"]
+    for chunk in chunks:
+        score = finite_score(chunk.reranker_score)
+        if score is None:
+            continue
+        execution["raw_scores_total"] += 1
+        raw_scores_by_chunk.setdefault(chunk.chunk_id, []).append(score)
+        if len(raw_scores) < MAX_TRACE_RERANK_SCORES:
+            raw_scores.append(score)
+
+
+def _score_origin(
+    chunk: ScoredChunk,
+    raw_scores_by_chunk: dict[str, list[float]],
+) -> str:
+    final_score = finite_score(chunk.reranker_score)
+    if final_score is None:
+        return "synthetic"
+    if any(
+        math.isclose(final_score, raw_score, rel_tol=1e-12, abs_tol=1e-12)
+        for raw_score in raw_scores_by_chunk.get(chunk.chunk_id, ())
+    ):
+        return "reranker"
+    return "synthetic"
 
 
 def _source_only_fast_path_allowed(

@@ -29,6 +29,7 @@ from eval.run_ask import (
 
 HOLDOUT_CASE_IDS = [f"case-{index:03d}" for index in range(1, 81)]
 CALIBRATION_REPLAY_RUNTIME_SHA = "9" * 40
+SOURCE_DIAGNOSTIC_RUNTIME_SHA = "d" * 40
 
 
 @pytest.fixture(autouse=True)
@@ -306,6 +307,134 @@ def _ready_payload(
             "authorized": authorized,
         },
     }
+
+
+def _source_observed_diagnostic_case() -> dict[str, object]:
+    return {
+        "id": "source-diagnostic-001",
+        "query": "Обезличенный диагностический вопрос",
+        "privacy_class": "private_ticket_derived",
+        "split": "calibration",
+        "label_status": "source_observed_diagnostic",
+        "requires_human_review": False,
+        "channel": "vk",
+        "tags": ["split:calibration"],
+    }
+
+
+def _source_diagnostic_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, Path]:
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-eval-secret")
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    cases_path = private_root / "source-diagnostic-cases.json"
+    output_path = private_root / "source-diagnostic-report.json"
+    cases_path.write_text(
+        json.dumps([_source_observed_diagnostic_case()], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return private_root, cases_path, output_path
+
+
+def _phase0_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, Path, Path, str]:
+    from eval import social_ticket_benchmark as phase0_benchmark
+
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-eval-secret")
+    monkeypatch.setenv(
+        "ASK_EVAL_POSTGRES_DSN",
+        "postgresql://eval:test@127.0.0.1:6543/eval",
+    )
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    monkeypatch.setattr(run_ask_module, "PRIVATE_DATA_ROOT", private_root)
+    monkeypatch.setattr(
+        phase0_benchmark,
+        "_validate_manifest_integrity",
+        lambda _manifest: None,
+    )
+    monkeypatch.setattr(
+        phase0_benchmark,
+        "_validate_builder_git_provenance",
+        lambda _runtime_git_sha: None,
+    )
+    cases = []
+    manifest_cases = []
+    for index in range(run_ask_module.PHASE0_CASES_TOTAL):
+        case_id = f"social-p0-test-{index:02d}"
+        query = f"РћР±РµР·Р»РёС‡РµРЅРЅС‹Р№ РІРѕРїСЂРѕСЃ {index}"
+        channel = "vk" if index < 22 else "max"
+        query_sha256 = hashlib.sha256(query.encode("utf-8")).hexdigest()
+        cases.append(
+            {
+                "id": case_id,
+                "query": query,
+                "privacy_class": "private_ticket_derived",
+                "split": "calibration",
+                "label_status": "source_observed_diagnostic",
+                "requires_human_review": False,
+                "user_id": case_id,
+                "channel": channel,
+                "tags": list(run_ask_module.PHASE0_RUNNER_TAGS),
+            }
+        )
+        manifest_cases.append(
+            {
+                "id": case_id,
+                "deidentified_query_sha256": query_sha256,
+                "runner_case_sha256": "",
+                "source_channel": channel,
+            }
+        )
+        manifest_cases[-1]["runner_case_sha256"] = (
+            phase0_benchmark._canonical_sha256(cases[-1])
+        )
+    cases_path = private_root / "phase0-cases.json"
+    cases_path.write_text(
+        json.dumps(cases, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    monkeypatch.setattr(
+        phase0_benchmark,
+        "EXPECTED_PHASE0_CASES_FILE_SHA256",
+        cases_file_sha256,
+    )
+    ordered_selection_sha256 = phase0_benchmark._canonical_sha256(
+        [case["id"] for case in manifest_cases]
+    )
+    manifest = {
+        "telemetry": {"git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA},
+        "approval": {
+            "id": run_ask_module.PHASE0_APPROVAL_ID,
+            "hard_cap_rub": run_ask_module.PHASE0_COST_CAP_RUB,
+            "case_count": run_ask_module.PHASE0_CASES_TOTAL,
+            "telemetry_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            "ordered_selection_sha256": ordered_selection_sha256,
+        },
+        "integrity": {
+            "cases_file_sha256": cases_file_sha256,
+            "ordered_selection_sha256": ordered_selection_sha256,
+        },
+        "cases": manifest_cases,
+    }
+    manifest_path = private_root / "phase0-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return (
+        private_root,
+        cases_path,
+        manifest_path,
+        private_root / "phase0-report.json",
+        cases_file_sha256,
+    )
 
 
 def test_calibration_replay_receipt_key_binds_selection_file_and_runtime() -> None:
@@ -1030,6 +1159,34 @@ def test_llm_cost_accounting_accepts_direct_and_priced_llm_results() -> None:
             }
         )
         is None
+    )
+
+
+def test_score_case_preserves_null_llm_accounting_as_missing() -> None:
+    result = score_case(
+        _normalize_case({"id": "cost-null", "query": "Р’РѕРїСЂРѕСЃ"}),
+        {
+            "http_status": 200,
+            "request_id": "11111111-1111-1111-1111-111111111111",
+            "response": "РћС‚РІРµС‚",
+            "latency_ms": 10,
+            "error": None,
+        },
+        {
+            "llm_usage": None,
+            "llm_prompt_tokens": None,
+            "llm_completion_tokens": None,
+            "llm_total_tokens": None,
+            "llm_estimated_cost_rub": None,
+        },
+    )
+
+    assert result["llm_accounting_present"] is False
+    assert result["llm_estimated_cost_rub"] is None
+    assert result["llm_usage"] is None
+    assert (
+        run_ask_module._llm_cost_accounting_failure(result)
+        == "llm_cost_accounting_missing"
     )
 
 
@@ -5079,3 +5236,825 @@ async def test_holdout_ledger_must_use_canonical_persistent_directory(
 
     assert requests == []
     assert not alternate_ledger.exists()
+
+
+@pytest.mark.parametrize(
+    "runtime_git_sha",
+    [None, "A" * 40, "0" * 40, "a" * 64],
+)
+@pytest.mark.asyncio
+async def test_source_diagnostic_strict_live_requires_exact_runtime_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_git_sha: str | None,
+) -> None:
+    _private_root, cases_path, output_path = _source_diagnostic_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    requests: list[httpx.Request] = []
+    monkeypatch.setattr(
+        run_ask_module,
+        "_is_in_process_mock_transport",
+        lambda _transport: False,
+    )
+
+    with pytest.raises(ValueError, match="expected_runtime_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=False,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request)
+                or httpx.Response(500)
+            ),
+            bypass_cache=True,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=runtime_git_sha,
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_expected_runtime_sha_is_rejected_for_regular_eval(
+    tmp_path: Path,
+) -> None:
+    cases_path = tmp_path / "cases.json"
+    output_path = tmp_path / "report.json"
+    cases_path.write_text(
+        json.dumps([{"id": "regular", "query": "Привет"}]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="only valid"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            trace_lookup=False,
+            api_key_env=None,
+            transport=httpx.MockTransport(lambda _request: httpx.Response(500)),
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        )
+
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_source_diagnostic_rejects_runtime_mismatch_before_ask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_path, output_path = _source_diagnostic_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json=_ready_payload(release_git_sha="e" * 40),
+        )
+
+    with pytest.raises(ValueError, match="release_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=False,
+            transport=httpx.MockTransport(handler),
+            bypass_cache=True,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_source_diagnostic_report_is_unscored_and_runtime_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root, cases_path, output_path = _source_diagnostic_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    monkeypatch.setattr(run_ask_module, "uuid4", lambda: "source-fixed")
+    cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    reservation = run_ask_module.LiveEvalCostReservation(
+        path=private_root / "secret-ledger" / "reservation.json",
+        record={
+            "runtime_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            "manifest_sha256": cases_file_sha256,
+            "case_count": 1,
+            "approved_cap_rub": 200.0,
+            "high_cost_approval_id": "SOURCE-DIAGNOSTIC-ONE-20260805",
+            "run_id": "ask-eval-source-fixed",
+            "scope": "ask-eval",
+            "approval_required": True,
+            "secret_material": "must-not-be-reported",
+        },
+    )
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=_ready_payload(
+                    release_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+                ),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "11111111-1111-1111-1111-111111111111",
+                "response": "Диагностический ответ",
+            },
+        )
+
+    metrics = await run_eval(
+        cases_path=cases_path,
+        output_path=output_path,
+        target="http://127.0.0.1:8001/ask",
+        trace_lookup=False,
+        transport=httpx.MockTransport(handler),
+        bypass_cache=True,
+        max_llm_cost_rub=200.0,
+        high_cost_approval_id="SOURCE-DIAGNOSTIC-ONE-20260805",
+        cost_reservation=reservation,
+        allow_source_observed_diagnostic=True,
+        expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+    )
+
+    assert requests == [("GET", "/ready"), ("POST", "/ask"), ("GET", "/ready")]
+    assert metrics["results"][0]["passed"] is None
+    assert metrics["cases_passed"] is None
+    assert metrics["pass_rate"] is None
+    assert metrics["runtime_identity"] == {
+        "required": True,
+        "status": "verified",
+        "expected_runtime_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        "preflight_release_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        "postflight_release_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        "verified_release_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        "matched_expected_runtime": True,
+    }
+    assert metrics["cost_control"]["reservation"] == {
+        "valid": True,
+        "run_id": "ask-eval-source-fixed",
+        "scope": "ask-eval",
+        "runtime_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        "manifest_sha256": cases_file_sha256,
+        "cases_file_sha256": cases_file_sha256,
+        "manifest_matches_cases_file": True,
+        "case_count": 1,
+        "approved_cap_rub": 200.0,
+        "approval_required": True,
+        "high_cost_approval_id": "SOURCE-DIAGNOSTIC-ONE-20260805",
+    }
+    serialized_reservation = json.dumps(
+        metrics["cost_control"]["reservation"],
+        sort_keys=True,
+    )
+    assert "secret-ledger" not in serialized_reservation
+    assert "must-not-be-reported" not in serialized_reservation
+    assert json.loads(output_path.read_text(encoding="utf-8"))["pass_rate"] is None
+
+
+@pytest.mark.asyncio
+async def test_phase0_approval_requires_manifest_before_any_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_path, output_path = _source_diagnostic_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValueError, match="requires --phase0-manifest"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=False,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request) or httpx.Response(500)
+            ),
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        )
+
+    assert requests == []
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_phase0_rejects_selective_max_cases_before_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="max_cases_forbidden"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            bypass_cache=True,
+            max_cases=1,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_phase0_rejects_custom_transport_and_injected_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+
+    class CustomTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, request=request)
+
+    common = {
+        "cases_path": cases_path,
+        "output_path": output_path,
+        "target": "http://127.0.0.1:8001/ask",
+        "trace_lookup": True,
+        "bypass_cache": True,
+        "max_llm_cost_rub": run_ask_module.PHASE0_COST_CAP_RUB,
+        "high_cost_approval_id": run_ask_module.PHASE0_APPROVAL_ID,
+        "allow_source_observed_diagnostic": True,
+        "expected_runtime_git_sha": SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        "expected_cases_file_sha256": cases_file_sha256,
+        "phase0_manifest_path": manifest_path,
+    }
+
+    with pytest.raises(ValueError, match="injected HTTP transports"):
+        await run_eval(**common, transport=CustomTransport())
+
+    injected = run_ask_module.LiveEvalCostReservation(
+        path=private_root / "injected.json",
+        record={},
+    )
+    with pytest.raises(ValueError, match="injected cost reservations"):
+        await run_eval(**common, cost_reservation=injected)
+
+    with pytest.raises(ValueError, match="canonical private path"):
+        await run_eval(**common, cost_ledger_dir=private_root / "alternate-ledger")
+
+
+@pytest.mark.asyncio
+async def test_phase0_rejects_extra_context_even_when_private_files_are_rehashed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        _cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    from eval import social_ticket_benchmark as phase0_benchmark
+
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    cases[0]["forum_context"] = "РњР°С€СѓРє"
+    cases_path.write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
+    cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    monkeypatch.setattr(
+        phase0_benchmark,
+        "EXPECTED_PHASE0_CASES_FILE_SHA256",
+        cases_file_sha256,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity"]["cases_file_sha256"] = cases_file_sha256
+    manifest["cases"][0]["runner_case_sha256"] = (
+        phase0_benchmark._canonical_sha256(cases[0])
+    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exact private schema"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+
+@pytest.mark.asyncio
+async def test_phase0_rejects_changed_query_even_when_files_are_fully_rehashed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        approved_cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    from eval import social_ticket_benchmark as phase0_benchmark
+
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    cases[0]["query"] = "Подменённый обезличенный вопрос"
+    cases_path.write_text(
+        json.dumps(cases, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    changed_cases_file_sha256 = run_ask_module._file_sha256(cases_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity"]["cases_file_sha256"] = changed_cases_file_sha256
+    manifest["cases"][0]["deidentified_query_sha256"] = hashlib.sha256(
+        cases[0]["query"].encode("utf-8")
+    ).hexdigest()
+    manifest["cases"][0]["runner_case_sha256"] = (
+        phase0_benchmark._canonical_sha256(cases[0])
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact approved cases file"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=changed_cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+    assert changed_cases_file_sha256 != approved_cases_file_sha256
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trace_dsn",
+    [
+        "postgresql://eval:test@remote-db.internal:5432/eval",
+        "postgresql://eval:test@127.0.0.1:6543/eval?host=remote-db.internal",
+        "postgresql://eval:test@127.0.0.1:6543,remote-db.internal:5432/eval",
+    ],
+)
+async def test_phase0_rejects_non_loopback_trace_dsn_before_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trace_dsn: str,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+
+    with pytest.raises(ValueError, match="loopback DSN"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            trace_dsn=trace_dsn,
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_phase0_runtime_ready_precedes_cost_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    class TracePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> TracePool:
+        return TracePool()
+
+    reserve_calls: list[dict[str, object]] = []
+
+    def fake_reserve(**kwargs: object) -> object:
+        reserve_calls.append(kwargs)
+        raise AssertionError("reservation must not happen before verified /ready")
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "reserve_live_eval_cost", fake_reserve)
+    requests: list[tuple[str, str]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str, **_kwargs: object) -> httpx.Response:
+            requests.append(("GET", httpx.URL(url).path))
+            return httpx.Response(
+                200,
+                json=_ready_payload(release_git_sha="e" * 40),
+            )
+
+        async def post(self, url: str, **_kwargs: object) -> httpx.Response:
+            requests.append(("POST", httpx.URL(url).path))
+            raise AssertionError("POST /ask must not happen")
+
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(ValueError, match="release_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://eval:test@127.0.0.1:6543/eval",
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert reserve_calls == []
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_phase0_reservation_failure_writes_private_rejection_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        run_ask_module,
+        "uuid4",
+        lambda: "phase0-reservation-failure",
+    )
+
+    class TracePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> TracePool:
+        return TracePool()
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, _url: str, **_kwargs: object) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_ready_payload(
+                    release_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+                ),
+            )
+
+    def fake_reserve_failure(**_kwargs: object) -> object:
+        raise OSError("simulated ledger error")
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        run_ask_module,
+        "reserve_live_eval_cost",
+        fake_reserve_failure,
+    )
+
+    with pytest.raises(RuntimeError, match="rejection evidence was written"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://eval:test@127.0.0.1:6543/eval",
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+    rejection_path = output_path.with_name(
+        "phase0-report.ask-eval-phase0-reservation-failure.execution-rejected.json"
+    )
+    rejection = json.loads(rejection_path.read_text(encoding="utf-8"))
+    assert not output_path.exists()
+    assert rejection["phase0_run"]["failure_stage"] == "cost_reservation"
+    assert rejection["phase0_run"]["executed_cases_total"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_stage"),
+    [
+        ("postflight", "runtime_postflight"),
+        ("trace_pool_close", "trace_pool_close"),
+    ],
+)
+async def test_phase0_runtime_failure_writes_private_rejection_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+    expected_stage: str,
+) -> None:
+    (
+        private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        run_ask_module,
+        "uuid4",
+        lambda: "phase0-postflight",
+    )
+
+    class TracePool:
+        async def close(self) -> None:
+            if failure_mode == "trace_pool_close":
+                raise RuntimeError("simulated trace pool close failure")
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> TracePool:
+        return TracePool()
+
+    ready_calls = 0
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, _url: str, **_kwargs: object) -> httpx.Response:
+            nonlocal ready_calls
+            ready_calls += 1
+            runtime_sha = (
+                "e" * 40
+                if failure_mode == "postflight" and ready_calls == 2
+                else SOURCE_DIAGNOSTIC_RUNTIME_SHA
+            )
+            return httpx.Response(
+                200,
+                json=_ready_payload(release_git_sha=runtime_sha),
+            )
+
+    async def fake_run_case(**kwargs: object) -> dict[str, object]:
+        case = kwargs["case"]
+        case_id = str(case["id"])
+        case_index = int(case_id.rsplit("-", maxsplit=1)[-1]) + 1
+        return {
+            "id": case_id,
+            "request_id": f"00000000-0000-0000-0000-{case_index:012d}",
+            "http_success": True,
+            "trace_found": True,
+            "llm_accounting_present": True,
+            "llm_usage": [],
+            "llm_total_tokens": 0,
+            "llm_estimated_cost_rub": 0.0,
+        }
+
+    def fake_reserve(**kwargs: object) -> object:
+        return run_ask_module.LiveEvalCostReservation(
+            path=private_root / "phase0-reservation.json",
+            record={
+                **kwargs,
+                "private_full": False,
+                "approval_required": True,
+            },
+        )
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(run_ask_module, "_run_case", fake_run_case)
+    monkeypatch.setattr(run_ask_module, "reserve_live_eval_cost", fake_reserve)
+
+    with pytest.raises(RuntimeError, match="rejection evidence was written"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://127.0.0.1:8001/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://eval:test@127.0.0.1:6543/eval",
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+        )
+
+    rejection_path = output_path.with_name(
+        "phase0-report.ask-eval-phase0-postflight.execution-rejected.json"
+    )
+    rejection = json.loads(rejection_path.read_text(encoding="utf-8"))
+    assert ready_calls == 2
+    assert not output_path.exists()
+    assert rejection["phase0_run"]["failure_stage"] == expected_stage
+    assert rejection["phase0_run"]["executed_cases_total"] == 30
+    assert rejection["phase0_run"]["selective_reruns_forbidden"] is True
+
+
+def test_source_diagnostic_rejects_direct_app_ml_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_path, output_path = _source_diagnostic_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    case = run_ask_module._normalize_case(
+        _source_observed_diagnostic_case(),
+        allow_source_observed_diagnostic=True,
+    )
+
+    with pytest.raises(ValueError, match="SSH-forwarded loopback"):
+        _guard_eval_privacy(
+            cases=[case],
+            cases_path=cases_path,
+            output_path=output_path,
+            markdown_path=None,
+            target="http://app-ml:8000/ask",
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_phase0_trace_cardinality_binds_request_case_pairs() -> None:
+    expected = [
+        (
+            f"00000000-0000-0000-0000-{index + 1:012d}",
+            f"case-{index + 1:03d}",
+        )
+        for index in range(run_ask_module.PHASE0_CASES_TOTAL)
+    ]
+
+    class CardinalityPool:
+        async def fetch(self, query: str, eval_run_id: str) -> list[dict[str, object]]:
+            assert "SELECT request_id, eval_case_id, cache_hit" in query
+            assert eval_run_id == "ask-eval-phase0"
+            return [
+                {
+                    "request_id": request_id,
+                    "eval_case_id": case_id,
+                    "cache_hit": False,
+                }
+                for request_id, case_id in expected
+            ]
+
+    summary = await run_ask_module._fetch_phase0_trace_cardinality(
+        CardinalityPool(),  # type: ignore[arg-type]
+        eval_run_id="ask-eval-phase0",
+        expected_request_case_pairs=expected,
+    )
+
+    assert summary["request_case_pairs_match"] is True
+    assert summary["traces_total"] == run_ask_module.PHASE0_CASES_TOTAL
+    assert summary["cache_hit_false_total"] == run_ask_module.PHASE0_CASES_TOTAL
+    assert summary["missing_request_case_pairs_total"] == 0
+    assert summary["unexpected_request_case_pairs_total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_phase0_finalization_writes_private_rejection_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "private" / "phase0-report.json"
+    metrics = {"phase0_run": {"status": "completed", "completed": True}}
+    original_writer = run_ask_module._write_json_exclusive
+
+    def fail_canonical_only(path: Path, payload: dict[str, object]) -> None:
+        if path == output_path:
+            raise OSError("simulated canonical write failure")
+        original_writer(path, payload)
+
+    monkeypatch.setattr(
+        run_ask_module,
+        "_write_json_exclusive",
+        fail_canonical_only,
+    )
+
+    with pytest.raises(RuntimeError, match="rejection evidence was written"):
+        await run_ask_module._finalize_phase0_report(
+            output_path=output_path,
+            metrics=metrics,
+            eval_run_id="ask-eval-finalization-test",
+        )
+
+    rejection_path = output_path.with_name(
+        "phase0-report.ask-eval-finalization-test.finalization-rejected.json"
+    )
+    assert not output_path.exists()
+    assert rejection_path.is_file()
+    rejection = json.loads(rejection_path.read_text(encoding="utf-8"))
+    assert rejection["phase0_run"]["status"] == "finalization_failed"
+    assert rejection["phase0_run"]["integrity_failures"] == [
+        "exclusive_finalization_failed"
+    ]

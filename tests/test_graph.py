@@ -25,6 +25,7 @@ from src.graph.nodes.retrieve import retrieve
 from src.graph.nodes.verify import UNKNOWN_FORUM_RESPONSE, verify
 from src.graph.query_normalization import expand_query_aliases
 from src.graph.question_utils import build_effective_questions, named_section_entities
+from src.logging.tracer import Tracer
 from src.models import (
     Channel,
     Chunk,
@@ -2417,7 +2418,7 @@ async def test_analyze_keeps_llm_for_unclear_query_when_available() -> None:
 
     assert llm.calls == 1
     assert result["analysis"].category == "общее"
-    assert "analyzer_mode" not in result
+    assert result["analyzer_mode"] == "llm"
 
 
 @pytest.mark.asyncio
@@ -2501,6 +2502,7 @@ async def test_analyze_clarifies_unclear_query_on_llm_outage() -> None:
     )
 
     assert result.get("should_escalate") is not True
+    assert result["analyzer_mode"] == "fallback"
     assert result["analyzer_fallback"] is True
     assert result["analysis"].needs_clarification is True
     assert result["analysis"].category == "общее"
@@ -2892,6 +2894,58 @@ async def test_retrieve_uses_metadata_lookup_for_exact_topic_attempts() -> None:
             10,
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_traces_metadata_miss_and_hybrid_candidates() -> None:
+    class MetadataMissRetriever:
+        async def retrieve_by_metadata(self, filters: dict, top_k: int):
+            return []
+
+        async def retrieve(self, query: str, filters: dict, top_k: int):
+            if filters == {"forum_normalized": "Forum A", "source_type": "yonote"}:
+                return [
+                    YonoteChunk(
+                        chunk_id="hybrid_schedule",
+                        text="Forum schedule.",
+                        score=0.8,
+                    )
+                ]
+            return []
+
+    tracer = Tracer()
+    result = await retrieve(
+        {
+            "analysis": QueryAnalysis(
+                forum_normalized="Forum A",
+                category="forums",
+                questions=[
+                    Question(
+                        text="Where is the schedule?",
+                        topic="schedule",
+                    )
+                ],
+            ),
+            "retriever": MetadataMissRetriever(),
+            "trace": tracer,
+        }
+    )
+
+    assert [chunk.chunk_id for chunk in result["retrieved_chunks"]] == [
+        "hybrid_schedule"
+    ]
+    metadata = tracer.events[-1].metadata
+    assert metadata["retrieval_method"] == "mixed"
+    assert metadata["metadata_lookup_attempted"] is True
+    assert metadata["metadata_lookup_succeeded"] is False
+    assert metadata["metadata_lookup_result_count"] == 0
+    assert metadata["hybrid_candidates_present"] is True
+    attempts = metadata["question_provenance"][0]["attempts"]
+    assert attempts[0]["retrieval_method"] == "metadata"
+    assert attempts[0]["metadata_lookup_attempted"] is True
+    assert attempts[0]["metadata_lookup_succeeded"] is False
+    assert attempts[1]["retrieval_method"] == "hybrid"
+    assert attempts[1]["hybrid_candidates_present"] is True
 
 
 @pytest.mark.asyncio
@@ -3502,6 +3556,7 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
         ),
     ]
 
+    tracer = Tracer()
     result = await rerank(
         {
             "message_masked": "Амур: документы, трансфер и возраст участников?",
@@ -3516,12 +3571,21 @@ async def test_rerank_uses_source_only_fast_path_for_exact_forum_scope(
             ),
             "retrieved_chunks": chunks,
             "reranker": FailingReranker(),
+            "trace": tracer,
         }
     )
 
     chunk_ids = {chunk.chunk_id for chunk in result["reranked_chunks"]}
     assert {"amur_docs", "amur_transfer", "amur_age"} <= chunk_ids
     assert result["max_confidence"] == 0.7
+    metadata = tracer.events[-1].metadata
+    assert metadata["reranker_invoked"] is False
+    assert metadata["raw_reranker_scores"] == []
+    assert metadata["raw_reranker_max"] is None
+    assert metadata["score_origin"] == "synthetic"
+    assert metadata["synthetic_score_applied"] is True
+    assert metadata["synthetic_high_score_applied"] is True
+    assert metadata["floor_applied"] is False
 
 
 @pytest.mark.asyncio
@@ -5467,17 +5531,27 @@ async def test_rerank_uses_retrieval_confidence_floor_for_exact_forum_hit(
         )
     ]
 
+    tracer = Tracer()
     result = await rerank(
         {
             "message_masked": "[ИМЯ] Вышлите положение",
             "analysis": QueryAnalysis(forum_normalized="Машук", category="техподдержка"),
             "retrieved_chunks": chunks,
             "reranker": LowScoreReranker(),
+            "trace": tracer,
         }
     )
 
     assert result.get("should_escalate") is not True
     assert result["max_confidence"] == 0.7
+    metadata = tracer.events[-1].metadata
+    assert metadata["reranker_invoked"] is True
+    assert metadata["raw_reranker_scores"] == [0.001]
+    assert metadata["raw_reranker_max"] == 0.001
+    assert metadata["score_origin"] == "reranker"
+    assert metadata["synthetic_score_applied"] is False
+    assert metadata["synthetic_high_score_applied"] is False
+    assert metadata["floor_applied"] is True
 
 
 @pytest.mark.asyncio

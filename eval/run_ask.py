@@ -9,6 +9,7 @@ import os
 import re
 import sys
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -49,8 +50,33 @@ PRIVATE_HOLDOUT_SPLIT = "holdout"
 PRIVATE_EVAL_SPLITS = frozenset({"calibration", "validation", PRIVATE_HOLDOUT_SPLIT})
 ALLOWED_PRIVACY_CLASSES = {"standard", PRIVATE_TICKET_DERIVED}
 PRIVATE_EVAL_HOSTS = {"localhost", "127.0.0.1", "::1", "app-ml"}
+SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 HUMAN_REVIEW_MODE = "human_reviewed"
 MODEL_ASSISTED_PRERUN_MODE = "model_assisted_prerun"
+SOURCE_OBSERVED_DIAGNOSTIC_MODE = "source_observed_diagnostic"
+PHASE0_APPROVAL_ID = "RAG-PHASE0-30-20260805"
+PHASE0_COST_CAP_RUB = 200.0
+PHASE0_CASES_TOTAL = 30
+PHASE0_COST_SCOPE = "phase0-social-30"
+PHASE0_COST_LEDGER_DIRNAME = "phase0-social-30-cost-ledger-v1"
+PHASE0_RUNNER_CASE_FIELDS = frozenset(
+    {
+        "id",
+        "query",
+        "privacy_class",
+        "split",
+        "label_status",
+        "requires_human_review",
+        "user_id",
+        "channel",
+        "tags",
+    }
+)
+PHASE0_RUNNER_TAGS = [
+    "benchmark:social_only_v1",
+    "measurement:source_observed_diagnostic",
+    "split:calibration",
+]
 HOLDOUT_REVIEW_MODES = frozenset(
     {
         HUMAN_REVIEW_MODE,
@@ -106,6 +132,35 @@ NON_ANSWER_RE = re.compile(
 )
 EXPECTED_BEHAVIORS = {"answer", "clarify", "scope_note", "escalate"}
 EXPECTED_RESPONSE_PROFILES = {profile.value for profile in ResponseProfileName}
+SOURCE_DIAGNOSTIC_EXPECTATION_FIELDS = frozenset(
+    {
+        "allowed_cited_source_types",
+        "answer_contains",
+        "acceptable_chunk_ids",
+        "behavior",
+        "equivalent_chunk_ids",
+        "equivalent_chunks",
+        "expected_answer_contains",
+        "expected_behavior",
+        "expected_chunk_ids",
+        "expected_chunks",
+        "expected_cited_chunk_ids",
+        "expected_cited_sources",
+        "expected_escalated",
+        "expected_escalation_reason",
+        "expected_generator_model",
+        "expected_message_masked_contains",
+        "expected_profile",
+        "expected_response_profile",
+        "expected_response_type",
+        "forbidden_message_masked_contains",
+        "forbidden_profiles",
+        "forbidden_response_profiles",
+        "qrels",
+        "relevant_chunk_ids",
+        "response_profile",
+    }
+)
 EVAL_CRITICAL_FORBIDDEN_RESPONSE_PROFILES: dict[str, tuple[str, ...]] = {
     "dates": ("application", "selection_status", "travel"),
     "application": ("dates", "selection_status", "travel"),
@@ -198,6 +253,7 @@ def _normalize_case(
     raw: dict[str, Any],
     *,
     allow_model_assisted_prerun: bool = False,
+    allow_source_observed_diagnostic: bool = False,
 ) -> dict[str, Any]:
     label_status = str(raw.get("label_status") or "").strip().casefold()
     review_flag = raw.get("requires_human_review")
@@ -206,6 +262,9 @@ def _normalize_case(
         and review_flag.strip().casefold() in {"1", "true", "yes"}
     )
     model_assisted_prerun = label_status == MODEL_ASSISTED_PRERUN_MODE
+    source_observed_diagnostic = (
+        label_status == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+    )
     if label_status.startswith("weak_") or (
         review_required and not model_assisted_prerun
     ):
@@ -215,6 +274,10 @@ def _normalize_case(
     if model_assisted_prerun and not allow_model_assisted_prerun:
         raise ValueError(
             "model_assisted_prerun requires an explicit runner opt-in"
+        )
+    if source_observed_diagnostic and not allow_source_observed_diagnostic:
+        raise ValueError(
+            "source_observed_diagnostic requires an explicit runner opt-in"
         )
     query = raw.get("query") or raw.get("question") or raw.get("text")
     if not query:
@@ -249,6 +312,17 @@ def _normalize_case(
                     "model_assisted_prerun is only valid for a sealed holdout "
                     "with requires_human_review=true"
                 )
+        elif source_observed_diagnostic:
+            if split != "calibration" or review_flag is not False:
+                raise ValueError(
+                    "source_observed_diagnostic is only valid for private "
+                    "calibration with requires_human_review=false"
+                )
+            if _has_explicit_case_expectation(raw):
+                raise ValueError(
+                    "source_observed_diagnostic cannot contain expected "
+                    "behavior, qrels, citations, or verdict fields"
+                )
         else:
             raise ValueError(
                 "private_ticket_derived cases require an explicit "
@@ -262,6 +336,10 @@ def _normalize_case(
     elif model_assisted_prerun:
         raise ValueError(
             "model_assisted_prerun requires privacy_class=private_ticket_derived"
+        )
+    elif source_observed_diagnostic:
+        raise ValueError(
+            "source_observed_diagnostic requires privacy_class=private_ticket_derived"
         )
 
     split_holdout = split == PRIVATE_HOLDOUT_SPLIT
@@ -301,11 +379,13 @@ def _normalize_case(
                 "holdout_contract review_mode must match case label_status"
             )
 
-    expected_behavior = _normalize_expected_behavior(
-        raw.get("expected_behavior")
-        or raw.get("expected_response_type")
-        or raw.get("behavior")
-    ) or _infer_expected_behavior(raw, str(query))
+    expected_behavior = None
+    if not source_observed_diagnostic:
+        expected_behavior = _normalize_expected_behavior(
+            raw.get("expected_behavior")
+            or raw.get("expected_response_type")
+            or raw.get("behavior")
+        ) or _infer_expected_behavior(raw, str(query))
     expected_chunk_ids = _string_list(
         raw.get("expected_chunk_ids")
         or raw.get("expected_chunks")
@@ -386,6 +466,8 @@ def _normalize_case(
         "expected_generator_model": raw.get("expected_generator_model"),
         "tags": tags,
     }
+    if label_status:
+        normalized["label_status"] = label_status
     if split:
         normalized["split"] = split
     if gold_ticket_case:
@@ -394,6 +476,16 @@ def _normalize_case(
     if holdout_contract is not None:
         normalized["holdout_contract"] = holdout_contract
     return normalized
+
+
+def _has_explicit_case_expectation(raw: Mapping[str, Any]) -> bool:
+    for field in SOURCE_DIAGNOSTIC_EXPECTATION_FIELDS:
+        if field not in raw:
+            continue
+        value = raw[field]
+        if value not in (None, "", [], {}):
+            return True
+    return False
 
 
 def _normalize_holdout_contract(value: Any) -> dict[str, Any]:
@@ -594,14 +686,20 @@ async def run_eval(
     cost_ledger_dir: Path | None = None,
     cost_runtime_git_sha: str | None = None,
     cost_reservation: LiveEvalCostReservation | None = None,
+    allow_source_observed_diagnostic: bool = False,
+    phase0_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
+    run_started_at = datetime.now(UTC)
     eval_run_id = f"ask-eval-{uuid4()}"
     if sealed_holdout and calibration_replay:
         raise ValueError("sealed_holdout and calibration_replay are mutually exclusive")
     private_contract_run = sealed_holdout or calibration_replay
+    source_diagnostic_requested = allow_source_observed_diagnostic
+    strict_live = not _is_in_process_mock_transport(transport)
     effective_api_key_env = (
         "API_AUTH_TOKEN"
-        if private_contract_run and api_key_env is None
+        if (private_contract_run or source_diagnostic_requested)
+        and api_key_env is None
         else api_key_env
     )
     headers = _auth_headers(effective_api_key_env)
@@ -615,10 +713,15 @@ async def run_eval(
             "allow_model_assisted_prerun requires sealed_holdout or "
             "calibration_replay mode"
         )
+    if allow_source_observed_diagnostic and private_contract_run:
+        raise ValueError(
+            "source_observed_diagnostic cannot be combined with holdout modes"
+        )
     _guard_eval_artifact_aliases(
         cases_path=cases_path,
         output_path=output_path,
         markdown_path=markdown_path,
+        extra_paths=[phase0_manifest_path] if phase0_manifest_path is not None else None,
     )
     (
         cases,
@@ -632,7 +735,66 @@ async def run_eval(
         max_smoke_cases=max_smoke_cases,
         user_prefix=generated_user_prefix or _default_generated_user_prefix("ask-eval"),
         allow_model_assisted_prerun=allow_model_assisted_prerun,
+        allow_source_observed_diagnostic=allow_source_observed_diagnostic,
     )
+    source_diagnostic_cases = [
+        case
+        for case in cases
+        if case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+    ]
+    if source_diagnostic_cases and len(source_diagnostic_cases) != len(cases):
+        raise ValueError(
+            "source_observed_diagnostic cases cannot be mixed with scored cases"
+        )
+    if bool(source_diagnostic_cases) != allow_source_observed_diagnostic:
+        raise ValueError(
+            "source_observed_diagnostic cases and explicit runner opt-in "
+            "must be used together"
+        )
+    phase0_contract: dict[str, Any] | None = None
+    if high_cost_approval_id == PHASE0_APPROVAL_ID and phase0_manifest_path is None:
+        raise ValueError(
+            f"{PHASE0_APPROVAL_ID} requires --phase0-manifest before any live request"
+        )
+    if phase0_manifest_path is not None:
+        if not source_diagnostic_cases:
+            raise ValueError(
+                "--phase0-manifest requires source_observed_diagnostic cases"
+            )
+        phase0_contract = _validated_phase0_execution_contract(
+            manifest_path=phase0_manifest_path,
+            cases_path=cases_path,
+            cases=cases,
+            cases_file_sha256=cases_file_sha256,
+            expected_cases_file_sha256=expected_cases_file_sha256,
+            expected_runtime_git_sha=expected_runtime_git_sha,
+            high_cost_approval_id=high_cost_approval_id,
+            max_llm_cost_rub=max_llm_cost_rub,
+            bypass_cache=bypass_cache,
+            trace_lookup=trace_lookup,
+            max_cases=max_cases,
+            auto_smoke_cases=auto_smoke_cases,
+            generated_user_prefix=generated_user_prefix,
+            concurrency=concurrency,
+            target=target,
+            trace_dsn=trace_dsn,
+            strict_live=strict_live,
+            cost_runtime_git_sha=cost_runtime_git_sha,
+            cost_ledger_dir=cost_ledger_dir,
+            cost_reservation=cost_reservation,
+            transport=transport,
+            markdown_path=markdown_path,
+        )
+        canonical_existing = [
+            str(path)
+            for path in (output_path, markdown_path)
+            if path is not None and _path_lexists(path)
+        ]
+        if canonical_existing:
+            raise FileExistsError(
+                "Phase 0 canonical output and markdown must be absent: "
+                + ", ".join(canonical_existing)
+            )
     holdout_contract = _validate_holdout_run_contract(
         cases,
         raw_cases_payload_sha256=raw_cases_payload_sha256,
@@ -655,14 +817,26 @@ async def run_eval(
     if not private_contract_run and (
         expected_holdout_freeze_sha256 is not None
         or expected_cases_payload_sha256 is not None
-        or expected_cases_file_sha256 is not None
         or holdout_ledger_dir is not None
-        or expected_runtime_git_sha is not None
         or calibration_replay_ledger_dir is not None
     ):
         raise ValueError(
             "private contract identity and ledger options require sealed_holdout "
             "or calibration_replay mode"
+        )
+    if expected_cases_file_sha256 is not None and not (
+        private_contract_run or phase0_contract is not None
+    ):
+        raise ValueError(
+            "expected_cases_file_sha256 requires a private holdout/replay or "
+            "an approved Phase 0 manifest"
+        )
+    if expected_runtime_git_sha is not None and not (
+        calibration_replay or source_diagnostic_cases
+    ):
+        raise ValueError(
+            "expected_runtime_git_sha is only valid for calibration_replay "
+            "or source_observed_diagnostic"
         )
     if sealed_holdout and (
         expected_runtime_git_sha is not None
@@ -689,6 +863,8 @@ async def run_eval(
     holdout_completed_receipt_path: Path | None = None
     source_holdout_contract: dict[str, Any] | None = None
     evaluation_runtime_git_sha: str | None = None
+    verified_runtime_git_sha_preflight: str | None = None
+    verified_runtime_git_sha_postflight: str | None = None
     prior_sealed_exposure_receipts: list[str] = []
     private_report_context: dict[str, Any] = {}
     private_run_label = (
@@ -894,6 +1070,15 @@ async def run_eval(
                 f"{private_run_label} preflight failed: "
                 + ", ".join(preflight_failures)
             )
+    elif source_diagnostic_cases:
+        evaluation_runtime_git_sha = _validated_source_diagnostic_runtime_sha(
+            expected_runtime_git_sha,
+            required=strict_live,
+        )
+        if strict_live and not bypass_cache:
+            raise ValueError(
+                "strict-live source_observed_diagnostic requires signed cache bypass"
+            )
     original_cases_total = len(cases)
     if max_cases is not None:
         if holdout_contract is not None:
@@ -1002,7 +1187,11 @@ async def run_eval(
             f"{private_run_label} requires an available trace lookup connection"
         )
 
-    if not _is_in_process_mock_transport(transport) and cases:
+    if (
+        not _is_in_process_mock_transport(transport)
+        and cases
+        and phase0_contract is None
+    ):
         try:
             if validated_cost_reservation is None:
                 assert max_llm_cost_rub is not None
@@ -1031,6 +1220,15 @@ async def run_eval(
                     max_llm_cost_rub=max_llm_cost_rub,
                     private_full=private_contract_run,
                 )
+            if source_diagnostic_cases and evaluation_runtime_git_sha is not None:
+                reservation_runtime_git_sha = str(
+                    validated_cost_reservation.record.get("runtime_git_sha") or ""
+                )
+                if reservation_runtime_git_sha != evaluation_runtime_git_sha:
+                    raise CostGovernanceError(
+                        "source_observed_diagnostic cost reservation runtime Git "
+                        "SHA differs from the expected evaluation runtime"
+                    )
             if private_contract_run:
                 assert holdout_contract is not None
                 assert holdout_ledger is not None
@@ -1082,27 +1280,30 @@ async def run_eval(
     llm_pricing_failure: str | None = None
     holdout_trace_cardinality: dict[str, Any] | None = None
     holdout_trace_cardinality_error: str | None = None
+    results: list[dict[str, Any]] = []
+    phase0_execution_stage = "http_client_setup"
+    phase0_reservation_started = False
+    phase0_rejection_path: Path | None = None
     try:
         async with httpx.AsyncClient(
             transport=transport,
             timeout=request_timeout,
             trust_env=False,
         ) as client:
-            if holdout_contract is not None or (
+            if source_diagnostic_cases or holdout_contract is not None or (
                 bypass_cache and _requires_signed_cache_bypass(target)
             ):
+                phase0_execution_stage = "runtime_preflight"
                 try:
-                    await _verify_cache_bypass_runtime(
-                        client=client,
-                        target=target,
-                        headers=headers,
-                        expected_git_sha=(
-                            evaluation_runtime_git_sha
-                            if holdout_contract is not None
-                            else None
-                        ),
-                        eval_run_id=eval_run_id,
-                        cache_bypass_secret=cache_bypass_secret,
+                    verified_runtime_git_sha_preflight = (
+                        await _verify_cache_bypass_runtime(
+                            client=client,
+                            target=target,
+                            headers=headers,
+                            expected_git_sha=evaluation_runtime_git_sha,
+                            eval_run_id=eval_run_id,
+                            cache_bypass_secret=cache_bypass_secret,
+                        )
                     )
                 except ValueError as exc:
                     if holdout_contract is not None:
@@ -1176,11 +1377,45 @@ async def run_eval(
                         raise RuntimeError(
                             f"{private_run_label} started receipt could not be created"
                         ) from exc
+                if phase0_contract is not None:
+                    phase0_execution_stage = "cost_reservation"
+                    phase0_reservation_started = True
+                    try:
+                        if validated_cost_reservation is None:
+                            validated_cost_reservation = reserve_live_eval_cost(
+                                scope=PHASE0_COST_SCOPE,
+                                run_id=eval_run_id,
+                                runtime_git_sha=phase0_contract["runtime_git_sha"],
+                                manifest_sha256=phase0_contract["cases_file_sha256"],
+                                case_count=PHASE0_CASES_TOTAL,
+                                approved_cap_rub=PHASE0_COST_CAP_RUB,
+                                private_full=False,
+                                high_cost_approval_id=PHASE0_APPROVAL_ID,
+                                ledger_dir=phase0_contract["cost_ledger_dir"],
+                            )
+                        else:
+                            _validate_cost_reservation_for_child_run(
+                                validated_cost_reservation,
+                                case_count=PHASE0_CASES_TOTAL,
+                                max_llm_cost_rub=PHASE0_COST_CAP_RUB,
+                                private_full=False,
+                            )
+                        _validate_phase0_cost_reservation(
+                            validated_cost_reservation,
+                            eval_run_id=eval_run_id,
+                            contract=phase0_contract,
+                        )
+                    except (OSError, ValueError) as exc:
+                        raise ValueError(
+                            "Phase 0 cost-governance preflight failed after "
+                            f"runtime verification: {exc}"
+                        ) from exc
             strict_live_cost_control = (
                 not _is_in_process_mock_transport(transport)
                 and max_llm_cost_rub is not None
             )
             if max_llm_cost_rub is None:
+                phase0_execution_stage = "case_execution"
                 tasks = [
                     _run_case(
                         client=client,
@@ -1199,7 +1434,7 @@ async def run_eval(
             else:
                 # Budget enforcement needs trace usage after each response, so run cases
                 # sequentially.
-                results = []
+                phase0_execution_stage = "case_execution"
                 strict_cost_total = 0.0
                 sequential_semaphore = asyncio.Semaphore(1)
                 for case_index, case in enumerate(cases):
@@ -1232,54 +1467,145 @@ async def run_eval(
                     elif _llm_cost_rub_total(results) > max_llm_cost_rub:
                         budget_stopped = True
                         break
-            if holdout_contract is not None:
+            if holdout_contract is not None or source_diagnostic_cases:
+                phase0_execution_stage = "runtime_postflight"
                 try:
-                    await _verify_cache_bypass_runtime(
-                        client=client,
-                        target=target,
-                        headers=headers,
-                        expected_git_sha=evaluation_runtime_git_sha,
-                        eval_run_id=eval_run_id,
-                        cache_bypass_secret=cache_bypass_secret,
+                    verified_runtime_git_sha_postflight = (
+                        await _verify_cache_bypass_runtime(
+                            client=client,
+                            target=target,
+                            headers=headers,
+                            expected_git_sha=evaluation_runtime_git_sha,
+                            eval_run_id=eval_run_id,
+                            cache_bypass_secret=cache_bypass_secret,
+                        )
                     )
                 except ValueError as exc:
-                    assert holdout_ledger is not None
-                    assert holdout_receipt_key is not None
-                    await _write_holdout_rejection_report(
-                        ledger_dir=holdout_ledger,
-                        receipt_key=holdout_receipt_key,
-                        target=target,
-                        cases_path=cases_path,
-                        eval_run_id=eval_run_id,
-                        contract=holdout_contract,
-                        expected_cases_file_sha256=expected_file_sha256,
-                        status="post_runtime_rejected",
-                        failures=["post_runtime_ready_check_failed"],
-                        executed_cases_total=len(results),
-                        receipt_path=holdout_receipt_path,
-                        detail=str(exc),
-                        base_metrics=summarize_results(
-                            results,
+                    if holdout_contract is not None:
+                        assert holdout_ledger is not None
+                        assert holdout_receipt_key is not None
+                        await _write_holdout_rejection_report(
+                            ledger_dir=holdout_ledger,
+                            receipt_key=holdout_receipt_key,
                             target=target,
                             cases_path=cases_path,
-                            generated_smoke_cases=generated_smoke_cases,
-                            trace_lookup_error=trace_lookup_error,
-                        ),
-                        **private_report_context,
-                    )
+                            eval_run_id=eval_run_id,
+                            contract=holdout_contract,
+                            expected_cases_file_sha256=expected_file_sha256,
+                            status="post_runtime_rejected",
+                            failures=["post_runtime_ready_check_failed"],
+                            executed_cases_total=len(results),
+                            receipt_path=holdout_receipt_path,
+                            detail=str(exc),
+                            base_metrics=summarize_results(
+                                results,
+                                target=target,
+                                cases_path=cases_path,
+                                generated_smoke_cases=generated_smoke_cases,
+                                trace_lookup_error=trace_lookup_error,
+                            ),
+                            **private_report_context,
+                        )
                     raise
-                assert trace_pool is not None
-                try:
-                    holdout_trace_cardinality = await _fetch_eval_trace_cardinality(
-                        trace_pool,
-                        eval_run_id=eval_run_id,
-                        expected_case_ids=[str(case["id"]) for case in cases],
-                    )
-                except Exception as exc:
-                    holdout_trace_cardinality_error = type(exc).__name__
+                if holdout_contract is not None or phase0_contract is not None:
+                    assert trace_pool is not None
+                    phase0_execution_stage = "trace_cardinality"
+                    try:
+                        if phase0_contract is not None:
+                            holdout_trace_cardinality = (
+                                await _fetch_phase0_trace_cardinality(
+                                    trace_pool,
+                                    eval_run_id=eval_run_id,
+                                    expected_request_case_pairs=[
+                                        (
+                                            str(result.get("request_id") or ""),
+                                            str(result.get("id") or ""),
+                                        )
+                                        for result in results
+                                    ],
+                                )
+                            )
+                        else:
+                            holdout_trace_cardinality = (
+                                await _fetch_eval_trace_cardinality(
+                                    trace_pool,
+                                    eval_run_id=eval_run_id,
+                                    expected_case_ids=[
+                                        str(case["id"]) for case in cases
+                                    ],
+                                )
+                            )
+                    except Exception as exc:
+                        holdout_trace_cardinality_error = type(exc).__name__
+            phase0_execution_stage = "completed"
+    except Exception as exc:
+        if phase0_contract is not None and phase0_reservation_started:
+            try:
+                phase0_rejection_path = await _write_phase0_execution_rejection(
+                    output_path=output_path,
+                    eval_run_id=eval_run_id,
+                    run_started_at=run_started_at,
+                    target=target,
+                    cases_path=cases_path,
+                    cases_file_sha256=cases_file_sha256,
+                    phase0_contract=phase0_contract,
+                    results=results,
+                    trace_lookup_error=trace_lookup_error,
+                    trace_cardinality=holdout_trace_cardinality,
+                    trace_cardinality_error=holdout_trace_cardinality_error,
+                    reservation=validated_cost_reservation,
+                    stage=phase0_execution_stage,
+                    error=exc,
+                )
+            except Exception as rejection_exc:
+                raise RuntimeError(
+                    "Phase 0 failed after cost reservation and rejection "
+                    "evidence could not be written"
+                ) from rejection_exc
+            raise RuntimeError(
+                "Phase 0 failed after cost reservation; private rejection "
+                f"evidence was written to {phase0_rejection_path.name}"
+            ) from exc
+        raise
     finally:
         if trace_pool:
-            await trace_pool.close()
+            try:
+                await trace_pool.close()
+            except Exception as close_exc:
+                if phase0_contract is not None and phase0_reservation_started:
+                    if phase0_rejection_path is None:
+                        try:
+                            phase0_rejection_path = (
+                                await _write_phase0_execution_rejection(
+                                    output_path=output_path,
+                                    eval_run_id=eval_run_id,
+                                    run_started_at=run_started_at,
+                                    target=target,
+                                    cases_path=cases_path,
+                                    cases_file_sha256=cases_file_sha256,
+                                    phase0_contract=phase0_contract,
+                                    results=results,
+                                    trace_lookup_error=trace_lookup_error,
+                                    trace_cardinality=holdout_trace_cardinality,
+                                    trace_cardinality_error=(
+                                        holdout_trace_cardinality_error
+                                    ),
+                                    reservation=validated_cost_reservation,
+                                    stage="trace_pool_close",
+                                    error=close_exc,
+                                )
+                            )
+                        except Exception as rejection_exc:
+                            raise RuntimeError(
+                                "Phase 0 trace pool close failed and rejection "
+                                "evidence could not be written"
+                            ) from rejection_exc
+                    raise RuntimeError(
+                        "Phase 0 trace pool close failed; private rejection "
+                        "evidence was written to "
+                        f"{phase0_rejection_path.name}"
+                    ) from close_exc
+                raise
 
     metrics = summarize_results(
         results,
@@ -1288,7 +1614,26 @@ async def run_eval(
         generated_smoke_cases=generated_smoke_cases,
         trace_lookup_error=trace_lookup_error,
     )
+    metrics["run_started_at"] = run_started_at.isoformat()
+    metrics["run_completed_at"] = datetime.now(UTC).isoformat()
     metrics["eval_run_id"] = eval_run_id
+    metrics["cases_file_sha256"] = cases_file_sha256
+    if source_diagnostic_cases:
+        metrics["report_classification"] = {
+            "evaluation_classification": SOURCE_OBSERVED_DIAGNOSTIC_MODE,
+            "provisional": True,
+            "calibration_only": True,
+            "independent_evaluation": False,
+            "previously_exposed": True,
+            "product_verdict_eligible": False,
+            "human_product_verdict": False,
+        }
+        metrics["cases_passed"] = None
+        metrics["pass_rate"] = None
+    if phase0_contract is not None:
+        metrics["trace_cardinality"] = holdout_trace_cardinality
+        if holdout_trace_cardinality_error is not None:
+            metrics["trace_cardinality_error"] = holdout_trace_cardinality_error
     private_run_key = "calibration_replay" if calibration_replay else "holdout_run"
     if holdout_contract is not None:
         if calibration_replay:
@@ -1309,16 +1654,34 @@ async def run_eval(
         max_cases=max_cases,
         max_llm_cost_rub=max_llm_cost_rub,
     )
+    runtime_identity = _runtime_identity_report(
+        expected_runtime_git_sha=evaluation_runtime_git_sha,
+        preflight_release_git_sha=verified_runtime_git_sha_preflight,
+        postflight_release_git_sha=verified_runtime_git_sha_postflight,
+        required=(
+            holdout_contract is not None
+            or bool(source_diagnostic_cases)
+            and (strict_live or evaluation_runtime_git_sha is not None)
+        ),
+    )
+    if (
+        source_diagnostic_cases
+        and strict_live
+        and runtime_identity["status"] != "verified"
+    ):
+        raise RuntimeError(
+            "strict-live source_observed_diagnostic runtime identity was not verified"
+        )
+    metrics["runtime_identity"] = runtime_identity
     metrics["cost_control"] = {
-        "strict_live": not _is_in_process_mock_transport(transport),
+        "strict_live": strict_live,
         "routine_run_cap_rub": ROUTINE_LIVE_EVAL_MAX_COST_RUB,
         "routine_run_max_cases": ROUTINE_LIVE_EVAL_MAX_CASES,
         "high_cost_approval_id": validated_high_cost_approval_id,
         "pricing_complete": llm_pricing_failure is None,
-        "reservation": (
-            validated_cost_reservation.path.name
-            if validated_cost_reservation is not None
-            else None
+        "reservation": _safe_cost_reservation_report(
+            validated_cost_reservation,
+            cases_file_sha256=cases_file_sha256,
         ),
     }
     if budget_stopped:
@@ -1330,6 +1693,54 @@ async def run_eval(
         metrics["cases_limited"] = True
         metrics["llm_pricing_stopped"] = True
         metrics["llm_pricing_failure"] = llm_pricing_failure
+    phase0_failures: list[str] = []
+    if phase0_contract is not None:
+        phase0_failures = _phase0_integrity_failures(
+            metrics,
+            results=results,
+            trace_cardinality=holdout_trace_cardinality,
+            trace_cardinality_error=holdout_trace_cardinality_error,
+        )
+        if budget_stopped:
+            phase0_failures.append("llm_budget_stopped")
+        if llm_pricing_failure is not None:
+            phase0_failures.append("llm_pricing_unavailable")
+        reservation_report = metrics["cost_control"].get("reservation")
+        if not isinstance(reservation_report, Mapping) or (
+            reservation_report.get("valid") is not True
+        ):
+            phase0_failures.append("cost_reservation_invalid")
+        phase0_failures = list(dict.fromkeys(phase0_failures))
+        metrics["phase0_run"] = {
+            "status": "completed" if not phase0_failures else "integrity_rejected",
+            "completed": not phase0_failures,
+            "expected_cases_total": PHASE0_CASES_TOTAL,
+            "executed_cases_total": len(results),
+            "cases_file_sha256": phase0_contract["cases_file_sha256"],
+            "manifest_file_sha256": phase0_contract["manifest_file_sha256"],
+            "manifest_binding_sha256": phase0_contract[
+                "manifest_binding_sha256"
+            ],
+            "ordered_selection_sha256": phase0_contract[
+                "ordered_selection_sha256"
+            ],
+            "runtime_git_sha": phase0_contract["runtime_git_sha"],
+            "approval_id": PHASE0_APPROVAL_ID,
+            "cost_scope": PHASE0_COST_SCOPE,
+            "integrity_failures": phase0_failures,
+            "selective_reruns_forbidden": True,
+        }
+    if phase0_failures:
+        rejection_path = output_path.with_name(
+            f"{output_path.stem}.{eval_run_id}.rejected.json"
+        )
+        metrics["phase0_run"]["rejection_evidence"] = rejection_path.name
+        await asyncio.to_thread(_write_json_exclusive, rejection_path, metrics)
+        raise RuntimeError(
+            "Phase 0 failed run-integrity checks; private rejection evidence was "
+            "written and the canonical report was not created: "
+            + ", ".join(phase0_failures)
+        )
     holdout_failures: list[str] = []
     if holdout_contract is not None:
         executed_cases_total = len(results)
@@ -1454,6 +1865,12 @@ async def run_eval(
                 f"{private_run_label} final report or completed receipt "
                 "could not be created exclusively"
             ) from exc
+    elif phase0_contract is not None:
+        await _finalize_phase0_report(
+            output_path=output_path,
+            metrics=metrics,
+            eval_run_id=eval_run_id,
+        )
     else:
         await asyncio.to_thread(_write_json, output_path, metrics)
         if markdown_path:
@@ -1733,6 +2150,383 @@ def _cost_governance_runtime_git_sha(
     )
 
 
+def _validated_source_diagnostic_runtime_sha(
+    value: str | None,
+    *,
+    required: bool,
+) -> str | None:
+    runtime_git_sha = str(value or "")
+    if not runtime_git_sha and not required:
+        return None
+    if (
+        FULL_GIT_SHA_RE.fullmatch(runtime_git_sha) is None
+        or runtime_git_sha == "0" * 40
+    ):
+        raise ValueError(
+            "source_observed_diagnostic requires expected_runtime_git_sha as "
+            "a non-zero full lowercase 40-hex Git SHA for strict-live runs"
+        )
+    return runtime_git_sha
+
+
+def _validated_phase0_execution_contract(
+    *,
+    manifest_path: Path,
+    cases_path: Path,
+    cases: list[dict[str, Any]],
+    cases_file_sha256: str,
+    expected_cases_file_sha256: str | None,
+    expected_runtime_git_sha: str | None,
+    high_cost_approval_id: str | None,
+    max_llm_cost_rub: float | None,
+    bypass_cache: bool,
+    trace_lookup: bool,
+    max_cases: int | None,
+    auto_smoke_cases: bool,
+    generated_user_prefix: str | None,
+    concurrency: int,
+    target: str,
+    trace_dsn: str | None,
+    strict_live: bool,
+    cost_runtime_git_sha: str | None,
+    cost_ledger_dir: Path | None,
+    cost_reservation: LiveEvalCostReservation | None,
+    transport: httpx.AsyncBaseTransport | None,
+    markdown_path: Path | None,
+) -> dict[str, Any]:
+    """Bind the paid Phase 0 run to its exact approved manifest before /ask."""
+
+    if not strict_live:
+        raise ValueError("Phase 0 requires a strict-live loopback transport")
+    if transport is not None:
+        raise ValueError("Phase 0 forbids injected HTTP transports")
+    if cost_reservation is not None:
+        raise ValueError("Phase 0 forbids injected cost reservations")
+    if markdown_path is not None:
+        raise ValueError("Phase 0 requires --no-markdown for atomic finalization")
+    parsed = urlsplit(target)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path.rstrip("/") != "/ask"
+    ):
+        raise ValueError(
+            "Phase 0 /ask must use a local SSH-forwarded loopback target"
+        )
+    effective_trace_dsn = _trace_dsn_candidates(trace_dsn)[0]
+    try:
+        parsed_trace_dsn = urlsplit(effective_trace_dsn)
+    except ValueError as exc:
+        raise ValueError("Phase 0 trace DSN is invalid") from exc
+    if (
+        parsed_trace_dsn.scheme not in {"postgres", "postgresql"}
+        or parsed_trace_dsn.hostname not in SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+        or "," in parsed_trace_dsn.netloc
+        or "%2c" in parsed_trace_dsn.netloc.casefold()
+        or parsed_trace_dsn.query
+        or parsed_trace_dsn.fragment
+    ):
+        raise ValueError(
+            "Phase 0 trace lookup must use a local SSH-forwarded loopback DSN"
+        )
+    argument_failures: list[str] = []
+    if bypass_cache is not True:
+        argument_failures.append("bypass_cache_required")
+    if trace_lookup is not True:
+        argument_failures.append("trace_lookup_required")
+    if max_cases is not None:
+        argument_failures.append("max_cases_forbidden")
+    if auto_smoke_cases:
+        argument_failures.append("auto_smoke_cases_forbidden")
+    if generated_user_prefix:
+        argument_failures.append("generated_user_prefix_forbidden")
+    if concurrency != 1:
+        argument_failures.append("concurrency_must_equal_one")
+    if high_cost_approval_id != PHASE0_APPROVAL_ID:
+        argument_failures.append("approval_id_mismatch")
+    if (
+        isinstance(max_llm_cost_rub, bool)
+        or not isinstance(max_llm_cost_rub, (int, float))
+        or not math.isfinite(float(max_llm_cost_rub))
+        or float(max_llm_cost_rub) != PHASE0_COST_CAP_RUB
+    ):
+        argument_failures.append("cost_cap_mismatch")
+    if argument_failures:
+        raise ValueError(
+            "Phase 0 preflight failed: " + ", ".join(argument_failures)
+        )
+
+    try:
+        private_root = PRIVATE_DATA_ROOT.resolve(strict=True)
+        manifest_resolved = manifest_path.resolve(strict=True)
+        cases_resolved = cases_path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("Phase 0 manifest and cases must exist locally") from exc
+    if (
+        not manifest_resolved.is_file()
+        or not manifest_resolved.is_relative_to(private_root)
+        or not cases_resolved.is_relative_to(private_root)
+    ):
+        raise ValueError(
+            "Phase 0 manifest and cases must remain under data/private"
+        )
+    if manifest_resolved.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError("Phase 0 manifest exceeds the bounded size limit")
+    try:
+        manifest = _read_json(manifest_resolved)
+        raw_cases = _read_json(cases_resolved)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "Phase 0 manifest and cases must be valid UTF-8 JSON"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("Phase 0 manifest must be a JSON object")
+    if not isinstance(raw_cases, list):
+        raise ValueError("Phase 0 cases must be a JSON array")
+
+    canonical_cost_ledger = private_root / PHASE0_COST_LEDGER_DIRNAME
+    if cost_ledger_dir is not None:
+        candidate_cost_ledger = cost_ledger_dir
+        if not candidate_cost_ledger.is_absolute():
+            candidate_cost_ledger = PROJECT_ROOT / candidate_cost_ledger
+        candidate_cost_ledger = Path(os.path.abspath(candidate_cost_ledger))
+        if candidate_cost_ledger != canonical_cost_ledger:
+            raise ValueError("Phase 0 cost ledger must use the canonical private path")
+
+    # Import lazily so the generic runner does not load spreadsheet dependencies.
+    from eval import social_ticket_benchmark as phase0_benchmark
+
+    phase0_benchmark._validate_manifest_integrity(manifest)
+    telemetry = manifest.get("telemetry")
+    approval = manifest.get("approval")
+    integrity = manifest.get("integrity")
+    manifest_cases = manifest.get("cases")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (telemetry, approval, integrity)
+    ) or not isinstance(manifest_cases, list):
+        raise ValueError("Phase 0 manifest execution fields are invalid")
+
+    runtime_git_sha = str(telemetry.get("git_sha") or "")
+    phase0_benchmark._validate_builder_git_provenance(runtime_git_sha)
+    manifest_cases_sha = str(integrity.get("cases_file_sha256") or "")
+    ordered_selection_sha256 = str(
+        integrity.get("ordered_selection_sha256") or ""
+    )
+    expected_external_sha = str(expected_cases_file_sha256 or "")
+    if (
+        SHA256_RE.fullmatch(expected_external_sha) is None
+        or expected_external_sha != cases_file_sha256
+        or manifest_cases_sha != cases_file_sha256
+        or cases_file_sha256
+        != phase0_benchmark.EXPECTED_PHASE0_CASES_FILE_SHA256
+    ):
+        raise ValueError(
+            "Phase 0 expected_cases_file_sha256 must match the exact approved cases file"
+        )
+    if expected_runtime_git_sha != runtime_git_sha:
+        raise ValueError(
+            "Phase 0 expected_runtime_git_sha differs from the approved telemetry SHA"
+        )
+    if cost_runtime_git_sha is not None and cost_runtime_git_sha != runtime_git_sha:
+        raise ValueError(
+            "Phase 0 cost runtime Git SHA differs from the approved telemetry SHA"
+        )
+    if any(
+        (
+            approval.get("id") != PHASE0_APPROVAL_ID,
+            approval.get("hard_cap_rub") != PHASE0_COST_CAP_RUB,
+            approval.get("case_count") != PHASE0_CASES_TOTAL,
+            approval.get("telemetry_git_sha") != runtime_git_sha,
+            approval.get("ordered_selection_sha256")
+            != ordered_selection_sha256,
+        )
+    ):
+        raise ValueError("Phase 0 manifest approval tuple is invalid")
+
+    case_ids = [str(case.get("id") or "") for case in cases]
+    manifest_ids = [
+        str(row.get("id") or "") if isinstance(row, Mapping) else ""
+        for row in manifest_cases
+    ]
+    if (
+        len(cases) != PHASE0_CASES_TOTAL
+        or len(manifest_ids) != PHASE0_CASES_TOTAL
+        or len(set(case_ids)) != PHASE0_CASES_TOTAL
+        or any(not case_id for case_id in case_ids)
+        or case_ids != manifest_ids
+        or phase0_benchmark._canonical_sha256(case_ids)
+        != ordered_selection_sha256
+    ):
+        raise ValueError(
+            "Phase 0 cases must match the exact ordered 30-case manifest"
+        )
+    for raw_case, case, manifest_case in zip(
+        raw_cases,
+        cases,
+        manifest_cases,
+        strict=True,
+    ):
+        if not isinstance(raw_case, dict) or set(raw_case) != PHASE0_RUNNER_CASE_FIELDS:
+            raise ValueError("Phase 0 runner cases must use the exact private schema")
+        assert isinstance(manifest_case, Mapping)
+        query_sha256 = hashlib.sha256(case["query"].encode("utf-8")).hexdigest()
+        runner_case_sha256 = phase0_benchmark._canonical_sha256(raw_case)
+        exact_case = bool(
+            raw_case.get("id") == case.get("id")
+            and raw_case.get("query") == case.get("query")
+            and raw_case.get("privacy_class") == PRIVATE_TICKET_DERIVED
+            and raw_case.get("split") == "calibration"
+            and raw_case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+            and raw_case.get("requires_human_review") is False
+            and raw_case.get("user_id") == raw_case.get("id")
+            and raw_case.get("channel") == manifest_case.get("source_channel")
+            and raw_case.get("tags") == PHASE0_RUNNER_TAGS
+            and case.get("user_id") == case.get("id")
+            and case.get("forum_context") is None
+            and case.get("privacy_class") == PRIVATE_TICKET_DERIVED
+            and case.get("split") == "calibration"
+            and case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+            and case.get("tags") == PHASE0_RUNNER_TAGS
+        )
+        if not exact_case or any(
+            (
+                query_sha256 != manifest_case.get("deidentified_query_sha256"),
+                runner_case_sha256 != manifest_case.get("runner_case_sha256"),
+                case.get("channel") != manifest_case.get("source_channel"),
+            )
+        ):
+            raise ValueError(
+                "Phase 0 case payload differs from its exact single-turn manifest binding"
+            )
+
+    return {
+        "manifest_path": manifest_resolved,
+        "manifest_file_sha256": _file_sha256(manifest_resolved),
+        "manifest_binding_sha256": hashlib.sha256(
+            _canonical_json(manifest).encode("utf-8")
+        ).hexdigest(),
+        "cases_file_sha256": cases_file_sha256,
+        "ordered_selection_sha256": ordered_selection_sha256,
+        "runtime_git_sha": runtime_git_sha,
+        "approval_id": PHASE0_APPROVAL_ID,
+        "cost_cap_rub": PHASE0_COST_CAP_RUB,
+        "case_count": PHASE0_CASES_TOTAL,
+        "cost_scope": PHASE0_COST_SCOPE,
+        "cost_ledger_dir": canonical_cost_ledger,
+    }
+
+
+def _runtime_identity_report(
+    *,
+    expected_runtime_git_sha: str | None,
+    preflight_release_git_sha: str | None,
+    postflight_release_git_sha: str | None,
+    required: bool,
+) -> dict[str, Any]:
+    expected = str(expected_runtime_git_sha or "") or None
+    preflight = str(preflight_release_git_sha or "") or None
+    postflight = str(postflight_release_git_sha or "") or None
+    verified = bool(
+        expected
+        and preflight == expected
+        and postflight == expected
+    )
+    if verified:
+        status = "verified"
+    elif required:
+        status = "invalid"
+    elif preflight or postflight:
+        status = "observed_unbound"
+    else:
+        status = "not_checked"
+    return {
+        "required": required,
+        "status": status,
+        "expected_runtime_git_sha": expected,
+        "preflight_release_git_sha": preflight,
+        "postflight_release_git_sha": postflight,
+        "verified_release_git_sha": (
+            expected if verified else postflight or preflight
+        ),
+        "matched_expected_runtime": verified if expected else None,
+    }
+
+
+def _safe_cost_reservation_report(
+    reservation: LiveEvalCostReservation | None,
+    *,
+    cases_file_sha256: str | None,
+) -> dict[str, Any] | None:
+    if reservation is None:
+        return None
+    record = reservation.record
+    runtime_git_sha = str(record.get("runtime_git_sha") or "")
+    manifest_sha256 = str(record.get("manifest_sha256") or "")
+    approval_id = str(record.get("high_cost_approval_id") or "") or None
+    run_id = str(record.get("run_id") or "") or None
+    scope = str(record.get("scope") or "") or None
+    approval_required = record.get("approval_required")
+    try:
+        case_count = _strict_nonnegative_int(record.get("case_count"))
+    except ValueError:
+        case_count = None
+    try:
+        approved_cap_rub = float(record.get("approved_cap_rub"))
+    except (TypeError, ValueError, OverflowError):
+        approved_cap_rub = math.nan
+    if not math.isfinite(approved_cap_rub) or approved_cap_rub <= 0:
+        approved_cap: float | None = None
+    else:
+        approved_cap = approved_cap_rub
+    safe_cases_sha = str(cases_file_sha256 or "")
+    runtime_valid = (
+        FULL_GIT_SHA_RE.fullmatch(runtime_git_sha) is not None
+        and runtime_git_sha != "0" * 40
+    )
+    manifest_valid = SHA256_RE.fullmatch(manifest_sha256) is not None
+    cases_sha_valid = SHA256_RE.fullmatch(safe_cases_sha) is not None
+    approval_valid = approval_id is None or (
+        SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is not None
+    )
+    return {
+        "valid": all(
+            (
+                runtime_valid,
+                manifest_valid,
+                cases_sha_valid,
+                case_count is not None,
+                approved_cap is not None,
+                approval_valid,
+                bool(run_id),
+                bool(scope),
+                type(approval_required) is bool,
+                manifest_sha256 == safe_cases_sha,
+            )
+        ),
+        "run_id": run_id,
+        "scope": scope,
+        "runtime_git_sha": runtime_git_sha if runtime_valid else None,
+        "manifest_sha256": manifest_sha256 if manifest_valid else None,
+        "cases_file_sha256": safe_cases_sha if cases_sha_valid else None,
+        "manifest_matches_cases_file": (
+            manifest_sha256 == safe_cases_sha
+            if manifest_valid and cases_sha_valid
+            else None
+        ),
+        "case_count": case_count,
+        "approved_cap_rub": approved_cap,
+        "approval_required": (
+            approval_required if type(approval_required) is bool else None
+        ),
+        "high_cost_approval_id": approval_id if approval_valid else None,
+    }
+
+
 def _validate_cost_reservation_for_child_run(
     reservation: LiveEvalCostReservation,
     *,
@@ -1754,6 +2548,30 @@ def _validate_cost_reservation_for_child_run(
         raise CostGovernanceError("child live eval exceeds its parent cost reservation")
     if private_full and record.get("private_full") is not True:
         raise CostGovernanceError("private full eval requires a private reservation")
+
+
+def _validate_phase0_cost_reservation(
+    reservation: LiveEvalCostReservation,
+    *,
+    eval_run_id: str,
+    contract: Mapping[str, Any],
+) -> None:
+    record = reservation.record
+    expected = {
+        "scope": PHASE0_COST_SCOPE,
+        "run_id": eval_run_id,
+        "runtime_git_sha": contract["runtime_git_sha"],
+        "manifest_sha256": contract["cases_file_sha256"],
+        "case_count": PHASE0_CASES_TOTAL,
+        "approved_cap_rub": PHASE0_COST_CAP_RUB,
+        "private_full": False,
+        "approval_required": True,
+        "high_cost_approval_id": PHASE0_APPROVAL_ID,
+    }
+    if any(record.get(field) != value for field, value in expected.items()):
+        raise CostGovernanceError(
+            "Phase 0 cost reservation differs from the approved execution tuple"
+        )
 
 
 def _is_in_process_mock_transport(
@@ -1845,18 +2663,30 @@ def _guard_eval_privacy(
     ):
         return
 
+    source_diagnostic = any(
+        case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+        for case in cases
+    )
+    allowed_hosts = (
+        SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS if source_diagnostic else PRIVATE_EVAL_HOSTS
+    )
     parsed = urlsplit(target)
     if (
         parsed.scheme not in {"http", "https"}
-        or parsed.hostname not in PRIVATE_EVAL_HOSTS
+        or parsed.hostname not in allowed_hosts
         or parsed.username
         or parsed.password
         or parsed.query
         or parsed.fragment
         or parsed.path.rstrip("/") != "/ask"
     ):
+        target_contract = (
+            "a local SSH-forwarded loopback /ask target"
+            if source_diagnostic
+            else "a loopback or app-ml /ask target"
+        )
         raise ValueError(
-            "private_ticket_derived cases may only use a loopback or app-ml /ask target"
+            "private_ticket_derived cases may only use " + target_contract
         )
 
     artifact_paths = [cases_resolved, output_path.resolve()]
@@ -1920,7 +2750,7 @@ async def _verify_cache_bypass_runtime(
     expected_git_sha: str | None,
     eval_run_id: str,
     cache_bypass_secret: str,
-) -> None:
+) -> str:
     ready_url = urlsplit(target)._replace(path="/ready", query="", fragment="").geturl()
     ready_headers = {
         **headers,
@@ -1965,6 +2795,7 @@ async def _verify_cache_bypass_runtime(
             "runtime did not authorize signed "
             "cache bypass capability"
         )
+    return release_git_sha
 
 
 def _validated_holdout_ledger_dir(
@@ -2671,6 +3502,92 @@ def _holdout_integrity_failures(
     return failures
 
 
+def _phase0_integrity_failures(
+    metrics: Mapping[str, Any],
+    *,
+    results: list[dict[str, Any]],
+    trace_cardinality: Mapping[str, Any] | None,
+    trace_cardinality_error: str | None,
+) -> list[str]:
+    failures: list[str] = []
+    if len(results) != PHASE0_CASES_TOTAL:
+        failures.append("case_count_incomplete")
+    if metrics.get("http_success_rate") != 1.0:
+        failures.append("http_success_below_100_percent")
+    if metrics.get("trace_coverage_rate") != 1.0:
+        failures.append("trace_coverage_below_100_percent")
+
+    request_ids = [str(result.get("request_id") or "") for result in results]
+    valid_request_ids: list[str] = []
+    for request_id in request_ids:
+        try:
+            valid_request_ids.append(str(UUID(request_id)))
+        except (TypeError, ValueError, AttributeError):
+            failures.append("request_id_invalid")
+            break
+    if len(valid_request_ids) != PHASE0_CASES_TOTAL:
+        if "request_id_invalid" not in failures:
+            failures.append("request_ids_missing")
+    elif len(set(valid_request_ids)) != PHASE0_CASES_TOTAL:
+        failures.append("request_ids_not_unique")
+
+    if any(result.get("cache_hit") is not False for result in results):
+        failures.append("cache_hit_not_exactly_false")
+    if any(result.get("trace_found") is not True for result in results):
+        failures.append("trace_coverage_below_100_percent")
+    if any(result.get("trace_binding_match") is not True for result in results):
+        failures.append("trace_binding_mismatch")
+    if any(
+        result.get("trace_eval_run_id") != metrics.get("eval_run_id")
+        or result.get("trace_eval_case_id") != result.get("id")
+        for result in results
+    ):
+        failures.append("trace_identity_mismatch")
+    if any(result.get("trace_lookup_error") for result in results) or metrics.get(
+        "trace_lookup_error"
+    ):
+        failures.append("trace_lookup_error")
+    if any(result.get("trace_error") not in (None, "") for result in results):
+        failures.append("trace_error_present")
+    if any(result.get("error") not in (None, "") for result in results):
+        failures.append("case_error_present")
+
+    if trace_cardinality_error is not None or trace_cardinality is None:
+        failures.append("trace_cardinality_lookup_error")
+    else:
+        exact_cardinality = bool(
+            trace_cardinality.get("eval_run_id") == metrics.get("eval_run_id")
+            and trace_cardinality.get("expected_cases_total")
+            == PHASE0_CASES_TOTAL
+            and trace_cardinality.get("traces_total") == PHASE0_CASES_TOTAL
+            and trace_cardinality.get("request_case_pairs_match") is True
+            and trace_cardinality.get("distinct_request_ids_total")
+            == PHASE0_CASES_TOTAL
+            and trace_cardinality.get("invalid_expected_request_ids_total") == 0
+            and trace_cardinality.get("invalid_observed_request_ids_total") == 0
+            and trace_cardinality.get("duplicate_request_ids_total") == 0
+            and trace_cardinality.get("missing_request_case_pairs_total") == 0
+            and trace_cardinality.get("unexpected_request_case_pairs_total") == 0
+            and trace_cardinality.get("cache_hit_true_total") == 0
+            and trace_cardinality.get("cache_hit_false_total")
+            == PHASE0_CASES_TOTAL
+            and trace_cardinality.get("cache_hit_unknown_total") == 0
+            and not trace_cardinality.get("missing_case_ids")
+            and not trace_cardinality.get("duplicate_case_ids")
+            and not trace_cardinality.get("unknown_case_ids")
+        )
+        case_counts = trace_cardinality.get("case_counts")
+        exact_cardinality = bool(
+            exact_cardinality
+            and isinstance(case_counts, Mapping)
+            and len(case_counts) == PHASE0_CASES_TOTAL
+            and all(type(count) is int and count == 1 for count in case_counts.values())
+        )
+        if not exact_cardinality:
+            failures.append("trace_cardinality_mismatch")
+    return list(dict.fromkeys(failures))
+
+
 def _holdout_failure_status(
     failures: list[str],
     *,
@@ -2734,6 +3651,8 @@ def _llm_cost_rub_total(results: list[dict[str, Any]]) -> float:
 def _llm_cost_accounting_failure(result: dict[str, Any]) -> str | None:
     if result.get("trace_found") is not True:
         return "llm_cost_trace_missing"
+    if result.get("llm_accounting_present") is False:
+        return "llm_cost_accounting_missing"
     try:
         aggregate_cost = float(result.get("llm_estimated_cost_rub"))
     except (TypeError, ValueError):
@@ -2807,10 +3726,23 @@ def score_case(
     http_result: dict[str, Any],
     trace: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    source_observed_diagnostic = (
+        case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+    )
     response_text = str(http_result.get("response") or "")
     status = http_result.get("http_status")
     http_success = isinstance(status, int) and 200 <= status < 300
     trace = trace or {}
+    llm_accounting_fields = (
+        "llm_usage",
+        "llm_prompt_tokens",
+        "llm_completion_tokens",
+        "llm_total_tokens",
+        "llm_estimated_cost_rub",
+    )
+    llm_accounting_present = bool(trace) and all(
+        field in trace and trace[field] is not None for field in llm_accounting_fields
+    )
 
     observed_chunk_ids = _collect_trace_chunk_ids(trace)
     pipeline_lineage = _pipeline_lineage(trace)
@@ -2960,9 +3892,15 @@ def score_case(
         required_checks["no_false_insufficient_source_response"] = no_false_insufficient
         required_checks["no_non_answer_response"] = no_non_answer
 
-    passed = http_success and all(value is True for value in required_checks.values())
-    if not required_checks:
-        passed = http_success
+    passed: bool | None
+    if source_observed_diagnostic:
+        passed = None
+    else:
+        passed = http_success and all(
+            value is True for value in required_checks.values()
+        )
+        if not required_checks:
+            passed = http_success
     failure_reasons = _failure_reasons(
         http_success=http_success,
         trace_found=bool(trace),
@@ -3064,14 +4002,15 @@ def score_case(
         "cache_hit": trace.get("cache_hit"),
         "max_reranker_score": trace.get("max_reranker_score"),
         "trace_total_latency_ms": trace.get("total_latency_ms"),
-        "llm_usage": trace.get("llm_usage") or [],
+        "llm_usage": trace.get("llm_usage"),
         "generate_retry_reasons": _generate_retry_reasons(trace),
-        "llm_prompt_tokens": trace.get("llm_prompt_tokens") or 0,
-        "llm_completion_tokens": trace.get("llm_completion_tokens") or 0,
-        "llm_total_tokens": trace.get("llm_total_tokens") or 0,
-        "llm_estimated_cost_rub": trace.get("llm_estimated_cost_rub") or 0.0,
+        "llm_prompt_tokens": trace.get("llm_prompt_tokens"),
+        "llm_completion_tokens": trace.get("llm_completion_tokens"),
+        "llm_total_tokens": trace.get("llm_total_tokens"),
+        "llm_estimated_cost_rub": trace.get("llm_estimated_cost_rub"),
+        "llm_accounting_present": llm_accounting_present,
         "passed": passed,
-        "failure_reasons": [] if passed else failure_reasons,
+        "failure_reasons": [] if passed is True else failure_reasons,
     }
 
 
@@ -3334,6 +4273,7 @@ async def _load_cases(
     max_smoke_cases: int,
     user_prefix: str,
     allow_model_assisted_prerun: bool = False,
+    allow_source_observed_diagnostic: bool = False,
 ) -> tuple[list[dict[str, Any]], bool, str | None, str | None]:
     raw_cases: list[dict[str, Any]] = []
     generated_smoke_cases = False
@@ -3361,10 +4301,15 @@ async def _load_cases(
         _normalize_case(
             item,
             allow_model_assisted_prerun=allow_model_assisted_prerun,
+            allow_source_observed_diagnostic=allow_source_observed_diagnostic,
         )
         for item in raw_cases
     ]
-    if not any(case.get("split") == PRIVATE_HOLDOUT_SPLIT for case in cases):
+    if not any(
+        case.get("split") == PRIVATE_HOLDOUT_SPLIT
+        or case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
+        for case in cases
+    ):
         cases = _apply_user_prefix(cases, user_prefix=user_prefix)
     if not cases and auto_smoke_cases:
         records = await asyncio.to_thread(_read_json, kb_seed_path)
@@ -3552,6 +4497,105 @@ async def _fetch_eval_trace_cardinality(
     }
 
 
+async def _fetch_phase0_trace_cardinality(
+    pool: asyncpg.Pool,
+    *,
+    eval_run_id: str,
+    expected_request_case_pairs: list[tuple[str, str]],
+) -> dict[str, Any]:
+    rows = await pool.fetch(
+        """
+        SELECT request_id, eval_case_id, cache_hit
+        FROM request_traces
+        WHERE eval_run_id = $1
+        ORDER BY eval_case_id NULLS FIRST, request_id
+        """,
+        eval_run_id,
+    )
+    expected_pairs: list[tuple[str, str]] = []
+    invalid_expected_request_ids = 0
+    for request_id, case_id in expected_request_case_pairs:
+        try:
+            normalized_request_id = str(UUID(request_id))
+        except (TypeError, ValueError, AttributeError):
+            invalid_expected_request_ids += 1
+            normalized_request_id = "<invalid>"
+        expected_pairs.append((normalized_request_id, case_id))
+
+    observed_pairs: list[tuple[str, str]] = []
+    case_counts: Counter[str] = Counter()
+    observed_request_ids: list[str] = []
+    invalid_observed_request_ids = 0
+    cache_hit_true_total = 0
+    cache_hit_false_total = 0
+    cache_hit_unknown_total = 0
+    for row in rows:
+        raw_request_id = row["request_id"]
+        try:
+            request_id = str(UUID(str(raw_request_id)))
+        except (TypeError, ValueError, AttributeError):
+            invalid_observed_request_ids += 1
+            request_id = "<invalid>"
+        raw_case_id = row["eval_case_id"]
+        case_id = str(raw_case_id) if raw_case_id is not None else "<null>"
+        observed_request_ids.append(request_id)
+        observed_pairs.append((request_id, case_id))
+        case_counts[case_id] += 1
+        cache_hit = row["cache_hit"]
+        if cache_hit is True:
+            cache_hit_true_total += 1
+        elif cache_hit is False:
+            cache_hit_false_total += 1
+        else:
+            cache_hit_unknown_total += 1
+
+    expected_case_ids = [case_id for _request_id, case_id in expected_pairs]
+    expected_case_set = set(expected_case_ids)
+    observed_case_set = set(case_counts)
+    expected_pair_set = set(expected_pairs)
+    observed_pair_set = set(observed_pairs)
+    duplicate_request_ids_total = len(observed_request_ids) - len(
+        set(observed_request_ids)
+    )
+    request_case_pairs_match = bool(
+        invalid_expected_request_ids == 0
+        and invalid_observed_request_ids == 0
+        and len(expected_pairs) == PHASE0_CASES_TOTAL
+        and len(expected_pair_set) == PHASE0_CASES_TOTAL
+        and len(observed_pairs) == PHASE0_CASES_TOTAL
+        and len(observed_pair_set) == PHASE0_CASES_TOTAL
+        and expected_pair_set == observed_pair_set
+    )
+    return {
+        "eval_run_id": eval_run_id,
+        "expected_cases_total": len(expected_pairs),
+        "traces_total": len(observed_pairs),
+        "case_counts": dict(sorted(case_counts.items())),
+        "missing_case_ids": sorted(expected_case_set - observed_case_set),
+        "duplicate_case_ids": sorted(
+            case_id
+            for case_id, trace_count in case_counts.items()
+            if trace_count != 1
+        ),
+        "unknown_case_ids": sorted(observed_case_set - expected_case_set),
+        "expected_request_ids_total": len(expected_pairs),
+        "distinct_request_ids_total": len(set(observed_request_ids)),
+        "invalid_expected_request_ids_total": invalid_expected_request_ids,
+        "invalid_observed_request_ids_total": invalid_observed_request_ids,
+        "duplicate_request_ids_total": duplicate_request_ids_total,
+        "missing_request_case_pairs_total": len(
+            expected_pair_set - observed_pair_set
+        ),
+        "unexpected_request_case_pairs_total": len(
+            observed_pair_set - expected_pair_set
+        ),
+        "request_case_pairs_match": request_case_pairs_match,
+        "cache_hit_true_total": cache_hit_true_total,
+        "cache_hit_false_total": cache_hit_false_total,
+        "cache_hit_unknown_total": cache_hit_unknown_total,
+    }
+
+
 async def _fetch_trace(
     pool: asyncpg.Pool,
     request_id: str,
@@ -3603,10 +4647,12 @@ def _collect_trace_chunk_ids(trace: dict[str, Any]) -> set[str]:
 
 
 def _pipeline_lineage(trace: dict[str, Any]) -> dict[str, Any]:
+    analyze_event = _latest_trace_event_metadata(trace, "analyze")
     retrieve_event = _latest_trace_event_metadata(trace, "retrieve")
     rerank_event = _latest_trace_event_metadata(trace, "rerank")
     generate_event = _latest_trace_event_metadata(trace, "generate_selection")
     verify_event = _latest_trace_event_metadata(trace, "verify_decision")
+    metadata_primary = _metadata_primary_diagnostics(retrieve_event)
     retrieve_available = _valid_question_provenance_event(
         retrieve_event,
         stage="retrieve",
@@ -3684,7 +4730,88 @@ def _pipeline_lineage(trace: dict[str, Any]) -> dict[str, Any]:
         "rerank_confidence_components": _numeric_trace_mapping(
             rerank_event.get("confidence_components")
         ),
+        "analyzer_execution_mode": _analyzer_execution_mode(analyze_event),
+        "retrieval_method": _safe_trace_label(
+            retrieve_event.get("retrieval_method")
+        ),
+        "metadata_lookup_attempted": _trace_bool(
+            retrieve_event.get("metadata_lookup_attempted")
+        ),
+        "metadata_lookup_succeeded": _trace_bool(
+            retrieve_event.get("metadata_lookup_succeeded")
+        ),
+        "metadata_lookup_result_count": _trace_nonnegative_int(
+            retrieve_event.get("metadata_lookup_result_count")
+        ),
+        "hybrid_candidates_present": _trace_bool(
+            retrieve_event.get("hybrid_candidates_present")
+        ),
+        "reranker_invoked": _trace_bool(rerank_event.get("reranker_invoked")),
+        "reranker_raw_max": _finite_trace_number(
+            rerank_event.get("raw_reranker_max")
+        ),
+        "reranker_score_origin": _safe_trace_label(
+            rerank_event.get("score_origin")
+        ),
+        "reranker_synthetic_score_applied": _trace_bool(
+            rerank_event.get("synthetic_score_applied")
+        ),
+        "reranker_floor_applied": _trace_bool(
+            rerank_event.get("floor_applied")
+        ),
+        "reranker_synthetic_high_score_applied": _trace_bool(
+            rerank_event.get("synthetic_high_score_applied")
+        ),
+        "generator_path": _safe_trace_label(generate_event.get("generator_path")),
+        "source_chunk_applied": _trace_bool(
+            generate_event.get("source_chunk_applied")
+        ),
+        **metadata_primary,
         "pipeline_node_sequence": _trace_node_sequence(trace),
+    }
+
+
+def _analyzer_execution_mode(metadata: Mapping[str, Any]) -> str | None:
+    if metadata.get("mode") == "deterministic":
+        return "deterministic"
+    if metadata.get("mode") == "fallback" or metadata.get("fallback") is True:
+        return "fallback"
+    if str(metadata.get("model") or "").strip():
+        return "llm"
+    return None
+
+
+def _metadata_primary_diagnostics(
+    retrieve_event: Mapping[str, Any],
+) -> dict[str, bool | int]:
+    attempts_total = 0
+    successes_total = 0
+    rows = retrieve_event.get("question_provenance")
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            attempts = row.get("attempts")
+            if not isinstance(attempts, list) or not attempts:
+                continue
+            first = attempts[0]
+            if not isinstance(first, dict):
+                continue
+            if (
+                first.get("retrieval_method") != "metadata"
+                or first.get("metadata_lookup_attempted") is not True
+            ):
+                continue
+            attempts_total += 1
+            successes_total += int(first.get("metadata_lookup_succeeded") is True)
+    return {
+        "metadata_primary_attempted": attempts_total > 0,
+        "metadata_primary_succeeded": successes_total > 0,
+        "metadata_primary_all_succeeded": (
+            attempts_total > 0 and successes_total == attempts_total
+        ),
+        "metadata_primary_attempts_total": attempts_total,
+        "metadata_primary_successes_total": successes_total,
     }
 
 
@@ -3882,6 +5009,26 @@ def _safe_trace_label(value: object) -> str | None:
     return None
 
 
+def _trace_bool(value: object) -> bool | None:
+    return value if type(value) is bool else None
+
+
+def _trace_nonnegative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _finite_trace_number(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _numeric_trace_mapping(value: object) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
@@ -4067,6 +5214,137 @@ def _write_json_exclusive(path: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     ).encode("utf-8")
     _write_bytes_exclusive(path, encoded)
+
+
+async def _write_phase0_execution_rejection(
+    *,
+    output_path: Path,
+    eval_run_id: str,
+    run_started_at: datetime,
+    target: str,
+    cases_path: Path,
+    cases_file_sha256: str,
+    phase0_contract: Mapping[str, Any],
+    results: list[dict[str, Any]],
+    trace_lookup_error: str | None,
+    trace_cardinality: Mapping[str, Any] | None,
+    trace_cardinality_error: str | None,
+    reservation: LiveEvalCostReservation | None,
+    stage: str,
+    error: Exception,
+) -> Path:
+    try:
+        metrics = summarize_results(
+            results,
+            target=target,
+            cases_path=cases_path,
+            generated_smoke_cases=False,
+            trace_lookup_error=trace_lookup_error,
+        )
+    except Exception as summary_error:
+        metrics = {
+            "target": target,
+            "cases_file": str(cases_path),
+            "cases_total": len(results),
+            "results": results,
+            "trace_lookup_error": trace_lookup_error,
+            "rejection_summary_error": type(summary_error).__name__,
+        }
+    metrics.update(
+        {
+            "run_started_at": run_started_at.isoformat(),
+            "run_completed_at": datetime.now(UTC).isoformat(),
+            "eval_run_id": eval_run_id,
+            "cases_file_sha256": cases_file_sha256,
+            "report_classification": {
+                "evaluation_classification": SOURCE_OBSERVED_DIAGNOSTIC_MODE,
+                "provisional": True,
+                "calibration_only": True,
+                "independent_evaluation": False,
+                "previously_exposed": True,
+                "product_verdict_eligible": False,
+                "human_product_verdict": False,
+            },
+            "trace_cardinality": trace_cardinality,
+            "cost_control": {
+                "strict_live": True,
+                "high_cost_approval_id": PHASE0_APPROVAL_ID,
+                "pricing_complete": False,
+                "reservation": _safe_cost_reservation_report(
+                    reservation,
+                    cases_file_sha256=cases_file_sha256,
+                ),
+            },
+            "phase0_run": {
+                "status": "execution_rejected",
+                "completed": False,
+                "expected_cases_total": PHASE0_CASES_TOTAL,
+                "executed_cases_total": len(results),
+                "cases_file_sha256": phase0_contract["cases_file_sha256"],
+                "manifest_file_sha256": phase0_contract[
+                    "manifest_file_sha256"
+                ],
+                "manifest_binding_sha256": phase0_contract[
+                    "manifest_binding_sha256"
+                ],
+                "ordered_selection_sha256": phase0_contract[
+                    "ordered_selection_sha256"
+                ],
+                "runtime_git_sha": phase0_contract["runtime_git_sha"],
+                "approval_id": PHASE0_APPROVAL_ID,
+                "cost_scope": PHASE0_COST_SCOPE,
+                "integrity_failures": [f"{stage}_failed"],
+                "failure_stage": stage,
+                "failure_error": type(error).__name__,
+                "trace_cardinality_error": trace_cardinality_error,
+                "selective_reruns_forbidden": True,
+            },
+        }
+    )
+    rejection_path = output_path.with_name(
+        f"{output_path.stem}.{eval_run_id}.execution-rejected.json"
+    )
+    metrics["phase0_run"]["rejection_evidence"] = rejection_path.name
+    await asyncio.to_thread(_write_json_exclusive, rejection_path, metrics)
+    return rejection_path
+
+
+async def _finalize_phase0_report(
+    *,
+    output_path: Path,
+    metrics: dict[str, Any],
+    eval_run_id: str,
+) -> None:
+    try:
+        await asyncio.to_thread(_write_json_exclusive, output_path, metrics)
+    except Exception as exc:
+        phase0_run = metrics.get("phase0_run")
+        if not isinstance(phase0_run, dict):
+            phase0_run = {}
+            metrics["phase0_run"] = phase0_run
+        phase0_run["status"] = "finalization_failed"
+        phase0_run["completed"] = False
+        phase0_run["integrity_failures"] = ["exclusive_finalization_failed"]
+        phase0_run["finalization_error"] = type(exc).__name__
+        rejection_path = output_path.with_name(
+            f"{output_path.stem}.{eval_run_id}.finalization-rejected.json"
+        )
+        phase0_run["rejection_evidence"] = rejection_path.name
+        try:
+            await asyncio.to_thread(
+                _write_json_exclusive,
+                rejection_path,
+                metrics,
+            )
+        except Exception as rejection_exc:
+            raise RuntimeError(
+                "Phase 0 canonical report and rejection evidence could not "
+                "be finalized exclusively"
+            ) from rejection_exc
+        raise RuntimeError(
+            "Phase 0 canonical report could not be finalized; private "
+            "rejection evidence was written"
+        ) from exc
 
 
 def _write_markdown(path: Path, metrics: dict[str, Any]) -> None:
@@ -4402,6 +5680,22 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--allow-source-observed-diagnostic",
+        action="store_true",
+        help=(
+            "Allow private unscored source-observed calibration cases. "
+            "This mode never infers expected behavior or qrels."
+        ),
+    )
+    parser.add_argument(
+        "--phase0-manifest",
+        default="",
+        help=(
+            "Private approved Phase 0 manifest. Required with approval "
+            f"{PHASE0_APPROVAL_ID}; binds the exact 30 cases before /ask."
+        ),
+    )
+    parser.add_argument(
         "--expected-holdout-freeze-sha256",
         default="",
         help="Externally supplied frozen holdout contract SHA-256.",
@@ -4414,7 +5708,7 @@ def main() -> None:
     parser.add_argument(
         "--expected-cases-file-sha256",
         default="",
-        help="Externally supplied exact holdout cases file SHA-256.",
+        help="Externally supplied exact private cases file SHA-256.",
     )
     parser.add_argument(
         "--holdout-ledger-dir",
@@ -4503,6 +5797,12 @@ def main() -> None:
                 else None
             ),
             high_cost_approval_id=args.high_cost_approval_id or None,
+            allow_source_observed_diagnostic=(
+                args.allow_source_observed_diagnostic
+            ),
+            phase0_manifest_path=(
+                Path(args.phase0_manifest) if args.phase0_manifest else None
+            ),
         )
     )
     quality_gate_failures = _quality_gate_failures(

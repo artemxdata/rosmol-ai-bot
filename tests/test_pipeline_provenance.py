@@ -221,6 +221,8 @@ async def test_generate_records_global_selection_and_coarse_question_overlap(
 
     metadata = tracer.events[-1].metadata
     assert tracer.events[-1].node == "generate_selection"
+    assert metadata["generator_path"] == "source_chunk"
+    assert metadata["source_chunk_applied"] is True
     assert metadata["selected_source_ids"] == ["yonote_answer"]
     assert metadata["cited_source_ids"] == ["yonote_answer"]
     assert metadata["selection_binding_scope"] == "global_exact_question_unattributed"
