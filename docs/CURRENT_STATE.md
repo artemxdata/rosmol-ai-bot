@@ -1,6 +1,6 @@
 # Текущее состояние проекта
 
-**Обновлено:** 28 июля 2026
+**Обновлено:** 4 августа 2026
 
 **Ветка:** `master`
 
@@ -183,6 +183,8 @@ Read-only аудит кода, всех 2186 seed-записей, БД/trace-с�
 - `docs/quality_improvement_loop.md` — дальнейшая продуктовая калибровка.
 - `docs/new_ai_bot_contour_roadmap_20260728.md` — границы контуров, критерии перехода и
   human-governed roadmap нового AI-помощника.
+- `docs/self_hosted_rag_platforms_comparison_20260728.md` — research-only сравнение Dify,
+  Flowise и RAGFlow по D-032; это не ADR, не решение о миграции и не разрешение менять runtime.
 - `docs/security_incident_20260715.md` — P0 incident record, contamination boundary и правила
   clean recovery.
 - `docs/operator_feedback_20260715.md` — тесты Наты, evidence и будущий quality backlog.
@@ -1431,3 +1433,244 @@ targeted live eval максимум 10 кейсов / 100 RUB по D-036. Пол
 это exposed calibration без human-gold stage attribution. Deployment этого tooling/telemetry
 change set, если понадобится, выполняет пользователь отдельно по точному SHA; без миграций,
 Yonote Apply, KB indexing или изменения Qdrant.
+
+## 19. Offline Cycle 2: baseline, фактический retrieval и восстановление stage attribution 4 августа 2026
+
+Исходная точка — `2383a90159c66f34e1ffd52864c988a1274d321a`. Этот commit совпадает с
+`master` на GitHub, но рабочая папка не идентична GitHub: до цикла уже существовали пользовательский
+hunk из двух строк в этом файле и два untracked research-документа. Они сохранены без изменений,
+не staging и не включены в correction cycle. Codex не подключался к серверу и не запускал `/ask`;
+HDE/VK, Yonote, versioned KB seed, Qdrant, БД, миграции, runtime и production-конфигурация не
+менялись. Платных LLM-вызовов не было.
+
+Явное решение владельца отменяет прежний следующий шаг из раздела 18: массовой операторской
+разметки Gold150, операторских Excel/анкет и написания людьми 150–300 эталонных ответов не будет.
+Private `gold150_sanity@v2` остаётся неизменённым draft/pending artifact,
+`independent_evaluation=false`; это не human Gold и не основание для quality claim. Ранее созданный
+private operator-review package не использовался, не изменялся и не экспортировался. Ответы
+операторов допускаются только как signal намерения, требуемого действия и стиля; фактическая истина
+берётся только из published Yonote и разрешённых versioned published seed-источников.
+
+### Что доказано по историческим метрикам
+
+- Frozen July-4 набор найден: `150` уникальных single-turn query, `50` типовых + `100`
+  нетиповых, file SHA-256
+  `3452ce57aadd985eace1ce2504e39a0a55facb3229e148ecd38fa65cd1e04522`. Exact result artifact
+  содержит те же `150` ID в том же порядке, file SHA-256
+  `55f2c8d42095a9dc420e096b94029299fb85334008d5ec8bf2b2ee76060db3a1`.
+- Исторический результат подтверждён: answer `38/150 = 25.3%`, no-operator proxy
+  `46/150 = 30.7%`, escalation `104/150 = 69.3%`, behavior match `106/150 = 70.7%`,
+  LLM cost `13.434144 RUB`. Но это weak-label calibration по отдельным запросам, не полные
+  диалоги и не независимая ticket-level conversion. Expected behavior и `answerable_by_kb`
+  сформированы эвристиками, частично зависящими от извлечённого operator answer; поэтому operator
+  answer нельзя считать source truth.
+- В публичном summary есть числовое расхождение: указанный p95 `29.14 s` получен другой
+  percentile-конвенцией, тогда как exact ask report хранит HTTP p95 `32.360 s` и trace p95
+  `32.338 s`. Среднее `8.65 s` соответствует trace average `8.64991 s`.
+- Frozen case-файл можно replay как исторический regression, а его исходный builder воспроизводится
+  только на прежнем commit и сохранённом normalized source. Result не фиксирует runtime Git SHA,
+  KB hash, image digest и production config, поэтому причинно воспроизвести старое окружение нельзя.
+- `rag_dataset_demo_100` — не product baseline. Фактический tracked набор объединяет `50`
+  seed-derived fixtures и `50` synthetic multi-aspect fixtures с заранее назначенными source IDs;
+  он не был целиком напрямую создан `eval/build_ask_eval_set.py`. `RAG_Dataset.xlsx` использовался
+  для профиля traffic mix, а не как источник этих 100 реальных query. Поэтому `100% pass` и
+  `99% expected chunk hit` — технический smoke/regression по известным источникам.
+- `data/golden_set.json` действительно равен `[]`. Старые default CLI/README-ссылки на него stale,
+  но CI уже использует `eval/cases/pre_pilot_forums.json` из `11` calibration/regression кейсов.
+  Рабочего независимого product golden сейчас нет.
+
+### Что доказано по текущему pipeline
+
+Бесплатный query-only harness выбрал `20` реальных single-turn calibration-вопросов по `20`
+разным форумам: role reconstruction `complete`, operator answer не включался и не использовался,
+duplicate components уникальны. Selection SHA-256:
+`d39bd5daf492ca49fdb3fac51a5ca114580517de63cc3e43f165d4d15d107766`.
+
+- deterministic analyzer: `20/20 = 100%`;
+- `retrieve_by_metadata` вызван: `14/20 = 70%`, но metadata-only requests: `0/20`;
+- hybrid dense+sparse/RRF branch вызван: `20/20 = 100%`; keyword branch: `20/20 = 100%`;
+- top `reranker_score == 0.7`: `14/20 = 70%`; метод reranker вызван `7/20 = 35%`, полностью
+  обойдён `13/20 = 65%`;
+- `generator_model=source_chunk`: `5/20 = 25%`; LLM-generation branch выбран `11/20 = 55%`;
+  `source_only`: `4/20 = 20%`.
+
+Таким образом, системные deterministic analysis и reranker bypass подтверждены. Гипотезы
+«request выполняет только metadata retrieval» и «generation всегда отсутствует» опровергнуты.
+Ровно `0.7` само по себе не доказывает bypass: priority candidate также может получить этот floor.
+Single-source `source_chunk` действительно возвращает весь текст чанка с citation, если contract
+не переводит случай в synthesis.
+
+Ограничение: это branch diagnostic на актуальных graph nodes и `1429` published Yonote seed records,
+но с in-memory metadata adapter, lexical SeedRetriever, sentinel reranker и fail-closed LLM.
+Результат не является production trace, качеством реального `bge-reranker-v2-m3`, retrieval recall
+или конверсией.
+
+### Что доказано по KB и deterministic-слою
+
+- Текущий seed: `2186` records, из них `1436` Yonote; published всего `2152`, published Yonote
+  `1429`. Все `2186/2186` имеют `parent_chunk_id=None`.
+- Yonote содержит `110` source documents; медиана `9.5` chunks/document. `498/2186 = 22.78%`
+  всех chunks короче 150 символов. `has_conditional_logic=true` у `563/2186 = 25.75%`, причём
+  `199/563` отмечены только широкими role-словами без явных conditional markers.
+- Документная связность используется частично: generation умеет связать уже найденные соседние
+  sections по `source_document_id/source_row`, и это покрыто regression для «Правды». Но retrieval
+  не подгружает соседнюю секцию, если её ещё нет среди candidates. Для «Машука» нужные sections
+  находятся на расстоянии шести строк, поэтому безусловный `N±1` expansion был бы неверным.
+- `generate.py` имеет `173` top-level функций; число «около 433 topic slugs» не является
+  продуктовой сущностью. Воспроизводимый строгий lexical proxy даёт `429`, но только `65` из них
+  совпадают с текущими значениями `seed.topic`. На HEAD собрано `2240` pytest items, поэтому прежнее
+  число около `1085` тестов устарело.
+
+### Исправленный измерительный дефект
+
+Runtime provenance использует `question-pipeline-provenance-v2`, а `eval/run_ask.py`,
+`eval/stage_funnel.py` и `eval/audit_trace_failures.py` независимо ожидали literal `v1`. Поэтому
+актуальная полная telemetry ошибочно понижалась до `legacy_coarse`, блокируя точную локализацию
+retrieval/rerank/selection/citation/verify loss.
+
+Минимальное исправление: все три offline-eval модуля теперь импортируют один
+`src.graph.provenance.PROVENANCE_SCHEMA_VERSION`; tests используют тот же canonical contract.
+Bot behavior, routing, prompts, thresholds, generation, KB и API payload не менялись.
+
+Проверки correction cycle:
+
+- lineage/stage/audit regression — `39 passed`;
+- direct `eval/stage_funnel.py --help` — успешно;
+- `.venv\Scripts\ruff.exe check .` — успешно;
+- полный pytest выполнен восемью детерминированными непересекающимися file-shards после
+  подтверждённого зависания единого Windows-процесса: `2239 passed, 1 skipped, 0 failed` из
+  `2240` collected, все `119` test-файлов покрыты ровно один раз;
+- `.venv\Scripts\python.exe scripts\index_kb.py --validate-only` —
+  `2186 valid / 2152 published`.
+
+### Риски, внешняя конверсия и точный следующий шаг
+
+Документы governance пока противоречат друг другу: `AGENTS.md`, incident/runbook и D-018 сохраняют
+`NO GO / SECURITY HOLD`, тогда как поздние append-only блоки этого файла описывают принятую clean
+test-production. Registry ротации секретов также не закрыт полностью. До явного согласования
+этой границы behavior-change запрещён; разрешены только local offline/eval/tooling изменения.
+
+4 августа 2026 владелец получил внешнюю фактическую ChatMe-метрику: **реальная конверсия бота
+без оператора — `24%` после исключения «липового» первого сообщения, которое искусственно
+повышало показатель**. До появления лучшего воспроизводимого источника `24%` — текущая рабочая
+продуктовая точка отсчёта, а метрику с включённым первым сервисным сообщением использовать для
+оценки качества запрещено.
+
+Эти `24%` невозможно восстановить или независимо перепроверить на имеющейся локальной выборке:
+исходный cohort, полный calculation ledger и достаточная event-level проекция локально отсутствуют.
+Статус evidence — `owner-reported external production metric / non-reproducible locally`, а не
+offline eval, sealed holdout или результат текущего кода. Число хранится отдельно от исторических
+`25.3%` auto-answer и `30.7%` no-operator proxy на weak-label single-turn calibration; близость
+значений не делает методики сопоставимыми. Для будущих замеров обязательно фиксировать window,
+eligible denominator и exclusions, runtime/version, полный ticket-level numerator, clarification /
+follow-up и operator-transfer semantics.
+
+Точный следующий offline step: regression-first добавить поддержку фильтра `source_type=yonote`
+в существующий `SeedRetriever`, затем на неизменном private calibration split автоматически
+построить leakage-safe full-ticket → published-Yonote candidate audit. В query используются только
+user turns/full dialogue; operator answers не входят в retrieval query и не используются как факт.
+Сохранить в `data/private` только source candidates/provisional qrels и safe aggregates, после чего
+измерить candidate recall и определить следующий крупнейший retrieval/selection loss. Production,
+live `/ask`, RETRIEVAL_MODE, пороги и Qdrant до этого не менять.
+
+## 20. Полная июльская популяция VK/MAX: этап 0 остановлен по privacy-gate 4 августа 2026
+
+Новая приоритетная задача — воспроизводимо измерить first-content-turn no-operator baseline
+текущего AI-бота на полной популяции июльских обращений и сопоставить его с ChatMe. На этом этапе
+выполнена только локальная read-only валидация; сервер, `/ask`, HDE/VK, Yonote, Qdrant, KB,
+runtime behavior и production-конфигурация не затрагивались, платных LLM-вызовов не было.
+
+Приватный файл уже находится по правильному пути
+`data/private/july_vk_max_tickets.jsonl`; копии в `docs/` нет. Путь защищён правилом
+`.gitignore:22:/data/private/`, файл не отслеживается Git. Текущий SHA-256 до повторного
+обезличивания —
+`bc669899e49638c6d196c3e552142372adfc73f4fce5b972f4350d6ab4252dd1`.
+
+### Агрегаты набора
+
+| Показатель | Значение |
+|---|---:|
+| Валидные записи / уникальные `ticket_id` | `852 / 852` |
+| Пустые / невалидные JSONL-строки | `0 / 0` |
+| `vk` | `628` (`73.71%`) |
+| `max` | `224` (`26.29%`) |
+| Минимальный `created_at` | `2026-07-01T00:38:00+03:00` |
+| Максимальный `created_at` | `2026-07-31T20:22:00+03:00` |
+| `counted_in_conversion == true` | `852` |
+| `closed_without_operator == true` | `381` |
+| Воспроизводимая конверсия ChatMe | `381 / 852 = 44.7183%` |
+| Расхождение с owner-reported `24%` | `+20.7183 п.п.` |
+| `len(user_turns) == 1` | `293` (`34.39%`) |
+| `len(user_turns) == 2` | `289` (`33.92%`) |
+| `len(user_turns) >= 3` | `270` (`31.69%`) |
+
+Полученные `44.7183%` близки к отдельному отчётному срезу `384 / 861 = 44.6%`, но не
+воспроизводят заявленную июльскую метрику `24%`. Поэтому файл пригоден как зафиксированная
+популяция обращений после privacy remediation, но пока не является доказательством методики
+расчёта `24%`; denominator/exclusions нужно уточнять у источника данных отдельно.
+
+### Распределение `category`
+
+| Значение | Количество |
+|---|---:|
+| `Разное` | 320 |
+| `Мероприятия Росмола` | 197 |
+| `<null>` | 185 |
+| `Гранты Росмолодёжи` | 60 |
+| `Обратная связь и предложения от участников` | 44 |
+| `Тех.вопросы ФГАИС` | 17 |
+| `Общая информация о Росмоле` | 13 |
+| `Добро.РФ` | 12 |
+| `Тех.вопросы Молодёжь-Развивайся РФ` | 3 |
+| `Партнеры Росмолодёжи` | 1 |
+
+### Распределение `forum`
+
+| Количество | Значения |
+|---:|---|
+| 607 | `<null>` |
+| 38 | `Гранты для физических лиц` |
+| 28 | `Всероссийский этап «ГосСтарт.Стажировки»` |
+| 18 | `«Территория Смыслов» форум` |
+| 16 | `«Полюс» форум` |
+| 15 | `«Волга» форум` |
+| 14 | `Другое`; `«Территория БезОпасности» форум` |
+| 13 | `День молодёжи` |
+| 6 | `«ГосСтарт» форум`; `«Доброволец России» нагрудный знак` |
+| 5 | `Гранты 1 сезон`; `Больше, чем путешествие`; `«Байкал» форум` |
+| 4 | `ТИМ «Бирюса» форум`; `Гранты. Микрогранты` |
+| 3 | `«Добрино» форум`; `«Ладога» форум`; `Онлайн-курсы от Академии Росмолодёжи`; `Региональный этап «ГосСтарт.Стажировки»`; `«ШУМ» форум`; `Региональное мероприятие`; `«Экосистема. Заповедный край» форум`; `Международный фестиваль молодёжи`; `Форум рабочей молодежи` |
+| 2 | `«Быть, а не казаться» конкурс наставников`; `«ВОЛОГДА.ФОЛК» фольклорный форум`; `Национальная премия «Патриот»`; `«Я в Агро» всероссийский конкурс`; `ТИМ «Юниор» форум`; `Всероссийский форум рабочей молодёжи`; `«Время молодых» премия` |
+| 1 | `119`; `«Машук» форум`; `«ОстроVа» форум`; `«Регион 93» форум Кубани`; `«Таврида.АРТ» фестиваль`; `«ШУМ» премия`; `«Экосистема» КМОЦ`; `«иВолга» форум`; `Гранты 2 сезон`; `Гранты Двигай сообщества`; `Гранты для НКО`; `Профилактика социально-негативных явлений в молодёжной среде`; `Тематические образовательные заезды КМОЦ ШУМ` |
+
+Метаданные дополнительно требуют внимания: у `607/852` записей отсутствует `forum`, у `185/852`
+отсутствует `category`, а одно значение `forum` равно строке `119`. Это не privacy-стоп само по
+себе и не исправляется в измерительном цикле, но должно остаться видимым в будущих разрезах.
+
+### Privacy-gate и STOP
+
+На 30 случайных записях с фиксированным seed `20260804` проверены только поля `user_turns` и
+`bot_turns`; значения совпадений и исходные тексты не выводились:
+
+| Паттерн | `user_turns` | `bot_turns` |
+|---|---:|---:|
+| Телефон | 0 | 0 |
+| Email | 0 | `2 совпадения в 1 записи` |
+| Паспортоподобный номер | 0 | 0 |
+| СНИЛС-подобный номер | 0 | 0 |
+
+Сработал заданный stop-criterion: этап 1 и любые `/ask` запрещены до повторного обезличивания
+приватного файла. Текущий SHA нельзя считать постоянным benchmark ID: после безопасной замены
+email-подобных значений нужно повторить весь этап 0, подтвердить нулевые privacy findings и
+зафиксировать новый SHA-256. Выборочно удалять строки или менять product behavior запрещено.
+
+После privacy-gate стоимость сначала проверяется на bounded live probe по D-036. Историческая
+оценка `13.434144 RUB / 150` даёт около `2.69 RUB` для 30 и `76.30 RUB` для 852 кейсов, но она
+ненадёжна: предыдущий provider bill расходился с runner estimate примерно в `17.6x`. Поэтому до
+полного прогона обязательны фактическая billing-сверка короткого запуска, новый прогноз и
+одноразовое owner approval для запуска свыше 10 кейсов; при прогнозе выше `300 RUB` полный прогон
+не начинается.
+
+**Точный следующий шаг:** переобезличить текущий private JSONL без изменения состава и порядка
+852 тикетов, повторить эту же read-only валидацию и зафиксировать новый SHA-256. До этого сервер и
+`/ask` не трогать.

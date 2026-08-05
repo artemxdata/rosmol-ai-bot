@@ -135,6 +135,9 @@ def tokenize(text: str) -> list[str]:
 def _matches_filters(record: dict[str, Any], filters: dict[str, Any]) -> bool:
     if filters.get("status") and record.get("status") != filters["status"]:
         return False
+    source_type = filters.get("source_type")
+    if source_type and record.get("source_type") != source_type:
+        return False
     for key in ("forum_normalized", "category", "topic"):
         expected = filters.get(key)
         if expected is None:

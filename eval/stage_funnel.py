@@ -3,14 +3,20 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from src.graph.provenance import (
+    PROVENANCE_SCHEMA_VERSION as PIPELINE_LINEAGE_SCHEMA_VERSION,
+)
+
 SAFE_SCHEMA_VERSION = "stage-funnel-safe-v1"
-PIPELINE_LINEAGE_SCHEMA_VERSION = "question-pipeline-provenance-v1"
 RELEVANT_GRADE = 2
 AUTHORITATIVE_GRADE = 3
 RANK_CUTOFFS = (1, 3, 5, 10)

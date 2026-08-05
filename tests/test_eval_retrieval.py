@@ -12,6 +12,7 @@ from eval.run_retrieval import (
     compute_recall_at_k,
     rank_summary,
     run_eval,
+    run_private_yonote_candidate_audit,
 )
 
 
@@ -241,3 +242,178 @@ async def test_run_eval_can_generate_lexical_smoke_cases(tmp_path: Path) -> None
     assert metrics["generated_smoke_cases"] is True
     assert metrics["cases_total"] == 1
     assert metrics["recall_at_5"] == 1.0
+
+
+def test_private_candidate_audit_is_user_only_and_yonote_only(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    source = private_root / "tickets.jsonl"
+    output = private_root / "candidate_audit.json"
+    kb_seed = tmp_path / "kb.json"
+    source.write_text(
+        json.dumps(
+            {
+                "ticket_id": "raw-ticket-42",
+                "user_turns": ["Как зарегистрироваться?", "Именно на форум Машук"],
+                "bot_turns": ["SECRET BOT ANSWER"],
+                "closed_without_operator": True,
+                "category": "label-must-be-ignored",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    kb_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "yonote_published",
+                    "status": "published",
+                    "source_type": "yonote",
+                    "text_clean": "Регистрация на форум Машук открыта.",
+                },
+                {
+                    "chunk_id": "xlsx_published",
+                    "status": "published",
+                    "source_type": "xlsx",
+                    "text_clean": "Регистрация на форум Машук открыта.",
+                },
+                {
+                    "chunk_id": "yonote_archived",
+                    "status": "archived",
+                    "source_type": "yonote",
+                    "text_clean": "Регистрация на форум Машук открыта.",
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_private_yonote_candidate_audit(
+        source,
+        output,
+        kb_seed_path=kb_seed,
+        top_k=5,
+        private_root=private_root,
+    )
+
+    assert report["schema_version"] == "private-yonote-candidate-audit-v1"
+    assert report["cases_total"] == 1
+    assert report["user_turns_total"] == 2
+    assert report["multi_turn_cases"] == 1
+    assert report["qrels_status"] == "not_available"
+    assert report["metrics_status"] == "unscored"
+    assert report["source_filter"] == {"status": "published", "source_type": "yonote"}
+    result = report["results"][0]
+    assert result["ticket_id_hash"] != "raw-ticket-42"
+    assert len(result["ticket_id_hash"]) == 24
+    assert len(result["turns"]) == 2
+    assert result["turns"][0]["query_sha256"] != result["turns"][1]["query_sha256"]
+    assert {
+        candidate["chunk_id"]
+        for turn in result["turns"]
+        for candidate in turn["candidates"]
+    } == {"yonote_published"}
+    assert [item["chunk_id"] for item in result["union_candidates"]] == [
+        "yonote_published"
+    ]
+    serialized = output.read_text(encoding="utf-8")
+    assert "raw-ticket-42" not in serialized
+    assert "SECRET BOT ANSWER" not in serialized
+    assert "label-must-be-ignored" not in serialized
+    assert "Как зарегистрироваться?" not in serialized
+
+
+def test_private_candidate_audit_ignores_bot_and_conversion_fields(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    kb_seed = tmp_path / "kb.json"
+    kb_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "yonote",
+                    "status": "published",
+                    "source_type": "yonote",
+                    "text_clean": "Как подать заявку на форум.",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    reports = []
+    for index, ignored in enumerate(("first", "second"), start=1):
+        source = private_root / f"tickets-{index}.jsonl"
+        source.write_text(
+            json.dumps(
+                {
+                    "ticket_id": "same-ticket",
+                    "user_turns": ["Как подать заявку?"],
+                    "bot_turns": [ignored],
+                    "closed_without_operator": index == 1,
+                    "counted_in_conversion": index != 1,
+                    "topic": ignored,
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        reports.append(
+            run_private_yonote_candidate_audit(
+                source,
+                private_root / f"audit-{index}.json",
+                kb_seed_path=kb_seed,
+                top_k=5,
+                private_root=private_root,
+            )
+        )
+
+    assert reports[0]["results"] == reports[1]["results"]
+
+
+def test_private_candidate_audit_rejects_malformed_turns(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    source = private_root / "tickets.jsonl"
+    output = private_root / "audit.json"
+    kb_seed = tmp_path / "kb.json"
+    source.write_text(
+        json.dumps({"ticket_id": "ticket", "user_turns": ["ok", 42]}) + "\n",
+        encoding="utf-8",
+    )
+    kb_seed.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="user_turns must contain non-empty strings"):
+        run_private_yonote_candidate_audit(
+            source,
+            output,
+            kb_seed_path=kb_seed,
+            top_k=5,
+            private_root=private_root,
+        )
+
+
+def test_private_candidate_audit_requires_private_paths(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    source = tmp_path / "outside.jsonl"
+    output = private_root / "audit.json"
+    kb_seed = tmp_path / "kb.json"
+    source.write_text(
+        json.dumps({"ticket_id": "ticket", "user_turns": ["question"]}) + "\n",
+        encoding="utf-8",
+    )
+    kb_seed.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must stay under data/private"):
+        run_private_yonote_candidate_audit(
+            source,
+            output,
+            kb_seed_path=kb_seed,
+            top_k=5,
+            private_root=private_root,
+        )

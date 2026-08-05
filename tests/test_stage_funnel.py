@@ -13,6 +13,7 @@ from eval.stage_funnel import (
     load_tickets_jsonl,
     run_stage_funnel,
 )
+from src.graph.provenance import PROVENANCE_SCHEMA_VERSION
 
 
 def _ticket(
@@ -55,7 +56,7 @@ def _observation(
         "cited_source_ids": [source_id],
         "verification_source_ids": [source_id],
         "verification_decision": "pass",
-        "lineage_schema_version": "question-pipeline-provenance-v1",
+        "lineage_schema_version": PROVENANCE_SCHEMA_VERSION,
         "lineage_attribution": "exact",
         "lineage_stage_available": {
             "retrieve": True,
@@ -268,7 +269,7 @@ def test_score_case_exact_lineage_adapter_uses_ordered_stage_fields() -> None:
         "ordered_cited_source_ids": ["source-a"],
         "verification_source_ids": ["source-a"],
         "lineage_attribution": "exact",
-        "lineage_schema_version": "question-pipeline-provenance-v1",
+        "lineage_schema_version": PROVENANCE_SCHEMA_VERSION,
         "lineage_stage_available": {
             "retrieve": True,
             "rerank": True,
@@ -397,7 +398,7 @@ def test_trace_events_can_supply_selection_and_contract_enums() -> None:
         {
             "node": "generate_selection",
             "metadata": {
-                "schema_version": "question-pipeline-provenance-v1",
+                "schema_version": PROVENANCE_SCHEMA_VERSION,
                 "selected_source_ids": ["source-a"],
                 "contract_status": "pass",
             },

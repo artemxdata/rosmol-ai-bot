@@ -34,6 +34,9 @@ from eval.cost_governance import (
     approval_required as cost_approval_required,
 )
 from src.config import get_settings
+from src.graph.provenance import (
+    PROVENANCE_SCHEMA_VERSION as PIPELINE_LINEAGE_SCHEMA_VERSION,
+)
 from src.response_contract import ResponseProfileName
 from src.security import eval_cache_bypass
 
@@ -84,7 +87,6 @@ SAFE_COST_APPROVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}")
 SAFE_GOLD_TICKET_HASH_RE = re.compile(r"[0-9a-f]{12,64}")
 SAFE_GOLD_STEP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}")
 HOLDOUT_MARKER_RE = re.compile(r"(?:^|[:_./-])holdout(?:$|[:_./-])")
-PIPELINE_LINEAGE_SCHEMA_VERSION = "question-pipeline-provenance-v1"
 
 FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
     r"(ответ[а]?[^.!?]{0,120}\s+в\s+источник(?:е|ах)\s+нет|"

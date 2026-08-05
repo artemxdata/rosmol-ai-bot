@@ -43,6 +43,35 @@ def test_seed_retriever_returns_filtered_published_chunks() -> None:
     assert [chunk.chunk_id for chunk in chunks] == ["travel"]
 
 
+def test_seed_retriever_filters_published_chunks_by_source_type() -> None:
+    retriever = SeedRetriever(
+        [
+            {
+                "chunk_id": "yonote_registration",
+                "status": "published",
+                "source_type": "yonote",
+                "text_clean": "Регистрация на форум открыта на платформе.",
+                "category": "форумы",
+            },
+            {
+                "chunk_id": "xlsx_registration",
+                "status": "published",
+                "source_type": "xlsx",
+                "text_clean": "Регистрация на форум открыта на платформе.",
+                "category": "форумы",
+            },
+        ]
+    )
+
+    chunks = retriever.retrieve(
+        "регистрация на форум",
+        {"category": "форумы", "source_type": "yonote"},
+        top_k=5,
+    )
+
+    assert [chunk.chunk_id for chunk in chunks] == ["yonote_registration"]
+
+
 def test_seed_retriever_matches_and_canonicalizes_yonote_forum_variant() -> None:
     retriever = SeedRetriever(
         [

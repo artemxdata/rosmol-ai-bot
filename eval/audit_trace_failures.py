@@ -13,8 +13,10 @@ import asyncpg
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.config import get_settings
+from src.graph.provenance import (
+    PROVENANCE_SCHEMA_VERSION as PIPELINE_LINEAGE_SCHEMA_VERSION,
+)
 
-PIPELINE_LINEAGE_SCHEMA_VERSION = "question-pipeline-provenance-v1"
 LINEAGE_STAGES = frozenset(
     {"retrieve", "rerank", "source_selection", "citation", "verify"}
 )

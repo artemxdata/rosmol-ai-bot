@@ -4,6 +4,7 @@ import pytest
 
 from eval.run_ask import _normalize_case, score_case
 from eval.stage_funnel import build_stage_funnel_report
+from src.graph.provenance import PROVENANCE_SCHEMA_VERSION
 
 
 def test_score_case_exports_separate_exact_pipeline_lineage() -> None:
@@ -22,7 +23,7 @@ def test_score_case_exports_separate_exact_pipeline_lineage() -> None:
                 "metadata": {
                     "question_provenance": [
                         {
-                            "schema_version": "question-pipeline-provenance-v1",
+                            "schema_version": PROVENANCE_SCHEMA_VERSION,
                             "question_id": "q1",
                             "retrieved_chunk_ids": ["retrieved_only", "selected"],
                         }
@@ -39,7 +40,7 @@ def test_score_case_exports_separate_exact_pipeline_lineage() -> None:
                     },
                     "question_provenance": [
                         {
-                            "schema_version": "question-pipeline-provenance-v1",
+                            "schema_version": PROVENANCE_SCHEMA_VERSION,
                             "question_id": "q1",
                             "output_chunks": [
                                 {"chunk_id": "selected", "score": 0.93}
@@ -51,7 +52,7 @@ def test_score_case_exports_separate_exact_pipeline_lineage() -> None:
             {
                 "node": "generate_selection",
                 "metadata": {
-                    "schema_version": "question-pipeline-provenance-v1",
+                    "schema_version": PROVENANCE_SCHEMA_VERSION,
                     "mode": "llm",
                     "selected_source_ids": ["selected"],
                     "question_source_overlaps": [
@@ -69,7 +70,7 @@ def test_score_case_exports_separate_exact_pipeline_lineage() -> None:
             {
                 "node": "verify_decision",
                 "metadata": {
-                    "schema_version": "question-pipeline-provenance-v1",
+                    "schema_version": PROVENANCE_SCHEMA_VERSION,
                     "decision": "pass",
                     "reason": "passed",
                     "referenced_source_ids": ["cited"],
@@ -93,6 +94,7 @@ def test_score_case_exports_separate_exact_pipeline_lineage() -> None:
     assert result["selected_source_ids"] == ["selected"]
     assert result["ordered_cited_source_ids"] == ["cited"]
     assert result["verification_source_ids"] == ["cited"]
+    assert result["lineage_schema_version"] == PROVENANCE_SCHEMA_VERSION
     assert result["lineage_attribution"] == "exact"
     assert result["lineage_stage_available"] == {
         "retrieve": True,
@@ -159,7 +161,7 @@ def test_gold_ticket_identity_survives_ask_scoring_and_matches_stage_funnel() ->
                 {
                     "node": "generate_selection",
                     "metadata": {
-                        "schema_version": "question-pipeline-provenance-v1",
+                        "schema_version": PROVENANCE_SCHEMA_VERSION,
                         "selected_source_ids": ["source-a"],
                         "contract_status": "passed",
                         "reason": "passed",
@@ -168,7 +170,7 @@ def test_gold_ticket_identity_survives_ask_scoring_and_matches_stage_funnel() ->
                 {
                     "node": "verify_decision",
                     "metadata": {
-                        "schema_version": "question-pipeline-provenance-v1",
+                        "schema_version": PROVENANCE_SCHEMA_VERSION,
                         "decision": "pass",
                         "reason": "passed",
                         "referenced_source_ids": ["source-a"],

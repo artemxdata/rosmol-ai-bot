@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from eval.audit_trace_failures import build_trace_failure_report
+from src.graph.provenance import PROVENANCE_SCHEMA_VERSION
 
 
 def test_build_trace_failure_report_marks_rerank_loss_without_raw_text() -> None:
@@ -143,7 +144,7 @@ def test_build_trace_failure_report_marks_exact_source_selection_loss() -> None:
                 "selected_source_ids": ["neighbor"],
                 "cited_source_ids": ["neighbor"],
                 "verification_source_ids": [],
-                "lineage_schema_version": "question-pipeline-provenance-v1",
+                "lineage_schema_version": PROVENANCE_SCHEMA_VERSION,
                 "lineage_attribution": "exact",
                 "lineage_stage_available": {
                     "retrieve": True,
@@ -177,7 +178,7 @@ def test_build_trace_failure_report_marks_exact_citation_binding_loss() -> None:
                 "selected_source_ids": ["expected"],
                 "cited_source_ids": [],
                 "verification_source_ids": [],
-                "lineage_schema_version": "question-pipeline-provenance-v1",
+                "lineage_schema_version": PROVENANCE_SCHEMA_VERSION,
                 "lineage_attribution": "exact",
                 "lineage_stage_available": {
                     "retrieve": True,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from collections import Counter
@@ -13,10 +14,15 @@ from qdrant_client import AsyncQdrantClient
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from eval.ask_cases import seed_smoke_query, select_balanced_records
+from scripts.analyze_ticket_dataset import private_id_hash
 from src.config import get_settings
 from src.rag.embedder import Embedder
 from src.rag.retriever import Retriever
 from src.rag.seed_retriever import SeedRetriever
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_DATA_ROOT = (PROJECT_ROOT / "data" / "private").resolve()
+PRIVATE_CANDIDATE_AUDIT_SCHEMA_VERSION = "private-yonote-candidate-audit-v1"
 
 
 def compute_recall_at_k(results: list[dict[str, Any]]) -> float | None:
@@ -160,6 +166,161 @@ async def run_eval(
     return metrics
 
 
+def run_private_yonote_candidate_audit(
+    ticket_jsonl_path: Path,
+    output_path: Path,
+    *,
+    kb_seed_path: Path = Path("data/knowledge_base_seed.json"),
+    top_k: int = 10,
+    private_root: Path = PRIVATE_DATA_ROOT,
+) -> dict[str, Any]:
+    """Build user-only published-Yonote candidates without claiming qrels."""
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    source_path = _private_path(
+        ticket_jsonl_path,
+        private_root=private_root,
+        label="private ticket input",
+        must_exist=True,
+    )
+    destination = _private_path(
+        output_path,
+        private_root=private_root,
+        label="private candidate output",
+        must_exist=False,
+    )
+    if source_path.suffix.casefold() != ".jsonl":
+        raise ValueError("private ticket input must be JSONL")
+    if destination.suffix.casefold() != ".json":
+        raise ValueError("private candidate output must be JSON")
+    if destination.exists():
+        raise FileExistsError("private candidate output already exists")
+
+    ticket_records = _read_private_ticket_jsonl(source_path)
+    seed_payload = _read_json(kb_seed_path)
+    if not isinstance(seed_payload, list):
+        raise ValueError("KB seed must be a JSON array")
+    yonote_records = [
+        record
+        for record in seed_payload
+        if isinstance(record, dict)
+        and record.get("status") == "published"
+        and record.get("source_type") == "yonote"
+    ]
+    retriever = SeedRetriever(yonote_records)
+    source_filter = {"status": "published", "source_type": "yonote"}
+
+    results: list[dict[str, Any]] = []
+    user_turns_total = 0
+    multi_turn_cases = 0
+    cases_with_candidates = 0
+    union_candidate_counts: list[int] = []
+    for ticket in ticket_records:
+        user_turns = ticket["user_turns"]
+        user_turns_total += len(user_turns)
+        multi_turn_cases += len(user_turns) >= 2
+        cumulative_turns: list[str] = []
+        turn_results: list[dict[str, Any]] = []
+        union_by_id: dict[str, dict[str, Any]] = {}
+        for turn_index, turn_text in enumerate(user_turns, start=1):
+            cumulative_turns.append(turn_text)
+            query = "\n".join(cumulative_turns)
+            chunks = retriever.retrieve(query, source_filter, top_k=top_k)
+            candidates: list[dict[str, Any]] = []
+            for rank, chunk in enumerate(chunks, start=1):
+                if (
+                    chunk.metadata.get("status") != "published"
+                    or chunk.metadata.get("source_type") != "yonote"
+                ):
+                    raise RuntimeError("candidate escaped the published Yonote source universe")
+                score = round(float(chunk.score), 12)
+                candidates.append(
+                    {"chunk_id": chunk.chunk_id, "rank": rank, "score": score}
+                )
+                current = union_by_id.get(chunk.chunk_id)
+                if current is None:
+                    union_by_id[chunk.chunk_id] = {
+                        "chunk_id": chunk.chunk_id,
+                        "best_rank": rank,
+                        "best_score": score,
+                        "first_turn_index": turn_index,
+                        "turn_hits": 1,
+                    }
+                else:
+                    current["best_rank"] = min(int(current["best_rank"]), rank)
+                    current["best_score"] = max(float(current["best_score"]), score)
+                    current["turn_hits"] = int(current["turn_hits"]) + 1
+            turn_results.append(
+                {
+                    "turn_index": turn_index,
+                    "query_sha256": _text_sha256(query),
+                    "candidates": candidates,
+                }
+            )
+
+        union_candidates = sorted(
+            union_by_id.values(),
+            key=lambda item: (
+                int(item["best_rank"]),
+                -float(item["best_score"]),
+                int(item["first_turn_index"]),
+                str(item["chunk_id"]),
+            ),
+        )
+        cases_with_candidates += bool(union_candidates)
+        union_candidate_counts.append(len(union_candidates))
+        results.append(
+            {
+                "ticket_id_hash": private_id_hash(ticket["ticket_id"]),
+                "user_turns_count": len(user_turns),
+                "turns": turn_results,
+                "union_candidates": union_candidates,
+            }
+        )
+
+    report = {
+        "schema_version": PRIVATE_CANDIDATE_AUDIT_SCHEMA_VERSION,
+        "candidate_semantics": "provisional_source_candidates_not_qrels",
+        "qrels_status": "not_available",
+        "metrics_status": "unscored",
+        "query_contract": "ordered-user-turns-cumulative-v1",
+        "dialogue_limit": "bot-turn interleaving unavailable; user-only context",
+        "ignored_input_fields": [
+            "bot_turns",
+            "category",
+            "channel",
+            "closed_without_operator",
+            "counted_in_conversion",
+            "forum",
+            "is_substantive",
+            "topic",
+            "was_escalated",
+        ],
+        "source_filter": source_filter,
+        "source_file_sha256": _file_sha256(source_path),
+        "kb_seed_sha256": _file_sha256(kb_seed_path),
+        "eval_tool_sha256": _file_sha256(Path(__file__)),
+        "seed_retriever_sha256": _file_sha256(
+            PROJECT_ROOT / "src" / "rag" / "seed_retriever.py"
+        ),
+        "kb_seed_records_total": len(seed_payload),
+        "published_yonote_records_total": len(yonote_records),
+        "top_k": top_k,
+        "cases_total": len(results),
+        "user_turns_total": user_turns_total,
+        "multi_turn_cases": multi_turn_cases,
+        "cases_with_candidates": cases_with_candidates,
+        "avg_union_candidates": (
+            round(sum(union_candidate_counts) / len(union_candidate_counts), 6)
+            if union_candidate_counts
+            else None
+        ),
+        "results": results,
+    }
+    _write_json(destination, report)
+    return report
+
+
 def build_seed_smoke_cases(
     records: list[dict[str, Any]],
     max_cases: int = 100,
@@ -214,6 +375,73 @@ def _retrieved_for_cutoff(item: dict[str, Any], cutoff: int | None) -> list[str]
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_private_ticket_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    ticket_ids: set[str] = set()
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, raw_line in enumerate(source, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                raw = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSONL at line {line_number}") from exc
+            if not isinstance(raw, dict):
+                raise ValueError(f"private ticket line {line_number} must be an object")
+            ticket_id = raw.get("ticket_id")
+            if not isinstance(ticket_id, str) or not ticket_id.strip():
+                raise ValueError(f"private ticket line {line_number} has no ticket_id")
+            ticket_id = ticket_id.strip()
+            if ticket_id in ticket_ids:
+                raise ValueError(f"duplicate ticket_id at line {line_number}")
+            ticket_ids.add(ticket_id)
+            user_turns = raw.get("user_turns")
+            if (
+                not isinstance(user_turns, list)
+                or not user_turns
+                or any(
+                    not isinstance(turn, str) or not turn.strip() for turn in user_turns
+                )
+            ):
+                raise ValueError(
+                    f"private ticket line {line_number} user_turns must contain "
+                    "non-empty strings"
+                )
+            records.append(
+                {
+                    "ticket_id": ticket_id,
+                    "user_turns": [turn.strip() for turn in user_turns],
+                }
+            )
+    return records
+
+
+def _private_path(
+    path: Path,
+    *,
+    private_root: Path,
+    label: str,
+    must_exist: bool,
+) -> Path:
+    root = private_root.resolve(strict=True)
+    candidate = path.resolve(strict=must_exist)
+    if not candidate.is_relative_to(root):
+        raise ValueError(f"{label} must stay under data/private")
+    return candidate
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -280,7 +508,35 @@ def main() -> None:
     parser.add_argument("--kb-seed", default="data/knowledge_base_seed.json")
     parser.add_argument("--auto-smoke-cases", action="store_true")
     parser.add_argument("--max-smoke-cases", type=int, default=100)
+    parser.add_argument(
+        "--private-ticket-jsonl",
+        default="",
+        help=(
+            "Build unscored user-only Yonote candidates from a private ticket JSONL; "
+            "requires --backend lexical and an output under data/private"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.private_ticket_jsonl:
+        if args.backend != "lexical":
+            parser.error("--private-ticket-jsonl requires --backend lexical")
+        if args.auto_smoke_cases or args.markdown:
+            parser.error("private candidate mode does not support smoke cases or markdown")
+        report = run_private_yonote_candidate_audit(
+            Path(args.private_ticket_jsonl),
+            Path(args.output),
+            kb_seed_path=Path(args.kb_seed),
+            top_k=args.top_k,
+        )
+        print(
+            json.dumps(
+                {key: value for key, value in report.items() if key != "results"},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
 
     metrics = asyncio.run(
         run_eval(
