@@ -1,8 +1,46 @@
 # Текущее состояние проекта
 
-**Обновлено:** 4 августа 2026
+**Обновлено:** 5 августа 2026
 
-**Ветка:** `master`
+**Ветка:** `codex/real-rag`
+
+## Real-RAG Phase 0: локальная подготовка завершена, live-прогон не выполнен
+
+Локальный checkpoint `7d244e4fdee21a36a609e6f1cd0012e198746376`
+(`Add Phase 0 real-RAG measurement gate`) добавляет только измерительный контур и telemetry:
+analysis path, retrieval/metadata/hybrid participation, фактический reranker и происхождение
+score, generator path и `source_chunk`. Runtime не развёртывался, production-конфиг, KB,
+thresholds и default `deterministic` не менялись.
+
+Июльская приватная когорта зафиксирована без live-вызовов: source SHA-256
+`bc669899e49638c6d196c3e552142372adfc73f4fce5b972f4350d6ab4252dd1`, 852 тикета
+(VK 628, MAX 224), из них 119 относятся к собственному текстовому флагу `social_only_v1`
+и 733 содержат first-content turn. Историческая внутренняя метрика этого определения —
+`(381−118)/(852−119) = 263/733 = 35,88%`; это не воспроизведение внешней метрики ChatMe.
+Внешний reference `217/705 = 30,8%` остаётся только ориентиром до exact join списка владельца.
+Список 167 `unique_id` пока не предоставлен; owner join имеет статус `not_provided` и не
+блокирует Phase 0.
+
+Approval-bound выборка 30 построена с seed `20260804` и квотами `11/11/4/4` по
+VK/forum, VK/no-forum, MAX/forum, MAX/no-forum. SHA-256 cases:
+`aff198bbc98d07894a3e1676e3457891e3a38f674315051505b681641fe9d02d`; ordered selection:
+`4127a5ec72a6a5166b6c1a545fc7dfacebb73452dd6d9fe35816d03f36016a33`. Приватные manifest и
+cases находятся в `data/private/eval/phase0-real-rag-7d244e4/` и не входят в Git или server
+artifacts. Approval: `RAG-PHASE0-30-20260805`, cap `200 ₽`.
+
+Локальный gate checkpoint: Ruff — pass; pytest — `2344 passed, 1 skipped, 0 failed`
+из `2345 collected`. Из-за воспроизводимого зависания общего Windows-процесса полный набор
+выполнен восемью детерминированными непересекающимися file-shards; проблемный shard дополнительно
+пройден пофайлово. KB validation — `2186 valid / 2152 published`. Стоимость на этом этапе —
+`0 ₽`: платный `/ask`, HDE/VK, Yonote и production runtime не использовались.
+
+Точный следующий шаг — один раз выполнить утверждённый Phase 0 прогон 30 кейсов в изолированном
+clean eval-runtime через заранее настроенные SSH loopback-forward и проверенный host fingerprint,
+с отдельной eval billing attribution. Перед первым запросом runner обязан пройти signed `/ready`,
+зарезервировать cap и сохранить rejection evidence при любом fail-closed отказе. После прогона
+сверить provider billing с ledger: расхождение больше 10% или превышение cap означает STOP.
+Фазы 1–4 не начинать до результата joint bypass: `≥60%` — гипотеза подтверждена, `30–60%` —
+частично подтверждена, `<30%` — остановка. Owner-exception действует только local/eval.
 
 **Deployed release:** `b4bc23ab890337324f8c9ef62f3a9d90c136b72e`
 (`Refresh recovery security deadline`). Server checkout, app image и app-ml image были сверены
