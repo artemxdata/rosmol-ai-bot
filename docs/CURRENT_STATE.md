@@ -35,6 +35,11 @@ Docker Compose config с профилем `phase0` — valid. Следующий
 `/dev/shm` и один раз выполнить `bash scripts/run_phase0_server_local.sh`. До получения
 `phase0-safe-metrics.json` фазы 1–4 не начинать.
 
+Первый server-local launcher preflight остановился до `/ask` и до cost reservation: Compose
+потребовал path-переменные неактивного sibling-сервиса `quality-acceptance`. Launcher дополнен
+всеми обязательными non-secret Compose paths; это infrastructure-only исправление, повторный
+запуск не является выборочным rerun и не расходует approval.
+
 Локальный checkpoint `7d244e4fdee21a36a609e6f1cd0012e198746376`
 (`Add Phase 0 real-RAG measurement gate`) добавляет только измерительный контур и telemetry:
 analysis path, retrieval/metadata/hybrid participation, фактический reranker и происхождение

@@ -52,3 +52,26 @@ def test_stream_phase0_inputs_sends_only_approved_archive(
         assert bundle.getnames() == ["phase0-cases.json", "phase0-manifest.json"]
         assert bundle.extractfile("phase0-cases.json").read() == cases
         assert bundle.extractfile("phase0-manifest.json").read() == manifest
+
+
+def test_server_launcher_supplies_all_acceptance_compose_variables() -> None:
+    launcher = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_phase0_server_local.sh"
+    ).read_text(encoding="utf-8")
+
+    for variable in (
+        "RELEASE_GIT_SHA",
+        "ACCEPTANCE_SOURCE_DIR",
+        "ACCEPTANCE_OUTPUT_DIR",
+        "ACCEPTANCE_PROVENANCE_DIR",
+        "ACCEPTANCE_COST_LEDGER_DIR",
+        "PHASE0_RUNTIME_GIT_SHA",
+        "PHASE0_RUNNER_SOURCE_DIR",
+        "PHASE0_BUILDER_SOURCE_DIR",
+        "PHASE0_PRIVATE_DIR",
+        "PHASE0_COST_LEDGER_DIR",
+    ):
+        assert f'"{variable}=$' in launcher
+    assert "  --profile ml\n  --profile phase0\n" in launcher
