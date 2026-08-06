@@ -5774,6 +5774,102 @@ async def test_phase0_server_local_rejects_missing_owner_exception_before_reques
 
 
 @pytest.mark.asyncio
+async def test_phase0_server_local_reaches_ready_before_cost_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    from eval import phase0_server_provenance
+
+    monkeypatch.setenv(
+        run_ask_module.PHASE0_SERVER_LOCAL_OWNER_EXCEPTION_ENV,
+        run_ask_module.PHASE0_APPROVAL_ID,
+    )
+    monkeypatch.setattr(
+        phase0_server_provenance,
+        "validate_phase0_builder_snapshot",
+        lambda _source, *, telemetry_git_sha: {
+            "telemetry_git_sha": telemetry_git_sha,
+            "files_verified": 9,
+            "file_sha256": {},
+        },
+    )
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    class TracePool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> TracePool:
+        return TracePool()
+
+    reserve_calls: list[dict[str, object]] = []
+
+    def fake_reserve(**kwargs: object) -> object:
+        reserve_calls.append(kwargs)
+        raise AssertionError("reservation must follow verified /ready")
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "reserve_live_eval_cost", fake_reserve)
+    requests: list[tuple[str, str]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str, **_kwargs: object) -> httpx.Response:
+            requests.append(("GET", httpx.URL(url).path))
+            return httpx.Response(
+                200,
+                json=_ready_payload(release_git_sha="e" * 40),
+            )
+
+        async def post(self, url: str, **_kwargs: object) -> httpx.Response:
+            requests.append(("POST", httpx.URL(url).path))
+            raise AssertionError("POST /ask must not happen")
+
+    monkeypatch.setattr(run_ask_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(ValueError, match="release_git_sha"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://rosmol-phase0-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://eval:test@postgres:5432/eval",
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+            phase0_server_local=True,
+            phase0_builder_source=tmp_path,
+        )
+
+    assert requests == [("GET", "/ready")]
+    assert reserve_calls == []
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_phase0_runtime_ready_precedes_cost_reservation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6080,6 +6176,29 @@ def test_source_diagnostic_rejects_direct_app_ml_target(
             markdown_path=None,
             target="http://app-ml:8000/ask",
         )
+
+
+def test_source_diagnostic_accepts_approved_phase0_server_local_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_root, cases_path, output_path = _source_diagnostic_workspace(
+        tmp_path,
+        monkeypatch,
+    )
+    case = run_ask_module._normalize_case(
+        _source_observed_diagnostic_case(),
+        allow_source_observed_diagnostic=True,
+    )
+
+    _guard_eval_privacy(
+        cases=[case],
+        cases_path=cases_path,
+        output_path=output_path,
+        markdown_path=None,
+        target="http://rosmol-phase0-ml:8000/ask",
+        phase0_server_local=True,
+    )
 
 
 @pytest.mark.asyncio

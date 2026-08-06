@@ -867,6 +867,10 @@ async def run_eval(
         output_path=output_path,
         markdown_path=markdown_path,
         target=target,
+        phase0_server_local=bool(
+            phase0_contract
+            and phase0_contract.get("transport_mode") == "server_local"
+        ),
     )
     holdout_ledger: Path | None = None
     holdout_receipt_key: str | None = None
@@ -2703,6 +2707,7 @@ def _guard_eval_privacy(
     output_path: Path,
     markdown_path: Path | None,
     target: str,
+    phase0_server_local: bool = False,
 ) -> None:
     private_root = PRIVATE_DATA_ROOT.resolve()
     cases_resolved = cases_path.resolve()
@@ -2721,21 +2726,36 @@ def _guard_eval_privacy(
         case.get("label_status") == SOURCE_OBSERVED_DIAGNOSTIC_MODE
         for case in cases
     )
-    allowed_hosts = (
-        SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS if source_diagnostic else PRIVATE_EVAL_HOSTS
-    )
+    if phase0_server_local and not source_diagnostic:
+        raise ValueError(
+            "Phase 0 server-local privacy exception requires source diagnostics"
+        )
+    if phase0_server_local:
+        allowed_hosts = PHASE0_SERVER_LOCAL_ASK_HOSTS
+    else:
+        allowed_hosts = (
+            SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+            if source_diagnostic
+            else PRIVATE_EVAL_HOSTS
+        )
     parsed = urlsplit(target)
+    valid_scheme = parsed.scheme == "http" if phase0_server_local else (
+        parsed.scheme in {"http", "https"}
+    )
     if (
-        parsed.scheme not in {"http", "https"}
+        not valid_scheme
         or parsed.hostname not in allowed_hosts
         or parsed.username
         or parsed.password
         or parsed.query
         or parsed.fragment
         or parsed.path.rstrip("/") != "/ask"
+        or (phase0_server_local and parsed.port != 8000)
     ):
         target_contract = (
-            "a local SSH-forwarded loopback /ask target"
+            "the approved server-local Docker /ask target"
+            if phase0_server_local
+            else "a local SSH-forwarded loopback /ask target"
             if source_diagnostic
             else "a loopback or app-ml /ask target"
         )

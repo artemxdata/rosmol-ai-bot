@@ -28,8 +28,9 @@ source без `.env.production`, tmpfs-входа, exact runtime `/ready`, пу�
 отсутствующего итогового отчёта. Выборочные перезапуски остаются запрещены. Live `/ask` после этой
 правки ещё не выполнялся; стоимость разработки и проверок — `0 ₽`.
 
-Локальный gate server-local harness: `ruff check .` — pass; полный `pytest` —
-`2352 passed, 1 skipped`; KB validation — `2186 valid / 2152 published`; объединённый
+Локальный gate server-local harness: `ruff check .` — pass; полный набор `pytest`, выполненный
+восьмью непересекающимися file-shards из-за известного Windows-зависания общего процесса, —
+`2354 passed, 1 skipped`; KB validation — `2186 valid / 2152 published`; объединённый
 Docker Compose config с профилем `phase0` — valid. Следующий шаг: push runner commit, создать на
 сервере clean worktree этого commit, secretless-потоком поместить два approval-bound JSON в
 `/dev/shm` и один раз выполнить `bash scripts/run_phase0_server_local.sh`. До получения
@@ -50,6 +51,12 @@ Compose-отказа tmpfs-вход остался владельцем UID eval
 Добавлен regression-тест CRLF/LF. Live-запросов, reservation receipts и расходов по этим
 попыткам нет; после push требуется новый clean runner worktree и один полный запуск с уже
 переданными approval-bound входами.
+
+Следующий запуск прошёл provenance gate, но общий privacy guard остановил server-local Docker
+target как не-loopback до cost reservation и первого `/ask`. Privacy exception теперь передаётся
+в guard только из уже полностью проверенного Phase 0 contract с действующим owner-exception;
+обычные private/source-diagnostic прогоны сохраняют прежнее требование loopback. Добавлен
+regression-тест разрешённого `rosmol-phase0-ml:8000` и сохранён запрет внешних target.
 
 Локальный checkpoint `7d244e4fdee21a36a609e6f1cd0012e198746376`
 (`Add Phase 0 real-RAG measurement gate`) добавляет только измерительный контур и telemetry:
