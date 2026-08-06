@@ -42,6 +42,37 @@
 
 ## Preflight Before Pilot
 
+### Real-RAG Phase 0: server-local one-shot
+
+Phase 0 не требует и не допускает перенос API token или PostgreSQL DSN на workstation. Локальная
+команда только проверяет SHA двух уже обезличенных approval-bound JSON и передаёт их через SSH в
+`/dev/shm`. Весь `/ask`, trace lookup, cost accounting и sanitization выполняются на сервере.
+
+После получения runner commit создать на сервере отдельный clean worktree без
+`.env.production`; exact builder snapshot `7d244e4fdee21a36a609e6f1cd0012e198746376` и отдельный
+healthy runtime `rosmol-phase0-ml` должны уже существовать. Затем передать inputs одной
+secretless-командой с workstation:
+
+```powershell
+.venv\Scripts\python.exe scripts\stream_phase0_inputs.py `
+  --ssh-target rosmol `
+  --cases data\private\eval\phase0-real-rag-7d244e4\phase0-cases.json `
+  --manifest data\private\eval\phase0-real-rag-7d244e4\phase0-manifest.json
+```
+
+На сервере из clean runner worktree выполнить только:
+
+```bash
+bash scripts/run_phase0_server_local.sh
+```
+
+Скрипт fail-closed проверяет runtime/source/input SHA, owner-exception, модели и цены через runner,
+пустой persistent ledger и полный trace/cache contract. После успешного запуска raw input/report
+удаляются из RAM; выводится только обезличенный
+`/var/lib/rosmol/phase0/phase0-20260805/evidence/phase0-safe-metrics.json`. Наличие результата или
+непустого ledger блокирует повторный запуск. До provider billing reconciliation вывод является
+предварительным и не снимает STOP по billing.
+
 ```powershell
 .venv\Scripts\ruff.exe check .
 .venv\Scripts\python.exe -m pytest

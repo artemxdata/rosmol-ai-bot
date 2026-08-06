@@ -1,10 +1,39 @@
 # Текущее состояние проекта
 
-**Обновлено:** 5 августа 2026
+**Обновлено:** 6 августа 2026
 
 **Ветка:** `codex/real-rag`
 
 ## Real-RAG Phase 0: локальная подготовка завершена, live-прогон не выполнен
+
+6 августа подготовлен server-local owner-exception для Phase 0 без переноса секретов на
+workstation. Исходный runner `7d244e4` разрешал только локальные SSH-forward адреса, из-за чего
+требовал бы API token и PostgreSQL DSN на локальной машине. Новый контур оставляет exact runtime
+и telemetry SHA `7d244e4fdee21a36a609e6f1cd0012e198746376`, но запускает eval внутри изолированной
+Docker-сети сервера. Eval-контейнер получает из server-only `.env.production` только API auth,
+trace DSN, model identity и цены; Cloud.ru, HDE, Yonote, Qdrant, Redis и административные
+credentials в runner не передаются.
+
+Approval-bound `phase0-cases.json` и `phase0-manifest.json` передаются без секретов через SSH в
+server RAM (`/dev/shm`), проверяются по SHA-256 и после успешного построения безопасной проекции
+удаляются вместе с raw report. На постоянном диске остаются только one-shot cost ledger и
+allowlist-only `phase0-safe-metrics.json` без case ID, query, response и evidence. Billing в первой
+проекции имеет статус `pending`; окончательное решение гейта требует отдельной сверки provider
+billing. Production-контейнер не изменяется, тест выполняется против отдельного
+`rosmol-phase0-ml`.
+
+Добавлены fail-closed проверки internal Docker target/DSN, server-local owner-exception,
+неизменённого read-only snapshot девяти builder/classifier файлов telemetry commit, clean runner
+source без `.env.production`, tmpfs-входа, exact runtime `/ready`, пустого постоянного ledger и
+отсутствующего итогового отчёта. Выборочные перезапуски остаются запрещены. Live `/ask` после этой
+правки ещё не выполнялся; стоимость разработки и проверок — `0 ₽`.
+
+Локальный gate server-local harness: `ruff check .` — pass; полный `pytest` —
+`2350 passed, 1 skipped`; KB validation — `2186 valid / 2152 published`; объединённый
+Docker Compose config с профилем `phase0` — valid. Следующий шаг: push runner commit, создать на
+сервере clean worktree этого commit, secretless-потоком поместить два approval-bound JSON в
+`/dev/shm` и один раз выполнить `bash scripts/run_phase0_server_local.sh`. До получения
+`phase0-safe-metrics.json` фазы 1–4 не начинать.
 
 Локальный checkpoint `7d244e4fdee21a36a609e6f1cd0012e198746376`
 (`Add Phase 0 real-RAG measurement gate`) добавляет только измерительный контур и telemetry:

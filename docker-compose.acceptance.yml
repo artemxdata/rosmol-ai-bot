@@ -58,3 +58,62 @@ services:
           cpus: "2.0"
           memory: 2G
           pids: 256
+
+  phase0-acceptance:
+    profiles: ["phase0"]
+    image: rosmol-ai-bot-ml:${PHASE0_RUNTIME_GIT_SHA:?PHASE0_RUNTIME_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    user: app
+    working_dir: /workspace
+    entrypoint: ["python", "-m", "eval.run_ask"]
+    command: ["--help"]
+    environment:
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?API_AUTH_TOKEN is required}
+      ASK_EVAL_POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+      RELEASE_GIT_SHA: ${PHASE0_RUNTIME_GIT_SHA:?PHASE0_RUNTIME_GIT_SHA is required}
+      PHASE0_SERVER_LOCAL_OWNER_EXCEPTION: RAG-PHASE0-30-20260805
+      CLOUD_RU_MODEL: ai-sage/GigaChat3-10B-A1.8B
+      CLOUD_RU_MODEL_SIMPLE: ai-sage/GigaChat3-10B-A1.8B
+      CLOUD_RU_MODEL_COMPLEX: ai-sage/GigaChat3-10B-A1.8B
+      CLOUD_RU_MODEL_ANALYZER: ai-sage/GigaChat3-10B-A1.8B
+      CLOUD_RU_MODEL_JUDGE: ai-sage/GigaChat3-10B-A1.8B
+      CLOUD_RU_MODEL_SIMPLE_INPUT_PRICE_RUB_PER_MILLION: "12.2"
+      CLOUD_RU_MODEL_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION: "12.2"
+      CLOUD_RU_MODEL_COMPLEX_INPUT_PRICE_RUB_PER_MILLION: "12.2"
+      CLOUD_RU_MODEL_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION: "12.2"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: rosmol-phase0-ml,postgres,rosmol-postgres,127.0.0.1,localhost
+    volumes:
+      - type: bind
+        source: ${PHASE0_RUNNER_SOURCE_DIR:?PHASE0_RUNNER_SOURCE_DIR is required}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${PHASE0_BUILDER_SOURCE_DIR:?PHASE0_BUILDER_SOURCE_DIR is required}
+        target: /builder-source
+        read_only: true
+      - type: bind
+        source: ${PHASE0_PRIVATE_DIR:?PHASE0_PRIVATE_DIR is required}
+        target: /workspace/data/private
+      - type: bind
+        source: ${PHASE0_COST_LEDGER_DIR:?PHASE0_COST_LEDGER_DIR is required}
+        target: /workspace/data/private/phase0-social-30-cost-ledger-v1
+    networks: [data]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+          pids: 256

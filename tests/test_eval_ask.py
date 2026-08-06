@@ -5676,6 +5676,103 @@ async def test_phase0_rejects_non_loopback_trace_dsn_before_ready(
     assert not output_path.exists()
 
 
+def test_phase0_server_local_contract_accepts_only_internal_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        _output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    from eval import phase0_server_provenance
+
+    monkeypatch.setenv(
+        run_ask_module.PHASE0_SERVER_LOCAL_OWNER_EXCEPTION_ENV,
+        run_ask_module.PHASE0_APPROVAL_ID,
+    )
+    monkeypatch.setattr(
+        phase0_server_provenance,
+        "validate_phase0_builder_snapshot",
+        lambda _source, *, telemetry_git_sha: {
+            "telemetry_git_sha": telemetry_git_sha,
+            "files_verified": 9,
+            "file_sha256": {},
+        },
+    )
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+
+    contract = run_ask_module._validated_phase0_execution_contract(
+        manifest_path=manifest_path,
+        cases_path=cases_path,
+        cases=cases,
+        cases_file_sha256=cases_file_sha256,
+        expected_cases_file_sha256=cases_file_sha256,
+        expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+        max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+        bypass_cache=True,
+        trace_lookup=True,
+        max_cases=None,
+        auto_smoke_cases=False,
+        generated_user_prefix=None,
+        concurrency=1,
+        target="http://rosmol-phase0-ml:8000/ask",
+        trace_dsn="postgresql://eval:test@postgres:5432/eval",
+        strict_live=True,
+        cost_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        cost_ledger_dir=None,
+        cost_reservation=None,
+        transport=None,
+        markdown_path=None,
+        server_local=True,
+        builder_source=tmp_path,
+    )
+
+    assert contract["transport_mode"] == "server_local"
+    assert contract["builder_snapshot"]["files_verified"] == 9
+
+
+@pytest.mark.asyncio
+async def test_phase0_server_local_rejects_missing_owner_exception_before_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _private_root,
+        cases_path,
+        manifest_path,
+        output_path,
+        cases_file_sha256,
+    ) = _phase0_workspace(tmp_path, monkeypatch)
+    monkeypatch.delenv(
+        run_ask_module.PHASE0_SERVER_LOCAL_OWNER_EXCEPTION_ENV,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="owner exception"):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://rosmol-phase0-ml:8000/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://eval:test@postgres:5432/eval",
+            bypass_cache=True,
+            max_llm_cost_rub=run_ask_module.PHASE0_COST_CAP_RUB,
+            high_cost_approval_id=run_ask_module.PHASE0_APPROVAL_ID,
+            allow_source_observed_diagnostic=True,
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            expected_cases_file_sha256=cases_file_sha256,
+            phase0_manifest_path=manifest_path,
+            phase0_server_local=True,
+            phase0_builder_source=tmp_path,
+        )
+
+    assert not output_path.exists()
+
+
 @pytest.mark.asyncio
 async def test_phase0_runtime_ready_precedes_cost_reservation(
     tmp_path: Path,

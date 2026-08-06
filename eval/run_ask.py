@@ -51,6 +51,9 @@ PRIVATE_EVAL_SPLITS = frozenset({"calibration", "validation", PRIVATE_HOLDOUT_SP
 ALLOWED_PRIVACY_CLASSES = {"standard", PRIVATE_TICKET_DERIVED}
 PRIVATE_EVAL_HOSTS = {"localhost", "127.0.0.1", "::1", "app-ml"}
 SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+PHASE0_SERVER_LOCAL_ASK_HOSTS = {"app-ml", "rosmol-phase0-ml"}
+PHASE0_SERVER_LOCAL_TRACE_HOSTS = {"postgres", "rosmol-postgres"}
+PHASE0_SERVER_LOCAL_OWNER_EXCEPTION_ENV = "PHASE0_SERVER_LOCAL_OWNER_EXCEPTION"
 HUMAN_REVIEW_MODE = "human_reviewed"
 MODEL_ASSISTED_PRERUN_MODE = "model_assisted_prerun"
 SOURCE_OBSERVED_DIAGNOSTIC_MODE = "source_observed_diagnostic"
@@ -688,6 +691,8 @@ async def run_eval(
     cost_reservation: LiveEvalCostReservation | None = None,
     allow_source_observed_diagnostic: bool = False,
     phase0_manifest_path: Path | None = None,
+    phase0_server_local: bool = False,
+    phase0_builder_source: Path | None = None,
 ) -> dict[str, Any]:
     run_started_at = datetime.now(UTC)
     eval_run_id = f"ask-eval-{uuid4()}"
@@ -752,6 +757,10 @@ async def run_eval(
             "must be used together"
         )
     phase0_contract: dict[str, Any] | None = None
+    if phase0_server_local and phase0_manifest_path is None:
+        raise ValueError("--phase0-server-local requires --phase0-manifest")
+    if phase0_builder_source is not None and phase0_manifest_path is None:
+        raise ValueError("--phase0-builder-source requires --phase0-manifest")
     if high_cost_approval_id == PHASE0_APPROVAL_ID and phase0_manifest_path is None:
         raise ValueError(
             f"{PHASE0_APPROVAL_ID} requires --phase0-manifest before any live request"
@@ -784,6 +793,8 @@ async def run_eval(
             cost_reservation=cost_reservation,
             transport=transport,
             markdown_path=markdown_path,
+            server_local=phase0_server_local,
+            builder_source=phase0_builder_source,
         )
         canonical_existing = [
             str(path)
@@ -1725,6 +1736,8 @@ async def run_eval(
                 "ordered_selection_sha256"
             ],
             "runtime_git_sha": phase0_contract["runtime_git_sha"],
+            "transport_mode": phase0_contract["transport_mode"],
+            "builder_snapshot": phase0_contract["builder_snapshot"],
             "approval_id": PHASE0_APPROVAL_ID,
             "cost_scope": PHASE0_COST_SCOPE,
             "integrity_failures": phase0_failures,
@@ -2193,6 +2206,8 @@ def _validated_phase0_execution_contract(
     cost_reservation: LiveEvalCostReservation | None,
     transport: httpx.AsyncBaseTransport | None,
     markdown_path: Path | None,
+    server_local: bool,
+    builder_source: Path | None,
 ) -> dict[str, Any]:
     """Bind the paid Phase 0 run to its exact approved manifest before /ask."""
 
@@ -2204,35 +2219,60 @@ def _validated_phase0_execution_contract(
         raise ValueError("Phase 0 forbids injected cost reservations")
     if markdown_path is not None:
         raise ValueError("Phase 0 requires --no-markdown for atomic finalization")
+    if server_local:
+        if os.getenv(PHASE0_SERVER_LOCAL_OWNER_EXCEPTION_ENV) != PHASE0_APPROVAL_ID:
+            raise ValueError(
+                "Phase 0 server-local owner exception is missing or invalid"
+            )
+        if builder_source is None:
+            raise ValueError("Phase 0 server-local requires --phase0-builder-source")
+    elif builder_source is not None:
+        raise ValueError(
+            "--phase0-builder-source is allowed only with --phase0-server-local"
+        )
+
     parsed = urlsplit(target)
+    allowed_ask_hosts = (
+        PHASE0_SERVER_LOCAL_ASK_HOSTS
+        if server_local
+        else SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+    )
+    valid_ask_scheme = parsed.scheme == "http" if server_local else (
+        parsed.scheme in {"http", "https"}
+    )
     if (
-        parsed.scheme not in {"http", "https"}
-        or parsed.hostname not in SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+        not valid_ask_scheme
+        or parsed.hostname not in allowed_ask_hosts
         or parsed.username
         or parsed.password
         or parsed.query
         or parsed.fragment
         or parsed.path.rstrip("/") != "/ask"
+        or (server_local and parsed.port != 8000)
     ):
-        raise ValueError(
-            "Phase 0 /ask must use a local SSH-forwarded loopback target"
-        )
+        transport_name = "server-local Docker" if server_local else "local SSH-forwarded"
+        raise ValueError(f"Phase 0 /ask must use the approved {transport_name} target")
     effective_trace_dsn = _trace_dsn_candidates(trace_dsn)[0]
     try:
         parsed_trace_dsn = urlsplit(effective_trace_dsn)
     except ValueError as exc:
         raise ValueError("Phase 0 trace DSN is invalid") from exc
+    allowed_trace_hosts = (
+        PHASE0_SERVER_LOCAL_TRACE_HOSTS
+        if server_local
+        else SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+    )
     if (
         parsed_trace_dsn.scheme not in {"postgres", "postgresql"}
-        or parsed_trace_dsn.hostname not in SOURCE_DIAGNOSTIC_LOOPBACK_HOSTS
+        or parsed_trace_dsn.hostname not in allowed_trace_hosts
         or "," in parsed_trace_dsn.netloc
         or "%2c" in parsed_trace_dsn.netloc.casefold()
         or parsed_trace_dsn.query
         or parsed_trace_dsn.fragment
+        or (server_local and parsed_trace_dsn.port != 5432)
     ):
-        raise ValueError(
-            "Phase 0 trace lookup must use a local SSH-forwarded loopback DSN"
-        )
+        transport_name = "server-local Docker" if server_local else "local SSH-forwarded loopback"
+        raise ValueError(f"Phase 0 trace lookup must use the approved {transport_name} DSN")
     argument_failures: list[str] = []
     if bypass_cache is not True:
         argument_failures.append("bypass_cache_required")
@@ -2312,7 +2352,19 @@ def _validated_phase0_execution_contract(
         raise ValueError("Phase 0 manifest execution fields are invalid")
 
     runtime_git_sha = str(telemetry.get("git_sha") or "")
-    phase0_benchmark._validate_builder_git_provenance(runtime_git_sha)
+    builder_snapshot: dict[str, object] | None = None
+    if server_local:
+        from eval.phase0_server_provenance import (
+            validate_phase0_builder_snapshot,
+        )
+
+        assert builder_source is not None
+        builder_snapshot = validate_phase0_builder_snapshot(
+            builder_source,
+            telemetry_git_sha=runtime_git_sha,
+        )
+    else:
+        phase0_benchmark._validate_builder_git_provenance(runtime_git_sha)
     manifest_cases_sha = str(integrity.get("cases_file_sha256") or "")
     ordered_selection_sha256 = str(
         integrity.get("ordered_selection_sha256") or ""
@@ -2418,6 +2470,8 @@ def _validated_phase0_execution_contract(
         "case_count": PHASE0_CASES_TOTAL,
         "cost_scope": PHASE0_COST_SCOPE,
         "cost_ledger_dir": canonical_cost_ledger,
+        "transport_mode": "server_local" if server_local else "ssh_loopback",
+        "builder_snapshot": builder_snapshot,
     }
 
 
@@ -5291,6 +5345,8 @@ async def _write_phase0_execution_rejection(
                     "ordered_selection_sha256"
                 ],
                 "runtime_git_sha": phase0_contract["runtime_git_sha"],
+                "transport_mode": phase0_contract["transport_mode"],
+                "builder_snapshot": phase0_contract["builder_snapshot"],
                 "approval_id": PHASE0_APPROVAL_ID,
                 "cost_scope": PHASE0_COST_SCOPE,
                 "integrity_failures": [f"{stage}_failed"],
@@ -5696,6 +5752,22 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--phase0-server-local",
+        action="store_true",
+        help=(
+            "Run approved Phase 0 entirely inside the isolated server Docker "
+            "network. Requires the explicit server owner-exception env flag."
+        ),
+    )
+    parser.add_argument(
+        "--phase0-builder-source",
+        default="",
+        help=(
+            "Read-only source snapshot of the approval-bound telemetry commit; "
+            "required for server-local Phase 0 provenance validation."
+        ),
+    )
+    parser.add_argument(
         "--expected-holdout-freeze-sha256",
         default="",
         help="Externally supplied frozen holdout contract SHA-256.",
@@ -5802,6 +5874,12 @@ def main() -> None:
             ),
             phase0_manifest_path=(
                 Path(args.phase0_manifest) if args.phase0_manifest else None
+            ),
+            phase0_server_local=args.phase0_server_local,
+            phase0_builder_source=(
+                Path(args.phase0_builder_source)
+                if args.phase0_builder_source
+                else None
             ),
         )
     )
