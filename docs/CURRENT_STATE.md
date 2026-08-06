@@ -4,7 +4,33 @@
 
 **Ветка:** `codex/real-rag`
 
-## Real-RAG Phase 0: локальная подготовка завершена, live-прогон не выполнен
+## Real-RAG Phase 0: live-прогон завершён, fail-closed STOP
+
+6 августа завершён единственный approval-bound Phase 0 прогон 30 кейсов:
+`ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168`, runtime/telemetry
+`7d244e4fdee21a36a609e6f1cd0012e198746376`, runner
+`e516a0d0b724e67c9e45c7931173055848fec0e8`. Все 30 запросов получили HTTP 200, найдены ровно
+30 уникальных trace, cache hit отсутствует, pre/postflight runtime identity совпадает, integrity
+failures нет. Окно запуска: `2026-08-06T12:10:56.774654Z` —
+`2026-08-06T12:15:30.205184Z`; runner estimate — `0,832748 ₽` при cap `200 ₽`. SHA-256
+постоянного безопасного отчёта:
+`36fd972db7c7dc49dc9a06c7eaccf7cc708ef16435e89870255a9896f9f5579e`.
+
+Формальный Phase 0 gate имеет статус `invalid`: у ранних выходов отсутствуют typed telemetry
+значения пропущенных retrieval/rerank/generation стадий, а provider billing reconciliation имеет
+статус `pending`. Это дефект полноты измерительного контракта, а не инфраструктурный сбой;
+повторный `/ask` запрещён и не требуется. Приватные агрегаты при этом дают fail-closed верхнюю
+границу joint bypass ниже порога `30%`; точные редкие ячейки `n<5` в публичном handoff не
+раскрываются. По заранее утверждённым decision bands гипотеза не проходит Phase 0, поэтому
+реализация фаз 1–4 и любые следующие population arms остановлены. Phase 0 не является оценкой
+качества ответов: набор имеет `source_observed_diagnostic`, `pass_rate` отсутствует, human verdict
+не выполнялся.
+
+Открыто только административное закрытие запуска: владелец сверяет фактический provider billing
+за точное UTC-окно с `0,832748 ₽`. Расхождение больше `10%`, невозможность однозначной атрибуции
+или превышение cap сохраняют STOP. Никаких повторных live-запросов для этой сверки не выполнять.
+
+### Подготовка и история запуска
 
 6 августа подготовлен server-local owner-exception для Phase 0 без переноса секретов на
 workstation. Исходный runner `7d244e4` разрешал только локальные SSH-forward адреса, из-за чего
@@ -25,16 +51,14 @@ billing. Production-контейнер не изменяется, тест вы�
 Добавлены fail-closed проверки internal Docker target/DSN, server-local owner-exception,
 неизменённого read-only snapshot девяти builder/classifier файлов telemetry commit, clean runner
 source без `.env.production`, tmpfs-входа, exact runtime `/ready`, пустого постоянного ledger и
-отсутствующего итогового отчёта. Выборочные перезапуски остаются запрещены. Live `/ask` после этой
-правки ещё не выполнялся; стоимость разработки и проверок — `0 ₽`.
+отсутствующего итогового отчёта. Выборочные перезапуски остаются запрещены. До финального запуска
+live `/ask` не выполнялся; стоимость подготовительных проверок составляла `0 ₽`.
 
 Локальный gate server-local harness: `ruff check .` — pass; полный набор `pytest`, выполненный
 восьмью непересекающимися file-shards из-за известного Windows-зависания общего процесса, —
 `2354 passed, 1 skipped`; KB validation — `2186 valid / 2152 published`; объединённый
-Docker Compose config с профилем `phase0` — valid. Следующий шаг: push runner commit, создать на
-сервере clean worktree этого commit, secretless-потоком поместить два approval-bound JSON в
-`/dev/shm` и один раз выполнить `bash scripts/run_phase0_server_local.sh`. До получения
-`phase0-safe-metrics.json` фазы 1–4 не начинать.
+Docker Compose config с профилем `phase0` — valid. Подготовленный контур затем выполнил один
+полный запуск и сохранил `phase0-safe-metrics.json`; фазы 1–4 остановлены по результату Phase 0.
 
 Первый server-local launcher preflight остановился до `/ask` и до cost reservation: Compose
 потребовал path-переменные неактивного sibling-сервиса `quality-acceptance`. Launcher дополнен
@@ -49,8 +73,8 @@ Compose-отказа tmpfs-вход остался владельцем UID eval
 содержит Git-канонические LF. Эталонные значения заменены SHA-256 Git blob из telemetry commit;
 проверка канонизирует только CRLF в LF и по-прежнему отклоняет любое изменение содержимого.
 Добавлен regression-тест CRLF/LF. Live-запросов, reservation receipts и расходов по этим
-попыткам нет; после push требуется новый clean runner worktree и один полный запуск с уже
-переданными approval-bound входами.
+preflight-попыткам не было; после исправления использован новый clean runner worktree с теми же
+approval-bound входами.
 
 Следующий запуск прошёл provenance gate, но общий privacy guard остановил server-local Docker
 target как не-loopback до cost reservation и первого `/ask`. Privacy exception теперь передаётся
@@ -86,13 +110,11 @@ artifacts. Approval: `RAG-PHASE0-30-20260805`, cap `200 ₽`.
 пройден пофайлово. KB validation — `2186 valid / 2152 published`. Стоимость на этом этапе —
 `0 ₽`: платный `/ask`, HDE/VK, Yonote и production runtime не использовались.
 
-Точный следующий шаг — один раз выполнить утверждённый Phase 0 прогон 30 кейсов в изолированном
-clean eval-runtime через заранее настроенные SSH loopback-forward и проверенный host fingerprint,
-с отдельной eval billing attribution. Перед первым запросом runner обязан пройти signed `/ready`,
-зарезервировать cap и сохранить rejection evidence при любом fail-closed отказе. После прогона
-сверить provider billing с ledger: расхождение больше 10% или превышение cap означает STOP.
-Фазы 1–4 не начинать до результата joint bypass: `≥60%` — гипотеза подтверждена, `30–60%` —
-частично подтверждена, `<30%` — остановка. Owner-exception действует только local/eval.
+Точный следующий шаг — только ручная сверка provider billing с run window и runner estimate.
+После неё зафиксировать фактическую сумму и расхождение; повторный Phase 0, выборочные перезапуски
+и фазы 1–4 не выполнять. Если владелец решит исследовать другую real-RAG гипотезу, она требует
+нового плана, нового telemetry contract и отдельного approval. Owner-exception остаётся только
+local/eval и не разрешает изменение production default.
 
 **Deployed release:** `b4bc23ab890337324f8c9ef62f3a9d90c136b72e`
 (`Refresh recovery security deadline`). Server checkout, app image и app-ml image были сверены
