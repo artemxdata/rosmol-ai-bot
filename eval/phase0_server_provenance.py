@@ -5,36 +5,36 @@ from pathlib import Path
 
 PHASE0_TELEMETRY_GIT_SHA = "7d244e4fdee21a36a609e6f1cd0012e198746376"
 
-# SHA-256 of the approval-bound builder files as stored in the telemetry commit.
-# The server-local runner may evolve independently, but the exact code that built
-# the private cases and telemetry contract must remain byte-for-byte identical.
+# SHA-256 of the approval-bound builder files as stored in the telemetry Git blobs.
+# Git stores text files with LF line endings; normalize a Windows CRLF checkout to
+# the same representation before comparing it with these immutable hashes.
 PHASE0_BUILDER_FILE_SHA256 = {
     "eval/cost_governance.py": (
-        "7e1c48fbb0304406cf3a036b7781ed7fbc48e0ddf0b9c90d34c0403092350d9d"
+        "4688fcf9b452bee4c4d08d7c2b7d4901da4814ef268a62bbd6595aca139b9cd3"
     ),
     "eval/run_ask.py": (
-        "e131e51cda7163ab33de9828d619558ffeb8c4c9df804838a66b885820e898d2"
+        "a69314a1e1301022e5006333938f85fedc0061dfa717d55199dc0268fd6dc9a0"
     ),
     "eval/social_ticket_benchmark.py": (
-        "a9e960cd510f3c549300acdbac5ae76ea32ba70114a8f87249aca9da2c5e8f20"
+        "971a0ef75d44d02f7a822e0e2b3d26c4fef3b3b3c240181d92cc54be9f82187b"
     ),
     "scripts/analyze_ticket_dataset.py": (
-        "899a98a980c14ff9bce0558dc96b01150cfe255d420423ec0ea0a931fd30fde9"
+        "1986b9fffa3c772ab60fd1ffea08b0e4cc08e7362108fa29c7a46b3cbe3d0ffb"
     ),
     "src/config.py": (
-        "447e56fd1200fb21c2089ca40b3d8b898c41d97552b09b84555ac9031ebc58fa"
+        "c70b2616db76d96be1e9086512cd331909445834807d968f4dd54bf03721f6e6"
     ),
     "src/graph/nodes/analyze.py": (
-        "7c341a20fbb52cb59fca0f73bc70a567ebc44cc025e5e0c8e7830dc5c04b2c6d"
+        "778c161870aa308133033486a7925bedbd20dd3df8d53da7a42c088d0e1e140c"
     ),
     "src/kb/source_extractors.py": (
-        "01cb8d76d94512e05fd8a177c99e119b3e181b56e2fc0d7d3e492735e6b155d6"
+        "6241ac602a36961f5c7e9e789e688bae58811635d56c3ae47c91bdf1f375a627"
     ),
     "src/security/eval_cache_bypass.py": (
-        "9324134cf443c88b771fc9153091965f66b0efac85c20dfc7d7517cbce6ea60a"
+        "3c09650dc6925fb7cbe6cf69af9395f2249e61a86cdd86b6b8751d96fa16d528"
     ),
     "src/security/pii_masker.py": (
-        "d293da5b88b5a49b2371aa8c589e499b37df08b17a9b551ebd149cbbea4dd335"
+        "490e8713c915cd18af8c5097c5d0bcbc3c228a127113516d76c94b61bf85020b"
     ),
 }
 
@@ -72,7 +72,8 @@ def validate_phase0_builder_snapshot(
             raise ValueError(
                 f"Phase 0 builder snapshot path is unsafe: {relative_path}"
             )
-        actual_sha256 = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        canonical_payload = resolved.read_bytes().replace(b"\r\n", b"\n")
+        actual_sha256 = hashlib.sha256(canonical_payload).hexdigest()
         if actual_sha256 != expected_sha256:
             raise ValueError(
                 f"Phase 0 builder snapshot differs from telemetry: {relative_path}"

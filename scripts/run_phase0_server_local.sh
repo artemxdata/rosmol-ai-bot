@@ -31,13 +31,13 @@ RUNNER_SHA="$(git -C "$RUNNER_SOURCE" rev-parse HEAD 2>/dev/null)" || fail "runn
   || fail "runner_source_not_clean"
 [[ ! -e "$RUNNER_SOURCE/.env.production" ]] || fail "runner_source_contains_env"
 
-[[ -r "$PHASE0_INPUT_DIR/phase0-cases.json" ]] || fail "cases_missing"
-[[ -r "$PHASE0_INPUT_DIR/phase0-manifest.json" ]] || fail "manifest_missing"
-[[ "$(findmnt -n -o FSTYPE --target "$PHASE0_INPUT_DIR")" == "tmpfs" ]] \
+sudo test -r "$PHASE0_INPUT_DIR/phase0-cases.json" || fail "cases_missing"
+sudo test -r "$PHASE0_INPUT_DIR/phase0-manifest.json" || fail "manifest_missing"
+[[ "$(sudo findmnt -n -o FSTYPE --target "$PHASE0_INPUT_DIR")" == "tmpfs" ]] \
   || fail "private_input_not_in_tmpfs"
-[[ "$(sha256sum "$PHASE0_INPUT_DIR/phase0-cases.json" | cut -d ' ' -f 1)" == "$PHASE0_CASES_SHA" ]] \
+[[ "$(sudo sha256sum "$PHASE0_INPUT_DIR/phase0-cases.json" | cut -d ' ' -f 1)" == "$PHASE0_CASES_SHA" ]] \
   || fail "cases_sha_mismatch"
-[[ "$(sha256sum "$PHASE0_INPUT_DIR/phase0-manifest.json" | cut -d ' ' -f 1)" == "$PHASE0_MANIFEST_SHA" ]] \
+[[ "$(sudo sha256sum "$PHASE0_INPUT_DIR/phase0-manifest.json" | cut -d ' ' -f 1)" == "$PHASE0_MANIFEST_SHA" ]] \
   || fail "manifest_sha_mismatch"
 
 [[ "$(git -C "$PHASE0_BUILDER_SOURCE" rev-parse HEAD 2>/dev/null)" == "$PHASE0_RUNTIME_SHA" ]] \

@@ -29,7 +29,7 @@ source без `.env.production`, tmpfs-входа, exact runtime `/ready`, пу�
 правки ещё не выполнялся; стоимость разработки и проверок — `0 ₽`.
 
 Локальный gate server-local harness: `ruff check .` — pass; полный `pytest` —
-`2350 passed, 1 skipped`; KB validation — `2186 valid / 2152 published`; объединённый
+`2352 passed, 1 skipped`; KB validation — `2186 valid / 2152 published`; объединённый
 Docker Compose config с профилем `phase0` — valid. Следующий шаг: push runner commit, создать на
 сервере clean worktree этого commit, secretless-потоком поместить два approval-bound JSON в
 `/dev/shm` и один раз выполнить `bash scripts/run_phase0_server_local.sh`. До получения
@@ -39,6 +39,17 @@ Docker Compose config с профилем `phase0` — valid. Следующий
 потребовал path-переменные неактивного sibling-сервиса `quality-acceptance`. Launcher дополнен
 всеми обязательными non-secret Compose paths; это infrastructure-only исправление, повторный
 запуск не является выборочным rerun и не расходует approval.
+
+Следующие preflight-попытки также завершились до `/ask` и cost reservation. После первого
+Compose-отказа tmpfs-вход остался владельцем UID eval-контейнера, поэтому launcher теперь
+проверяет доступность, filesystem type и SHA входов через `sudo` и допускает безопасное
+продолжение с теми же неизменёнными файлами. Затем provenance gate обнаружил, что девять
+эталонных SHA были ошибочно рассчитаны по Windows CRLF checkout, тогда как clean Linux checkout
+содержит Git-канонические LF. Эталонные значения заменены SHA-256 Git blob из telemetry commit;
+проверка канонизирует только CRLF в LF и по-прежнему отклоняет любое изменение содержимого.
+Добавлен regression-тест CRLF/LF. Live-запросов, reservation receipts и расходов по этим
+попыткам нет; после push требуется новый clean runner worktree и один полный запуск с уже
+переданными approval-bound входами.
 
 Локальный checkpoint `7d244e4fdee21a36a609e6f1cd0012e198746376`
 (`Add Phase 0 real-RAG measurement gate`) добавляет только измерительный контур и telemetry:
