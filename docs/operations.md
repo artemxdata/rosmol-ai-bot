@@ -42,6 +42,47 @@
 
 ## Preflight Before Pilot
 
+### Balanced Pilot50: server-local 25 typical + 25 atypical
+
+Pilot50 — one-shot regression calibration уже работающего `app-ml`, а не deployment и не
+независимая оценка product conversion. Набор содержит ровно 25 типовых single-intent и
+25 нетиповых noisy/multi/precise-aspect вопросов; все 50 заранее ожидают полноценный
+опубликованный ответ без оператора. Итоговая безопасная метрика — mechanical first-turn closure
+по каждой группе и всему balanced-набору. Её нельзя переносить на production traffic mix или
+называть ticket-level conversion/human verdict.
+
+Контур выполняется только после local tests, commit/push и server checkout exact 40-character
+SHA из GitHub. Codex не подключается к серверу. Сначала владелец запускает бесплатный preflight:
+
+```bash
+bash scripts/run_pilot50_server_local.sh preflight
+```
+
+Preflight не вызывает `/ask`: он проверяет clean Git snapshot, exact runtime `/ready`, image
+identity, manifest/source/membership/PII, materializes `50 = 25 + 25` и печатает только SHA,
+counts, forecast `10 RUB` и hard cap `20 RUB`. До paid run должны одновременно существовать:
+
+- успешный server-local Phase A export либо зафиксированный terminal
+  `STOP: evidence unavailable`; любой unresolved `FAIL` запрещает Pilot50;
+- ручной `PASS` сверки Phase 0 Cloud.ru billing за exact старое UTC-окно;
+- новый одноразовый non-secret approval reference для exact runtime SHA, Pilot50 v1,
+  forecast и cap. Approval ID нельзя придумывать или повторно использовать.
+
+Только после этих gate владелец задаёт значения из собственного внешнего evidence и выполняет
+один run:
+
+```bash
+test "${PHASE0_BILLING_VERDICT:-}" = "PASS"
+test -n "${HIGH_COST_APPROVAL_ID:-}"
+bash scripts/run_pilot50_server_local.sh run
+```
+
+Launcher не rebuild/restart/deploy services, не использует HDE/VK и отказывается от повтора
+после `run.started`, включая оборванную попытку. Raw cases/report остаются mode `0600` только в
+`/var/lib/rosmol/pilot50/`; stdout содержит только allowlist aggregate, exact run/runtime/
+approval/window hashes и `billing_status=pending_provider_reconciliation`. После run владелец
+снова вручную сверяет Cloud.ru billing; до этой сверки следующие paid eval запрещены.
+
 ### Real-RAG Phase 0: server-local one-shot
 
 Phase 0 не требует и не допускает перенос API token или PostgreSQL DSN на workstation. Локальная

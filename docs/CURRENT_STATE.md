@@ -4,6 +4,56 @@
 
 **Ветка:** `codex/real-rag`
 
+## Pilot50: bounded server-local calibration 25+25 подготовлен, live run не начинался
+
+10 августа подготовлен отдельный one-shot контур для сегодняшней проверки 25 типовых и
+25 нетиповых вопросов. Это не повтор Phase 0 и не переход к фазам B–E. В tracked manifest
+`eval/cases/pilot50_balanced_v1.json` входят только 50 обезличенных `privacy_class=standard`
+регрессионных вопросов, для которых зафиксировано ожидаемое поведение `answer` без оператора:
+типовые — частые single-intent вопросы, нетиповые — noisy/slang/profane, precise-aspect и
+multi-aspect вопросы. Greeting/bot-meta, PII, safety, operator-only, off-topic и clarify-кейсы
+в denominator не входят; они остаются в отдельных policy suites. Exact semantic manifest
+SHA-256 — `d591a02da2b616c1dc89931371184c762e0c9e1d3b68a50fd9ae33f9a5cf98f4`,
+детерминированный materialized cases SHA-256 —
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`.
+
+`scripts/pilot50.py` fail-closed собирает exact 50 cases, повторно проверяет source SHA,
+membership, PII, `25/25`, trace cardinality, cache, runtime, one-time approval, budget/pricing и
+cost reservation, после чего публикует только safe aggregate. `scripts/run_pilot50_server_local.sh`
+имеет раздельные режимы `preflight` и `run`: он использует clean exact Git snapshot и уже
+работающий `rosmol-app-ml`, ничего не rebuild/restart/deploy, не обращается к HDE/VK и не печатает
+queries, responses, request/case IDs, `.env`, DSN, ключи или stderr. Raw report остаётся с mode
+`0600` только в `/var/lib/rosmol/pilot50/`; runner выдаёт каждому запуску новый timestamp-bound
+user prefix, а повтор после `run.started` запрещён.
+
+Сегодняшняя метрика называется **mechanical first-turn closure на balanced Pilot50**:
+`closed` требует одновременно полного pass всех зафиксированных для кейса content/retrieval/
+citation/profile checks, ответа в первом ходе и отсутствия эскалации. Safe result показывает
+`x/25` typical, `y/25` atypical и `(x+y)/50`; это calibration-only proxy, а не независимый
+holdout, human product verdict, ticket-level conversion или оценка production traffic mix.
+
+До единственного платного `run` обязательны четыре последовательных gate:
+
+1. owner-run server-local export старого Phase A evidence выполняется до любых новых `/ask`:
+   `OK` либо зафиксированный terminal `STOP: evidence unavailable` закрывает попытку, любой
+   unresolved `FAIL` запрещает Pilot50;
+2. владелец вручную сверяет Cloud.ru billing Phase 0 за
+   `2026-08-06T12:10:56.774654Z`–`2026-08-06T12:15:30.205184Z` с runner estimate
+   `0,832748 RUB`; отсутствие суммы, неоднозначная атрибуция или variance `>10%` означает STOP;
+3. бесплатный `pilot50 preflight` фиксирует exact tooling/runtime/cases SHA, `25/25`, прогноз
+   `10 RUB` и hard cap `20 RUB` без `/ask`;
+4. владелец создаёт внешний одноразовый non-secret approval reference, связанный именно с этим
+   runtime SHA, набором, прогнозом и cap. Codex не придумывает approval ID.
+
+После запуска safe result сохраняет exact `eval_run_id`, UTC run window, runtime SHA, approval
+reference, hashes и `billing_status=pending_provider_reconciliation`. До второй ручной сверки
+Cloud.ru этот результат не разрешает следующий paid eval. На текущем этапе live `/ask` не было,
+стоимость изменений — `0 RUB`, production behavior не менялся. Focused Pilot50 gate:
+`65 passed`, Ruff — pass. Монолитный pytest воспроизвёл известное Windows event-loop/socket
+зависание без нового вывода; все 127 test files затем выполнены ровно один раз восьмью
+непересекающимися process-shards: `2575 passed, 1 skipped, 0 failed`. Финальный Ruff — pass;
+KB validation — `2186 valid / 2152 published`.
+
 **Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
 `52bd5ac` (`Support owner-authenticated Phase A export`) и `eea8062`
 (`Add server-local Phase A trace export`). Exact pushed handoff HEAD фиксируется
