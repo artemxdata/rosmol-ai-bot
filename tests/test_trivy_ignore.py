@@ -48,7 +48,7 @@ def test_perl_ignore_policies_are_exact_scoped_and_short_lived() -> None:
         assert len(perl_entries) == len(PERL_IDS)
         assert all(entry["purls"] == [PERL_PURL] for entry in perl_entries)
         assert all(
-            entry["expired_at"] == date(2026, 8, 10) for entry in entries
+            entry["expired_at"] == date(2026, 8, 24) for entry in entries
         )
         _assert_short_lived(entries)
 
@@ -70,7 +70,7 @@ def test_qdrant_node_tar_exception_records_metadata_only_reachability() -> None:
     entry = next(item for item in entries if item["id"] == "CVE-2026-59873")
 
     assert entry["purls"] == [QDRANT_WEB_UI_TAR_PURL]
-    assert entry["expired_at"] == date(2026, 8, 10)
+    assert entry["expired_at"] == date(2026, 8, 24)
     statement = str(entry["statement"])
     assert "qdrant-web-ui.spdx.json" in statement
     assert "zero node_modules/tar files" in statement
@@ -85,7 +85,7 @@ def test_postgres_ignore_policy_is_exact_scoped_and_short_lived() -> None:
         {
             "id": "CVE-2025-68121",
             "purls": [POSTGRES_PURL],
-            "expired_at": date(2026, 8, 10),
+            "expired_at": date(2026, 8, 24),
             "statement": entries[0]["statement"],
         }
     ]

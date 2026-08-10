@@ -5,7 +5,7 @@ vulnerabilities:
   - id: CVE-2026-8376
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not affected: the upstream flaw requires a 32-bit Perl build, while the
       release platform and package PURL are amd64. Re-review on any platform or
@@ -13,7 +13,7 @@ vulnerabilities:
   - id: CVE-2026-42496
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not affected in this image: Archive::Tar is absent, application and venv
       contain no Perl entrypoints, and runtime never extracts archives through
@@ -21,7 +21,7 @@ vulnerabilities:
   - id: CVE-2026-13221
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not reachable: the Python service never invokes Perl or compiles
       user-controlled Perl regular expressions; application and venv contain no
@@ -29,7 +29,7 @@ vulnerabilities:
   - id: CVE-2026-57433
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not present in the release image: CVE-2026-57433 affects the Storable
       module, but Debian's exact perl-base package does not ship Storable and

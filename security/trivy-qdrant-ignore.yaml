@@ -3,28 +3,28 @@ vulnerabilities:
   - id: CVE-2026-8376
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not affected: the upstream flaw requires a 32-bit Perl build, while the
       pinned Qdrant image and package PURL are amd64.
   - id: CVE-2026-42496
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not affected: Archive::Tar is absent from the pinned Qdrant image and its
       runtime contains no Perl entrypoints or Perl archive extraction path.
   - id: CVE-2026-13221
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not reachable: Qdrant starts its Rust binary directly and contains no Perl
       entrypoints that compile attacker-controlled Perl regular expressions.
   - id: CVE-2026-57433
     purls:
       - "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not present in the pinned image: CVE-2026-57433 affects the Storable
       module, but the image's exact perl-base package does not provide a
@@ -34,7 +34,7 @@ vulnerabilities:
   - id: CVE-2026-59873
     purls:
       - "pkg:npm/tar@7.5.16"
-    expired_at: 2026-08-10
+    expired_at: 2026-08-24
     statement: >-
       Not executable or reachable in the pinned Qdrant runtime: tar@7.5.16 is
       present only as inventory metadata in
