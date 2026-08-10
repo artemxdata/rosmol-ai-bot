@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -388,6 +390,30 @@ SAFE_FAILURE_CODES = frozenset(
         "remote_output_too_large",
     }
 )
+SAFE_VALIDATION_FAILURE_CODES = frozenset(
+    {
+        "post_sql_cache_invalid",
+        "post_sql_generation_invalid",
+        "post_sql_llm_usage_invalid",
+        "post_sql_membership_mismatch",
+        "post_sql_metrics_invalid",
+        "post_sql_outcome_invalid",
+        "post_sql_privacy_invalid",
+        "post_sql_query_analysis_invalid",
+        "post_sql_reranker_invalid",
+        "post_sql_retrieve_invalid",
+        "post_sql_retry_invalid",
+        "post_sql_row_core_invalid",
+        "post_sql_row_decode_invalid",
+        "post_sql_row_set_invalid",
+        "post_sql_source_ids_invalid",
+        "post_sql_timeline_invalid",
+        "post_sql_transport_invalid",
+        "post_sql_verifier_result_invalid",
+        "post_sql_verify_invalid",
+        "post_sql_window_invalid",
+    }
+)
 
 REMOTE_DOCKER_ACCESS_EXIT = 40
 REMOTE_POSTGRES_CONTAINER_MISSING_EXIT = 41
@@ -413,6 +439,28 @@ class SafeExportFailure(RuntimeError):
             raise ValueError("unsupported safe export failure code")
         self.code = code
         super().__init__(code)
+
+
+class SafeValidationFailure(ValueError):
+    """A payload-free post-SQL validation stage suitable for owner handoff."""
+
+    def __init__(self, code: str, detail: str | None = None) -> None:
+        if code not in SAFE_VALIDATION_FAILURE_CODES:
+            raise ValueError("unsupported safe validation failure code")
+        self.code = code
+        super().__init__(detail or code)
+
+
+@contextmanager
+def _validation_stage(code: str) -> Iterator[None]:
+    """Preserve detailed local errors while exposing only an allowlisted stage in CLI."""
+
+    try:
+        yield
+    except SafeValidationFailure:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SafeValidationFailure(code, str(exc)) from exc
 
 
 FORBIDDEN_OUTPUT_FIELDS = frozenset(
@@ -1161,50 +1209,57 @@ def _parse_and_validate_rows(
 ) -> list[dict[str, Any]]:
     if (expected_case_ids is None) == (expected_case_membership_sha256 is None):
         raise ValueError("exactly one Phase 0 membership binding is required")
-    payload = _normalize_copy_transport(payload)
-    if not payload.endswith(b"\n"):
-        raise ValueError("Phase 0 trace transport has invalid framing")
-    encoded_lines = payload[:-1].split(b"\n")
-    if not encoded_lines or any(not line for line in encoded_lines):
-        raise ValueError("Phase 0 trace transport has invalid framing")
+    with _validation_stage("post_sql_transport_invalid"):
+        payload = _normalize_copy_transport(payload)
+        if not payload.endswith(b"\n"):
+            raise ValueError("Phase 0 trace transport has invalid framing")
+        encoded_lines = payload[:-1].split(b"\n")
+        if not encoded_lines or any(not line for line in encoded_lines):
+            raise ValueError("Phase 0 trace transport has invalid framing")
     rows: list[dict[str, Any]] = []
     for line_number, encoded_line in enumerate(encoded_lines, start=1):
-        try:
-            decoded = base64.b64decode(encoded_line, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(
-                f"Phase 0 trace transport line {line_number} is not strict base64"
-            ) from exc
-        if not decoded or base64.b64encode(decoded) != encoded_line:
-            raise ValueError("Phase 0 trace transport contains a non-canonical row")
-        try:
-            row = json.loads(
-                decoded.decode("utf-8"),
-                parse_constant=_reject_constant,
-            )
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Phase 0 trace export line {line_number} is not valid JSON") from exc
-        if not isinstance(row, dict):
-            raise ValueError("Phase 0 trace rows must be JSON objects")
+        with _validation_stage("post_sql_transport_invalid"):
+            try:
+                decoded = base64.b64decode(encoded_line, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError(
+                    f"Phase 0 trace transport line {line_number} is not strict base64"
+                ) from exc
+            if not decoded or base64.b64encode(decoded) != encoded_line:
+                raise ValueError("Phase 0 trace transport contains a non-canonical row")
+        with _validation_stage("post_sql_row_decode_invalid"):
+            try:
+                row = json.loads(
+                    decoded.decode("utf-8"),
+                    parse_constant=_reject_constant,
+                )
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"Phase 0 trace export line {line_number} is not valid JSON"
+                ) from exc
+            if not isinstance(row, dict):
+                raise ValueError("Phase 0 trace rows must be JSON objects")
         _validate_row(row, eval_run_id=eval_run_id)
         rows.append(row)
 
-    if len(rows) != PHASE0_CASES_TOTAL:
-        raise ValueError("Phase 0 trace export must contain exactly 30 rows")
-    case_ids = [str(row["eval_case_id"]) for row in rows]
-    request_ids = [str(row["request_id"]) for row in rows]
-    if len(set(case_ids)) != PHASE0_CASES_TOTAL:
-        raise ValueError("Phase 0 trace export contains duplicate case IDs")
-    if len(set(request_ids)) != PHASE0_CASES_TOTAL:
-        raise ValueError("Phase 0 trace export contains duplicate request IDs")
-    by_case_id = {str(row["eval_case_id"]): row for row in rows}
-    if expected_case_ids is not None:
-        if set(case_ids) != set(expected_case_ids):
-            raise ValueError("Phase 0 trace membership differs from frozen cases")
-        return [by_case_id[case_id] for case_id in expected_case_ids]
-    if _case_membership_sha256(case_ids) != expected_case_membership_sha256:
-        raise ValueError("Phase 0 trace membership differs from the approved aggregate")
-    return [by_case_id[case_id] for case_id in sorted(case_ids)]
+    with _validation_stage("post_sql_row_set_invalid"):
+        if len(rows) != PHASE0_CASES_TOTAL:
+            raise ValueError("Phase 0 trace export must contain exactly 30 rows")
+        case_ids = [str(row["eval_case_id"]) for row in rows]
+        request_ids = [str(row["request_id"]) for row in rows]
+        if len(set(case_ids)) != PHASE0_CASES_TOTAL:
+            raise ValueError("Phase 0 trace export contains duplicate case IDs")
+        if len(set(request_ids)) != PHASE0_CASES_TOTAL:
+            raise ValueError("Phase 0 trace export contains duplicate request IDs")
+        by_case_id = {str(row["eval_case_id"]): row for row in rows}
+    with _validation_stage("post_sql_membership_mismatch"):
+        if expected_case_ids is not None:
+            if set(case_ids) != set(expected_case_ids):
+                raise ValueError("Phase 0 trace membership differs from frozen cases")
+            return [by_case_id[case_id] for case_id in expected_case_ids]
+        if _case_membership_sha256(case_ids) != expected_case_membership_sha256:
+            raise ValueError("Phase 0 trace membership differs from the approved aggregate")
+        return [by_case_id[case_id] for case_id in sorted(case_ids)]
 
 
 def _normalize_copy_transport(payload: bytes) -> bytes:
@@ -1229,101 +1284,117 @@ def _case_membership_sha256(case_ids: list[str]) -> str:
 
 
 def _validate_row(row: dict[str, Any], *, eval_run_id: str) -> None:
-    if set(row) != ROW_FIELDS:
-        raise ValueError("Phase 0 trace row fields differ from the safe projection")
-    if FORBIDDEN_OUTPUT_FIELDS & set(row):
-        raise ValueError("Phase 0 trace row contains a forbidden identity field")
-    if row.get("schema_version") != ROW_SCHEMA_VERSION:
-        raise ValueError("Phase 0 trace row schema is invalid")
-    if row.get("eval_run_id") != eval_run_id:
-        raise ValueError("Phase 0 trace row belongs to a different eval run")
-    if not isinstance(row.get("eval_case_id"), str) or not row["eval_case_id"].strip():
-        raise ValueError("Phase 0 trace row has an invalid case ID")
-    try:
-        UUID(str(row.get("request_id") or ""))
-    except ValueError as exc:
-        raise ValueError("Phase 0 trace row has an invalid request ID") from exc
-    timestamp = _parse_utc_timestamp(row.get("timestamp"))
-    if not PHASE0_RUN_STARTED_AT <= timestamp <= PHASE0_RUN_COMPLETED_AT:
-        raise ValueError("Phase 0 trace timestamp falls outside the approved run window")
-    if row.get("cache_hit") is not False:
-        raise ValueError("Phase 0 trace export contains a cache hit or untyped cache field")
-    for field in (
-        "retrieved_chunks",
-        "reranked_chunks",
-        "selected_source_ids",
-        "generate_retries",
-        "trace_timeline",
-        "cited_source_ids",
-        "verification_source_ids",
-        "llm_usage",
-    ):
-        if not isinstance(row.get(field), list):
-            raise ValueError(f"Phase 0 trace field {field} must be an array")
-    for field in ("retrieve_trace", "reranker_trace", "generation_trace", "verify_trace"):
-        if not isinstance(row.get(field), dict):
-            raise ValueError(f"Phase 0 trace field {field} must be an object")
-    _validate_query_analysis(row.get("query_analysis"))
-    _validate_verifier_result(row.get("verifier_result"))
-    _validate_llm_usage(row["llm_usage"])
-    _validate_retrieve_trace(row["retrieve_trace"])
-    _validate_reranker_trace(row["reranker_trace"])
-    _validate_generation_trace(row["generation_trace"])
-    _validate_verify_trace(row["verify_trace"])
-    _validate_generate_retries(row["generate_retries"])
-    _validate_source_id_array(
-        row["selected_source_ids"],
-        label="selected source IDs",
-    )
-    _validate_source_id_array(
-        row["verification_source_ids"],
-        label="verification source IDs",
-    )
-    _validate_source_id_array(row["cited_source_ids"], label="cited source IDs")
-    if row["generation_trace"] and (
-        row["selected_source_ids"] != row["generation_trace"]["selected_source_ids"]
-    ):
-        raise ValueError("Phase 0 selected source IDs contradict generation provenance")
-    if row["verify_trace"] and (
-        row["verification_source_ids"] != row["verify_trace"]["referenced_source_ids"]
-    ):
-        raise ValueError("Phase 0 verification source IDs contradict verify provenance")
-    if type(row.get("was_escalated")) is not bool:
-        raise ValueError("Phase 0 escalation flag must be boolean")
-    if type(row.get("verifier_triggered")) is not bool:
-        raise ValueError("Phase 0 verifier flag must be boolean")
-    if row["verify_trace"] and (
-        row["verifier_triggered"] != row["verify_trace"]["verifier_triggered"]
-    ):
-        raise ValueError("Phase 0 verifier flag contradicts verify provenance")
-    _validate_optional_safe_reason(row.get("escalation_reason"), label="escalation reason")
-    if row.get("ticket_outcome") not in TICKET_OUTCOMES:
-        raise ValueError("Phase 0 ticket outcome is not allowlisted")
-    _validate_optional_bounded_string(row.get("generator_model"), label="generator model")
-    _validate_optional_bounded_string(row.get("prompt_version"), label="prompt version")
-    _validate_optional_score(row.get("max_reranker_score"), label="max reranker score")
-    for field in ("llm_prompt_tokens", "llm_completion_tokens", "llm_total_tokens"):
-        _validate_nonnegative_int(row.get(field), label=field)
-    _validate_nonnegative_number(
-        row.get("llm_estimated_cost_rub"),
-        label="LLM estimated cost",
-    )
-    if row.get("total_latency_ms") is not None:
-        _validate_nonnegative_int(
-            row["total_latency_ms"],
-            label="total latency",
-            maximum=MAX_LATENCY_MS,
+    with _validation_stage("post_sql_row_core_invalid"):
+        if set(row) != ROW_FIELDS:
+            raise ValueError("Phase 0 trace row fields differ from the safe projection")
+        if FORBIDDEN_OUTPUT_FIELDS & set(row):
+            raise ValueError("Phase 0 trace row contains a forbidden identity field")
+        if row.get("schema_version") != ROW_SCHEMA_VERSION:
+            raise ValueError("Phase 0 trace row schema is invalid")
+        if row.get("eval_run_id") != eval_run_id:
+            raise ValueError("Phase 0 trace row belongs to a different eval run")
+        if not isinstance(row.get("eval_case_id"), str) or not row["eval_case_id"].strip():
+            raise ValueError("Phase 0 trace row has an invalid case ID")
+        try:
+            UUID(str(row.get("request_id") or ""))
+        except ValueError as exc:
+            raise ValueError("Phase 0 trace row has an invalid request ID") from exc
+        for field in (
+            "retrieved_chunks",
+            "reranked_chunks",
+            "selected_source_ids",
+            "generate_retries",
+            "trace_timeline",
+            "cited_source_ids",
+            "verification_source_ids",
+            "llm_usage",
+        ):
+            if not isinstance(row.get(field), list):
+                raise ValueError(f"Phase 0 trace field {field} must be an array")
+        for field in ("retrieve_trace", "reranker_trace", "generation_trace", "verify_trace"):
+            if not isinstance(row.get(field), dict):
+                raise ValueError(f"Phase 0 trace field {field} must be an object")
+    with _validation_stage("post_sql_window_invalid"):
+        timestamp = _parse_utc_timestamp(row.get("timestamp"))
+        if not PHASE0_RUN_STARTED_AT <= timestamp <= PHASE0_RUN_COMPLETED_AT:
+            raise ValueError("Phase 0 trace timestamp falls outside the approved run window")
+    with _validation_stage("post_sql_cache_invalid"):
+        if row.get("cache_hit") is not False:
+            raise ValueError("Phase 0 trace export contains a cache hit or untyped cache field")
+    with _validation_stage("post_sql_query_analysis_invalid"):
+        _validate_query_analysis(row.get("query_analysis"))
+    with _validation_stage("post_sql_verifier_result_invalid"):
+        _validate_verifier_result(row.get("verifier_result"))
+    with _validation_stage("post_sql_llm_usage_invalid"):
+        _validate_llm_usage(row["llm_usage"])
+    with _validation_stage("post_sql_retrieve_invalid"):
+        _validate_retrieve_trace(row["retrieve_trace"])
+    with _validation_stage("post_sql_reranker_invalid"):
+        _validate_reranker_trace(row["reranker_trace"])
+    with _validation_stage("post_sql_generation_invalid"):
+        _validate_generation_trace(row["generation_trace"])
+    with _validation_stage("post_sql_verify_invalid"):
+        _validate_verify_trace(row["verify_trace"])
+    with _validation_stage("post_sql_retry_invalid"):
+        _validate_generate_retries(row["generate_retries"])
+    with _validation_stage("post_sql_source_ids_invalid"):
+        _validate_source_id_array(
+            row["selected_source_ids"],
+            label="selected source IDs",
         )
-    _validate_error_telemetry(
-        row.get("error_present"),
-        row.get("error_code"),
-        allowed_codes=ROW_ERROR_CODES,
-        label="request",
-    )
-    _validate_trace_timeline(row["trace_timeline"])
-    _reject_forbidden_nested_keys(row)
-    _reject_raw_chunk_text(row["retrieved_chunks"], field="retrieved_chunks")
-    _reject_raw_chunk_text(row["reranked_chunks"], field="reranked_chunks")
+        _validate_source_id_array(
+            row["verification_source_ids"],
+            label="verification source IDs",
+        )
+        _validate_source_id_array(row["cited_source_ids"], label="cited source IDs")
+        if row["generation_trace"] and (
+            row["selected_source_ids"] != row["generation_trace"]["selected_source_ids"]
+        ):
+            raise ValueError("Phase 0 selected source IDs contradict generation provenance")
+        if row["verify_trace"] and (
+            row["verification_source_ids"] != row["verify_trace"]["referenced_source_ids"]
+        ):
+            raise ValueError("Phase 0 verification source IDs contradict verify provenance")
+    with _validation_stage("post_sql_outcome_invalid"):
+        if type(row.get("was_escalated")) is not bool:
+            raise ValueError("Phase 0 escalation flag must be boolean")
+        if type(row.get("verifier_triggered")) is not bool:
+            raise ValueError("Phase 0 verifier flag must be boolean")
+        if row["verify_trace"] and (
+            row["verifier_triggered"] != row["verify_trace"]["verifier_triggered"]
+        ):
+            raise ValueError("Phase 0 verifier flag contradicts verify provenance")
+        _validate_optional_safe_reason(row.get("escalation_reason"), label="escalation reason")
+        if row.get("ticket_outcome") not in TICKET_OUTCOMES:
+            raise ValueError("Phase 0 ticket outcome is not allowlisted")
+    with _validation_stage("post_sql_metrics_invalid"):
+        _validate_optional_bounded_string(row.get("generator_model"), label="generator model")
+        _validate_optional_bounded_string(row.get("prompt_version"), label="prompt version")
+        _validate_optional_score(row.get("max_reranker_score"), label="max reranker score")
+        for field in ("llm_prompt_tokens", "llm_completion_tokens", "llm_total_tokens"):
+            _validate_nonnegative_int(row.get(field), label=field)
+        _validate_nonnegative_number(
+            row.get("llm_estimated_cost_rub"),
+            label="LLM estimated cost",
+        )
+        if row.get("total_latency_ms") is not None:
+            _validate_nonnegative_int(
+                row["total_latency_ms"],
+                label="total latency",
+                maximum=MAX_LATENCY_MS,
+            )
+    with _validation_stage("post_sql_timeline_invalid"):
+        _validate_error_telemetry(
+            row.get("error_present"),
+            row.get("error_code"),
+            allowed_codes=ROW_ERROR_CODES,
+            label="request",
+        )
+        _validate_trace_timeline(row["trace_timeline"])
+    with _validation_stage("post_sql_privacy_invalid"):
+        _reject_forbidden_nested_keys(row)
+        _reject_raw_chunk_text(row["retrieved_chunks"], field="retrieved_chunks")
+        _reject_raw_chunk_text(row["reranked_chunks"], field="reranked_chunks")
 
 
 def _reject_raw_chunk_text(chunks: list[Any], *, field: str) -> None:
@@ -2110,6 +2181,9 @@ def main() -> int:
         print("phase0_trace_export=STOP reason=evidence_unavailable")
         return 2
     except SafeExportFailure as exc:
+        print(f"phase0_trace_export=FAIL reason={exc.code}", file=sys.stderr)
+        return 1
+    except SafeValidationFailure as exc:
         print(f"phase0_trace_export=FAIL reason={exc.code}", file=sys.stderr)
         return 1
     except FileExistsError:

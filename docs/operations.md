@@ -60,10 +60,11 @@ bash scripts/run_pilot50_server_local.sh preflight
 
 Preflight не вызывает `/ask`: он проверяет clean Git snapshot, exact runtime `/ready`, image
 identity, manifest/source/membership/PII, materializes `50 = 25 + 25` и печатает только SHA,
-counts, forecast `10 RUB` и hard cap `20 RUB`. До paid run должны одновременно существовать:
+counts, forecast `10 RUB` и hard cap `20 RUB`. Исторический Phase A остаётся отдельным
+`pending/evidence-at-risk` аудитом: его unresolved export `FAIL` не блокирует новый Pilot50,
+Pilot50 не заменяет это evidence, а replay Phase 0 запрещён. До paid run должны одновременно
+существовать:
 
-- успешный server-local Phase A export либо зафиксированный terminal
-  `STOP: evidence unavailable`; любой unresolved `FAIL` запрещает Pilot50;
 - ручной `PASS` сверки Phase 0 Cloud.ru billing за exact старое UTC-окно;
 - новый одноразовый non-secret approval reference для exact runtime SHA, Pilot50 v1,
   forecast и cap. Approval ID нельзя придумывать или повторно использовать.
@@ -82,6 +83,18 @@ Launcher не rebuild/restart/deploy services, не использует HDE/VK 
 `/var/lib/rosmol/pilot50/`; stdout содержит только allowlist aggregate, exact run/runtime/
 approval/window hashes и `billing_status=pending_provider_reconciliation`. После run владелец
 снова вручную сверяет Cloud.ru billing; до этой сверки следующие paid eval запрещены.
+
+После успешного `run` владелец может один раз вывести обезличенную проекцию 50 вопросов и ответов
+непосредственно в свой интерактивный server terminal:
+
+```bash
+bash scripts/run_pilot50_server_local.sh review
+```
+
+`review` не вызывает `/ask` и не меняет артефакты. Launcher требует прямой TTY и fail-closed
+отказывает при pipe, redirect, `tee`, command substitution или automation capture. Это также
+операционный запрет: строки review не копировать на workstation, в Git или чат; наружу передавать
+только safe aggregate/status/SHA из `run`.
 
 ### Real-RAG Phase 0: server-local one-shot
 

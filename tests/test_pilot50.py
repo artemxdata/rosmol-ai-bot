@@ -63,9 +63,10 @@ def _raw_report(
             "passed": passed,
             "observed_behavior": observed_behavior,
             "was_escalated": was_escalated,
+            "escalation_reason": "low_confidence" if was_escalated else None,
             "trace_total_latency_ms": 100 + index,
             "llm_estimated_cost_rub": 0.01,
-            "query": f"{canary}-query-{index}",
+            "query": case["query"],
             "response": f"{canary}-response-{index}",
         }
         results.append(result)
@@ -137,6 +138,59 @@ def _write_report(
     report_path = tmp_path / "pilot50-raw.json"
     _write_json(report_path, report)
     return report_path, report, rows
+
+
+def _write_validated_safe_result(
+    tmp_path: Path,
+    *,
+    cases_path: Path,
+    report_path: Path,
+    trace_rows: list[dict[str, Any]],
+) -> tuple[Path, dict[str, Any]]:
+    safe = pilot50.build_safe_result(
+        manifest_path=MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=APPROVAL_ID,
+    )
+    safe_path = tmp_path / "pilot50-safe.json"
+    _write_json(safe_path, safe)
+    return safe_path, safe
+
+
+def _show_review_argv(
+    *,
+    cases_path: Path,
+    report_path: Path,
+    safe_path: Path,
+    expected_runtime_git_sha: str = RUNTIME_GIT_SHA,
+) -> list[str]:
+    return [
+        "show-review",
+        "--manifest",
+        str(MANIFEST_PATH),
+        "--cases",
+        str(cases_path),
+        "--report",
+        str(report_path),
+        "--safe-result",
+        str(safe_path),
+        "--expected-runtime-git-sha",
+        expected_runtime_git_sha,
+    ]
+
+
+def _rewrite_report_and_rebind_safe_result(
+    report_path: Path,
+    report: dict[str, Any],
+    safe_path: Path,
+    safe: dict[str, Any],
+) -> None:
+    _write_json(report_path, report)
+    safe["report_sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _write_json(safe_path, safe)
 
 
 def _clone_bound_sources(
@@ -744,6 +798,301 @@ def test_summarize_cli_fails_closed_when_trace_fetch_is_unavailable(
     assert stdout == "pilot50=SUMMARIZE reason=validation_failed\n"
     assert "CANARY" not in stdout
     assert not output.exists()
+
+
+def test_show_review_prints_only_the_exact_owner_review_jsonl_projection(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cases, cases_path, cases_sha = _materialized_workspace(tmp_path)
+    report_path, report, trace_rows = _write_report(tmp_path, cases, cases_sha)
+    report["private_canary"] = "PRIVATE-REPORT-FIELD-CANARY"
+    report["results"][0]["tags"] = [
+        *report["results"][0]["tags"],
+        "PRIVATE-TAG-CANARY",
+    ]
+    report["results"][0]["runtime_private_field"] = "PRIVATE-RUNTIME-CANARY"
+    _write_json(report_path, report)
+    safe_path, _safe = _write_validated_safe_result(
+        tmp_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+    )
+
+    assert (
+        pilot50.main(
+            _show_review_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+            )
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    lines = stdout.splitlines()
+    review_rows = [json.loads(line) for line in lines]
+    expected_fields = {
+        "ordinal",
+        "group",
+        "query",
+        "response",
+        "was_escalated",
+        "escalation_reason",
+        "passed",
+        "observed_behavior",
+    }
+    assert len(lines) == 50
+    assert len(review_rows) == 50
+    assert [row["ordinal"] for row in review_rows] == list(range(1, 51))
+    assert [row["group"] for row in review_rows] == [
+        case["pilot50_group"] for case in cases
+    ]
+    assert sum(row["group"] == "typical" for row in review_rows) == 25
+    assert sum(row["group"] == "atypical" for row in review_rows) == 25
+    for ordinal, (row, case, result) in enumerate(
+        zip(review_rows, cases, report["results"], strict=True),
+        start=1,
+    ):
+        assert set(row) == expected_fields
+        assert row == {
+            "ordinal": ordinal,
+            "group": case["pilot50_group"],
+            "query": case["query"],
+            "response": result["response"],
+            "was_escalated": result["was_escalated"],
+            "escalation_reason": result["escalation_reason"],
+            "passed": result["passed"],
+            "observed_behavior": result["observed_behavior"],
+        }
+    for forbidden in (
+        '"id"',
+        '"request_id"',
+        '"tags"',
+        '"runtime_git_sha"',
+        '"private_canary"',
+        "PRIVATE-REPORT-FIELD-CANARY",
+        "PRIVATE-TAG-CANARY",
+        "PRIVATE-RUNTIME-CANARY",
+        RUNTIME_GIT_SHA,
+    ):
+        assert forbidden not in stdout
+
+
+def test_show_review_jsonl_escapes_terminal_control_characters(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cases, cases_path, cases_sha = _materialized_workspace(tmp_path)
+    report_path, report, trace_rows = _write_report(tmp_path, cases, cases_sha)
+    terminal_payload = "line-one\nline-two\r\t\x1b[31mred\x00done"
+    report["results"][0]["response"] = terminal_payload
+    _write_json(report_path, report)
+    safe_path, _safe = _write_validated_safe_result(
+        tmp_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+    )
+
+    assert (
+        pilot50.main(
+            _show_review_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+            )
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    lines = stdout.splitlines()
+    assert len(lines) == 50
+    assert stdout.count("\n") == 50
+    assert json.loads(lines[0])["response"] == terminal_payload
+    assert "\r" not in stdout
+    assert "\t" not in stdout
+    assert "\x1b" not in stdout
+    assert "\x00" not in stdout
+    assert "\\n" in lines[0]
+    assert "\\r" in lines[0]
+    assert "\\t" in lines[0]
+    assert "\\u001b" in lines[0]
+    assert "\\u0000" in lines[0]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["materialized_query", "report_membership", "report_query"],
+)
+def test_show_review_rejects_tampered_case_and_report_bindings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    cases, cases_path, cases_sha = _materialized_workspace(tmp_path)
+    report_path, report, trace_rows = _write_report(tmp_path, cases, cases_sha)
+    safe_path, safe = _write_validated_safe_result(
+        tmp_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+    )
+    if mutation == "materialized_query":
+        tampered_cases = copy.deepcopy(cases)
+        tampered_cases[0]["query"] = "PRIVATE-TAMPERED-CASE-QUERY"
+        cases_path.write_bytes(pilot50._canonical_json_bytes(tampered_cases))
+        safe["cases_sha256"] = hashlib.sha256(cases_path.read_bytes()).hexdigest()
+        _write_json(safe_path, safe)
+    elif mutation == "report_membership":
+        report["results"][0]["id"] = "PRIVATE-TAMPERED-CASE-ID"
+        _rewrite_report_and_rebind_safe_result(report_path, report, safe_path, safe)
+    else:
+        report["results"][0]["query"] = "PRIVATE-TAMPERED-REPORT-QUERY"
+        _rewrite_report_and_rebind_safe_result(report_path, report, safe_path, safe)
+
+    assert (
+        pilot50.main(
+            _show_review_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+            )
+        )
+        == 2
+    )
+    stdout = capsys.readouterr().out
+    assert stdout == "pilot50=SHOW-REVIEW reason=validation_failed\n"
+    assert "PRIVATE-TAMPERED" not in stdout
+
+
+@pytest.mark.parametrize(
+    "response",
+    [None, 123, "x" * (pilot50.MAX_REVIEW_TEXT_LENGTH + 1)],
+    ids=["null", "integer", "oversized"],
+)
+def test_show_review_rejects_untyped_or_oversized_responses(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    response: Any,
+) -> None:
+    cases, cases_path, cases_sha = _materialized_workspace(tmp_path)
+    report_path, report, trace_rows = _write_report(tmp_path, cases, cases_sha)
+    safe_path, safe = _write_validated_safe_result(
+        tmp_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+    )
+    report["results"][0]["response"] = response
+    _rewrite_report_and_rebind_safe_result(report_path, report, safe_path, safe)
+
+    assert (
+        pilot50.main(
+            _show_review_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == "pilot50=SHOW-REVIEW reason=validation_failed\n"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_result",
+        "trace_incomplete",
+        "cache_hit",
+        "untyped_verdict",
+        "missing_response",
+    ],
+)
+def test_show_review_rejects_report_that_was_not_fully_validated(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    cases, cases_path, cases_sha = _materialized_workspace(tmp_path)
+    report_path, report, trace_rows = _write_report(tmp_path, cases, cases_sha)
+    safe_path, safe = _write_validated_safe_result(
+        tmp_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+    )
+    if mutation == "missing_result":
+        report["results"].pop()
+    elif mutation == "trace_incomplete":
+        report["results"][0]["trace_found"] = False
+    elif mutation == "cache_hit":
+        report["results"][0]["cache_hit"] = True
+    elif mutation == "untyped_verdict":
+        report["results"][0]["passed"] = 1
+    else:
+        report["results"][0].pop("response")
+    _rewrite_report_and_rebind_safe_result(report_path, report, safe_path, safe)
+
+    assert (
+        pilot50.main(
+            _show_review_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == "pilot50=SHOW-REVIEW reason=validation_failed\n"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["cases_hash", "report_hash", "runtime_sha", "safe_schema", "expected_runtime"],
+)
+def test_show_review_rejects_unbound_or_tampered_safe_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    cases, cases_path, cases_sha = _materialized_workspace(tmp_path)
+    report_path, _report, trace_rows = _write_report(tmp_path, cases, cases_sha)
+    safe_path, safe = _write_validated_safe_result(
+        tmp_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+    )
+    expected_runtime = RUNTIME_GIT_SHA
+    if mutation == "cases_hash":
+        safe["cases_sha256"] = "b" * 64
+    elif mutation == "report_hash":
+        safe["report_sha256"] = "c" * 64
+    elif mutation == "runtime_sha":
+        safe["runtime_git_sha"] = "b" * 40
+    elif mutation == "safe_schema":
+        safe["human_product_verdict"] = True
+    else:
+        expected_runtime = "b" * 40
+    _write_json(safe_path, safe)
+
+    assert (
+        pilot50.main(
+            _show_review_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+                expected_runtime_git_sha=expected_runtime,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == "pilot50=SHOW-REVIEW reason=validation_failed\n"
 
 
 def test_show_safe_validates_and_prints_only_the_safe_schema(

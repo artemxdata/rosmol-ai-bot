@@ -1,9 +1,12 @@
 import copy
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "run_pilot50_server_local.sh"
@@ -28,6 +31,14 @@ def _validator_source(text: str) -> str:
     prefix = "  python3 -c '\n"
     start = body.index(prefix) + len(prefix)
     end = body.index("\n' \"$expected_cases_sha\"", start)
+    return body[start:end]
+
+
+def _review_validator_source(text: str) -> str:
+    body = _function(text, "validate_review_stdout")
+    prefix = "  python3 -c '\n"
+    start = body.index(prefix) + len(prefix)
+    end = body.index("\n' 2>/dev/null", start)
     return body[start:end]
 
 
@@ -101,6 +112,49 @@ def _run_validator(
     )
 
 
+def _review_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "ordinal": ordinal,
+            "group": "typical" if ordinal <= 25 else "atypical",
+            "query": f"Вопрос {ordinal}",
+            "response": "" if ordinal == 50 else f"Ответ {ordinal}",
+            "was_escalated": ordinal % 7 == 0,
+            "escalation_reason": "low_confidence" if ordinal % 7 == 0 else None,
+            "passed": ordinal % 5 != 0,
+            "observed_behavior": "escalate" if ordinal % 7 == 0 else "answer",
+        }
+        for ordinal in range(1, 51)
+    ]
+
+
+def _run_review_validator(
+    rows: list[dict[str, object]],
+    *,
+    raw_suffix: str = "",
+) -> subprocess.CompletedProcess[str]:
+    jsonl = "\n".join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for row in rows
+    )
+    payload = (
+        f"{jsonl}{raw_suffix}\npilot50-review-stream-complete-v1\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _review_validator_source(_text())],
+        input=payload.encode("utf-8"),
+        check=False,
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    return subprocess.CompletedProcess(
+        args=result.args,
+        returncode=result.returncode,
+        stdout=result.stdout.decode("utf-8"),
+        stderr=result.stderr.decode("utf-8"),
+    )
+
+
 def test_script_is_fail_closed_and_server_local_only() -> None:
     text = _text()
 
@@ -132,12 +186,13 @@ def test_script_is_fail_closed_and_server_local_only() -> None:
     assert all(value.casefold() not in lowered for value in forbidden)
 
 
-def test_modes_are_explicit_and_preflight_has_no_ask_or_approval() -> None:
+def test_modes_are_explicit_and_read_only_modes_have_no_ask_or_approval() -> None:
     text = _text()
     preflight = _function(text, "preflight_mode")
     run = _function(text, "run_mode")
+    review = _function(text, "review_mode")
 
-    assert "preflight | run" in _function(text, "validate_mode")
+    assert "preflight | run | review" in _function(text, "validate_mode")
     assert "eval.run_ask" not in preflight
     assert "PILOT50_TARGET" not in preflight
     assert "HIGH_COST_APPROVAL_ID" not in preflight
@@ -148,6 +203,13 @@ def test_modes_are_explicit_and_preflight_has_no_ask_or_approval() -> None:
     assert "scripts/pilot50.py show-safe" in run
     assert '--expected-runtime-git-sha "$RUNTIME_SHA"' in run
     assert '--expected-approval-id "$approval_id"' in run
+    assert "eval.run_ask" not in review
+    assert "PILOT50_TARGET" not in review
+    assert "HIGH_COST_APPROVAL_ID" not in review
+    assert "PHASE0_BILLING_VERDICT" not in review
+    assert "export_phase0" not in review.casefold()
+    assert "phase_a" not in review.casefold()
+    assert "scripts/pilot50.py show-review" in review
 
 
 def test_preflight_freezes_exact_clean_git_archive_and_balanced_cases() -> None:
@@ -198,6 +260,7 @@ def test_acceptance_container_is_read_only_bound_and_never_built() -> None:
     compose = _function(text, "build_compose_command")
     preflight = _function(text, "preflight_mode")
     run = _function(text, "run_mode")
+    review = _function(text, "review_mode")
 
     assert '"ACCEPTANCE_SOURCE_DIR=$SOURCE_DIR"' in compose
     assert '"ACCEPTANCE_OUTPUT_DIR=$EVIDENCE_DIR"' in compose
@@ -205,7 +268,7 @@ def test_acceptance_container_is_read_only_bound_and_never_built() -> None:
     assert '"ACCEPTANCE_COST_LEDGER_DIR=$PILOT50_LEDGER_DIR"' in compose
     assert "docker-compose.acceptance.yml" in compose
     assert "--profile acceptance" in compose
-    for section in (preflight, run):
+    for section in (preflight, run, review):
         assert "run --rm --no-deps --pull never" in section
         assert "--entrypoint python quality-acceptance" in section
     assert " up " not in text
@@ -252,6 +315,96 @@ def test_run_is_one_shot_and_keeps_raw_and_safe_outputs_private() -> None:
     assert "ask_eval_failed" in run
     assert "summarize_failed" in run
     assert ">/dev/null 2>&1" in run
+    assert "validate_completed_receipt" in run
+
+
+def test_review_requires_exact_completed_current_run_and_writes_no_artifact() -> None:
+    text = _text()
+    review = _function(text, "review_mode")
+
+    assert 'RUN_DIR="$PILOT50_BASE_DIR/runs/${PILOT50_DATASET_ID}-${RUNTIME_SHA}"' in text
+    assert "verify_source_snapshot" in review
+    assert "preflight.receipt" in review
+    assert "run.completed" in review
+    assert "validate_preflight_receipt" in review
+    assert "validate_completed_receipt" in review
+    assert review.count("sha256sum") >= 4
+    assert "pilot50-ask-report.json" in review
+    assert "pilot50-safe-result.json" in review
+    assert "--output" not in review
+    assert "eval.run_ask" not in review
+    assert "scripts/pilot50.py prepare" not in review
+    assert "scripts/pilot50.py summarize" not in review
+    assert 'printf \'pilot50-review-stream-complete-v1\\n\'' in review
+    tty_check = '[[ -t 1 ]] || fail "review_requires_owner_terminal"'
+    assert tty_check in review
+    assert review.index(tty_check) < review.index('sudo test -d "$RUN_DIR"')
+
+
+def test_review_refuses_redirected_stdout_before_private_reads() -> None:
+    bash = "bash"
+    if os.name == "nt":
+        bash_path = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git/bin/bash.exe"
+        if not bash_path.is_file():
+            pytest.skip("Git Bash is unavailable")
+        bash = str(bash_path)
+    result = subprocess.run(
+        [bash, str(SCRIPT), "review"],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == (
+        "pilot50_server_local=FAIL reason=review_requires_owner_terminal\n"
+    )
+    assert result.stderr == ""
+
+
+def test_review_cli_and_stdout_projection_are_exact_and_owner_only() -> None:
+    text = _text()
+    review = _function(text, "review_mode")
+    validator = _function(text, "validate_review_stdout")
+
+    expected_args = (
+        'scripts/pilot50.py show-review \\\n'
+        '      --manifest "/workspace/$PILOT50_MANIFEST_REL" \\\n'
+        "      --cases /evidence/pilot50-cases.json \\\n"
+        "      --report /evidence/pilot50-ask-report.json \\\n"
+        "      --safe-result /evidence/pilot50-safe-result.json \\\n"
+        '      --expected-runtime-git-sha "$RUNTIME_SHA"'
+    )
+    assert expected_args in review
+    assert "validate_review_stdout" in review
+    assert "set(row) == allowed" in validator
+    assert "list(range(1, 51))" in validator
+    assert '{"typical": 25, "atypical": 25}' in validator
+    assert "max_bytes = 32 * 1024 * 1024" in validator
+    assert "byte == 10 or (byte >= 32 and byte != 127)" in validator
+
+
+def test_review_validator_accepts_exact_50_row_contract() -> None:
+    result = _run_review_validator(_review_rows())
+
+    assert result.returncode == 0, result.stderr
+    output = [json.loads(line) for line in result.stdout.splitlines()]
+    assert output == _review_rows()
+
+
+def test_review_validator_rejects_extra_non_typed_unbalanced_or_control_rows() -> None:
+    extra = copy.deepcopy(_review_rows())
+    extra[0]["request_id"] = "private"
+    non_typed = copy.deepcopy(_review_rows())
+    non_typed[0]["was_escalated"] = 0
+    unbalanced = copy.deepcopy(_review_rows())
+    unbalanced[24]["group"] = "atypical"
+
+    assert _run_review_validator(extra).returncode != 0
+    assert _run_review_validator(non_typed).returncode != 0
+    assert _run_review_validator(unbalanced).returncode != 0
+    assert _run_review_validator(_review_rows(), raw_suffix="\t").returncode != 0
 
 
 def test_final_stdout_is_strictly_allowlisted_safe_json() -> None:

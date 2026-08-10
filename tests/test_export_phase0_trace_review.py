@@ -1121,12 +1121,19 @@ def test_main_reports_stable_payload_free_ssh_failure_codes(
     assert not output.exists()
 
 
-@pytest.mark.parametrize("field", ["confidence", "cost"])
+@pytest.mark.parametrize(
+    ("field", "expected_code"),
+    [
+        ("confidence", "post_sql_verifier_result_invalid"),
+        ("cost", "post_sql_llm_usage_invalid"),
+    ],
+)
 def test_main_rejects_huge_numeric_values_without_traceback(
     tmp_path: Path,
     monkeypatch,
     capsys,
     field: str,
+    expected_code: str,
 ) -> None:
     private_root = tmp_path / "data" / "private"
     _, _, case_ids = _approved_inputs(private_root, monkeypatch)
@@ -1152,9 +1159,14 @@ def test_main_rejects_huge_numeric_values_without_traceback(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == "phase0_trace_export=FAIL reason=validation_failed\n"
+    assert captured.err == f"phase0_trace_export=FAIL reason={expected_code}\n"
     assert "Traceback" not in captured.err
     assert not output.exists()
+
+
+def test_safe_validation_failure_rejects_unapproved_diagnostic_code() -> None:
+    with pytest.raises(ValueError, match="unsupported safe validation failure code"):
+        exporter.SafeValidationFailure("PRIVATE-CANARY")
 
 
 def test_main_catches_writer_oserror_without_traceback_or_path_leak(

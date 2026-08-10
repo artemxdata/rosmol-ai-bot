@@ -56,7 +56,7 @@ require_command() {
 validate_mode() {
   [[ "$#" -eq 1 ]] || fail "usage"
   case "$MODE" in
-    preflight | run) ;;
+    preflight | run | review) ;;
     *) fail "usage" ;;
   esac
 }
@@ -278,6 +278,37 @@ assert payload.decode("ascii").splitlines() == [
     "atypical_total=25",
     "forecast_llm_cost_rub=10",
     "max_llm_cost_rub=20",
+]
+PY
+}
+
+validate_completed_receipt() {
+  local receipt="$1"
+  local tooling_sha="$2"
+  local runtime_sha="$3"
+  local cases_sha="$4"
+  local report_sha="$5"
+  local safe_result_sha="$6"
+  python3 - "$receipt" "$tooling_sha" "$runtime_sha" "$cases_sha" \
+    "$report_sha" "$safe_result_sha" >/dev/null 2>&1 <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path, tooling_sha, runtime_sha, cases_sha, report_sha, safe_result_sha = sys.argv[1:]
+payload = Path(path).read_bytes()
+assert 0 < len(payload) <= 4096 and payload.endswith(b"\n")
+assert re.fullmatch(r"[0-9a-f]{40}", tooling_sha)
+assert re.fullmatch(r"[0-9a-f]{40}", runtime_sha)
+for value in (cases_sha, report_sha, safe_result_sha):
+    assert re.fullmatch(r"[0-9a-f]{64}", value)
+assert payload.decode("ascii").splitlines() == [
+    "dataset_id=pilot50_balanced_v1",
+    f"tooling_sha={tooling_sha}",
+    f"runtime_sha={runtime_sha}",
+    f"cases_sha256={cases_sha}",
+    f"report_sha256={report_sha}",
+    f"safe_result_sha256={safe_result_sha}",
 ]
 PY
 }
@@ -513,6 +544,70 @@ print(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", "
   "$expected_runtime_sha" "$expected_approval_id" 2>/dev/null
 }
 
+validate_review_stdout() {
+  python3 -c '
+import json
+import re
+import sys
+from collections import Counter
+
+max_bytes = 32 * 1024 * 1024
+sentinel = b"pilot50-review-stream-complete-v1"
+allowed = {
+    "ordinal", "group", "query", "response", "was_escalated",
+    "escalation_reason", "passed", "observed_behavior",
+}
+behaviors = {"answer", "clarify", "escalate", "scope_note"}
+reason_re = re.compile(r"[a-z][a-z0-9_]{0,79}")
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        assert key not in result
+        result[key] = value
+    return result
+
+payload = sys.stdin.buffer.read(max_bytes + 1)
+assert 0 < len(payload) <= max_bytes and payload.endswith(b"\n")
+assert all(byte == 10 or (byte >= 32 and byte != 127) for byte in payload)
+lines = payload[:-1].split(b"\n")
+assert lines and lines[-1] == sentinel
+lines.pop()
+assert len(lines) == 50 and all(lines)
+
+rows = []
+canonical = []
+for line in lines:
+    row = json.loads(line.decode("utf-8"), object_pairs_hook=unique_object)
+    assert isinstance(row, dict) and set(row) == allowed
+    ordinal = row.get("ordinal")
+    assert type(ordinal) is int and 1 <= ordinal <= 50
+    assert row.get("group") in {"typical", "atypical"}
+    query = row.get("query")
+    response = row.get("response")
+    assert isinstance(query, str) and 1 <= len(query) <= 50000
+    assert isinstance(response, str) and len(response) <= 50000
+    query.encode("utf-8")
+    response.encode("utf-8")
+    assert type(row.get("was_escalated")) is bool
+    escalation_reason = row.get("escalation_reason")
+    assert escalation_reason is None or (
+        isinstance(escalation_reason, str)
+        and reason_re.fullmatch(escalation_reason) is not None
+    )
+    assert type(row.get("passed")) is bool
+    assert row.get("observed_behavior") in behaviors
+    rows.append(row)
+    canonical.append(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+assert [row["ordinal"] for row in rows] == list(range(1, 51))
+assert Counter(row["group"] for row in rows) == {"typical": 25, "atypical": 25}
+sys.stdout.write("\n".join(canonical) + "\n")
+' 2>/dev/null
+}
+
 run_mode() {
   local marker cases_sha final_cases_sha manifest_sha approval_id
   local report_sha safe_result_sha safe_stdout validated_safe
@@ -656,16 +751,95 @@ run_mode() {
     >"$completed") 2>/dev/null \
     || fail "completion_marker_failed"
   chmod 0600 "$completed" || fail "completion_marker_mode_failed"
+  validate_completed_receipt \
+    "$completed" "$TOOLING_SHA" "$RUNTIME_SHA" "$final_cases_sha" \
+    "$report_sha" "$safe_result_sha" || fail "completion_marker_invalid"
 
   printf 'pilot50_server_local=OK\n'
   printf 'safe_result_sha256=%s\n' "$safe_result_sha"
   printf '%s\n' "$validated_safe"
 }
 
+review_mode() {
+  local marker completed raw_report safe_result
+  local manifest_sha cases_sha report_sha safe_result_sha
+
+  [[ -t 1 ]] || fail "review_requires_owner_terminal"
+  sudo test -d "$RUN_DIR" || fail "completed_run_not_found"
+  sudo test ! -L "$RUN_DIR" || fail "run_directory_not_regular"
+  [[ "$(sudo readlink -f -- "$RUN_DIR" 2>/dev/null)" == "$RUN_DIR" ]] \
+    || fail "run_directory_not_regular"
+  verify_source_snapshot
+
+  sudo test -d "$EVIDENCE_DIR" || fail "evidence_directory_missing"
+  sudo test ! -L "$EVIDENCE_DIR" || fail "evidence_directory_not_regular"
+  [[ "$(sudo readlink -f -- "$EVIDENCE_DIR" 2>/dev/null)" == "$EVIDENCE_DIR" ]] \
+    || fail "evidence_directory_not_regular"
+  [[ "$(sudo stat -c '%u:%g:%a' "$EVIDENCE_DIR" 2>/dev/null)" == \
+    "10001:10001:700" ]] || fail "evidence_directory_mode_mismatch"
+
+  marker="$RUN_DIR/preflight.receipt"
+  completed="$RUN_DIR/run.completed"
+  raw_report="$EVIDENCE_DIR/pilot50-ask-report.json"
+  safe_result="$EVIDENCE_DIR/pilot50-safe-result.json"
+  for path in \
+    "$marker" \
+    "$RUN_DIR/run.started" \
+    "$completed" \
+    "$EVIDENCE_DIR/pilot50-cases.json" \
+    "$raw_report" \
+    "$safe_result"; do
+    sudo test -f "$path" || fail "completed_artifact_missing"
+    sudo test ! -L "$path" || fail "completed_artifact_not_regular"
+  done
+
+  manifest_sha="$(sudo sha256sum "$SOURCE_DIR/$PILOT50_MANIFEST_REL" 2>/dev/null \
+    | cut -d ' ' -f 1)" || fail "manifest_sha_unavailable"
+  cases_sha="$(sudo sha256sum "$EVIDENCE_DIR/pilot50-cases.json" 2>/dev/null \
+    | cut -d ' ' -f 1)" || fail "cases_sha_unavailable"
+  report_sha="$(sudo sha256sum "$raw_report" 2>/dev/null \
+    | cut -d ' ' -f 1)" || fail "report_sha_unavailable"
+  safe_result_sha="$(sudo sha256sum "$safe_result" 2>/dev/null \
+    | cut -d ' ' -f 1)" || fail "safe_result_sha_unavailable"
+  [[ "$manifest_sha" =~ ^[0-9a-f]{64}$ ]] || fail "manifest_sha_unavailable"
+  [[ "$cases_sha" =~ ^[0-9a-f]{64}$ ]] || fail "cases_sha_unavailable"
+  [[ "$report_sha" =~ ^[0-9a-f]{64}$ ]] || fail "report_sha_unavailable"
+  [[ "$safe_result_sha" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "safe_result_sha_unavailable"
+  validate_preflight_receipt \
+    "$marker" "$TOOLING_SHA" "$RUNTIME_SHA" "$manifest_sha" "$cases_sha" \
+    || fail "preflight_receipt_mismatch"
+  validate_completed_receipt \
+    "$completed" "$TOOLING_SHA" "$RUNTIME_SHA" "$cases_sha" \
+    "$report_sha" "$safe_result_sha" || fail "completion_marker_mismatch"
+
+  build_compose_command
+  "${compose[@]}" config --quiet >/dev/null 2>&1 \
+    || fail "compose_config_failed"
+  if ! {
+    "${compose[@]}" run --rm --no-deps --pull never \
+      --entrypoint python quality-acceptance \
+      scripts/pilot50.py show-review \
+      --manifest "/workspace/$PILOT50_MANIFEST_REL" \
+      --cases /evidence/pilot50-cases.json \
+      --report /evidence/pilot50-ask-report.json \
+      --safe-result /evidence/pilot50-safe-result.json \
+      --expected-runtime-git-sha "$RUNTIME_SHA" \
+      2>/dev/null \
+      && printf 'pilot50-review-stream-complete-v1\n'
+  } | validate_review_stdout; then
+    fail "review_output_invalid"
+  fi
+}
+
 validate_mode "$@"
+if [[ "$MODE" == "review" ]]; then
+  [[ -t 1 ]] || fail "review_requires_owner_terminal"
+fi
 load_common_state
 
 case "$MODE" in
   preflight) preflight_mode ;;
   run) run_mode ;;
+  review) review_mode ;;
 esac

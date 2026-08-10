@@ -46,11 +46,26 @@ MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_CASES_BYTES = 4 * 1024 * 1024
 MAX_REPORT_BYTES = 32 * 1024 * 1024
 MAX_SAFE_BYTES = 128 * 1024
+MAX_REVIEW_TEXT_LENGTH = 50_000
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EVAL_RUN_ID_RE = re.compile(r"^ask-eval-[0-9a-f-]{36}$")
 FULL_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SAFE_APPROVAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$")
 SAFE_TAG_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,160}$")
+SAFE_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+OBSERVED_BEHAVIORS = frozenset({"answer", "clarify", "escalate", "scope_note"})
+REVIEW_FIELDS = frozenset(
+    {
+        "ordinal",
+        "group",
+        "query",
+        "response",
+        "was_escalated",
+        "escalation_reason",
+        "passed",
+        "observed_behavior",
+    }
+)
 ALLOWED_SOURCE_PATHS = frozenset(
     {
         "eval/cases/pre_pilot_yonote.json",
@@ -927,6 +942,159 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def _validated_review_text(value: Any, *, label: str, allow_empty: bool) -> str:
+    if not isinstance(value, str) or len(value) > MAX_REVIEW_TEXT_LENGTH:
+        raise Pilot50Error(f"{label} is not a bounded string")
+    if not allow_empty and not value.strip():
+        raise Pilot50Error(f"{label} is empty")
+    return value
+
+
+def build_review_rows(
+    *,
+    manifest_path: Path,
+    cases_path: Path,
+    report_path: Path,
+    safe_result_path: Path,
+    expected_runtime_git_sha: str,
+) -> list[dict[str, Any]]:
+    """Build an owner-only JSONL view bound to the already validated Pilot50 run."""
+
+    runtime_git_sha = _validated_runtime_git_sha(expected_runtime_git_sha)
+    cases, cases_bytes, cases_sha = _validate_materialized_cases(
+        manifest_path,
+        cases_path,
+    )
+    safe_bytes = _read_regular_bytes(
+        safe_result_path,
+        max_bytes=MAX_SAFE_BYTES,
+        label="safe result",
+    )
+    safe = validate_safe_result(_load_json_bytes(safe_bytes, label="safe result"))
+    if safe["runtime_git_sha"] != runtime_git_sha:
+        raise Pilot50Error("safe result runtime differs from the expected runtime")
+    if safe["cases_sha256"] != cases_sha or cases_sha != _sha256(cases_bytes):
+        raise Pilot50Error("safe result cases binding is invalid")
+
+    report_bytes = _read_regular_bytes(
+        report_path,
+        max_bytes=MAX_REPORT_BYTES,
+        label="ask report",
+    )
+    if safe["report_sha256"] != _sha256(report_bytes):
+        raise Pilot50Error("safe result report binding is invalid")
+    report = _load_json_bytes(report_bytes, label="ask report")
+    if not isinstance(report, dict):
+        raise Pilot50Error("ask report must be a JSON object")
+    if (
+        report.get("target") != PILOT50_TARGET
+        or report.get("cases_total") != EXPECTED_CASES_TOTAL
+        or report.get("eval_run_id") != safe["eval_run_id"]
+        or report.get("cases_file_sha256") != cases_sha
+        or _validated_run_window(report) != safe["run_window_utc"]
+    ):
+        raise Pilot50Error("ask report does not bind the reviewed Pilot50 run")
+    runtime_identity = report.get("runtime_identity")
+    if (
+        not isinstance(runtime_identity, dict)
+        or runtime_identity.get("preflight_release_git_sha") != runtime_git_sha
+        or runtime_identity.get("verified_release_git_sha") != runtime_git_sha
+    ):
+        raise Pilot50Error("ask report runtime does not bind the reviewed Pilot50 run")
+    cost_control = report.get("cost_control")
+    reservation = cost_control.get("reservation") if isinstance(cost_control, dict) else None
+    if (
+        not isinstance(reservation, dict)
+        or cost_control.get("high_cost_approval_id") != safe["approval_id"]
+        or reservation.get("high_cost_approval_id") != safe["approval_id"]
+        or reservation.get("runtime_git_sha") != runtime_git_sha
+        or reservation.get("cases_file_sha256") != cases_sha
+    ):
+        raise Pilot50Error("ask report approval does not bind the reviewed Pilot50 run")
+
+    results = report.get("results")
+    if not isinstance(results, list) or len(results) != EXPECTED_CASES_TOTAL:
+        raise Pilot50Error("ask report must contain exactly 50 result rows")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for result in results:
+        if not isinstance(result, Mapping):
+            raise Pilot50Error("ask result row must be an object")
+        case_id = str(result.get("id") or "")
+        if not case_id or case_id in by_id:
+            raise Pilot50Error("ask result membership is invalid")
+        by_id[case_id] = result
+
+    review_rows: list[dict[str, Any]] = []
+    closure_counts: Counter[str] = Counter()
+    policy_counts: Counter[str] = Counter()
+    for ordinal, case in enumerate(cases, start=1):
+        case_id = str(case["id"])
+        result = by_id.get(case_id)
+        if result is None:
+            raise Pilot50Error("ask report membership does not match Pilot50")
+        group = str(case.get("pilot50_group") or "")
+        if group not in EXPECTED_TYPE_COUNTS:
+            raise Pilot50Error("materialized case type is invalid")
+        query = _validated_review_text(
+            result.get("query"),
+            label="review query",
+            allow_empty=False,
+        )
+        if query != case.get("query"):
+            raise Pilot50Error("ask report query does not match Pilot50")
+        response = _validated_review_text(
+            result.get("response"),
+            label="review response",
+            allow_empty=True,
+        )
+        passed = result.get("passed")
+        was_escalated = result.get("was_escalated")
+        if type(passed) is not bool or type(was_escalated) is not bool:
+            raise Pilot50Error("review verdict fields must be typed booleans")
+        observed_behavior = result.get("observed_behavior")
+        if observed_behavior not in OBSERVED_BEHAVIORS:
+            raise Pilot50Error("review behavior is invalid")
+        escalation_reason = result.get("escalation_reason")
+        if escalation_reason is not None and (
+            not isinstance(escalation_reason, str)
+            or SAFE_REASON_RE.fullmatch(escalation_reason) is None
+        ):
+            raise Pilot50Error("review escalation reason is invalid")
+        if result.get("http_success") is not True or result.get("trace_found") is not True:
+            raise Pilot50Error("review row lacks successful execution evidence")
+        if result.get("cache_hit") is not False:
+            raise Pilot50Error("review row violates the cache invariant")
+        if result.get("error") is not None or result.get("trace_error") not in (None, ""):
+            raise Pilot50Error("review row contains an execution error")
+        if passed:
+            policy_counts[group] += 1
+        if passed and observed_behavior == "answer" and was_escalated is False:
+            closure_counts[group] += 1
+        row = {
+            "ordinal": ordinal,
+            "group": group,
+            "query": query,
+            "response": response,
+            "was_escalated": was_escalated,
+            "escalation_reason": escalation_reason,
+            "passed": passed,
+            "observed_behavior": observed_behavior,
+        }
+        if set(row) != REVIEW_FIELDS:
+            raise Pilot50Error("review row fields are invalid")
+        review_rows.append(row)
+    if set(by_id) != {str(case["id"]) for case in cases}:
+        raise Pilot50Error("ask report membership does not match Pilot50")
+    for group in ("typical", "atypical"):
+        if (
+            safe["mechanical_first_turn_closure"][group]["closed"]
+            != closure_counts[group]
+            or safe["policy_pass"][group]["passed"] != policy_counts[group]
+        ):
+            raise Pilot50Error("safe result verdicts do not match review rows")
+    return review_rows
+
+
 def _validated_output_parent(path: Path) -> Path:
     if path.exists() or path.is_symlink():
         raise Pilot50Error("output already exists")
@@ -1014,6 +1182,16 @@ def _show_safe(args: argparse.Namespace) -> dict[str, Any]:
     return validate_safe_result(value)
 
 
+def _show_review(args: argparse.Namespace) -> list[dict[str, Any]]:
+    return build_review_rows(
+        manifest_path=args.manifest,
+        cases_path=args.cases,
+        report_path=args.report,
+        safe_result_path=args.safe_result,
+        expected_runtime_git_sha=args.expected_runtime_git_sha,
+    )
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare and summarize Pilot50 evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1029,6 +1207,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     summarize.add_argument("--expected-approval-id", required=True)
     show_safe = subparsers.add_parser("show-safe")
     show_safe.add_argument("--input", type=Path, required=True)
+    show_review = subparsers.add_parser("show-review")
+    show_review.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    show_review.add_argument("--cases", type=Path, required=True)
+    show_review.add_argument("--report", type=Path, required=True)
+    show_review.add_argument("--safe-result", type=Path, required=True)
+    show_review.add_argument("--expected-runtime-git-sha", required=True)
     return parser.parse_args(argv)
 
 
@@ -1039,12 +1223,18 @@ def main(argv: list[str] | None = None) -> int:
             result = _prepare(args)
         elif args.command == "summarize":
             result = asyncio.run(_summarize(args))
+        elif args.command == "show-review":
+            result = _show_review(args)
         else:
             result = _show_safe(args)
     except (Pilot50Error, OSError) as exc:
         reason = "output_exists" if "output already exists" in str(exc) else "validation_failed"
         print(f"pilot50={args.command.upper()} reason={reason}")
         return 2
+    if args.command == "show-review":
+        for row in result:
+            print(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        return 0
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     return 0
 

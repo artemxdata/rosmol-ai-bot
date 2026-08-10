@@ -19,12 +19,16 @@ SHA-256 — `d591a02da2b616c1dc89931371184c762e0c9e1d3b68a50fd9ae33f9a5cf98f4`,
 
 `scripts/pilot50.py` fail-closed собирает exact 50 cases, повторно проверяет source SHA,
 membership, PII, `25/25`, trace cardinality, cache, runtime, one-time approval, budget/pricing и
-cost reservation, после чего публикует только safe aggregate. `scripts/run_pilot50_server_local.sh`
-имеет раздельные режимы `preflight` и `run`: он использует clean exact Git snapshot и уже
-работающий `rosmol-app-ml`, ничего не rebuild/restart/deploy, не обращается к HDE/VK и не печатает
-queries, responses, request/case IDs, `.env`, DSN, ключи или stderr. Raw report остаётся с mode
-`0600` только в `/var/lib/rosmol/pilot50/`; runner выдаёт каждому запуску новый timestamp-bound
-user prefix, а повтор после `run.started` запрещён.
+cost reservation, после чего публикует safe aggregate. `scripts/run_pilot50_server_local.sh`
+имеет раздельные режимы `preflight`, `run` и `review`: он использует clean exact Git snapshot и уже
+работающий `rosmol-app-ml`, ничего не rebuild/restart/deploy и не обращается к HDE/VK. Raw report
+остаётся с mode `0600` только в `/var/lib/rosmol/pilot50/`; runner выдаёт каждому запуску новый
+timestamp-bound user prefix, а повтор после `run.started` запрещён. После успешного `run` владелец
+может выполнить offline `review`: только в своём terminal на server печатаются 50 JSONL-строк
+`вопрос -> ответ -> эскалация/verdict`, привязанных к проверенным cases/report/runtime SHA. В этой
+проекции нет user/request/case/eval IDs, trace, chunk text, `.env`, DSN, ключей или raw errors;
+launcher требует прямой TTY и отказывает при redirect/pipe/`tee`. По операционному контракту
+queries/responses не копируются в Git, workstation или чат.
 
 Сегодняшняя метрика называется **mechanical first-turn closure на balanced Pilot50**:
 `closed` требует одновременно полного pass всех зафиксированных для кейса content/retrieval/
@@ -32,26 +36,34 @@ citation/profile checks, ответа в первом ходе и отсутст
 `x/25` typical, `y/25` atypical и `(x+y)/50`; это calibration-only proxy, а не независимый
 holdout, human product verdict, ticket-level conversion или оценка production traffic mix.
 
-До единственного платного `run` обязательны четыре последовательных gate:
+Владелец разрешил рассматривать для следующих доказательных quality-итераций бюджет до
+`500 RUB` на один прогон, только если до запуска зафиксированы конкретная гипотеза улучшения,
+dataset/runtime SHA, критерий успеха и одноразовое согласование. Это верхняя граница, а не цель и
+не blanket approval: текущий baseline Pilot50 сохраняет прогноз `10 RUB` и hard cap `20 RUB`,
+поскольку больший расход здесь не даёт дополнительного quality evidence.
 
-1. owner-run server-local export старого Phase A evidence выполняется до любых новых `/ask`:
-   `OK` либо зафиксированный terminal `STOP: evidence unavailable` закрывает попытку, любой
-   unresolved `FAIL` запрещает Pilot50;
-2. владелец вручную сверяет Cloud.ru billing Phase 0 за
+Исторический Phase A и новый Pilot50 теперь явно разделены: неуспешный read-only export старых
+trace остаётся `pending/evidence-at-risk`, но технически не блокирует отдельный новый eval run и
+не заменяется его результатами. Повтор Phase 0 по-прежнему запрещён. До единственного платного
+Pilot50 `run` обязательны три последовательных gate:
+
+1. владелец вручную сверяет Cloud.ru billing Phase 0 за
    `2026-08-06T12:10:56.774654Z`–`2026-08-06T12:15:30.205184Z` с runner estimate
    `0,832748 RUB`; отсутствие суммы, неоднозначная атрибуция или variance `>10%` означает STOP;
-3. бесплатный `pilot50 preflight` фиксирует exact tooling/runtime/cases SHA, `25/25`, прогноз
+2. бесплатный `pilot50 preflight` фиксирует exact tooling/runtime/cases SHA, `25/25`, прогноз
    `10 RUB` и hard cap `20 RUB` без `/ask`;
-4. владелец создаёт внешний одноразовый non-secret approval reference, связанный именно с этим
+3. владелец создаёт внешний одноразовый non-secret approval reference, связанный именно с этим
    runtime SHA, набором, прогнозом и cap. Codex не придумывает approval ID.
 
 После запуска safe result сохраняет exact `eval_run_id`, UTC run window, runtime SHA, approval
 reference, hashes и `billing_status=pending_provider_reconciliation`. До второй ручной сверки
 Cloud.ru этот результат не разрешает следующий paid eval. На текущем этапе live `/ask` не было,
 стоимость изменений — `0 RUB`, production behavior не менялся. Focused Pilot50 gate:
-`65 passed`, Ruff — pass. Монолитный pytest воспроизвёл известное Windows event-loop/socket
-зависание без нового вывода; все 127 test files затем выполнены ровно один раз восьмью
-непересекающимися process-shards: `2575 passed, 1 skipped, 0 failed`. Финальный Ruff — pass;
+`88 passed`, combined Phase A/Pilot50 gate — `230 passed`, Ruff и `bash -n` — pass. Монолитный
+pytest воспроизвёл известное Windows event-loop/socket зависание без нового вывода; все test files
+затем выполнены ровно один раз восьмью непересекающимися process-shards:
+`2599 passed, 1 skipped, 0 failed` с учётом отдельно выполненного нового TTY regression.
+Финальный Ruff — pass;
 KB validation — `2186 valid / 2152 published`.
 
 **Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
@@ -149,38 +161,22 @@ exporter/analyzer/logger suite — `158 passed`; membership binding против
 Финальный локальный gate после server-local правки: Ruff — pass; KB validation —
 `2186 valid / 2152 published`; все `2511` тестов покрыты непересекающимися
 file-shards и пофайловым fallback для известного Windows event-loop/socket hang: `2510 passed,
-1 skipped, 0 failed`.
+1 skipped, 0 failed`. Owner затем успешно получил exact GitHub commit `b65135d`, запустил
+server-local exporter и после системного `AUTH` получил `validation_failed`. Это означает, что
+fixed Docker/PostgreSQL read-only команда завершилась с кодом `0` и вернула непустой bounded
+payload, а отказ произошёл уже в локальном validator. Output не создан, `/ask` не выполнялся.
+Для возможного продолжения Phase A добавлены только allowlisted payload-free post-SQL stage codes;
+ни row number, ни ID, ни значения, ни exception text в terminal не выводятся. Сам Phase A теперь
+остаётся отдельным `pending/evidence-at-risk` аудитом и не блокирует Pilot50; новый Pilot50 не
+заменяет старые evidence и не разрешает replay Phase 0.
 
-**Точный следующий шаг:** после commit/push владелец сам выполняет `ssh rosmol`,
-затем вставляет в shell сервера выданный в handoff блок с exact pushed SHA. Блок делает
-GitHub `fetch`/detached checkout и server-local read-only export; не перезапускает сервисы:
-
-```bash
-set -Eeuo pipefail
-cd /opt/rosmol-ai-bot
-readonly TRUSTED_GIT_SHA='<EXACT_PUSHED_40_CHARACTER_SHA>'
-
-printf '%s' "$TRUSTED_GIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
-test -z "$(git status --porcelain --untracked-files=normal)"
-git fetch --no-tags --prune origin codex/real-rag
-git cat-file -e "${TRUSTED_GIT_SHA}^{commit}"
-git checkout --detach "$TRUSTED_GIT_SHA"
-test "$(git rev-parse HEAD)" = "$TRUSTED_GIT_SHA"
-test -z "$(git status --porcelain --untracked-files=normal)"
-
-install -d -m 0700 data/private/eval/phase0-real-rag-7d244e4
-python3 scripts/export_phase0_trace_review.py \
-  --server-local \
-  --eval-run-id ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168 \
-  --output data/private/eval/phase0-real-rag-7d244e4/phase-a-traces.json \
-  --interactive-sudo
-```
-
-Если команда вернула `STOP`, Phase A завершается как `evidence unavailable`: старый сервер,
-provider logs и новый платный replay не использовать. При `OK` владелец возвращает только
-safe status/path/SHA-256. Перед `prepare` отдельно фиксируется owner-controlled передача
-только этого safe artifact с server на workstation; до private result фазы B–E остаются
-остановлены.
+**Точный следующий шаг:** после нового commit/push владелец сам выполняет `ssh rosmol`, получает
+exact commit из GitHub detached checkout и запускает только бесплатный
+`bash scripts/run_pilot50_server_local.sh preflight`. После фактической billing-сверки Phase 0 и
+создания одноразового approval reference тот же owner-run контур выполняет один `run`, а затем
+offline `review` для просмотра 50 вопросов/ответов в server terminal. Никаких deployment,
+restart, HDE/VK или повторного Phase 0 в этой последовательности нет. В чат возвращаются только
+safe aggregate/status/SHA; owner-only review rows остаются на server terminal.
 
 ## Real-RAG Phase 0: live-прогон завершён, fail-closed STOP
 
