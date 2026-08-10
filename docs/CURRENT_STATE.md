@@ -69,12 +69,18 @@ KB validation — `2186 valid / 2152 published`. Монолитный pytest н�
 package inventory и entrypoints не изменились; исключения продлены не более чем на 14 дней — до
 `2026-08-24`. Это не новый image-scan verdict и не release `GO`: Docker/server/provider API не
 использовались, а свежий полный SHA-bound Trivy scan остаётся обязательным перед любым release.
-Фиксированный SQL exporter покрыт contract-тестами, но в этой сессии не выполнялся против
-PostgreSQL: локальный Docker daemon был недоступен; первый owner-run export остаётся интеграционной
-проверкой clean-host схемы.
+Фиксированный SQL exporter покрыт contract-тестами. Первый owner-run вызов остановился на
+`ssh_exit`; после разблокировки owner SSH alias запрос достиг clean host, но вернул безопасный
+`remote_failure`. Локальный output не создан, SQL error/stderr не раскрывался, Codex к серверу не
+подключался. Exporter теперь сначала проверяет фиксированный Docker socket напрямую, затем через
+`sudo --non-interactive`, и возвращает только payload-free этап:
+`docker_access_failed`, `postgres_container_missing`, `postgres_container_not_running` либо
+`postgres_export_failed`. Совместимость exporter/analyzer после изменения — `124 passed`; Ruff и
+KB validation — pass. Следующий owner-run вызов остаётся первой интеграционной проверкой exact SQL
+против clean-host схемы.
 
-**Точный следующий шаг:** после review/commit change set владелец один раз выполняет на
-workstation только read-only export существующих clean-server trace:
+**Точный следующий шаг:** владелец повторяет на workstation только read-only export существующих
+clean-server trace и возвращает один безопасный status/reason без stderr:
 
 ```powershell
 .venv\Scripts\python.exe scripts\export_phase0_trace_review.py `

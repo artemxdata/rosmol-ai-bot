@@ -306,7 +306,13 @@ def test_export_writes_only_validated_safe_projection(
         "rosmol",
     ]
     remote = args[6]
-    assert "sudo --non-interactive docker exec -i rosmol-postgres psql" in remote
+    assert "docker --host unix:///var/run/docker.sock version" in remote
+    assert "sudo --non-interactive docker --host unix:///var/run/docker.sock" in remote
+    assert '"$@" exec -i rosmol-postgres psql' in remote
+    assert f"exit {exporter.REMOTE_DOCKER_ACCESS_EXIT}" in remote
+    assert f"exit {exporter.REMOTE_POSTGRES_CONTAINER_MISSING_EXIT}" in remote
+    assert f"exit {exporter.REMOTE_POSTGRES_CONTAINER_NOT_RUNNING_EXIT}" in remote
+    assert f"exit {exporter.REMOTE_POSTGRES_EXPORT_EXIT}" in remote
     assert "COPY" in remote
     assert "encode(convert_to(" in remote
     assert "'base64'" in remote
@@ -777,6 +783,10 @@ def test_bounded_ssh_classifies_timeout_and_kills_process(monkeypatch) -> None:
         ("start", "ssh_start_failed"),
         ("ssh_exit", "ssh_exit"),
         ("remote", "remote_failure"),
+        ("docker", "docker_access_failed"),
+        ("container_missing", "postgres_container_missing"),
+        ("container_stopped", "postgres_container_not_running"),
+        ("postgres_export", "postgres_export_failed"),
     ],
 )
 def test_main_reports_stable_payload_free_ssh_failure_codes(
@@ -803,9 +813,17 @@ def test_main_reports_stable_payload_free_ssh_failure_codes(
     def fake_run(args):
         if failure in {"timeout", "start"}:
             raise exporter.SafeExportFailure(expected_code)
+        exit_codes = {
+            "ssh_exit": 255,
+            "remote": 23,
+            "docker": exporter.REMOTE_DOCKER_ACCESS_EXIT,
+            "container_missing": exporter.REMOTE_POSTGRES_CONTAINER_MISSING_EXIT,
+            "container_stopped": exporter.REMOTE_POSTGRES_CONTAINER_NOT_RUNNING_EXIT,
+            "postgres_export": exporter.REMOTE_POSTGRES_EXPORT_EXIT,
+        }
         return subprocess.CompletedProcess(
             args,
-            255 if failure == "ssh_exit" else 23,
+            exit_codes[failure],
             stdout=b"",
             stderr=private_canary.encode(),
         )

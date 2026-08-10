@@ -369,6 +369,10 @@ TRACE_ERROR_CODES = frozenset(
 )
 SAFE_FAILURE_CODES = frozenset(
     {
+        "docker_access_failed",
+        "postgres_container_missing",
+        "postgres_container_not_running",
+        "postgres_export_failed",
         "ssh_timeout",
         "ssh_start_failed",
         "ssh_stream_failed",
@@ -377,6 +381,17 @@ SAFE_FAILURE_CODES = frozenset(
         "remote_output_too_large",
     }
 )
+
+REMOTE_DOCKER_ACCESS_EXIT = 40
+REMOTE_POSTGRES_CONTAINER_MISSING_EXIT = 41
+REMOTE_POSTGRES_CONTAINER_NOT_RUNNING_EXIT = 42
+REMOTE_POSTGRES_EXPORT_EXIT = 43
+REMOTE_FAILURE_CODES = {
+    REMOTE_DOCKER_ACCESS_EXIT: "docker_access_failed",
+    REMOTE_POSTGRES_CONTAINER_MISSING_EXIT: "postgres_container_missing",
+    REMOTE_POSTGRES_CONTAINER_NOT_RUNNING_EXIT: "postgres_container_not_running",
+    REMOTE_POSTGRES_EXPORT_EXIT: "postgres_export_failed",
+}
 
 
 class EvidenceUnavailableError(RuntimeError):
@@ -697,7 +712,7 @@ def export_phase0_trace_review(
         code = (
             "ssh_exit"
             if completed.returncode == 255 or completed.returncode < 0
-            else "remote_failure"
+            else REMOTE_FAILURE_CODES.get(completed.returncode, "remote_failure")
         )
         raise SafeExportFailure(code)
     payload = completed.stdout
@@ -744,10 +759,7 @@ def export_phase0_trace_review(
 
 
 def _remote_command() -> str:
-    argv = [
-        "sudo",
-        "--non-interactive",
-        "docker",
+    postgres_argv = [
         "exec",
         "-i",
         "rosmol-postgres",
@@ -763,7 +775,30 @@ def _remote_command() -> str:
         "--command",
         PHASE0_COPY_SQL,
     ]
-    return shlex.join(argv)
+    postgres_command = shlex.join(postgres_argv)
+    docker_socket = "unix:///var/run/docker.sock"
+    script = f"""
+set -u
+if docker --host {docker_socket} version >/dev/null 2>&1; then
+    set -- docker --host {docker_socket}
+elif sudo --non-interactive docker --host {docker_socket} version >/dev/null 2>&1; then
+    set -- sudo --non-interactive docker --host {docker_socket}
+else
+    exit {REMOTE_DOCKER_ACCESS_EXIT}
+fi
+if ! "$@" inspect rosmol-postgres >/dev/null 2>&1; then
+    exit {REMOTE_POSTGRES_CONTAINER_MISSING_EXIT}
+fi
+running=$("$@" inspect --format '{{{{.State.Running}}}}' rosmol-postgres 2>/dev/null) \
+    || exit {REMOTE_POSTGRES_CONTAINER_MISSING_EXIT}
+if [ "$running" != "true" ]; then
+    exit {REMOTE_POSTGRES_CONTAINER_NOT_RUNNING_EXIT}
+fi
+if ! "$@" {postgres_command}; then
+    exit {REMOTE_POSTGRES_EXPORT_EXIT}
+fi
+""".strip()
+    return shlex.join(["sh", "-c", script])
 
 
 def _run_bounded_ssh(args: list[str]) -> subprocess.CompletedProcess[bytes]:
