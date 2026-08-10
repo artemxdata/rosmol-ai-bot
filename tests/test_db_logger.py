@@ -23,6 +23,22 @@ class FakePool:
         return self.execute_result
 
 
+async def _persisted_generator_model(
+    monkeypatch: pytest.MonkeyPatch,
+    state: dict[str, Any],
+) -> str:
+    monkeypatch.setattr(
+        "src.logging.db_logger.get_settings",
+        lambda: SimpleNamespace(prompt_version="test"),
+    )
+    pool = FakePool()
+    await log_request(
+        pool,  # type: ignore[arg-type]
+        {"request_id": uuid4(), **state},
+    )
+    return str(pool.args[11])
+
+
 @pytest.mark.asyncio
 async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -81,6 +97,125 @@ async def test_log_request_persists_trace_events(monkeypatch: pytest.MonkeyPatch
     assert pool.args[30] == "run-1"
     assert pool.args[31] == "case-1"
     assert pool.args[32] == "answered"
+    assert pool.args[11] == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"escalation_reason": "operator_requested", "should_escalate": True},
+        {
+            "trace_events": [
+                {"node": "analyze", "latency_ms": 1, "metadata": {}, "error": None},
+                {"node": "clarify", "latency_ms": 1, "metadata": {}, "error": None},
+            ]
+        },
+        {
+            "escalation_reason": "low_confidence",
+            "should_escalate": True,
+            "trace_events": [
+                {"node": "analyze", "latency_ms": 1, "metadata": {}, "error": None},
+                {"node": "retrieve", "latency_ms": 1, "metadata": {}, "error": None},
+                {"node": "rerank", "latency_ms": 1, "metadata": {}, "error": None},
+                {"node": "escalate", "latency_ms": 1, "metadata": {}, "error": None},
+            ],
+        },
+        {"interaction_reason": "profanity"},
+    ],
+)
+async def test_log_request_marks_proven_skipped_generation_not_run(
+    monkeypatch: pytest.MonkeyPatch,
+    state: dict[str, Any],
+) -> None:
+    assert await _persisted_generator_model(monkeypatch, state) == "not_run"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("generator_model", "extra_state"),
+    [
+        ("source_only", {}),
+        ("source_chunk", {"cache_hit": True}),
+        (
+            "ai-sage/GigaChat3-10B-A1.8B",
+            {
+                "error": "llm_generation_failed",
+                "trace_events": [
+                    {
+                        "node": "generate",
+                        "latency_ms": 1,
+                        "metadata": {},
+                        "error": "provider_error",
+                    }
+                ],
+            },
+        ),
+    ],
+)
+async def test_log_request_preserves_explicit_generator_model(
+    monkeypatch: pytest.MonkeyPatch,
+    generator_model: str,
+    extra_state: dict[str, Any],
+) -> None:
+    state = {"generator_model": generator_model, **extra_state}
+
+    assert await _persisted_generator_model(monkeypatch, state) == generator_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"cache_hit": True},
+        {"error": "request_timeout", "escalation_reason": "request_timeout"},
+        {
+            "trace_events": [
+                {
+                    "node": "generate_selection",
+                    "latency_ms": 0,
+                    "metadata": {"generator_path": "llm"},
+                    "error": None,
+                }
+            ]
+        },
+        {
+            "trace_events": [
+                {
+                    "node": "retrieve",
+                    "latency_ms": 1,
+                    "metadata": {},
+                    "error": "retrieval_failed",
+                }
+            ]
+        },
+    ],
+)
+async def test_log_request_marks_ambiguous_missing_generator_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    state: dict[str, Any],
+) -> None:
+    assert await _persisted_generator_model(monkeypatch, state) == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["low_confidence", "operator_requested"])
+async def test_log_request_generation_evidence_overrides_pre_generation_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+) -> None:
+    state = {
+        "escalation_reason": reason,
+        "should_escalate": True,
+        "trace_events": [
+            {"node": "analyze", "latency_ms": 1, "metadata": {}, "error": None},
+            {"node": "generate", "latency_ms": 1, "metadata": {}, "error": None},
+            {"node": "guard", "latency_ms": 1, "metadata": {}, "error": None},
+            {"node": "respond", "latency_ms": 1, "metadata": {}, "error": None},
+        ],
+    }
+
+    assert await _persisted_generator_model(monkeypatch, state) == "unknown"
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,33 @@ from src.config import get_settings
 
 SOURCE_RE = re.compile(r"\[src:([^\]]+)\]")
 
+_GENERATOR_MODEL_NOT_RUN = "not_run"
+_GENERATOR_MODEL_UNKNOWN = "unknown"
+_GENERATION_EVIDENCE_NODES = frozenset(
+    {
+        "generate",
+        "generate_retry",
+        "generate_selection",
+        "guard",
+        "verify",
+        "verify_decision",
+        "respond",
+    }
+)
+_PRE_GENERATION_TERMINAL_NODES = frozenset({"clarify", "escalate"})
+_PRE_GENERATION_REASONS = frozenset(
+    {
+        "attachment_only",
+        "llm_not_configured",
+        "low_confidence",
+        "no_relevant_chunks",
+        "operator_requested",
+        "personal_status",
+        "rate_limited",
+        "repeated_support_failure",
+    }
+)
+
 
 async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
     settings = get_settings()
@@ -58,7 +85,7 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
         ),
         state.get("max_confidence"),
         state.get("cache_hit", False),
-        state.get("generator_model"),
+        _generator_model_for_trace(state, trace_events),
         _cited_sources_from_state(state),
         bool(state.get("verifier_triggered")),
         json.dumps(verification.model_dump() if verification else None, ensure_ascii=False),
@@ -81,6 +108,51 @@ async def log_request(pg_pool: asyncpg.Pool, state: dict[str, Any]) -> None:
         state.get("eval_case_id"),
         _ticket_outcome_from_state(state),
     )
+
+
+def _generator_model_for_trace(
+    state: dict[str, Any],
+    trace_events: Any,
+) -> str:
+    """Return a forward-only generation marker without changing request behavior.
+
+    ``generator_model`` already contains both provider model IDs and deterministic
+    generation modes.  Missing values are safe to classify as ``not_run`` only when
+    the terminal state or the complete node sequence proves that generation was
+    skipped.  Any contradictory, incomplete, cached, timed-out, or errored evidence
+    remains explicitly ``unknown`` instead of being stored as SQL ``NULL``.
+    """
+
+    explicit = state.get("generator_model")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+
+    if state.get("cache_hit") is True or str(state.get("error") or "").strip():
+        return _GENERATOR_MODEL_UNKNOWN
+
+    if not isinstance(trace_events, list) or any(
+        not isinstance(event, dict)
+        or not isinstance(event.get("node"), str)
+        or not event["node"].strip()
+        for event in trace_events
+    ):
+        return _GENERATOR_MODEL_UNKNOWN
+
+    if any(str(event.get("error") or "").strip() for event in trace_events):
+        return _GENERATOR_MODEL_UNKNOWN
+
+    nodes = {event["node"].strip() for event in trace_events}
+    if nodes & _GENERATION_EVIDENCE_NODES:
+        return _GENERATOR_MODEL_UNKNOWN
+    if nodes & _PRE_GENERATION_TERMINAL_NODES:
+        return _GENERATOR_MODEL_NOT_RUN
+
+    reason = str(state.get("escalation_reason") or "").strip()
+    if reason in _PRE_GENERATION_REASONS or reason.startswith("safety_"):
+        return _GENERATOR_MODEL_NOT_RUN
+    if state.get("interaction_reason") == "profanity":
+        return _GENERATOR_MODEL_NOT_RUN
+    return _GENERATOR_MODEL_UNKNOWN
 
 
 async def update_delivery_outcome(

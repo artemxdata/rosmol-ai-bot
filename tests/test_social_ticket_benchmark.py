@@ -757,6 +757,27 @@ def test_phase0_billing_accepts_exact_ten_percent_discrepancy(
     )
 
 
+def test_safe_metrics_keeps_controlled_generator_model_labels_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, report = _synthetic_phase0_inputs(monkeypatch)
+    for result in report["results"][:5]:
+        result["generator_model"] = "not_run"
+    for result in report["results"][5:10]:
+        result["generator_model"] = "source_only"
+
+    counts = build_safe_phase0_metrics(manifest, report)["diagnostics"][
+        "generator_model_counts"
+    ]
+
+    assert counts["cells"] == {
+        "not_run": 5,
+        "source_chunk": 20,
+        "source_only": 5,
+    }
+    assert counts["suppressed"]["applied"] is False
+
+
 def test_safe_metrics_suppresses_every_rare_categorical_cell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

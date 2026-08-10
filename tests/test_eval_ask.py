@@ -2296,6 +2296,16 @@ def test_summarize_results_counts_core_metrics() -> None:
     assert metrics["likely_infrastructure_failure"] is False
 
 
+def test_summarize_results_preserves_not_run_generator_model() -> None:
+    metrics = summarize_results(
+        [{"generator_model": "not_run", "llm_usage": []}],
+        target="http://127.0.0.1:8001/ask",
+        cases_path=Path("cases.json"),
+    )
+
+    assert metrics["generator_model_counts"] == {"not_run": 1}
+
+
 def test_summarize_results_reports_behavior_matrix_and_retry_reasons() -> None:
     metrics = summarize_results(
         [

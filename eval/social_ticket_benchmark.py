@@ -126,7 +126,9 @@ PUBLIC_BEHAVIOR_LABELS = frozenset(
 PUBLIC_GENERATOR_MODEL_LABELS = frozenset(
     {
         "ai-sage/GigaChat3-10B-A1.8B",
+        "not_run",
         "source_chunk",
+        "source_only",
         "unknown",
     }
 )

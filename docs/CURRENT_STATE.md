@@ -1,8 +1,88 @@
 # Текущее состояние проекта
 
-**Обновлено:** 6 августа 2026
+**Обновлено:** 10 августа 2026
 
 **Ветка:** `codex/real-rag`
+
+## Phase A: доказательный аудит эскалаций подготовлен, evidence-export ожидает владельца
+
+10 августа подготовлен behavior-free контур разбора 20 эскалаций единственного Phase 0 run
+`ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168`. Codex не подключался к серверу и не запускал
+`/ask`; HDE/VK, Yonote, Qdrant, KB, пороги, prompts, graph routing, схема БД, historical rows и
+production-конфигурация не менялись. Платных LLM-вызовов и deployment не было.
+
+**Операционная граница:** Codex не выполняет SSH/SCP/rsync, remote Docker/psql/curl и любые
+другие команды на сервере. Все server-side команды запускает только владелец. В чат возвращаются
+только заранее ограниченные `status`/`reason`, SHA-256 и безопасные агрегированные counts — без
+`.env`, DSN, токенов, ключей, stderr и сырых строк. Codex может читать только созданную owner-run
+командой локальную safe projection внутри `data/private/`; она не коммитится и не копируется на
+сервер.
+
+Локально по-прежнему отсутствуют raw `phase0-ask-report.json` и per-case trace: launcher хранил
+raw report в server tmpfs и удалил его после построения агрегированной safe projection. Поэтому
+содержательную корректность семи отклонённых generation-contract drafts восстановить нельзя:
+`generate.py` заменил каждый такой draft пустой строкой до записи trace. Эти кейсы имеют
+`rejected_candidate_correctness=unavailable`, а не считаются подтверждённо правильными или
+исправимыми.
+
+Добавлены два offline-инструмента:
+
+- `scripts/export_phase0_trace_review.py` — owner-run read-only export по exact run ID через
+  фиксированный SSH → `rosmol-postgres` → PostgreSQL `COPY`. SQL выполняется в read-only
+  transaction и возвращает только allowlist-проекцию без user/ticket/upstream IDs, raw chunk
+  text, исходного сообщения, final response или raw verifier details. До записи проверяются exact
+  frozen membership `30/30`, уникальность case/request IDs, UTC-окно, `cache_hit=false`, SHA
+  cases/manifest, схема полей и лимит размера; output атомарный, не перезаписывается и разрешён
+  только внутри `data/private/`. Пустой COPY даёт безопасный
+  `STOP: evidence unavailable`, а не провоцирует новый прогон.
+- `scripts/analyze_phase0_escalations.py` — `prepare`/`summarize` для private human review.
+  Истиной служит только неизменённый frozen published-Yonote seed; operator replies не
+  используются как факты. Exact таблицы причин и review rows остаются в `data/private/` и не
+  коммитятся.
+
+Stop-criterion зафиксирован на всех 20 эскалациях: lower bound включает только human-confirmed
+threshold-кейсы и output-кейсы с доступным корректным draft; upper bound добавляет только
+`uncertain/unavailable` threshold/output. `lower >= 10/20` означал бы `CONFIRMED`, `upper < 10/20`
+— `REFUTED_STOP`, иначе — `INCONCLUSIVE_STOP`. До human review консервативная aggregate-only
+граница равна `0..13/20`, поэтому текущий статус — `INCONCLUSIVE_STOP`. Из-за утраченных семи
+drafts и не более шести threshold-кандидатов старый Phase 0 evidence в принципе не может дать
+`CONFIRMED`; фазы B–E не начинать.
+
+На границе записи новых trace `generator_model` теперь получает `not_run`, только когда terminal
+state/node sequence доказывает, что generation не запускалась. Явные `source_only`,
+`source_chunk` и model ID сохраняются; cache без модели, timeout/error и противоречивая telemetry
+получают `unknown`. Public safe-metrics allowlist знает controlled labels `not_run` и
+`source_only`. Это forward-only telemetry change без миграции/backfill и не делает старый
+формально invalid Phase 0 валидным: остальные skipped-stage markers остаются незаполненными.
+
+Локальные проверки change set: Ruff — pass; focused Phase A/telemetry suite — `411 passed`;
+KB validation — `2186 valid / 2152 published`. Монолитный pytest на Windows-host воспроизвёл
+известное зависание event-loop/socket без движения CPU; полный набор поэтому выполнен восемью
+детерминированными непересекающимися file-shards: все `2490` тестов исполнены ровно один раз,
+итог — `2489 passed, 1 skipped, 0 failed`.
+
+Отдельный fail-closed CVE/reachability review зафиксирован локальным commit `9489d4c`. По
+актуальным официальным Debian, node-tar и Go advisory exact image digests, `linux/amd64`, PURL,
+package inventory и entrypoints не изменились; исключения продлены не более чем на 14 дней — до
+`2026-08-24`. Это не новый image-scan verdict и не release `GO`: Docker/server/provider API не
+использовались, а свежий полный SHA-bound Trivy scan остаётся обязательным перед любым release.
+Фиксированный SQL exporter покрыт contract-тестами, но в этой сессии не выполнялся против
+PostgreSQL: локальный Docker daemon был недоступен; первый owner-run export остаётся интеграционной
+проверкой clean-host схемы.
+
+**Точный следующий шаг:** после review/commit change set владелец один раз выполняет на
+workstation только read-only export существующих clean-server trace:
+
+```powershell
+.venv\Scripts\python.exe scripts\export_phase0_trace_review.py `
+  --ssh-target rosmol `
+  --eval-run-id ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168 `
+  --output data\private\eval\phase0-real-rag-7d244e4\phase-a-traces.json
+```
+
+Если команда вернула `STOP`, Phase A завершается как `evidence unavailable`: старый сервер,
+provider logs и новый платный replay не использовать. При успешном export следующий локальный
+шаг — `prepare`, human review и `summarize`; до private result фазы B–E остаются остановлены.
 
 ## Real-RAG Phase 0: live-прогон завершён, fail-closed STOP
 
@@ -110,11 +190,13 @@ artifacts. Approval: `RAG-PHASE0-30-20260805`, cap `200 ₽`.
 пройден пофайлово. KB validation — `2186 valid / 2152 published`. Стоимость на этом этапе —
 `0 ₽`: платный `/ask`, HDE/VK, Yonote и production runtime не использовались.
 
-Точный следующий шаг — только ручная сверка provider billing с run window и runner estimate.
-После неё зафиксировать фактическую сумму и расхождение; повторный Phase 0, выборочные перезапуски
-и фазы 1–4 не выполнять. Если владелец решит исследовать другую real-RAG гипотезу, она требует
-нового плана, нового telemetry contract и отдельного approval. Owner-exception остаётся только
-local/eval и не разрешает изменение production default.
+Исторический следующий шаг по состоянию на 6 августа, superseded текущей Phase A
+export-последовательностью в начале документа: ручная сверка provider billing с run window и
+runner estimate остаётся обязательной отдельной проверкой. После неё зафиксировать фактическую
+сумму и расхождение; повторный Phase 0, выборочные перезапуски и фазы 1–4 не выполнять. Если
+владелец решит исследовать другую real-RAG гипотезу, она требует нового плана, нового telemetry
+contract и отдельного approval. Owner-exception остаётся только local/eval и не разрешает
+изменение production default.
 
 **Deployed release:** `b4bc23ab890337324f8c9ef62f3a9d90c136b72e`
 (`Refresh recovery security deadline`). Server checkout, app image и app-ml image были сверены
