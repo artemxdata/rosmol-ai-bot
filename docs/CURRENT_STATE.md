@@ -4,6 +4,9 @@
 
 **Ветка:** `codex/real-rag`
 
+**Локальные commits, не pushed и не deployed:** `9489d4c` (`Renew scoped Trivy security review`)
+и `c95fb4a` (`Add Phase A escalation evidence audit`).
+
 ## Phase A: доказательный аудит эскалаций подготовлен, evidence-export ожидает владельца
 
 10 августа подготовлен behavior-free контур разбора 20 эскалаций единственного Phase 0 run
