@@ -272,6 +272,18 @@ def _install_fake_ssh(monkeypatch, payload: bytes) -> list[list[str]]:
     return calls
 
 
+def _install_fake_local(monkeypatch, payload: bytes) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def fake_run(args, *, interactive=False):
+        calls.append(args)
+        assert interactive is False
+        return subprocess.CompletedProcess(args, 0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(exporter, "_run_bounded_local", fake_run)
+    return calls
+
+
 def test_export_writes_only_validated_safe_projection(
     tmp_path: Path,
     monkeypatch,
@@ -330,6 +342,177 @@ def test_export_writes_only_validated_safe_projection(
     assert "upstream_event_id" not in remote
     assert "response_text" not in remote
     assert "clarification_question" not in remote
+
+
+def test_server_local_export_uses_aggregate_membership_without_private_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    private_root = (tmp_path / "data" / "private").resolve()
+    private_root.mkdir(parents=True)
+    case_ids = [f"case-{index:02d}" for index in range(exporter.PHASE0_CASES_TOTAL)]
+    monkeypatch.setattr(exporter, "PRIVATE_DATA_ROOT", private_root)
+    monkeypatch.setattr(
+        exporter,
+        "PHASE0_CASE_MEMBERSHIP_SHA256",
+        exporter._case_membership_sha256(case_ids),
+    )
+    monkeypatch.setattr(
+        exporter,
+        "_load_approved_membership",
+        lambda: pytest.fail("server-local export must not load private frozen inputs"),
+    )
+    monkeypatch.setattr(
+        exporter,
+        "_run_bounded_ssh",
+        lambda *_args, **_kwargs: pytest.fail("server-local export must not invoke SSH"),
+    )
+    calls = _install_fake_local(monkeypatch, _payload(list(reversed(case_ids))))
+    output = private_root / "phase-a-traces.json"
+
+    result = exporter.export_phase0_trace_review_server_local(
+        eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+        output_path=output,
+    )
+
+    assert result["status"] == "OK"
+    assert result["cases_total"] == exporter.PHASE0_CASES_TOTAL
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert [row["eval_case_id"] for row in report["rows"]] == sorted(case_ids)
+    assert report["bindings"] == {
+        "cases_file_sha256": exporter.PHASE0_CASES_SHA256,
+        "manifest_file_sha256": exporter.PHASE0_MANIFEST_SHA256,
+    }
+    assert len(calls) == 1
+    command = calls[0]
+    assert command[:2] == ["sh", "-c"]
+    assert "ssh" not in command
+    local_script = command[2]
+    assert "docker --host unix:///var/run/docker.sock version" in local_script
+    assert "COPY" in local_script
+    assert "BEGIN TRANSACTION READ ONLY" in local_script
+    assert ".env" not in local_script
+    assert "postgresql://" not in local_script
+
+
+def test_server_local_export_rejects_wrong_aggregate_membership(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    private_root = (tmp_path / "data" / "private").resolve()
+    private_root.mkdir(parents=True)
+    approved_ids = [f"case-{index:02d}" for index in range(exporter.PHASE0_CASES_TOTAL)]
+    exported_ids = approved_ids.copy()
+    exported_ids[-1] = "case-not-approved"
+    monkeypatch.setattr(exporter, "PRIVATE_DATA_ROOT", private_root)
+    monkeypatch.setattr(
+        exporter,
+        "PHASE0_CASE_MEMBERSHIP_SHA256",
+        exporter._case_membership_sha256(approved_ids),
+    )
+    _install_fake_local(monkeypatch, _payload(exported_ids))
+    output = private_root / "phase-a-traces.json"
+
+    with pytest.raises(ValueError, match="approved aggregate"):
+        exporter.export_phase0_trace_review_server_local(
+            eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+            output_path=output,
+        )
+
+    assert not output.exists()
+
+
+def test_case_membership_digest_is_order_independent_and_exact() -> None:
+    case_ids = [f"case-{index:02d}" for index in range(exporter.PHASE0_CASES_TOTAL)]
+
+    assert exporter._case_membership_sha256(case_ids) == exporter._case_membership_sha256(
+        list(reversed(case_ids))
+    )
+    changed = case_ids.copy()
+    changed[-1] = "case-not-approved"
+    assert exporter._case_membership_sha256(changed) != exporter._case_membership_sha256(case_ids)
+
+
+def test_server_local_rejects_unapproved_run_before_process(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    private_root = (tmp_path / "data" / "private").resolve()
+    private_root.mkdir(parents=True)
+    monkeypatch.setattr(exporter, "PRIVATE_DATA_ROOT", private_root)
+    monkeypatch.setattr(
+        exporter,
+        "_run_bounded_local",
+        lambda *_args, **_kwargs: pytest.fail("local export must not start"),
+    )
+
+    with pytest.raises(ValueError, match="approved Phase 0 run"):
+        exporter.export_phase0_trace_review_server_local(
+            eval_run_id="ask-eval-other",
+            output_path=private_root / "phase-a-traces.json",
+        )
+
+
+def test_server_local_interactive_sudo_requires_owner_tty(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    private_root = (tmp_path / "data" / "private").resolve()
+    private_root.mkdir(parents=True)
+    monkeypatch.setattr(exporter, "PRIVATE_DATA_ROOT", private_root)
+    monkeypatch.setattr(exporter.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(
+        exporter,
+        "_run_bounded_local",
+        lambda *_args, **_kwargs: pytest.fail("local export must not start without a TTY"),
+    )
+
+    with pytest.raises(exporter.SafeExportFailure, match="interactive_tty_required"):
+        exporter.export_phase0_trace_review_server_local(
+            eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+            output_path=private_root / "phase-a-traces.json",
+            interactive_sudo=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected_code"),
+    [
+        (exporter.REMOTE_DOCKER_ACCESS_EXIT, "docker_access_failed"),
+        (exporter.REMOTE_POSTGRES_CONTAINER_MISSING_EXIT, "postgres_container_missing"),
+        (exporter.REMOTE_POSTGRES_CONTAINER_NOT_RUNNING_EXIT, "postgres_container_not_running"),
+        (exporter.REMOTE_POSTGRES_EXPORT_EXIT, "postgres_export_failed"),
+        (23, "local_exit"),
+    ],
+)
+def test_server_local_maps_process_exit_to_payload_free_code(
+    tmp_path: Path,
+    monkeypatch,
+    returncode: int,
+    expected_code: str,
+) -> None:
+    private_root = (tmp_path / "data" / "private").resolve()
+    private_root.mkdir(parents=True)
+    monkeypatch.setattr(exporter, "PRIVATE_DATA_ROOT", private_root)
+    monkeypatch.setattr(
+        exporter,
+        "_run_bounded_local",
+        lambda args, **_kwargs: subprocess.CompletedProcess(
+            args,
+            returncode,
+            stdout=b"PRIVATE-STDOUT-CANARY",
+            stderr=b"PRIVATE-STDERR-CANARY",
+        ),
+    )
+    output = private_root / "phase-a-traces.json"
+
+    with pytest.raises(exporter.SafeExportFailure, match=expected_code):
+        exporter.export_phase0_trace_review_server_local(
+            eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+            output_path=output,
+        )
+
+    assert not output.exists()
 
 
 def test_interactive_remote_command_uses_tty_sudo_without_persisting_credentials() -> None:
@@ -520,6 +703,36 @@ def test_base64_transport_round_trips_copy_sensitive_characters() -> None:
     )
 
     assert parsed[0]["eval_case_id"] == copy_sensitive
+
+
+def test_base64_transport_accepts_uniform_ssh_pty_crlf_framing() -> None:
+    case_ids = [f"case-{index:02d}" for index in range(exporter.PHASE0_CASES_TOTAL)]
+    payload = _payload(case_ids).replace(b"\n", b"\r\n")
+
+    parsed = exporter._parse_and_validate_rows(
+        payload,
+        expected_case_ids=case_ids,
+        eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+    )
+
+    assert [row["eval_case_id"] for row in parsed] == case_ids
+
+
+@pytest.mark.parametrize("framing", ["mixed", "bare_cr"])
+def test_base64_transport_rejects_nonuniform_carriage_returns(framing: str) -> None:
+    case_ids = [f"case-{index:02d}" for index in range(exporter.PHASE0_CASES_TOTAL)]
+    payload = _payload(case_ids)
+    if framing == "mixed":
+        payload = payload.replace(b"\n", b"\r\n", 1)
+    else:
+        payload = payload.replace(b"\n", b"\r", 1)
+
+    with pytest.raises(ValueError, match="CRLF framing"):
+        exporter._parse_and_validate_rows(
+            payload,
+            expected_case_ids=case_ids,
+            eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+        )
 
 
 @pytest.mark.parametrize("framing", ["raw_json", "missing_final_lf", "wrapped", "blank"])
@@ -1009,6 +1222,58 @@ def test_main_stdout_contains_only_safe_status_path_and_hash(
         "phase0_trace_export=OK",
         f"path={output}",
         f"sha256={'a' * 64}",
+    ]
+
+
+def test_main_dispatches_server_local_mode_without_ssh(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    output = tmp_path / "data" / "private" / "review.json"
+    expected = {
+        "status": "OK",
+        "path": str(output),
+        "sha256": "b" * 64,
+        "cases_total": exporter.PHASE0_CASES_TOTAL,
+    }
+    captured_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(
+        exporter,
+        "parse_args",
+        lambda: argparse_namespace(
+            server_local=True,
+            ssh_target=None,
+            eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+            output=output,
+            interactive_sudo=True,
+        ),
+    )
+
+    def fake_server_local(**kwargs):
+        captured_kwargs.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(exporter, "export_phase0_trace_review_server_local", fake_server_local)
+    monkeypatch.setattr(
+        exporter,
+        "export_phase0_trace_review",
+        lambda **_kwargs: pytest.fail("server-local CLI mode must not use SSH export"),
+    )
+
+    assert exporter.main() == 0
+
+    assert captured_kwargs == {
+        "eval_run_id": exporter.PHASE0_EVAL_RUN_ID,
+        "output_path": output,
+        "interactive_sudo": True,
+    }
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.splitlines() == [
+        "phase0_trace_export=OK",
+        f"path={output}",
+        f"sha256={'b' * 64}",
     ]
 
 

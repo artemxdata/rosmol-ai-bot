@@ -26,6 +26,7 @@ MANIFEST_PATH = PRIVATE_DATA_ROOT / "eval" / "phase0-real-rag-7d244e4" / "phase0
 PHASE0_EVAL_RUN_ID = "ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168"
 PHASE0_CASES_SHA256 = "aff198bbc98d07894a3e1676e3457891e3a38f674315051505b681641fe9d02d"
 PHASE0_MANIFEST_SHA256 = "8cf9959aaf9caf8728b386214ebba826f7bb0eb349f27fd2737e2830eb353264"
+PHASE0_CASE_MEMBERSHIP_SHA256 = "60a9528cf4ef192f5e1132d93e3ec70447f6ec30bce85a818df19658993ebfd6"
 PHASE0_CASES_TOTAL = 30
 PHASE0_RUN_STARTED_AT = datetime(2026, 8, 6, 12, 10, 56, 774654, tzinfo=UTC)
 PHASE0_RUN_COMPLETED_AT = datetime(2026, 8, 6, 12, 15, 30, 205184, tzinfo=UTC)
@@ -35,6 +36,7 @@ ROW_SCHEMA_VERSION = "phase0-trace-review-row-v1"
 MAX_EXPORT_BYTES = 8 * 1024 * 1024
 MAX_INPUT_BYTES = 2 * 1024 * 1024
 SSH_TIMEOUT_SECONDS = 90
+LOCAL_EXPORT_TIMEOUT_SECONDS = 90
 SSH_TARGET_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}")
 SAFE_REASON_RE = re.compile(r"[a-z][a-z0-9_]{0,79}")
 QUESTION_ID_RE = re.compile(r"q[1-9][0-9]*")
@@ -371,6 +373,10 @@ SAFE_FAILURE_CODES = frozenset(
     {
         "docker_access_failed",
         "interactive_tty_required",
+        "local_start_failed",
+        "local_stream_failed",
+        "local_timeout",
+        "local_exit",
         "postgres_container_missing",
         "postgres_container_not_running",
         "postgres_export_failed",
@@ -737,6 +743,76 @@ def export_phase0_trace_review(
         expected_case_ids=expected_case_ids,
         eval_run_id=eval_run_id,
     )
+    return _persist_validated_report(
+        rows=rows,
+        eval_run_id=eval_run_id,
+        destination=destination,
+        output_parent_identity=output_parent_identity,
+        cases_sha256=cases_sha256,
+        manifest_sha256=manifest_sha256,
+    )
+
+
+def export_phase0_trace_review_server_local(
+    *,
+    eval_run_id: str,
+    output_path: Path,
+    interactive_sudo: bool = False,
+) -> dict[str, Any]:
+    """Export on the checked-out server without SSH or private frozen inputs."""
+
+    if eval_run_id != PHASE0_EVAL_RUN_ID:
+        raise ValueError("eval run ID differs from the approved Phase 0 run")
+
+    destination = _validated_output_path(output_path)
+    output_parent_identity = _prepare_output_parent(destination)
+    if interactive_sudo and not sys.stdin.isatty():
+        raise SafeExportFailure("interactive_tty_required")
+    command = _server_local_command(interactive_sudo=interactive_sudo)
+    if interactive_sudo:
+        print(
+            "phase0_trace_export=AUTH reason=server_sudo_required",
+            file=sys.stderr,
+            flush=True,
+        )
+    completed = _run_bounded_local(command, interactive=interactive_sudo)
+    if completed.returncode != 0:
+        code = (
+            "local_exit"
+            if completed.returncode < 0
+            else REMOTE_FAILURE_CODES.get(completed.returncode, "local_exit")
+        )
+        raise SafeExportFailure(code)
+    payload = completed.stdout
+    if payload == b"":
+        raise EvidenceUnavailableError("approved Phase 0 trace evidence is unavailable")
+    if len(payload) > MAX_EXPORT_BYTES:
+        raise SafeExportFailure("remote_output_too_large")
+
+    rows = _parse_and_validate_rows(
+        payload,
+        expected_case_membership_sha256=PHASE0_CASE_MEMBERSHIP_SHA256,
+        eval_run_id=eval_run_id,
+    )
+    return _persist_validated_report(
+        rows=rows,
+        eval_run_id=eval_run_id,
+        destination=destination,
+        output_parent_identity=output_parent_identity,
+        cases_sha256=PHASE0_CASES_SHA256,
+        manifest_sha256=PHASE0_MANIFEST_SHA256,
+    )
+
+
+def _persist_validated_report(
+    *,
+    rows: list[dict[str, Any]],
+    eval_run_id: str,
+    destination: Path,
+    output_parent_identity: tuple[int, int],
+    cases_sha256: str,
+    manifest_sha256: str,
+) -> dict[str, Any]:
     report = {
         "schema_version": EXPORT_SCHEMA_VERSION,
         "eval_run_id": eval_run_id,
@@ -770,6 +846,14 @@ def export_phase0_trace_review(
 
 
 def _remote_command(*, interactive_sudo: bool = False) -> str:
+    return shlex.join(["sh", "-c", _docker_export_script(interactive_sudo=interactive_sudo)])
+
+
+def _server_local_command(*, interactive_sudo: bool = False) -> list[str]:
+    return ["sh", "-c", _docker_export_script(interactive_sudo=interactive_sudo)]
+
+
+def _docker_export_script(*, interactive_sudo: bool = False) -> str:
     postgres_argv = [
         "exec",
         "-i",
@@ -792,12 +876,8 @@ def _remote_command(*, interactive_sudo: bool = False) -> str:
         sudo_probe = f"sudo -p '' docker --host {docker_socket} version"
         sudo_prefix = f"sudo -p '' docker --host {docker_socket}"
     else:
-        sudo_probe = (
-            f"sudo --non-interactive docker --host {docker_socket} version"
-        )
-        sudo_prefix = (
-            f"sudo --non-interactive docker --host {docker_socket}"
-        )
+        sudo_probe = f"sudo --non-interactive docker --host {docker_socket} version"
+        sudo_prefix = f"sudo --non-interactive docker --host {docker_socket}"
     script = f"""
 set -u
 if docker --host {docker_socket} version >/dev/null 2>&1; then
@@ -819,7 +899,7 @@ if ! "$@" {postgres_command}; then
     exit {REMOTE_POSTGRES_EXPORT_EXIT}
 fi
 """.strip()
-    return shlex.join(["sh", "-c", script])
+    return script
 
 
 def _run_bounded_ssh(
@@ -829,6 +909,43 @@ def _run_bounded_ssh(
 ) -> subprocess.CompletedProcess[bytes]:
     """Drain both SSH pipes incrementally and kill on timeout or bounded overflow."""
 
+    return _run_bounded_process(
+        args,
+        interactive=interactive,
+        timeout_seconds=SSH_TIMEOUT_SECONDS,
+        start_failure_code="ssh_start_failed",
+        stream_failure_code="ssh_stream_failed",
+        timeout_failure_code="ssh_timeout",
+    )
+
+
+def _run_bounded_local(
+    args: list[str],
+    *,
+    interactive: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run the server-local Docker projection with bounded, non-emitting pipes."""
+
+    return _run_bounded_process(
+        args,
+        interactive=interactive,
+        timeout_seconds=LOCAL_EXPORT_TIMEOUT_SECONDS,
+        start_failure_code="local_start_failed",
+        stream_failure_code="local_stream_failed",
+        timeout_failure_code="local_timeout",
+    )
+
+
+def _run_bounded_process(
+    args: list[str],
+    *,
+    interactive: bool,
+    timeout_seconds: int,
+    start_failure_code: str,
+    stream_failure_code: str,
+    timeout_failure_code: str,
+) -> subprocess.CompletedProcess[bytes]:
+
     try:
         process = subprocess.Popen(
             args,
@@ -837,10 +954,10 @@ def _run_bounded_ssh(
             stderr=subprocess.PIPE,
         )
     except OSError as exc:
-        raise SafeExportFailure("ssh_start_failed") from exc
+        raise SafeExportFailure(start_failure_code) from exc
     if process.stdout is None or process.stderr is None:
         _kill_process(process)
-        raise SafeExportFailure("ssh_stream_failed")
+        raise SafeExportFailure(stream_failure_code)
 
     stdout = bytearray()
     stderr = bytearray()
@@ -882,7 +999,7 @@ def _run_bounded_ssh(
         reader.start()
     timed_out = False
     try:
-        returncode = process.wait(timeout=SSH_TIMEOUT_SECONDS)
+        returncode = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_process(process)
@@ -898,13 +1015,13 @@ def _run_bounded_ssh(
         reader.join(timeout=5)
     if any(reader.is_alive() for reader in readers):
         _kill_process(process)
-        raise SafeExportFailure("ssh_stream_failed")
+        raise SafeExportFailure(stream_failure_code)
     if timed_out:
-        raise SafeExportFailure("ssh_timeout")
+        raise SafeExportFailure(timeout_failure_code)
     if overflow.is_set():
         raise SafeExportFailure("remote_output_too_large")
     if read_failed.is_set():
-        raise SafeExportFailure("ssh_stream_failed")
+        raise SafeExportFailure(stream_failure_code)
     return subprocess.CompletedProcess(
         args,
         returncode,
@@ -1038,9 +1155,13 @@ def _case_id(item: dict[str, Any]) -> str:
 def _parse_and_validate_rows(
     payload: bytes,
     *,
-    expected_case_ids: list[str],
+    expected_case_ids: list[str] | None = None,
+    expected_case_membership_sha256: str | None = None,
     eval_run_id: str,
 ) -> list[dict[str, Any]]:
+    if (expected_case_ids is None) == (expected_case_membership_sha256 is None):
+        raise ValueError("exactly one Phase 0 membership binding is required")
+    payload = _normalize_copy_transport(payload)
     if not payload.endswith(b"\n"):
         raise ValueError("Phase 0 trace transport has invalid framing")
     encoded_lines = payload[:-1].split(b"\n")
@@ -1076,10 +1197,35 @@ def _parse_and_validate_rows(
         raise ValueError("Phase 0 trace export contains duplicate case IDs")
     if len(set(request_ids)) != PHASE0_CASES_TOTAL:
         raise ValueError("Phase 0 trace export contains duplicate request IDs")
-    if set(case_ids) != set(expected_case_ids):
-        raise ValueError("Phase 0 trace membership differs from frozen cases")
     by_case_id = {str(row["eval_case_id"]): row for row in rows}
-    return [by_case_id[case_id] for case_id in expected_case_ids]
+    if expected_case_ids is not None:
+        if set(case_ids) != set(expected_case_ids):
+            raise ValueError("Phase 0 trace membership differs from frozen cases")
+        return [by_case_id[case_id] for case_id in expected_case_ids]
+    if _case_membership_sha256(case_ids) != expected_case_membership_sha256:
+        raise ValueError("Phase 0 trace membership differs from the approved aggregate")
+    return [by_case_id[case_id] for case_id in sorted(case_ids)]
+
+
+def _normalize_copy_transport(payload: bytes) -> bytes:
+    """Accept only canonical LF or uniform SSH-PTY CRLF record framing."""
+
+    if b"\r" not in payload:
+        return payload
+    without_crlf = payload.replace(b"\r\n", b"")
+    if b"\r" in without_crlf or b"\n" in without_crlf:
+        raise ValueError("Phase 0 trace transport has invalid CRLF framing")
+    return payload.replace(b"\r\n", b"\n")
+
+
+def _case_membership_sha256(case_ids: list[str]) -> str:
+    canonical = json.dumps(
+        sorted(case_ids),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _validate_row(row: dict[str, Any], *, eval_run_id: str) -> None:
@@ -1919,18 +2065,25 @@ def _unlink_if_identity_matches(path: Path, identity: tuple[int, int]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Export the fixed Phase 0 request trace projection through owner-controlled SSH. "
-            "The command reads no env files, DSNs, tokens or API keys."
+            "Export the fixed Phase 0 request trace projection either server-locally or "
+            "through owner-controlled SSH. The command reads no env files, DSNs, tokens "
+            "or API keys."
         )
     )
-    parser.add_argument("--ssh-target", required=True)
+    execution = parser.add_mutually_exclusive_group(required=True)
+    execution.add_argument("--ssh-target")
+    execution.add_argument(
+        "--server-local",
+        action="store_true",
+        help="run Docker/PostgreSQL projection on this host without SSH",
+    )
     parser.add_argument("--eval-run-id", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--interactive-sudo",
         action="store_true",
         help=(
-            "allocate an owner TTY for sudo authentication; the exporter never "
+            "allow sudo authentication through the owner's TTY; the exporter never "
             "reads or stores the password"
         ),
     )
@@ -1940,12 +2093,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        result = export_phase0_trace_review(
-            ssh_target=args.ssh_target,
-            eval_run_id=args.eval_run_id,
-            output_path=args.output,
-            interactive_sudo=bool(getattr(args, "interactive_sudo", False)),
-        )
+        if bool(getattr(args, "server_local", False)):
+            result = export_phase0_trace_review_server_local(
+                eval_run_id=args.eval_run_id,
+                output_path=args.output,
+                interactive_sudo=bool(getattr(args, "interactive_sudo", False)),
+            )
+        else:
+            result = export_phase0_trace_review(
+                ssh_target=args.ssh_target,
+                eval_run_id=args.eval_run_id,
+                output_path=args.output,
+                interactive_sudo=bool(getattr(args, "interactive_sudo", False)),
+            )
     except EvidenceUnavailableError:
         print("phase0_trace_export=STOP reason=evidence_unavailable")
         return 2
