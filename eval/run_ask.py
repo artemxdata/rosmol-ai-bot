@@ -62,6 +62,36 @@ PHASE0_COST_CAP_RUB = 200.0
 PHASE0_CASES_TOTAL = 30
 PHASE0_COST_SCOPE = "phase0-social-30"
 PHASE0_COST_LEDGER_DIRNAME = "phase0-social-30-cost-ledger-v1"
+PILOT50_REPRICING_CONTRACT_ID = "pilot50-c38-pricing-v1"
+PILOT50_REPRICING_RUNTIME_SHA = "c38f0e055630fae2af50720fae81acee20ff4f6a"
+PILOT50_REPRICING_CASES_SHA256 = (
+    "65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed"
+)
+PILOT50_REPRICING_TARGET = "http://app-ml:8000/ask"
+PILOT50_REPRICING_CASES_TOTAL = 50
+PILOT50_REPRICING_COST_CAP_RUB = 20.0
+PILOT50_REPRICING_RATE_CARD = {
+    "complex_input_price_rub_per_million": "569.34",
+    "complex_model": "GigaChat/GigaChat-2-Max",
+    "complex_official_price_rub_per_million": "569.3374",
+    "complex_output_price_rub_per_million": "569.34",
+    "complex_price_policy": "conservative_round_up",
+    "simple_input_price_rub_per_million": "12.2",
+    "simple_model": "ai-sage/GigaChat3-10B-A1.8B",
+    "simple_output_price_rub_per_million": "12.2",
+}
+PILOT50_REPRICING_RATE_CARD_SHA256 = hashlib.sha256(
+    json.dumps(
+        PILOT50_REPRICING_RATE_CARD,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+).hexdigest()
+PILOT50_REPRICING_MODELS: dict[str, tuple[Decimal, Decimal]] = {
+    "ai-sage/GigaChat3-10B-A1.8B": (Decimal("12.2"), Decimal("12.2")),
+    "GigaChat/GigaChat-2-Max": (Decimal("569.34"), Decimal("569.34")),
+}
 PHASE0_RUNNER_CASE_FIELDS = frozenset(
     {
         "id",
@@ -689,6 +719,7 @@ async def run_eval(
     cost_ledger_dir: Path | None = None,
     cost_runtime_git_sha: str | None = None,
     cost_reservation: LiveEvalCostReservation | None = None,
+    llm_cost_repricing_contract: str | None = None,
     allow_source_observed_diagnostic: bool = False,
     phase0_manifest_path: Path | None = None,
     phase0_server_local: bool = False,
@@ -843,7 +874,9 @@ async def run_eval(
             "an approved Phase 0 manifest"
         )
     if expected_runtime_git_sha is not None and not (
-        calibration_replay or source_diagnostic_cases
+        calibration_replay
+        or source_diagnostic_cases
+        or bool(str(llm_cost_repricing_contract or "").strip())
     ):
         raise ValueError(
             "expected_runtime_git_sha is only valid for calibration_replay "
@@ -1094,6 +1127,27 @@ async def run_eval(
             raise ValueError(
                 "strict-live source_observed_diagnostic requires signed cache bypass"
             )
+    validated_repricing_contract = _validated_pilot50_repricing_contract(
+        llm_cost_repricing_contract,
+        cases=cases,
+        cases_file_sha256=cases_file_sha256,
+        target=target,
+        concurrency=concurrency,
+        trace_lookup=trace_lookup,
+        bypass_cache=bypass_cache,
+        max_llm_cost_rub=max_llm_cost_rub,
+        max_cases=max_cases,
+        auto_smoke_cases=auto_smoke_cases,
+        generated_user_prefix=generated_user_prefix,
+        private_contract_run=private_contract_run,
+        source_diagnostic_cases=bool(source_diagnostic_cases),
+        phase0_contract=phase0_contract,
+        strict_live=strict_live,
+        high_cost_approval_id=high_cost_approval_id,
+        expected_runtime_git_sha=expected_runtime_git_sha,
+    )
+    if validated_repricing_contract is not None:
+        evaluation_runtime_git_sha = PILOT50_REPRICING_RUNTIME_SHA
     original_cases_total = len(cases)
     if max_cases is not None:
         if holdout_contract is not None:
@@ -1464,9 +1518,17 @@ async def run_eval(
                         sealed_holdout=private_contract_run,
                         cache_bypass_secret=cache_bypass_secret,
                     )
+                    repricing_failure: str | None = None
+                    if validated_repricing_contract is not None:
+                        result, repricing_failure = _pilot50_reprice_result(
+                            result,
+                            contract=validated_repricing_contract,
+                        )
                     results.append(result)
                     if strict_live_cost_control:
-                        llm_pricing_failure = _llm_cost_accounting_failure(result)
+                        llm_pricing_failure = (
+                            repricing_failure or _llm_cost_accounting_failure(result)
+                        )
                         if llm_pricing_failure is not None:
                             break
                         strict_cost_total += float(
@@ -1482,7 +1544,11 @@ async def run_eval(
                     elif _llm_cost_rub_total(results) > max_llm_cost_rub:
                         budget_stopped = True
                         break
-            if holdout_contract is not None or source_diagnostic_cases:
+            if (
+                holdout_contract is not None
+                or source_diagnostic_cases
+                or validated_repricing_contract is not None
+            ):
                 phase0_execution_stage = "runtime_postflight"
                 try:
                     verified_runtime_git_sha_postflight = (
@@ -1677,6 +1743,7 @@ async def run_eval(
             holdout_contract is not None
             or bool(source_diagnostic_cases)
             and (strict_live or evaluation_runtime_git_sha is not None)
+            or validated_repricing_contract is not None
         ),
     )
     if (
@@ -1687,6 +1754,11 @@ async def run_eval(
         raise RuntimeError(
             "strict-live source_observed_diagnostic runtime identity was not verified"
         )
+    if (
+        validated_repricing_contract is not None
+        and runtime_identity["status"] != "verified"
+    ):
+        raise RuntimeError("Pilot50 repricing runtime identity was not verified")
     metrics["runtime_identity"] = runtime_identity
     metrics["cost_control"] = {
         "strict_live": strict_live,
@@ -1699,6 +1771,8 @@ async def run_eval(
             cases_file_sha256=cases_file_sha256,
         ),
     }
+    if validated_repricing_contract is not None:
+        metrics["cost_control"]["pricing_projection"] = validated_repricing_contract
     if budget_stopped:
         metrics["cases_original_total"] = original_cases_total
         metrics["cases_limited"] = True
@@ -2078,6 +2152,232 @@ def summarize_results(
             dict.fromkeys(trace_lookup_errors)
         )
     return metrics
+
+
+def _validated_pilot50_repricing_contract(
+    value: str | None,
+    *,
+    cases: list[dict[str, Any]],
+    cases_file_sha256: str,
+    target: str,
+    concurrency: int,
+    trace_lookup: bool,
+    bypass_cache: bool,
+    max_llm_cost_rub: float | None,
+    max_cases: int | None,
+    auto_smoke_cases: bool,
+    generated_user_prefix: str | None,
+    private_contract_run: bool,
+    source_diagnostic_cases: bool,
+    phase0_contract: Mapping[str, Any] | None,
+    strict_live: bool,
+    high_cost_approval_id: str | None,
+    expected_runtime_git_sha: str | None,
+) -> dict[str, Any] | None:
+    contract_id = str(value or "").strip()
+    if not contract_id:
+        return None
+    runtime_sha = str(os.getenv("RELEASE_GIT_SHA") or "").strip()
+    failures: list[str] = []
+    if contract_id != PILOT50_REPRICING_CONTRACT_ID:
+        failures.append("contract_id")
+    if runtime_sha != PILOT50_REPRICING_RUNTIME_SHA:
+        failures.append("runtime_sha")
+    if expected_runtime_git_sha != PILOT50_REPRICING_RUNTIME_SHA:
+        failures.append("expected_runtime_sha")
+    if cases_file_sha256 != PILOT50_REPRICING_CASES_SHA256:
+        failures.append("cases_sha")
+    if len(cases) != PILOT50_REPRICING_CASES_TOTAL:
+        failures.append("case_count")
+    if target != PILOT50_REPRICING_TARGET:
+        failures.append("target")
+    if concurrency != 1:
+        failures.append("concurrency")
+    if trace_lookup is not True:
+        failures.append("trace_lookup")
+    if bypass_cache is not True:
+        failures.append("bypass_cache")
+    if max_llm_cost_rub != PILOT50_REPRICING_COST_CAP_RUB:
+        failures.append("cost_cap")
+    if max_cases is not None or auto_smoke_cases:
+        failures.append("case_selection")
+    if generated_user_prefix is not None:
+        failures.append("user_prefix")
+    if private_contract_run or source_diagnostic_cases or phase0_contract is not None:
+        failures.append("run_class")
+    if not strict_live:
+        failures.append("strict_live")
+    if not str(high_cost_approval_id or "").strip():
+        failures.append("approval")
+    if failures:
+        raise ValueError(
+            "Pilot50 LLM cost repricing contract rejected: " + ", ".join(failures)
+        )
+    return {
+        "schema_version": "pilot50-llm-cost-repricing-v1",
+        "contract_id": PILOT50_REPRICING_CONTRACT_ID,
+        "rate_card_sha256": PILOT50_REPRICING_RATE_CARD_SHA256,
+        "source": "eval_repriced",
+        "target_telemetry_preserved": True,
+        "target_telemetry_pricing_complete": False,
+        "simple_model": "ai-sage/GigaChat3-10B-A1.8B",
+        "simple_input_price_rub_per_million": 12.2,
+        "simple_output_price_rub_per_million": 12.2,
+        "complex_model": "GigaChat/GigaChat-2-Max",
+        "complex_input_price_rub_per_million": 569.34,
+        "complex_output_price_rub_per_million": 569.34,
+        "complex_official_price_rub_per_million": 569.3374,
+        "complex_price_policy": "conservative_round_up",
+    }
+
+
+def _pilot50_reprice_result(
+    result: dict[str, Any],
+    *,
+    contract: Mapping[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    projected = dict(result)
+    usage = result.get("llm_usage")
+    original_cost = result.get("llm_estimated_cost_rub")
+    projected["target_reported_llm_usage"] = usage
+    projected["target_reported_llm_prompt_tokens"] = result.get(
+        "llm_prompt_tokens"
+    )
+    projected["target_reported_llm_completion_tokens"] = result.get(
+        "llm_completion_tokens"
+    )
+    projected["target_reported_llm_total_tokens"] = result.get("llm_total_tokens")
+    projected["target_reported_llm_estimated_cost_rub"] = original_cost
+    provenance = {
+        "schema_version": contract["schema_version"],
+        "contract_id": contract["contract_id"],
+        "rate_card_sha256": contract["rate_card_sha256"],
+        "source": contract["source"],
+        "target_telemetry_preserved": True,
+        "target_telemetry_pricing_complete": False,
+        "status": "failed",
+    }
+    projected["llm_cost_pricing_provenance"] = provenance
+    if result.get("trace_found") is not True:
+        return projected, "llm_repricing_trace_missing"
+    if result.get("llm_accounting_present") is not True or not isinstance(usage, list):
+        return projected, "llm_repricing_usage_missing"
+    try:
+        aggregate_prompt = _strict_nonnegative_int(result.get("llm_prompt_tokens"))
+        aggregate_completion = _strict_nonnegative_int(
+            result.get("llm_completion_tokens")
+        )
+        aggregate_total = _strict_nonnegative_int(result.get("llm_total_tokens"))
+        target_cost = float(original_cost)
+    except (TypeError, ValueError):
+        return projected, "llm_repricing_aggregate_invalid"
+    if not math.isfinite(target_cost) or target_cost < 0:
+        return projected, "llm_repricing_aggregate_invalid"
+    if not usage:
+        if any((aggregate_prompt, aggregate_completion, aggregate_total)) or target_cost != 0:
+            return projected, "llm_repricing_empty_usage_mismatch"
+        if result.get("generator_model") not in {
+            None,
+            "not_run",
+            "source_only",
+            "source_chunk",
+        }:
+            return projected, "llm_repricing_zero_usage_model_ambiguous"
+        if result.get("analyzer_execution_mode") != "deterministic":
+            return projected, "llm_repricing_zero_usage_ambiguous"
+        if (
+            result.get("http_status") != 200
+            or result.get("http_success") is not True
+            or result.get("error") not in (None, "")
+            or result.get("trace_error") not in (None, "")
+            or bool(result.get("generate_retry_reasons"))
+        ):
+            return projected, "llm_repricing_zero_usage_ambiguous"
+        provenance["status"] = "not_run"
+        projected["llm_usage"] = []
+        projected["llm_estimated_cost_rub"] = 0.0
+        return projected, None
+
+    repriced_usage: list[dict[str, Any]] = []
+    prompt_total = 0
+    completion_total = 0
+    token_total = 0
+    cost_total = Decimal("0")
+    target_cost_total = 0.0
+    for event in usage:
+        if not isinstance(event, dict):
+            return projected, "llm_repricing_event_invalid"
+        model = str(event.get("model") or "").strip()
+        prices = PILOT50_REPRICING_MODELS.get(model)
+        if prices is None:
+            return projected, "llm_repricing_unknown_model"
+        try:
+            prompt_tokens = _strict_nonnegative_int(event.get("prompt_tokens"))
+            completion_tokens = _strict_nonnegative_int(event.get("completion_tokens"))
+            total_tokens = _strict_nonnegative_int(event.get("total_tokens"))
+            target_event_cost = float(event.get("estimated_cost_rub"))
+        except (TypeError, ValueError):
+            return projected, "llm_repricing_event_tokens_invalid"
+        if not math.isfinite(target_event_cost) or target_event_cost < 0:
+            return projected, "llm_repricing_target_event_cost_invalid"
+        if total_tokens <= 0:
+            return projected, "llm_repricing_event_tokens_zero"
+        if prompt_tokens + completion_tokens != total_tokens:
+            return projected, "llm_repricing_event_token_mismatch"
+        input_price, output_price = prices
+        event_cost = (
+            (
+                Decimal(prompt_tokens) * input_price
+                + Decimal(completion_tokens) * output_price
+            )
+            / Decimal(1_000_000)
+        ).quantize(Decimal("0.000001"))
+        if event_cost <= 0:
+            return projected, "llm_repricing_event_cost_zero"
+        if event.get("priced") is True:
+            if not math.isclose(
+                target_event_cost,
+                float(event_cost),
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            ):
+                return projected, "llm_repricing_target_priced_cost_mismatch"
+        elif event.get("priced") is False:
+            if target_event_cost != 0:
+                return projected, "llm_repricing_target_unpriced_cost_nonzero"
+        else:
+            return projected, "llm_repricing_target_priced_flag_invalid"
+        repriced_event = dict(event)
+        repriced_event["estimated_cost_rub"] = float(event_cost)
+        repriced_event["priced"] = True
+        repriced_event["pricing_source"] = "eval_repriced"
+        repriced_event["pricing_contract_id"] = PILOT50_REPRICING_CONTRACT_ID
+        repriced_event["pricing_rate_card_sha256"] = (
+            PILOT50_REPRICING_RATE_CARD_SHA256
+        )
+        repriced_usage.append(repriced_event)
+        prompt_total += prompt_tokens
+        completion_total += completion_tokens
+        token_total += total_tokens
+        cost_total += event_cost
+        target_cost_total += target_event_cost
+    if (
+        prompt_total != aggregate_prompt
+        or completion_total != aggregate_completion
+        or token_total != aggregate_total
+    ):
+        return projected, "llm_repricing_aggregate_token_mismatch"
+    if not math.isclose(
+        target_cost,
+        target_cost_total,
+        rel_tol=1e-9,
+        abs_tol=1e-6,
+    ):
+        return projected, "llm_repricing_target_aggregate_cost_mismatch"
+    provenance["status"] = "repriced"
+    projected["llm_usage"] = repriced_usage
+    projected["llm_estimated_cost_rub"] = float(cost_total)
+    return projected, None
 
 
 def _guard_large_live_run_budget(
@@ -5709,6 +6009,14 @@ def main() -> None:
     parser.add_argument("--max-cases", type=int, default=None)
     parser.add_argument("--max-llm-cost-rub", type=float, default=None)
     parser.add_argument(
+        "--llm-cost-repricing-contract",
+        default="",
+        help=(
+            "Exact fail-closed eval-only cost projection contract. It does not "
+            "modify target runtime telemetry or routing."
+        ),
+    )
+    parser.add_argument(
         "--large-run-threshold",
         type=int,
         default=20,
@@ -5861,6 +6169,9 @@ def main() -> None:
             generated_user_prefix=args.user_prefix or None,
             max_cases=args.max_cases,
             max_llm_cost_rub=args.max_llm_cost_rub,
+            llm_cost_repricing_contract=(
+                args.llm_cost_repricing_contract or None
+            ),
             require_budget_for_large_runs=not args.allow_unbounded_llm_cost,
             large_run_threshold=args.large_run_threshold,
             sealed_holdout=args.sealed_holdout,

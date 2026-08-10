@@ -52,6 +52,7 @@ def _raw_report(
             "id": case["id"],
             "tags": case["tags"],
             "request_id": request_id,
+            "http_status": 200,
             "http_success": True,
             "trace_found": True,
             "cache_hit": False,
@@ -65,7 +66,43 @@ def _raw_report(
             "was_escalated": was_escalated,
             "escalation_reason": "low_confidence" if was_escalated else None,
             "trace_total_latency_ms": 100 + index,
-            "llm_estimated_cost_rub": 0.01,
+            "generate_retry_reasons": [],
+            "llm_accounting_present": True,
+            "llm_prompt_tokens": 1,
+            "llm_completion_tokens": 1,
+            "llm_total_tokens": 2,
+            "llm_estimated_cost_rub": 0.000024,
+            "llm_usage": [
+                {
+                    "model": "ai-sage/GigaChat3-10B-A1.8B",
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                    "estimated_cost_rub": 0.000024,
+                    "priced": True,
+                    "pricing_source": pilot50.PRICING_SOURCE,
+                    "pricing_contract_id": pilot50.PRICING_CONTRACT_ID,
+                    "pricing_rate_card_sha256": pilot50.PRICING_RATE_CARD_SHA256,
+                }
+            ],
+            "target_reported_llm_usage": [
+                {
+                    "model": "ai-sage/GigaChat3-10B-A1.8B",
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                    "estimated_cost_rub": 0.0,
+                    "priced": False,
+                }
+            ],
+            "target_reported_llm_prompt_tokens": 1,
+            "target_reported_llm_completion_tokens": 1,
+            "target_reported_llm_total_tokens": 2,
+            "target_reported_llm_estimated_cost_rub": 0.0,
+            "llm_cost_pricing_provenance": {
+                **pilot50.PRICING_PROVENANCE_BASE,
+                "status": "repriced",
+            },
             "query": case["query"],
             "response": f"{canary}-response-{index}",
         }
@@ -92,12 +129,13 @@ def _raw_report(
         "llm_budget_exceeded": False,
         "llm_budget_stopped": False,
         "llm_pricing_stopped": False,
-        "llm_estimated_cost_rub": 0.5,
+        "llm_estimated_cost_rub": 0.0012,
         "cases_file_sha256": cases_sha256,
         "cost_control": {
             "strict_live": True,
             "high_cost_approval_id": APPROVAL_ID,
             "pricing_complete": True,
+            "pricing_projection": pilot50.PRICING_PROJECTION,
             "reservation": {
                 "valid": True,
                 "run_id": EVAL_RUN_ID,
@@ -113,13 +151,13 @@ def _raw_report(
             },
         },
         "runtime_identity": {
-            "required": False,
-            "status": "observed_unbound",
-            "expected_runtime_git_sha": None,
+            "required": True,
+            "status": "verified",
+            "expected_runtime_git_sha": RUNTIME_GIT_SHA,
             "preflight_release_git_sha": RUNTIME_GIT_SHA,
-            "postflight_release_git_sha": None,
+            "postflight_release_git_sha": RUNTIME_GIT_SHA,
             "verified_release_git_sha": RUNTIME_GIT_SHA,
-            "matched_expected_runtime": None,
+            "matched_expected_runtime": True,
         },
         "results": results,
         "private_canary": canary,
@@ -538,9 +576,17 @@ def test_summarize_builds_only_safe_balanced_aggregates(
     assert safe["trace_coverage"] == {"found": 50, "total": 50, "rate": 1.0}
     assert safe["cache_hits"] == 0
     assert safe["budget"] == {"max_rub": 20, "exceeded": False, "stopped": False}
-    assert safe["pricing"] == {"complete": True, "stopped": False}
+    assert safe["pricing"] == {
+        "complete": True,
+        "stopped": False,
+        "source": pilot50.PRICING_SOURCE,
+        "contract_id": pilot50.PRICING_CONTRACT_ID,
+        "rate_card_sha256": pilot50.PRICING_RATE_CARD_SHA256,
+        "target_telemetry_preserved": True,
+        "target_telemetry_pricing_complete": False,
+    }
     assert safe["latency_ms"] == {"p50": 124, "p95": 147}
-    assert safe["llm_cost_rub"] == 0.5
+    assert safe["llm_cost_rub"] == 0.0012
     assert canary not in stdout
     serialized = safe_path.read_text(encoding="utf-8")
     assert canary not in serialized
@@ -594,6 +640,24 @@ def test_summarize_builds_only_safe_balanced_aggregates(
         (
             lambda report: report.__setitem__("llm_estimated_cost_rub", 0.75),
             "cost accounting",
+        ),
+        (
+            lambda report: report["results"][0]["llm_usage"][0].__setitem__(
+                "estimated_cost_rub", 0.0
+            ),
+            "projected event differs",
+        ),
+        (
+            lambda report: report["results"][0]["target_reported_llm_usage"][
+                0
+            ].__setitem__("model", "unknown-model"),
+            "model is not approved",
+        ),
+        (
+            lambda report: report["results"][0].__setitem__(
+                "target_reported_llm_total_tokens", 3
+            ),
+            "cost projection is inconsistent",
         ),
         (
             lambda report: report["cost_control"].__setitem__(

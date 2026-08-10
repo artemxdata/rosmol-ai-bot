@@ -1162,6 +1162,215 @@ def test_llm_cost_accounting_accepts_direct_and_priced_llm_results() -> None:
     )
 
 
+def _pilot50_repricing_result() -> dict[str, object]:
+    return {
+        "trace_found": True,
+        "http_status": 200,
+        "http_success": True,
+        "error": None,
+        "trace_error": None,
+        "generate_retry_reasons": [],
+        "generator_model": "ai-sage/GigaChat3-10B-A1.8B",
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 80,
+        "llm_completion_tokens": 20,
+        "llm_total_tokens": 100,
+        "llm_estimated_cost_rub": 0.0,
+        "llm_usage": [
+            {
+                "model": "ai-sage/GigaChat3-10B-A1.8B",
+                "latency_ms": 10,
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+                "estimated_cost_rub": 0.0,
+                "priced": False,
+            }
+        ],
+    }
+
+
+def test_pilot50_repricing_contract_is_exact_and_runtime_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "RELEASE_GIT_SHA", run_ask_module.PILOT50_REPRICING_RUNTIME_SHA
+    )
+    contract = run_ask_module._validated_pilot50_repricing_contract(
+        run_ask_module.PILOT50_REPRICING_CONTRACT_ID,
+        cases=[{"id": str(index)} for index in range(50)],
+        cases_file_sha256=run_ask_module.PILOT50_REPRICING_CASES_SHA256,
+        target=run_ask_module.PILOT50_REPRICING_TARGET,
+        concurrency=1,
+        trace_lookup=True,
+        bypass_cache=True,
+        max_llm_cost_rub=20.0,
+        max_cases=None,
+        auto_smoke_cases=False,
+        generated_user_prefix=None,
+        private_contract_run=False,
+        source_diagnostic_cases=False,
+        phase0_contract=None,
+        strict_live=True,
+        high_cost_approval_id="owner-approved-pilot50",
+        expected_runtime_git_sha=run_ask_module.PILOT50_REPRICING_RUNTIME_SHA,
+    )
+
+    assert contract is not None
+    assert contract["source"] == "eval_repriced"
+    assert contract["rate_card_sha256"] == (
+        run_ask_module.PILOT50_REPRICING_RATE_CARD_SHA256
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("target", "http://localhost:8001/ask"),
+        ("concurrency", 2),
+        ("trace_lookup", False),
+        ("bypass_cache", False),
+        ("max_llm_cost_rub", 21.0),
+        ("expected_runtime_git_sha", "f" * 40),
+    ],
+)
+def test_pilot50_repricing_contract_rejects_any_binding_change(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    monkeypatch.setenv(
+        "RELEASE_GIT_SHA", run_ask_module.PILOT50_REPRICING_RUNTIME_SHA
+    )
+    kwargs: dict[str, object] = {
+        "cases": [{"id": str(index)} for index in range(50)],
+        "cases_file_sha256": run_ask_module.PILOT50_REPRICING_CASES_SHA256,
+        "target": run_ask_module.PILOT50_REPRICING_TARGET,
+        "concurrency": 1,
+        "trace_lookup": True,
+        "bypass_cache": True,
+        "max_llm_cost_rub": 20.0,
+        "max_cases": None,
+        "auto_smoke_cases": False,
+        "generated_user_prefix": None,
+        "private_contract_run": False,
+        "source_diagnostic_cases": False,
+        "phase0_contract": None,
+        "strict_live": True,
+        "high_cost_approval_id": "owner-approved-pilot50",
+        "expected_runtime_git_sha": run_ask_module.PILOT50_REPRICING_RUNTIME_SHA,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match="repricing contract rejected"):
+        run_ask_module._validated_pilot50_repricing_contract(
+            run_ask_module.PILOT50_REPRICING_CONTRACT_ID,
+            **kwargs,
+        )
+
+
+def test_pilot50_repricing_preserves_target_telemetry_and_prices_simple_model() -> None:
+    original = _pilot50_repricing_result()
+    projected, failure = run_ask_module._pilot50_reprice_result(
+        original,
+        contract={
+            "schema_version": "pilot50-llm-cost-repricing-v1",
+            "contract_id": run_ask_module.PILOT50_REPRICING_CONTRACT_ID,
+            "rate_card_sha256": run_ask_module.PILOT50_REPRICING_RATE_CARD_SHA256,
+            "source": "eval_repriced",
+        },
+    )
+
+    assert failure is None
+    assert original["llm_estimated_cost_rub"] == 0.0
+    assert projected["target_reported_llm_estimated_cost_rub"] == 0.0
+    assert projected["llm_estimated_cost_rub"] == 0.00122
+    assert projected["llm_usage"][0]["priced"] is True
+    assert projected["llm_usage"][0]["pricing_source"] == "eval_repriced"
+    assert projected["llm_cost_pricing_provenance"]["status"] == "repriced"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_failure"),
+    [
+        ({"model": "unknown"}, "llm_repricing_unknown_model"),
+        ({"total_tokens": 0}, "llm_repricing_event_tokens_zero"),
+        ({"completion_tokens": 19}, "llm_repricing_event_token_mismatch"),
+        ({"estimated_cost_rub": 1.0}, "llm_repricing_target_unpriced_cost_nonzero"),
+    ],
+)
+def test_pilot50_repricing_fails_closed_on_ambiguous_usage(
+    mutation: dict[str, object],
+    expected_failure: str,
+) -> None:
+    result = _pilot50_repricing_result()
+    result["llm_usage"][0].update(mutation)
+
+    _projected, failure = run_ask_module._pilot50_reprice_result(
+        result,
+        contract={
+            "schema_version": "pilot50-llm-cost-repricing-v1",
+            "contract_id": run_ask_module.PILOT50_REPRICING_CONTRACT_ID,
+            "rate_card_sha256": run_ask_module.PILOT50_REPRICING_RATE_CARD_SHA256,
+            "source": "eval_repriced",
+        },
+    )
+
+    assert failure == expected_failure
+
+
+def test_pilot50_repricing_accepts_proven_not_run_without_usage() -> None:
+    result = _pilot50_repricing_result()
+    result.update(
+        {
+            "generator_model": "not_run",
+            "analyzer_execution_mode": "deterministic",
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "llm_total_tokens": 0,
+            "llm_usage": [],
+        }
+    )
+    projected, failure = run_ask_module._pilot50_reprice_result(
+        result,
+        contract={
+            "schema_version": "pilot50-llm-cost-repricing-v1",
+            "contract_id": run_ask_module.PILOT50_REPRICING_CONTRACT_ID,
+            "rate_card_sha256": run_ask_module.PILOT50_REPRICING_RATE_CARD_SHA256,
+            "source": "eval_repriced",
+        },
+    )
+
+    assert failure is None
+    assert projected["llm_cost_pricing_provenance"]["status"] == "not_run"
+
+
+def test_pilot50_repricing_rejects_analyzer_fallback_without_usage() -> None:
+    result = _pilot50_repricing_result()
+    result.update(
+        {
+            "analyzer_execution_mode": "fallback",
+            "generator_model": "not_run",
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "llm_total_tokens": 0,
+            "llm_usage": [],
+        }
+    )
+
+    _projected, failure = run_ask_module._pilot50_reprice_result(
+        result,
+        contract={
+            "schema_version": "pilot50-llm-cost-repricing-v1",
+            "contract_id": run_ask_module.PILOT50_REPRICING_CONTRACT_ID,
+            "rate_card_sha256": run_ask_module.PILOT50_REPRICING_RATE_CARD_SHA256,
+            "source": "eval_repriced",
+        },
+    )
+
+    assert failure == "llm_repricing_zero_usage_ambiguous"
+
+
 def test_score_case_preserves_null_llm_accounting_as_missing() -> None:
     result = score_case(
         _normalize_case({"id": "cost-null", "query": "Р’РѕРїСЂРѕСЃ"}),

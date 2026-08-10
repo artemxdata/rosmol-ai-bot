@@ -72,7 +72,17 @@ def _safe_payload() -> dict[str, object]:
         "trace_coverage": {"found": 50, "total": 50, "rate": 1.0},
         "cache_hits": 0,
         "budget": {"max_rub": 20, "exceeded": False, "stopped": False},
-        "pricing": {"complete": True, "stopped": False},
+        "pricing": {
+            "complete": True,
+            "stopped": False,
+            "source": "eval_repriced",
+            "contract_id": "pilot50-c38-pricing-v1",
+            "rate_card_sha256": (
+                "3aebb12db82391bad23ec9256781e3439f2692ad63814070e4341bd28ea27bd6"
+            ),
+            "target_telemetry_preserved": True,
+            "target_telemetry_pricing_complete": False,
+        },
         "latency_ms": {"p50": 100, "p95": 250},
         "llm_cost_rub": 9.5,
         "cases_sha256": "a" * 64,
@@ -192,7 +202,9 @@ def test_modes_are_explicit_and_read_only_modes_have_no_ask_or_approval() -> Non
     run = _function(text, "run_mode")
     review = _function(text, "review_mode")
 
-    assert "preflight | run | review" in _function(text, "validate_mode")
+    assert "preflight | run | recover-pre-request | review" in _function(
+        text, "validate_mode"
+    )
     assert "eval.run_ask" not in preflight
     assert "PILOT50_TARGET" not in preflight
     assert "HIGH_COST_APPROVAL_ID" not in preflight
@@ -231,13 +243,11 @@ def test_preflight_freezes_exact_clean_git_archive_and_balanced_cases() -> None:
     assert "sudo git -c core.fileMode=false" in _function(
         text, "verify_source_snapshot"
     )
-    assert "ls-tree -r -t -z --name-only" in _function(
+    assert "ls-tree -r -t -z --name-only" in _function(text, "source_paths_sha")
+    assert "find \"$candidate\" -mindepth 1 -printf '%P\\0'" in _function(
         text, "verify_source_snapshot"
     )
-    assert "find \"$SOURCE_DIR\" -mindepth 1 -printf '%P\\0'" in _function(
-        text, "verify_source_snapshot"
-    )
-    assert 'sudo test ! -e "$SOURCE_DIR/.env.production"' in _function(
+    assert 'sudo test ! -e "$candidate/.env.production"' in _function(
         text, "verify_source_snapshot"
     )
     assert "source_snapshot_writable" in _function(text, "verify_source_snapshot")
@@ -264,7 +274,7 @@ def test_acceptance_container_is_read_only_bound_and_never_built() -> None:
     run = _function(text, "run_mode")
     review = _function(text, "review_mode")
 
-    assert '"ACCEPTANCE_SOURCE_DIR=$SOURCE_DIR"' in compose
+    assert '"ACCEPTANCE_SOURCE_DIR=$RUNNER_SOURCE_DIR"' in compose
     assert '"ACCEPTANCE_OUTPUT_DIR=$EVIDENCE_DIR"' in compose
     assert '"ACCEPTANCE_PROVENANCE_DIR=$PROVENANCE_DIR"' in compose
     assert '"ACCEPTANCE_COST_LEDGER_DIR=$PILOT50_LEDGER_DIR"' in compose
@@ -297,7 +307,7 @@ def test_compose_command_satisfies_inactive_phase0_required_bindings() -> None:
     }
     assert all(f'"{name}=' in compose for name in required_phase0_variables)
     assert '"PHASE0_RUNTIME_GIT_SHA=$RUNTIME_SHA"' in compose
-    assert '"PHASE0_RUNNER_SOURCE_DIR=$SOURCE_DIR"' in compose
+    assert '"PHASE0_RUNNER_SOURCE_DIR=$RUNNER_SOURCE_DIR"' in compose
     assert '"PHASE0_BUILDER_SOURCE_DIR=$PROVENANCE_DIR"' in compose
     assert '"PHASE0_PRIVATE_DIR=$EVIDENCE_DIR"' in compose
     assert '"PHASE0_COST_LEDGER_DIR=$PILOT50_LEDGER_DIR"' in compose
@@ -350,7 +360,10 @@ def test_run_is_sequential_bounded_trace_complete_and_cache_bypassed() -> None:
     assert "--user-prefix" not in run
     assert '--max-llm-cost-rub "$PILOT50_COST_CAP_RUB"' in run
     assert '--high-cost-approval-id "$approval_id"' in run
-    assert run.count('--expected-runtime-git-sha "$RUNTIME_SHA"') == 1
+    assert run.count('--expected-runtime-git-sha "$RUNTIME_SHA"') == 2
+    assert (
+        '--llm-cost-repricing-contract "$PILOT50_REPRICING_CONTRACT_ID"' in run
+    )
     assert "--bypass-cache" in run
     assert "--require-complete-traces" in run
     assert "--no-markdown" in run
@@ -379,6 +392,70 @@ def test_run_is_one_shot_and_keeps_raw_and_safe_outputs_private() -> None:
     assert "summarize_failed" in run
     assert ">/dev/null 2>&1" in run
     assert "validate_completed_receipt" in run
+
+
+def test_recovery_preserves_old_source_and_runs_exact_new_snapshot_once() -> None:
+    text = _text()
+    run = _function(text, "run_mode")
+    recovery = _function(text, "prepare_recovery_runner_snapshot")
+    receipt = _function(text, "validate_recovery_receipt")
+
+    assert (
+        'PILOT50_PRE_REQUEST_FAILED_TOOLING_SHA="36d0f0e5e4739a0264516cc46c3524beaa6fd934"'
+        in text
+    )
+    assert 'final_dir="$RUN_DIR/recovery-source-$TOOLING_SHA"' in recovery
+    assert 'archive --format=tar "$TOOLING_SHA"' in recovery
+    assert 'verify_source_snapshot "$RUNNER_SOURCE_DIR" "$TOOLING_SHA"' in recovery
+    assert 'RUNNER_SOURCE_DIR="$final_dir"' in recovery
+    assert 'verify_source_snapshot "$RUNNER_SOURCE_DIR" "$runner_source_sha"' in run
+    assert 'runner_source_paths_sha256=$runner_source_paths_sha' in run
+    assert "recovery_already_consumed" in run
+    assert "recovery_reservation_not_absent" in run
+    assert "prior_ask_count=0" in run
+    assert "prior_runner_cost_rub=0" in run
+    assert "runner_source_paths_sha256" in receipt
+    assert '--llm-cost-repricing-contract "$PILOT50_REPRICING_CONTRACT_ID"' in run
+    assert '--expected-runtime-git-sha "$RUNTIME_SHA"' in run
+
+
+def test_recovery_pricing_contract_is_explicit_and_does_not_restart_runtime() -> None:
+    text = _text()
+    free_preflight = _function(text, "verify_free_live_preflight")
+    target_check = _function(text, "verify_target_models_and_reported_pricing")
+    repricing_check = _function(text, "verify_repricing_contract_preflight")
+
+    assert 'PILOT50_SIMPLE_INPUT_PRICE_RUB_PER_MILLION="12.2"' in text
+    assert 'PILOT50_COMPLEX_INPUT_PRICE_RUB_PER_MILLION="569.34"' in text
+    assert (
+        'PILOT50_REPRICING_RATE_CARD_SHA256="3aebb12db82391bad23ec9256781e3439f2692ad63814070e4341bd28ea27bd6"'
+        in text
+    )
+    assert 'Decimal("0")' in target_check
+    assert 'Decimal("569.34")' in target_check
+    assert "_validated_pilot50_repricing_contract" in repricing_check
+    assert "verify_target_models_and_reported_pricing" in free_preflight
+    assert "verify_repricing_contract_preflight" in free_preflight
+    assert "docker restart" not in text
+    assert "docker compose restart" not in text
+
+
+def test_recovered_review_binds_both_snapshots_and_recovery_receipts() -> None:
+    text = _text()
+    review = _function(text, "review_mode")
+
+    assert "prepare_recovery_runner_snapshot" in review
+    assert 'runner_source_sha="$TOOLING_SHA"' in review
+    assert 'runner_source_sha="$SOURCE_SHA"' in review
+    assert 'source_paths_sha "$runner_source_sha"' in review
+    assert 'safe_result_approval_id "$safe_result"' in review
+    assert "sudo python3" in _function(text, "safe_result_approval_id")
+    assert "validate_recovery_receipt" in review
+    assert "recovery_receipt_sha" in review
+    assert "validate_completed_receipt" in review
+    assert 'verify_source_snapshot "$RUNNER_SOURCE_DIR" "$runner_source_sha"' in review
+    assert "provider_residual_risk_ceiling_rub=100" in text
+    assert "runner_projected_stop_limit_rub=20" in text
 
 
 def test_review_requires_exact_completed_current_run_and_writes_no_artifact() -> None:
@@ -489,7 +566,8 @@ def test_final_stdout_is_strictly_allowlisted_safe_json() -> None:
     assert 'payload.get("counts") == {"typical": 25, "atypical": 25}' in validator
     assert 'payload.get("cache_hits") == 0' in validator
     assert 'payload.get("trace_coverage") == {"found": 50, "total": 50, "rate": 1.0}' in validator
-    assert 'payload.get("pricing") == {"complete": True, "stopped": False}' in validator
+    assert '"source": "eval_repriced"' in validator
+    assert '"target_telemetry_pricing_complete": False' in validator
     assert "0 <= cost <= 20" in validator
     assert "expected_disclaimer" in validator
     assert "safe_output_oversized" in run

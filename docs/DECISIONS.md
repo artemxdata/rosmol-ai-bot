@@ -551,3 +551,50 @@ case ID, query, response или evidence; произвольные labels сво
 binary suppression. Behavior table, auto-answer, clarification и escalation остаются в
 приватном per-case отчёте, а в public JSON всегда помечаются как withheld: их совместная
 публикация позволяет восстанавливать малые пересечения даже при безопасных маргиналах.
+
+## D-039. Нулевой pre-request отказ Pilot50 допускает одно точное продолжение, а не replay
+
+**Статус:** принято 11 августа 2026; узко уточняет D-036 для одного Pilot50.
+
+Владелец отдельно разрешил один exact запуск `pilot50_balanced_v1` для runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a`: frozen cases SHA-256
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`, `50 = 25 + 25`,
+прогноз `10 RUB`, runner cap `20 RUB` и принятый остаточный provider-risk не более `100 RUB`.
+Это разрешение не меняет production behavior, не разрешает HDE/VK, deployment, Phase 0 replay
+или следующий paid eval.
+
+Первая owner-run попытка создала внешний `run.started`, но `eval.run_ask` остановился на
+локальном pricing preflight до cost reservation и первого `/ask`. Read-only payload-free
+диагностика подтвердила доступность signed runtime, PostgreSQL и ledger, а также отсутствие
+matching reservation и raw report. Поскольку generic runner выполняет pricing preflight до
+reservation, а reservation — до любого HTTP `/ask`, эта комбинация доказывает `0 /ask` и
+`0 RUB` runner-estimated LLM cost; approval ID в ledger не израсходован.
+
+Обычный повтор `run`, удаление marker или очистка ledger по-прежнему запрещены. Допускается
+ровно одно продолжение того же frozen запуска только при одновременной повторной проверке
+исходного preflight receipt/source, отсутствия report/safe/completed artifacts, отсутствия
+matching reservation, исправной pricing-конфигурации acceptance, exact eval-side pricing
+contract, signed cache-bypass и PostgreSQL. Исходный `run.started` сохраняется; отдельный exclusive continuation
+receipt связывает старый tooling snapshot, новый recovery launcher, runtime/cases и тот же
+неизрасходованный approval. После reservation либо любого следующего отказа повтор запрещён.
+
+Для этого continuation цена GigaChat3-10B фиксируется как `12.2/12.2 RUB` за миллион входных/
+выходных токенов. Текущий официальный тариф GigaChat-2-Max `569.3374/569.3374 RUB` учитывается
+консервативным округлением вверх до `569.34/569.34 RUB`. Production runtime сохраняет исходную
+конфигурацию и не перезапускается: нулевая цена 10B влияет только на cost telemetry, но не на
+выбор модели, graph, RAG или текст ответа. Exact Pilot50 eval-runner сохраняет target-reported
+usage/cost отдельно и до budget gate пересчитывает только приватную eval-проекцию по exact model
+ID и token counts. Неизвестная модель, отсутствующее/неоднозначное usage, нулевой token event,
+несовпадение token totals
+или превышение cap означают STOP. Safe aggregate явно маркирует `pricing_source=eval_repriced`;
+historical trace и production rows не изменяются. Источники тарифа: официальный каталог Cloud.ru
+`https://cloud.ru/products/evolution-ai-factory/catalog-foundation-models` и действующая страница
+тарифов `https://cloud.ru/documents/tariffs/evolution/foundation-models`. Эти значения являются
+eval telemetry, не меняют выбор модели или пользовательские ответы.
+
+Переданная владельцу команда ранее выставила `PHASE0_BILLING_VERDICT=PASS`, хотя фактическая
+provider-сверка Phase 0 не выполнялась, а владелец ввёл `STOP` в предложенном prompt. Это
+зафиксированное governance deviation:
+Phase 0 остаётся `unreconciled`, строка `PASS` не является billing evidence и не используется
+для продолжения. Продолжение использует отдельное явное owner-risk acceptance только для этого
+Pilot50; safe result по-прежнему получает `billing_status=pending_provider_reconciliation`.

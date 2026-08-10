@@ -12,6 +12,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,54 @@ EXPECTED_TYPE_COUNTS = {"typical": 25, "atypical": 25}
 EXPECTED_BEHAVIOR = "answer"
 EXPECTED_ESCALATED = False
 MAX_LLM_COST_RUB = 20.0
+PRICING_SOURCE = "eval_repriced"
+PRICING_CONTRACT_ID = "pilot50-c38-pricing-v1"
+PRICING_RATE_CARD = {
+    "complex_input_price_rub_per_million": "569.34",
+    "complex_model": "GigaChat/GigaChat-2-Max",
+    "complex_official_price_rub_per_million": "569.3374",
+    "complex_output_price_rub_per_million": "569.34",
+    "complex_price_policy": "conservative_round_up",
+    "simple_input_price_rub_per_million": "12.2",
+    "simple_model": "ai-sage/GigaChat3-10B-A1.8B",
+    "simple_output_price_rub_per_million": "12.2",
+}
+PRICING_RATE_CARD_SHA256 = hashlib.sha256(
+    json.dumps(
+        PRICING_RATE_CARD,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+).hexdigest()
+PRICING_MODELS: dict[str, tuple[Decimal, Decimal]] = {
+    "ai-sage/GigaChat3-10B-A1.8B": (Decimal("12.2"), Decimal("12.2")),
+    "GigaChat/GigaChat-2-Max": (Decimal("569.34"), Decimal("569.34")),
+}
+PRICING_PROJECTION = {
+    "schema_version": "pilot50-llm-cost-repricing-v1",
+    "contract_id": PRICING_CONTRACT_ID,
+    "rate_card_sha256": PRICING_RATE_CARD_SHA256,
+    "source": PRICING_SOURCE,
+    "target_telemetry_preserved": True,
+    "target_telemetry_pricing_complete": False,
+    "simple_model": "ai-sage/GigaChat3-10B-A1.8B",
+    "simple_input_price_rub_per_million": 12.2,
+    "simple_output_price_rub_per_million": 12.2,
+    "complex_model": "GigaChat/GigaChat-2-Max",
+    "complex_input_price_rub_per_million": 569.34,
+    "complex_output_price_rub_per_million": 569.34,
+    "complex_official_price_rub_per_million": 569.3374,
+    "complex_price_policy": "conservative_round_up",
+}
+PRICING_PROVENANCE_BASE = {
+    "schema_version": "pilot50-llm-cost-repricing-v1",
+    "contract_id": PRICING_CONTRACT_ID,
+    "rate_card_sha256": PRICING_RATE_CARD_SHA256,
+    "source": PRICING_SOURCE,
+    "target_telemetry_preserved": True,
+    "target_telemetry_pricing_complete": False,
+}
 MAX_MANIFEST_BYTES = 128 * 1024
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_CASES_BYTES = 4 * 1024 * 1024
@@ -480,6 +529,171 @@ def _finite_nonnegative_number(value: Any, *, label: str) -> float:
     return number
 
 
+def _strict_nonnegative_int(value: Any, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise Pilot50Error(f"{label} must be a non-negative integer")
+    return value
+
+
+def _validated_repriced_case_cost(result: Mapping[str, Any]) -> float:
+    if result.get("llm_accounting_present") is not True:
+        raise Pilot50Error("ask result LLM accounting is missing")
+    provenance = result.get("llm_cost_pricing_provenance")
+    if (
+        not isinstance(provenance, dict)
+        or {key: provenance.get(key) for key in PRICING_PROVENANCE_BASE}
+        != PRICING_PROVENANCE_BASE
+        or set(provenance) != {*PRICING_PROVENANCE_BASE, "status"}
+        or provenance.get("status") not in {"repriced", "not_run"}
+    ):
+        raise Pilot50Error("ask result pricing provenance is invalid")
+    target_usage = result.get("target_reported_llm_usage")
+    projected_usage = result.get("llm_usage")
+    if not isinstance(target_usage, list) or not isinstance(projected_usage, list):
+        raise Pilot50Error("ask result pricing evidence is invalid")
+    target_prompt = _strict_nonnegative_int(
+        result.get("target_reported_llm_prompt_tokens"),
+        label="target-reported prompt tokens",
+    )
+    target_completion = _strict_nonnegative_int(
+        result.get("target_reported_llm_completion_tokens"),
+        label="target-reported completion tokens",
+    )
+    target_total = _strict_nonnegative_int(
+        result.get("target_reported_llm_total_tokens"),
+        label="target-reported total tokens",
+    )
+    target_cost = _finite_nonnegative_number(
+        result.get("target_reported_llm_estimated_cost_rub"),
+        label="target-reported case LLM cost",
+    )
+    projected_prompt = _strict_nonnegative_int(
+        result.get("llm_prompt_tokens"), label="projected prompt tokens"
+    )
+    projected_completion = _strict_nonnegative_int(
+        result.get("llm_completion_tokens"), label="projected completion tokens"
+    )
+    projected_total = _strict_nonnegative_int(
+        result.get("llm_total_tokens"), label="projected total tokens"
+    )
+    projected_cost = _finite_nonnegative_number(
+        result.get("llm_estimated_cost_rub"), label="projected case LLM cost"
+    )
+    if not target_usage:
+        if (
+            provenance["status"] != "not_run"
+            or result.get("generator_model")
+            not in {None, "not_run", "source_only", "source_chunk"}
+            or result.get("analyzer_execution_mode") != "deterministic"
+            or result.get("http_status") != 200
+            or result.get("http_success") is not True
+            or result.get("error") not in (None, "")
+            or result.get("trace_error") not in (None, "")
+            or bool(result.get("generate_retry_reasons"))
+            or projected_usage
+            or any(
+                (
+                    target_prompt,
+                    target_completion,
+                    target_total,
+                    projected_prompt,
+                    projected_completion,
+                    projected_total,
+                )
+            )
+            or target_cost != 0
+            or projected_cost != 0
+        ):
+            raise Pilot50Error("not-run pricing evidence is inconsistent")
+        return 0.0
+    if provenance["status"] != "repriced" or len(projected_usage) != len(target_usage):
+        raise Pilot50Error("repriced result usage is inconsistent")
+
+    prompt_sum = 0
+    completion_sum = 0
+    total_sum = 0
+    target_cost_sum = 0.0
+    projected_cost_sum = Decimal("0")
+    for target_event, projected_event in zip(target_usage, projected_usage, strict=True):
+        if not isinstance(target_event, dict) or not isinstance(projected_event, dict):
+            raise Pilot50Error("repriced event must be an object")
+        model = str(target_event.get("model") or "").strip()
+        prices = PRICING_MODELS.get(model)
+        if prices is None:
+            raise Pilot50Error("repriced event model is not approved")
+        prompt_tokens = _strict_nonnegative_int(
+            target_event.get("prompt_tokens"), label="target event prompt tokens"
+        )
+        completion_tokens = _strict_nonnegative_int(
+            target_event.get("completion_tokens"),
+            label="target event completion tokens",
+        )
+        total_tokens = _strict_nonnegative_int(
+            target_event.get("total_tokens"), label="target event total tokens"
+        )
+        if total_tokens <= 0 or prompt_tokens + completion_tokens != total_tokens:
+            raise Pilot50Error("target event token accounting is inconsistent")
+        event_target_cost = _finite_nonnegative_number(
+            target_event.get("estimated_cost_rub"), label="target event LLM cost"
+        )
+        input_price, output_price = prices
+        event_projected_cost = (
+            (
+                Decimal(prompt_tokens) * input_price
+                + Decimal(completion_tokens) * output_price
+            )
+            / Decimal(1_000_000)
+        ).quantize(Decimal("0.000001"))
+        if event_projected_cost <= 0:
+            raise Pilot50Error("projected event LLM cost is zero")
+        if target_event.get("priced") is True:
+            if not math.isclose(
+                event_target_cost,
+                float(event_projected_cost),
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            ):
+                raise Pilot50Error("target priced event cost is inconsistent")
+        elif target_event.get("priced") is False:
+            if event_target_cost != 0:
+                raise Pilot50Error("target unpriced event has a nonzero cost")
+        else:
+            raise Pilot50Error("target event priced flag is invalid")
+        expected_projected = dict(target_event)
+        expected_projected.update(
+            {
+                "estimated_cost_rub": float(event_projected_cost),
+                "priced": True,
+                "pricing_source": PRICING_SOURCE,
+                "pricing_contract_id": PRICING_CONTRACT_ID,
+                "pricing_rate_card_sha256": PRICING_RATE_CARD_SHA256,
+            }
+        )
+        if projected_event != expected_projected:
+            raise Pilot50Error("projected event differs from target-bound repricing")
+        prompt_sum += prompt_tokens
+        completion_sum += completion_tokens
+        total_sum += total_tokens
+        target_cost_sum += event_target_cost
+        projected_cost_sum += event_projected_cost
+
+    if (
+        (target_prompt, target_completion, target_total)
+        != (prompt_sum, completion_sum, total_sum)
+        or (projected_prompt, projected_completion, projected_total)
+        != (prompt_sum, completion_sum, total_sum)
+        or not math.isclose(target_cost, target_cost_sum, rel_tol=1e-9, abs_tol=1e-6)
+        or not math.isclose(
+            projected_cost,
+            float(projected_cost_sum),
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        )
+    ):
+        raise Pilot50Error("case LLM cost projection is inconsistent")
+    return float(projected_cost_sum)
+
+
 def _validated_eval_run_id(value: Any) -> str:
     eval_run_id = str(value or "")
     if EVAL_RUN_ID_RE.fullmatch(eval_run_id) is None:
@@ -689,13 +903,13 @@ def build_safe_result(
     if (
         not isinstance(runtime_identity, dict)
         or set(runtime_identity) != RUNTIME_IDENTITY_FIELDS
-        or runtime_identity.get("required") is not False
-        or runtime_identity.get("status") != "observed_unbound"
-        or runtime_identity.get("expected_runtime_git_sha") is not None
+        or runtime_identity.get("required") is not True
+        or runtime_identity.get("status") != "verified"
+        or runtime_identity.get("expected_runtime_git_sha") != runtime_git_sha
         or runtime_identity.get("preflight_release_git_sha") != runtime_git_sha
-        or runtime_identity.get("postflight_release_git_sha") is not None
+        or runtime_identity.get("postflight_release_git_sha") != runtime_git_sha
         or runtime_identity.get("verified_release_git_sha") != runtime_git_sha
-        or runtime_identity.get("matched_expected_runtime") is not None
+        or runtime_identity.get("matched_expected_runtime") is not True
     ):
         raise Pilot50Error("ask report runtime identity does not bind Pilot50")
     expected_by_id = {str(case["id"]): case for case in cases}
@@ -746,10 +960,7 @@ def build_safe_result(
         if isinstance(latency, bool) or not isinstance(latency, int) or latency < 0:
             raise Pilot50Error("ask result latency is invalid")
         latencies.append(latency)
-        total_cost += _finite_nonnegative_number(
-            result.get("llm_estimated_cost_rub"),
-            label="case LLM cost",
-        )
+        total_cost += _validated_repriced_case_cost(result)
         group_totals[group] += 1
         if passed:
             group_passed[group] += 1
@@ -787,6 +998,7 @@ def build_safe_result(
         or cost_control.get("strict_live") is not True
         or cost_control.get("pricing_complete") is not True
         or cost_control.get("high_cost_approval_id") != approval_id
+        or cost_control.get("pricing_projection") != PRICING_PROJECTION
     ):
         raise Pilot50Error("ask report cost-control evidence is incomplete")
     reservation = cost_control.get("reservation")
@@ -843,7 +1055,15 @@ def build_safe_result(
             "exceeded": False,
             "stopped": False,
         },
-        "pricing": {"complete": True, "stopped": False},
+        "pricing": {
+            "complete": True,
+            "stopped": False,
+            "source": PRICING_SOURCE,
+            "contract_id": PRICING_CONTRACT_ID,
+            "rate_card_sha256": PRICING_RATE_CARD_SHA256,
+            "target_telemetry_preserved": True,
+            "target_telemetry_pricing_complete": False,
+        },
         "latency_ms": {"p50": _percentile(latencies, 50), "p95": _percentile(latencies, 95)},
         "llm_cost_rub": round(reported_cost, 6),
         "cases_sha256": _sha256(cases_bytes),
@@ -920,7 +1140,15 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         raise Pilot50Error("safe result cache count is invalid")
     if value.get("budget") != {"max_rub": 20, "exceeded": False, "stopped": False}:
         raise Pilot50Error("safe result budget is invalid")
-    if value.get("pricing") != {"complete": True, "stopped": False}:
+    if value.get("pricing") != {
+        "complete": True,
+        "stopped": False,
+        "source": PRICING_SOURCE,
+        "contract_id": PRICING_CONTRACT_ID,
+        "rate_card_sha256": PRICING_RATE_CARD_SHA256,
+        "target_telemetry_preserved": True,
+        "target_telemetry_pricing_complete": False,
+    }:
         raise Pilot50Error("safe result pricing is invalid")
     latency = value.get("latency_ms")
     if not isinstance(latency, dict) or set(latency) != {"p50", "p95"}:
@@ -997,8 +1225,14 @@ def build_review_rows(
     runtime_identity = report.get("runtime_identity")
     if (
         not isinstance(runtime_identity, dict)
+        or set(runtime_identity) != RUNTIME_IDENTITY_FIELDS
+        or runtime_identity.get("required") is not True
+        or runtime_identity.get("status") != "verified"
+        or runtime_identity.get("expected_runtime_git_sha") != runtime_git_sha
         or runtime_identity.get("preflight_release_git_sha") != runtime_git_sha
+        or runtime_identity.get("postflight_release_git_sha") != runtime_git_sha
         or runtime_identity.get("verified_release_git_sha") != runtime_git_sha
+        or runtime_identity.get("matched_expected_runtime") is not True
     ):
         raise Pilot50Error("ask report runtime does not bind the reviewed Pilot50 run")
     cost_control = report.get("cost_control")

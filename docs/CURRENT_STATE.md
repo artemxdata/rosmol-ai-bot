@@ -4,7 +4,7 @@
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50: bounded server-local calibration 25+25 подготовлен, live run не начинался
+## Pilot50: 25+25 frozen; первый paid path остановлен до `/ask`, готовится exact continuation
 
 10 августа подготовлен отдельный one-shot контур для сегодняшней проверки 25 типовых и
 25 нетиповых вопросов. Это не повтор Phase 0 и не переход к фазам B–E. В tracked manifest
@@ -39,33 +39,28 @@ holdout, human product verdict, ticket-level conversion или оценка prod
 Владелец разрешил рассматривать для следующих доказательных quality-итераций бюджет до
 `500 RUB` на один прогон, только если до запуска зафиксированы конкретная гипотеза улучшения,
 dataset/runtime SHA, критерий успеха и одноразовое согласование. Это верхняя граница, а не цель и
-не blanket approval: текущий baseline Pilot50 сохраняет прогноз `10 RUB` и hard cap `20 RUB`,
+не blanket approval: текущий baseline Pilot50 сохраняет прогноз `10 RUB` и runner projected
+stop-limit `20 RUB` (это не provider hard cap),
 поскольку больший расход здесь не даёт дополнительного quality evidence.
 
-Исторический Phase A и новый Pilot50 теперь явно разделены: неуспешный read-only export старых
-trace остаётся `pending/evidence-at-risk`, но технически не блокирует отдельный новый eval run и
-не заменяется его результатами. Повтор Phase 0 по-прежнему запрещён. До единственного платного
-Pilot50 `run` обязательны три последовательных gate:
-
-1. владелец вручную сверяет Cloud.ru billing Phase 0 за
-   `2026-08-06T12:10:56.774654Z`–`2026-08-06T12:15:30.205184Z` с runner estimate
-   `0,832748 RUB`; отсутствие суммы, неоднозначная атрибуция или variance `>10%` означает STOP;
-2. бесплатный `pilot50 preflight` фиксирует exact tooling/runtime/cases SHA, `25/25`, прогноз
-   `10 RUB` и hard cap `20 RUB` без `/ask`;
-3. владелец создаёт внешний одноразовый non-secret approval reference, связанный именно с этим
-   runtime SHA, набором, прогнозом и cap. Codex не придумывает approval ID.
+Исторический Phase A и новый Pilot50 явно разделены: неуспешный read-only export старых trace
+остаётся `pending/evidence-at-risk`, но технически не блокирует отдельный новый eval run и не
+заменяется его результатами. Повтор Phase 0 по-прежнему запрещён. Phase 0 provider billing
+остаётся `unreconciled`: владелец не выполнил сравнение и ввёл `STOP`, поэтому ранее переданный
+`PHASE0_BILLING_VERDICT=PASS` не является evidence. В D-039 владелец отдельно принял остаточный
+risk до `100 RUB` и разрешил ровно одно exact продолжение только этого Pilot50: runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, cases SHA-256
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`, прогноз `10 RUB`,
+runner projected stop-limit `20 RUB`. Это исключение не означает billing PASS и не разрешает
+следующий paid eval.
 
 После запуска safe result сохраняет exact `eval_run_id`, UTC run window, runtime SHA, approval
 reference, hashes и `billing_status=pending_provider_reconciliation`. До второй ручной сверки
 Cloud.ru этот результат не разрешает следующий paid eval. На текущем этапе live `/ask` не было,
-стоимость изменений — `0 RUB`, production behavior не менялся. Focused Pilot50 gate:
-`90 passed`, combined Phase A/Pilot50 gate — `232 passed`, Ruff и `bash -n` — pass. Монолитный
-pytest воспроизвёл известное Windows event-loop/socket зависание без нового вывода; все test files
-затем выполнены ровно один раз восьмью непересекающимися process-shards:
-`2601 passed, 1 skipped, 0 failed` с учётом отдельно выполненных новых
-TTY/Compose/module-CLI regressions.
-Финальный Ruff — pass;
-KB validation — `2186 valid / 2152 published`.
+стоимость запуска — `0 RUB`, production behavior не менялся. Финальный локальный gate recovery/
+repricing change set: focused Pilot50/runner suite — `307 passed`; полный pytest —
+`2621 passed, 1 skipped, 0 failed`; Ruff и `bash -n` — pass; KB validation —
+`2186 valid / 2152 published`.
 
 Первая owner-run попытка Pilot50 preflight на commit `4a309a7` остановилась до `/ask`, cost
 reservation и LLM-вызова с `compose_config_failed`: общий acceptance Compose потребовал пять
@@ -82,6 +77,26 @@ binding нельзя снова пропустить. Неудачная поп�
 `python -m scripts.pilot50`; отдельный subprocess regression удаляет `PYTHONPATH` и действительно
 materialize-ит exact `50 = 25 + 25`. Cost reservation, approval и paid one-shot этой попыткой не
 использованы.
+
+Успешный бесплатный preflight на tooling `36d0f0e5e4739a0264516cc46c3524beaa6fd934`
+подтвердил runtime `c38f0e055630fae2af50720fae81acee20ff4f6a`, exact `50 = 25 + 25` и cases SHA выше.
+Первая команда `run` создала только внешний `run.started`, после чего generic runner остановился
+на local pricing preflight. Payload-free server-local диагностика зафиксировала
+`pricing_preflight=FAIL`, `reservation_matches=0`, `raw_report=ABSENT`, исправные signed bypass,
+PostgreSQL и ledger. По control flow это доказывает `0 /ask`, `0 RUB` runner-estimated cost и
+неизрасходованный approval. Root cause: production runtime пишет цену Max, но цена 10B в trace
+равна нулю; это не влияет на routing (`10B` для простых, `Max` для сложных), RAG или ответы.
+
+D-039 разрешает не replay, а одно pre-request continuation с сохранением исходного marker.
+Production runtime и historical trace не меняются. Новый immutable eval-runner snapshot сохраняет
+target-reported usage/cost и до budget gate строит отдельную приватную проекцию по exact model ID,
+prompt/completion tokens и тарифам `12.2/12.2` для 10B и `569.34/569.34` для Max. Safe aggregate
+явно маркирует `pricing_source=eval_repriced`; неизвестная модель, нулевой token-usage event,
+неоднозначно отсутствующая usage telemetry, несовпадение token totals, runtime/cases/receipt или
+превышение `20 RUB` означают STOP без retry. Proven deterministic not-run остаётся валидным
+нулевым cost path.
+Следующий шаг после локального полного gate и GitHub push — один owner-run
+`recover-pre-request`; HDE/VK, rebuild, production restart и rollout не выполняются.
 
 **Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
 `52bd5ac` (`Support owner-authenticated Phase A export`) и `eea8062`
@@ -188,10 +203,11 @@ payload, а отказ произошёл уже в локальном validator
 заменяет старые evidence и не разрешает replay Phase 0.
 
 **Точный следующий шаг:** после нового commit/push владелец сам выполняет `ssh rosmol`, получает
-exact commit из GitHub detached checkout и запускает только бесплатный
-`bash scripts/run_pilot50_server_local.sh preflight`. После фактической billing-сверки Phase 0 и
-создания одноразового approval reference тот же owner-run контур выполняет один `run`, а затем
-offline `review` для просмотра 50 вопросов/ответов в server terminal. Никаких deployment,
+exact commit из GitHub detached checkout и запускает только один D-039
+`recover-pre-request` с тем же неизрасходованным approval reference и без ложного
+`PHASE0_BILLING_VERDICT=PASS`. Повторный `preflight`, обычный `run`, удаление marker и второй
+continuation запрещены. После успешного safe aggregate разрешён offline `review` для просмотра
+50 вопросов/ответов в server terminal. Никаких deployment,
 restart, HDE/VK или повторного Phase 0 в этой последовательности нет. В чат возвращаются только
 safe aggregate/status/SHA; owner-only review rows остаются на server terminal.
 

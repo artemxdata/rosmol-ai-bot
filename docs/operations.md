@@ -60,26 +60,29 @@ bash scripts/run_pilot50_server_local.sh preflight
 
 Preflight не вызывает `/ask`: он проверяет clean Git snapshot, exact runtime `/ready`, image
 identity, manifest/source/membership/PII, materializes `50 = 25 + 25` и печатает только SHA,
-counts, forecast `10 RUB` и hard cap `20 RUB`. Исторический Phase A остаётся отдельным
+counts, forecast `10 RUB` и runner projected stop-limit `20 RUB` (это не provider hard cap).
+Исторический Phase A остаётся отдельным
 `pending/evidence-at-risk` аудитом: его unresolved export `FAIL` не блокирует новый Pilot50,
-Pilot50 не заменяет это evidence, а replay Phase 0 запрещён. До paid run должны одновременно
-существовать:
+Pilot50 не заменяет это evidence, а replay Phase 0 запрещён. Первая попытка exact Pilot50 уже
+создала `run.started`, но payload-free диагностика доказала остановку pricing preflight до
+reservation, `/ask` и LLM-cost. Поэтому обычный `run` и удаление marker запрещены.
 
-- ручной `PASS` сверки Phase 0 Cloud.ru billing за exact старое UTC-окно;
-- новый одноразовый non-secret approval reference для exact runtime SHA, Pilot50 v1,
-  forecast и cap. Approval ID нельзя придумывать или повторно использовать.
-
-Только после этих gate владелец задаёт значения из собственного внешнего evidence и выполняет
-один run:
+По D-039 владелец принял residual provider-risk до `100 RUB` только для одного exact
+pre-request continuation: runtime `c38f0e055630fae2af50720fae81acee20ff4f6a`, cases SHA-256
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`, forecast `10 RUB` и
+runner projected stop-limit `20 RUB`. Phase 0 billing остаётся `unreconciled`; подставлять
+`PHASE0_BILLING_VERDICT=PASS` запрещено. После checkout exact recovery commit владелец выполняет
+только одно продолжение с тем же неизрасходованным non-secret approval reference:
 
 ```bash
-test "${PHASE0_BILLING_VERDICT:-}" = "PASS"
-test -n "${HIGH_COST_APPROVAL_ID:-}"
-bash scripts/run_pilot50_server_local.sh run
+env -u PHASE0_BILLING_VERDICT \
+  PILOT50_PHASE0_BILLING_RISK_ACCEPTANCE_ID='<EXACT_OWNER_APPROVAL_REFERENCE>' \
+  HIGH_COST_APPROVAL_ID='<EXACT_OWNER_APPROVAL_REFERENCE>' \
+  bash scripts/run_pilot50_server_local.sh recover-pre-request
 ```
 
-Launcher не rebuild/restart/deploy services, не использует HDE/VK и отказывается от повтора
-после `run.started`, включая оборванную попытку. Raw cases/report остаются mode `0600` только в
+Launcher не rebuild/restart/deploy services, не использует HDE/VK и отказывается от второго
+continuation после exclusive recovery receipt. Raw cases/report остаются mode `0600` только в
 `/var/lib/rosmol/pilot50/`; stdout содержит только allowlist aggregate, exact run/runtime/
 approval/window hashes и `billing_status=pending_provider_reconciliation`. После run владелец
 снова вручную сверяет Cloud.ru billing; до этой сверки следующие paid eval запрещены.
