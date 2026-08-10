@@ -4,8 +4,10 @@
 
 **Ветка:** `codex/real-rag`
 
-**Локальные commits, не pushed и не deployed:** `9489d4c` (`Renew scoped Trivy security review`)
-и `c95fb4a` (`Add Phase A escalation evidence audit`).
+**Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
+`52bd5ac` (`Support owner-authenticated Phase A export`) и `eea8062`
+(`Add server-local Phase A trace export`). Exact pushed handoff HEAD фиксируется
+в GitHub и передаётся владельцу полным 40-character SHA.
 
 ## Phase A: доказательный аудит эскалаций подготовлен, evidence-export ожидает владельца
 
@@ -14,12 +16,13 @@
 `/ask`; HDE/VK, Yonote, Qdrant, KB, пороги, prompts, graph routing, схема БД, historical rows и
 production-конфигурация не менялись. Платных LLM-вызовов и deployment не было.
 
-**Операционная граница:** Codex не выполняет SSH/SCP/rsync, remote Docker/psql/curl и любые
-другие команды на сервере. Все server-side команды запускает только владелец. В чат возвращаются
-только заранее ограниченные `status`/`reason`, SHA-256 и безопасные агрегированные counts — без
-`.env`, DSN, токенов, ключей, stderr и сырых строк. Codex может читать только созданную owner-run
-командой локальную safe projection внутри `data/private/`; она не коммитится и не копируется на
-сервер.
+**Операционная граница:** обязательный контур работы — `local -> GitHub -> server`.
+Codex меняет и тестирует код локально, делает commit/push, затем даёт один готовый
+Bash-блок для shell сервера. Владелец сам выполняет `ssh rosmol`; server получает exact
+commit только из GitHub через уже настроенный read-only deploy key. Codex не выполняет
+SSH/SCP/rsync, remote Docker/psql/curl и не запускает workstation-скрипт, который сам ходит
+на сервер. В чат возвращаются только заранее ограниченные `status`/`reason`, SHA-256 и
+безопасные агрегаты — без `.env`, DSN, токенов, ключей, stderr и сырых строк.
 
 Локально по-прежнему отсутствуют raw `phase0-ask-report.json` и per-case trace: launcher хранил
 raw report в server tmpfs и удалил его после построения агрегированной safe projection. Поэтому
@@ -30,12 +33,14 @@ raw report в server tmpfs и удалил его после построени�
 
 Добавлены два offline-инструмента:
 
-- `scripts/export_phase0_trace_review.py` — owner-run read-only export по exact run ID через
-  фиксированный SSH → `rosmol-postgres` → PostgreSQL `COPY`. SQL выполняется в read-only
+- `scripts/export_phase0_trace_review.py` — owner-run read-only export по exact run ID. Основной
+  режим `--server-local` выполняется в GitHub-checkout на server и обращается к
+  `rosmol-postgres` без SSH внутри Python. SQL выполняется в read-only
   transaction и возвращает только allowlist-проекцию без user/ticket/upstream IDs, raw chunk
   text, исходного сообщения, final response или raw verifier details. До записи проверяются exact
-  frozen membership `30/30`, уникальность case/request IDs, UTC-окно, `cache_hit=false`, SHA
-  cases/manifest, схема полей и лимит размера; output атомарный, не перезаписывается и разрешён
+  frozen membership `30/30` по фиксированному aggregate SHA-256 без передачи private
+  cases/manifest на server, уникальность case/request IDs, UTC-окно, `cache_hit=false`,
+  схема полей и лимит размера; output атомарный, не перезаписывается и разрешён
   только внутри `data/private/`. Пустой COPY даёт безопасный
   `STOP: evidence unavailable`, а не провоцирует новый прогон.
 - `scripts/analyze_phase0_escalations.py` — `prepare`/`summarize` для private human review.
@@ -83,22 +88,49 @@ membership в root-equivalent `docker` group запрещены. Добавле�
 хранит и не выводит; серверные временные файлы не создаются. Focused exporter/analyzer suite после
 этого изменения — `127 passed`. Финальный полный локальный gate выполнен восемью непересекающимися
 file-shards: `2496 passed, 1 skipped, 0 failed`; Ruff и KB validation — pass. Следующий owner-run
-вызов остаётся первой интеграционной проверкой exact SQL против clean-host схемы.
+вызов с interactive SSH дошёл до успешного SQL, но вернул `validation_failed`. Локальный
+разбор точного runtime `7d244e4` показал: SQL/схема и validator fields/enums совместимы;
+дефект был в transport framing — `ssh -tt` превращал `LF` из PostgreSQL COPY в `CRLF`,
+а strict base64 parser отклонял оставшийся `CR`. Output не создан. Добавлены regression на
+uniform `CRLF` и новый основной `--server-local` режим. Он не вызывает SSH, не читает
+private frozen inputs и сверяет exact 30 case IDs по aggregate SHA
+`60a9528cf4ef192f5e1132d93e3ec70447f6ec30bce85a818df19658993ebfd6`. Focused
+exporter/analyzer/logger suite — `158 passed`; membership binding против реальных frozen cases — pass.
+Финальный локальный gate после server-local правки: Ruff — pass; KB validation —
+`2186 valid / 2152 published`; все `2511` тестов покрыты непересекающимися
+file-shards и пофайловым fallback для известного Windows event-loop/socket hang: `2510 passed,
+1 skipped, 0 failed`.
 
-**Точный следующий шаг:** владелец повторяет на workstation только read-only export существующих
-clean-server trace и возвращает один безопасный status/reason без stderr:
+**Точный следующий шаг:** после commit/push владелец сам выполняет `ssh rosmol`,
+затем вставляет в shell сервера выданный в handoff блок с exact pushed SHA. Блок делает
+GitHub `fetch`/detached checkout и server-local read-only export; не перезапускает сервисы:
 
-```powershell
-.venv\Scripts\python.exe scripts\export_phase0_trace_review.py `
-  --ssh-target rosmol `
-  --eval-run-id ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168 `
-  --output data\private\eval\phase0-real-rag-7d244e4\phase-a-traces.json `
+```bash
+set -Eeuo pipefail
+cd /opt/rosmol-ai-bot
+readonly TRUSTED_GIT_SHA='<EXACT_PUSHED_40_CHARACTER_SHA>'
+
+printf '%s' "$TRUSTED_GIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
+test -z "$(git status --porcelain --untracked-files=normal)"
+git fetch --no-tags --prune origin codex/real-rag
+git cat-file -e "${TRUSTED_GIT_SHA}^{commit}"
+git checkout --detach "$TRUSTED_GIT_SHA"
+test "$(git rev-parse HEAD)" = "$TRUSTED_GIT_SHA"
+test -z "$(git status --porcelain --untracked-files=normal)"
+
+install -d -m 0700 data/private/eval/phase0-real-rag-7d244e4
+python3 scripts/export_phase0_trace_review.py \
+  --server-local \
+  --eval-run-id ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168 \
+  --output data/private/eval/phase0-real-rag-7d244e4/phase-a-traces.json \
   --interactive-sudo
 ```
 
 Если команда вернула `STOP`, Phase A завершается как `evidence unavailable`: старый сервер,
-provider logs и новый платный replay не использовать. При успешном export следующий локальный
-шаг — `prepare`, human review и `summarize`; до private result фазы B–E остаются остановлены.
+provider logs и новый платный replay не использовать. При `OK` владелец возвращает только
+safe status/path/SHA-256. Перед `prepare` отдельно фиксируется owner-controlled передача
+только этого safe artifact с server на workstation; до private result фазы B–E остаются
+остановлены.
 
 ## Real-RAG Phase 0: live-прогон завершён, fail-closed STOP
 
