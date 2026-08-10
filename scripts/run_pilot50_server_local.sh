@@ -377,7 +377,7 @@ preflight_mode() {
   prepare_receipt="$STAGING_DIR/prepare-safe.json"
   if ! "${compose[@]}" run --rm --no-deps --pull never \
     --entrypoint python quality-acceptance \
-    scripts/pilot50.py prepare \
+    -m scripts.pilot50 prepare \
     --manifest "/workspace/$PILOT50_MANIFEST_REL" \
     --output /evidence/pilot50-cases.json \
     >"$prepare_receipt" 2>/dev/null; then
@@ -696,7 +696,7 @@ run_mode() {
 
   if ! "${compose[@]}" run --rm --no-deps --pull never \
     --entrypoint python quality-acceptance \
-    scripts/pilot50.py summarize \
+    -m scripts.pilot50 summarize \
     --manifest "/workspace/$PILOT50_MANIFEST_REL" \
     --cases /evidence/pilot50-cases.json \
     --report /evidence/pilot50-ask-report.json \
@@ -725,7 +725,7 @@ run_mode() {
 
   if ! safe_stdout="$("${compose[@]}" run --rm --no-deps --pull never \
     --entrypoint python quality-acceptance \
-    scripts/pilot50.py show-safe \
+    -m scripts.pilot50 show-safe \
     --input /evidence/pilot50-safe-result.json \
     2>/dev/null)"; then
     fail "safe_output_failed"
@@ -824,7 +824,7 @@ review_mode() {
   if ! {
     "${compose[@]}" run --rm --no-deps --pull never \
       --entrypoint python quality-acceptance \
-      scripts/pilot50.py show-review \
+      -m scripts.pilot50 show-review \
       --manifest "/workspace/$PILOT50_MANIFEST_REL" \
       --cases /evidence/pilot50-cases.json \
       --report /evidence/pilot50-ask-report.json \

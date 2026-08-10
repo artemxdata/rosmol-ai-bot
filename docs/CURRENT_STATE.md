@@ -59,10 +59,11 @@ Pilot50 `run` обязательны три последовательных gat
 reference, hashes и `billing_status=pending_provider_reconciliation`. До второй ручной сверки
 Cloud.ru этот результат не разрешает следующий paid eval. На текущем этапе live `/ask` не было,
 стоимость изменений — `0 RUB`, production behavior не менялся. Focused Pilot50 gate:
-`89 passed`, combined Phase A/Pilot50 gate — `231 passed`, Ruff и `bash -n` — pass. Монолитный
+`90 passed`, combined Phase A/Pilot50 gate — `232 passed`, Ruff и `bash -n` — pass. Монолитный
 pytest воспроизвёл известное Windows event-loop/socket зависание без нового вывода; все test files
 затем выполнены ровно один раз восьмью непересекающимися process-shards:
-`2600 passed, 1 skipped, 0 failed` с учётом отдельно выполненных новых TTY/Compose regressions.
+`2601 passed, 1 skipped, 0 failed` с учётом отдельно выполненных новых
+TTY/Compose/module-CLI regressions.
 Финальный Ruff — pass;
 KB validation — `2186 valid / 2152 published`.
 
@@ -73,6 +74,14 @@ non-secret path/runtime bindings по уже применённому контр
 required variables непосредственно из `docker-compose.acceptance.yml`, поэтому новый sibling
 binding нельзя снова пропустить. Неудачная попытка не создала final run directory и не запрещает
 повторный бесплатный preflight.
+
+Повторный owner-run preflight на commit `3325d47` прошёл Compose и остановился до `/ask` на
+`prepare_failed`. Причина воспроизведена локально: прямой запуск
+`python scripts/pilot50.py` в clean container не добавляет `/workspace` в `sys.path`, поэтому
+импорт `src` падал до safe CLI. Все четыре launcher-вызова переведены на
+`python -m scripts.pilot50`; отдельный subprocess regression удаляет `PYTHONPATH` и действительно
+materialize-ит exact `50 = 25 + 25`. Cost reservation, approval и paid one-shot этой попыткой не
+использованы.
 
 **Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
 `52bd5ac` (`Support owner-authenticated Phase A export`) и `eea8062`

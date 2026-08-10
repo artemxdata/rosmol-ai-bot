@@ -197,10 +197,10 @@ def test_modes_are_explicit_and_read_only_modes_have_no_ask_or_approval() -> Non
     assert "PILOT50_TARGET" not in preflight
     assert "HIGH_COST_APPROVAL_ID" not in preflight
     assert "PHASE0_BILLING_VERDICT" not in preflight
-    assert "scripts/pilot50.py prepare" in preflight
+    assert "-m scripts.pilot50 prepare" in preflight
     assert "eval.run_ask" in run
-    assert "scripts/pilot50.py summarize" in run
-    assert "scripts/pilot50.py show-safe" in run
+    assert "-m scripts.pilot50 summarize" in run
+    assert "-m scripts.pilot50 show-safe" in run
     assert '--expected-runtime-git-sha "$RUNTIME_SHA"' in run
     assert '--expected-approval-id "$approval_id"' in run
     assert "eval.run_ask" not in review
@@ -209,7 +209,9 @@ def test_modes_are_explicit_and_read_only_modes_have_no_ask_or_approval() -> Non
     assert "PHASE0_BILLING_VERDICT" not in review
     assert "export_phase0" not in review.casefold()
     assert "phase_a" not in review.casefold()
-    assert "scripts/pilot50.py show-review" in review
+    assert "-m scripts.pilot50 show-review" in review
+    assert text.count("-m scripts.pilot50") == 4
+    assert "scripts/pilot50.py" not in text
 
 
 def test_preflight_freezes_exact_clean_git_archive_and_balanced_cases() -> None:
@@ -302,6 +304,41 @@ def test_compose_command_satisfies_inactive_phase0_required_bindings() -> None:
     assert "--profile phase0" not in compose
 
 
+def test_module_cli_prepares_exact_cases_without_pythonpath(tmp_path: Path) -> None:
+    output = tmp_path / "pilot50-cases.json"
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() != "PYTHONPATH"
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.pilot50",
+            "prepare",
+            "--manifest",
+            str(ROOT / "eval/cases/pilot50_balanced_v1.json"),
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt["status"] == "OK"
+    assert receipt["cases_total"] == 50
+    assert receipt["type_counts"] == {"typical": 25, "atypical": 25}
+    assert len(json.loads(output.read_text(encoding="utf-8"))) == 50
+
+
 def test_run_is_sequential_bounded_trace_complete_and_cache_bypassed() -> None:
     text = _text()
     run = _function(text, "run_mode")
@@ -318,7 +355,7 @@ def test_run_is_sequential_bounded_trace_complete_and_cache_bypassed() -> None:
     assert "--require-complete-traces" in run
     assert "--no-markdown" in run
     assert "--no-db-traces" not in run
-    assert run.index("eval.run_ask") < run.index("scripts/pilot50.py summarize")
+    assert run.index("eval.run_ask") < run.index("-m scripts.pilot50 summarize")
 
 
 def test_run_is_one_shot_and_keeps_raw_and_safe_outputs_private() -> None:
@@ -359,8 +396,8 @@ def test_review_requires_exact_completed_current_run_and_writes_no_artifact() ->
     assert "pilot50-safe-result.json" in review
     assert "--output" not in review
     assert "eval.run_ask" not in review
-    assert "scripts/pilot50.py prepare" not in review
-    assert "scripts/pilot50.py summarize" not in review
+    assert "-m scripts.pilot50 prepare" not in review
+    assert "-m scripts.pilot50 summarize" not in review
     assert 'printf \'pilot50-review-stream-complete-v1\\n\'' in review
     tty_check = '[[ -t 1 ]] || fail "review_requires_owner_terminal"'
     assert tty_check in review
@@ -395,7 +432,7 @@ def test_review_cli_and_stdout_projection_are_exact_and_owner_only() -> None:
     validator = _function(text, "validate_review_stdout")
 
     expected_args = (
-        'scripts/pilot50.py show-review \\\n'
+        '-m scripts.pilot50 show-review \\\n'
         '      --manifest "/workspace/$PILOT50_MANIFEST_REL" \\\n'
         "      --cases /evidence/pilot50-cases.json \\\n"
         "      --report /evidence/pilot50-ask-report.json \\\n"
