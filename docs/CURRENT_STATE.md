@@ -1,6 +1,6 @@
 # Текущее состояние проекта
 
-**Обновлено:** 10 августа 2026
+**Обновлено:** 11 августа 2026
 
 **Ветка:** `codex/real-rag`
 
@@ -59,12 +59,20 @@ Pilot50 `run` обязательны три последовательных gat
 reference, hashes и `billing_status=pending_provider_reconciliation`. До второй ручной сверки
 Cloud.ru этот результат не разрешает следующий paid eval. На текущем этапе live `/ask` не было,
 стоимость изменений — `0 RUB`, production behavior не менялся. Focused Pilot50 gate:
-`88 passed`, combined Phase A/Pilot50 gate — `230 passed`, Ruff и `bash -n` — pass. Монолитный
+`89 passed`, combined Phase A/Pilot50 gate — `231 passed`, Ruff и `bash -n` — pass. Монолитный
 pytest воспроизвёл известное Windows event-loop/socket зависание без нового вывода; все test files
 затем выполнены ровно один раз восьмью непересекающимися process-shards:
-`2599 passed, 1 skipped, 0 failed` с учётом отдельно выполненного нового TTY regression.
+`2600 passed, 1 skipped, 0 failed` с учётом отдельно выполненных новых TTY/Compose regressions.
 Финальный Ruff — pass;
 KB validation — `2186 valid / 2152 published`.
+
+Первая owner-run попытка Pilot50 preflight на commit `4a309a7` остановилась до `/ask`, cost
+reservation и LLM-вызова с `compose_config_failed`: общий acceptance Compose потребовал пять
+обязательных `PHASE0_*` bindings неактивного sibling-сервиса. Launcher дополнен только безопасными
+non-secret path/runtime bindings по уже применённому контракту Phase 0; regression теперь выводит
+required variables непосредственно из `docker-compose.acceptance.yml`, поэтому новый sibling
+binding нельзя снова пропустить. Неудачная попытка не создала final run directory и не запрещает
+повторный бесплатный preflight.
 
 **Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
 `52bd5ac` (`Support owner-authenticated Phase A export`) и `eea8062`

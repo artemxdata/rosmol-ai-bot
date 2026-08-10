@@ -276,6 +276,32 @@ def test_acceptance_container_is_read_only_bound_and_never_built() -> None:
     assert " restart " not in text
 
 
+def test_compose_command_satisfies_inactive_phase0_required_bindings() -> None:
+    text = _text()
+    compose = _function(text, "build_compose_command")
+    acceptance_compose = (ROOT / "docker-compose.acceptance.yml").read_text(
+        encoding="utf-8"
+    )
+    required_phase0_variables = set(
+        re.findall(r"\$\{(PHASE0_[A-Z0-9_]+):\?", acceptance_compose)
+    )
+
+    assert required_phase0_variables == {
+        "PHASE0_RUNTIME_GIT_SHA",
+        "PHASE0_RUNNER_SOURCE_DIR",
+        "PHASE0_BUILDER_SOURCE_DIR",
+        "PHASE0_PRIVATE_DIR",
+        "PHASE0_COST_LEDGER_DIR",
+    }
+    assert all(f'"{name}=' in compose for name in required_phase0_variables)
+    assert '"PHASE0_RUNTIME_GIT_SHA=$RUNTIME_SHA"' in compose
+    assert '"PHASE0_RUNNER_SOURCE_DIR=$SOURCE_DIR"' in compose
+    assert '"PHASE0_BUILDER_SOURCE_DIR=$PROVENANCE_DIR"' in compose
+    assert '"PHASE0_PRIVATE_DIR=$EVIDENCE_DIR"' in compose
+    assert '"PHASE0_COST_LEDGER_DIR=$PILOT50_LEDGER_DIR"' in compose
+    assert "--profile phase0" not in compose
+
+
 def test_run_is_sequential_bounded_trace_complete_and_cache_bypassed() -> None:
     text = _text()
     run = _function(text, "run_mode")
