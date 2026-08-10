@@ -76,8 +76,14 @@ package inventory и entrypoints не изменились; исключения
 `sudo --non-interactive`, и возвращает только payload-free этап:
 `docker_access_failed`, `postgres_container_missing`, `postgres_container_not_running` либо
 `postgres_export_failed`. Совместимость exporter/analyzer после изменения — `124 passed`; Ruff и
-KB validation — pass. Следующий owner-run вызов остаётся первой интеграционной проверкой exact SQL
-против clean-host схемы.
+KB validation — pass. Повтор вернул `docker_access_failed`: SSH исправен, но owner не имеет прямого
+доступа к фиксированному Docker socket, а `sudo -n` не авторизован. Постоянные изменения sudoers и
+membership в root-equivalent `docker` group запрещены. Добавлен явный `--interactive-sudo`: SSH
+выделяет owner TTY, пароль обрабатывают только системные SSH/sudo и exporter его не читает, не
+хранит и не выводит; серверные временные файлы не создаются. Focused exporter/analyzer suite после
+этого изменения — `127 passed`. Финальный полный локальный gate выполнен восемью непересекающимися
+file-shards: `2496 passed, 1 skipped, 0 failed`; Ruff и KB validation — pass. Следующий owner-run
+вызов остаётся первой интеграционной проверкой exact SQL против clean-host схемы.
 
 **Точный следующий шаг:** владелец повторяет на workstation только read-only export существующих
 clean-server trace и возвращает один безопасный status/reason без stderr:
@@ -86,7 +92,8 @@ clean-server trace и возвращает один безопасный status/
 .venv\Scripts\python.exe scripts\export_phase0_trace_review.py `
   --ssh-target rosmol `
   --eval-run-id ask-eval-61971dbd-75ff-44b0-8eef-0e64c5b27168 `
-  --output data\private\eval\phase0-real-rag-7d244e4\phase-a-traces.json
+  --output data\private\eval\phase0-real-rag-7d244e4\phase-a-traces.json `
+  --interactive-sudo
 ```
 
 Если команда вернула `STOP`, Phase A завершается как `evidence unavailable`: старый сервер,

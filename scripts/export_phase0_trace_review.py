@@ -370,6 +370,7 @@ TRACE_ERROR_CODES = frozenset(
 SAFE_FAILURE_CODES = frozenset(
     {
         "docker_access_failed",
+        "interactive_tty_required",
         "postgres_container_missing",
         "postgres_container_not_running",
         "postgres_export_failed",
@@ -685,6 +686,7 @@ def export_phase0_trace_review(
     ssh_target: str,
     eval_run_id: str,
     output_path: Path,
+    interactive_sudo: bool = False,
 ) -> dict[str, Any]:
     """Fetch, validate and exclusively persist the approved Phase 0 trace projection."""
 
@@ -696,18 +698,27 @@ def export_phase0_trace_review(
     destination = _validated_output_path(output_path)
     output_parent_identity = _prepare_output_parent(destination)
     expected_case_ids, cases_sha256, manifest_sha256 = _load_approved_membership()
-    remote_command = _remote_command()
-    completed = _run_bounded_ssh(
-        [
-            "ssh",
-            "-T",
-            "-o",
-            "BatchMode=yes",
-            "--",
-            ssh_target,
-            remote_command,
-        ]
-    )
+    if interactive_sudo and not sys.stdin.isatty():
+        raise SafeExportFailure("interactive_tty_required")
+    remote_command = _remote_command(interactive_sudo=interactive_sudo)
+    ssh_args = [
+        "ssh",
+        "-tt" if interactive_sudo else "-T",
+        "-o",
+        "BatchMode=yes",
+        "--",
+        ssh_target,
+        remote_command,
+    ]
+    if interactive_sudo:
+        print(
+            "phase0_trace_export=AUTH reason=server_sudo_required",
+            file=sys.stderr,
+            flush=True,
+        )
+        completed = _run_bounded_ssh(ssh_args, interactive=True)
+    else:
+        completed = _run_bounded_ssh(ssh_args)
     if completed.returncode != 0:
         code = (
             "ssh_exit"
@@ -758,7 +769,7 @@ def export_phase0_trace_review(
     }
 
 
-def _remote_command() -> str:
+def _remote_command(*, interactive_sudo: bool = False) -> str:
     postgres_argv = [
         "exec",
         "-i",
@@ -777,12 +788,22 @@ def _remote_command() -> str:
     ]
     postgres_command = shlex.join(postgres_argv)
     docker_socket = "unix:///var/run/docker.sock"
+    if interactive_sudo:
+        sudo_probe = f"sudo -p '' docker --host {docker_socket} version"
+        sudo_prefix = f"sudo -p '' docker --host {docker_socket}"
+    else:
+        sudo_probe = (
+            f"sudo --non-interactive docker --host {docker_socket} version"
+        )
+        sudo_prefix = (
+            f"sudo --non-interactive docker --host {docker_socket}"
+        )
     script = f"""
 set -u
 if docker --host {docker_socket} version >/dev/null 2>&1; then
     set -- docker --host {docker_socket}
-elif sudo --non-interactive docker --host {docker_socket} version >/dev/null 2>&1; then
-    set -- sudo --non-interactive docker --host {docker_socket}
+elif {sudo_probe} >/dev/null 2>&1; then
+    set -- {sudo_prefix}
 else
     exit {REMOTE_DOCKER_ACCESS_EXIT}
 fi
@@ -801,13 +822,17 @@ fi
     return shlex.join(["sh", "-c", script])
 
 
-def _run_bounded_ssh(args: list[str]) -> subprocess.CompletedProcess[bytes]:
+def _run_bounded_ssh(
+    args: list[str],
+    *,
+    interactive: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
     """Drain both SSH pipes incrementally and kill on timeout or bounded overflow."""
 
     try:
         process = subprocess.Popen(
             args,
-            stdin=subprocess.DEVNULL,
+            stdin=None if interactive else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -1901,6 +1926,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-target", required=True)
     parser.add_argument("--eval-run-id", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--interactive-sudo",
+        action="store_true",
+        help=(
+            "allocate an owner TTY for sudo authentication; the exporter never "
+            "reads or stores the password"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1911,6 +1944,7 @@ def main() -> int:
             ssh_target=args.ssh_target,
             eval_run_id=args.eval_run_id,
             output_path=args.output,
+            interactive_sudo=bool(getattr(args, "interactive_sudo", False)),
         )
     except EvidenceUnavailableError:
         print("phase0_trace_export=STOP reason=evidence_unavailable")

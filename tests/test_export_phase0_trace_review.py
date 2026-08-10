@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import json
+import shlex
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -329,6 +330,18 @@ def test_export_writes_only_validated_safe_projection(
     assert "upstream_event_id" not in remote
     assert "response_text" not in remote
     assert "clarification_question" not in remote
+
+
+def test_interactive_remote_command_uses_tty_sudo_without_persisting_credentials() -> None:
+    command = shlex.split(exporter._remote_command(interactive_sudo=True))
+    assert command[:2] == ["sh", "-c"]
+    remote = command[2]
+
+    assert "sudo -p '' docker --host unix:///var/run/docker.sock version" in remote
+    assert "set -- sudo -p '' docker --host unix:///var/run/docker.sock" in remote
+    assert "--non-interactive" not in remote
+    assert "sudoers" not in remote
+    assert "usermod" not in remote
     assert "extracted_params" not in remote
     assert "verifier_result->'details'" not in remote
     assert "left(rt.error" not in remote
@@ -774,6 +787,62 @@ def test_bounded_ssh_classifies_timeout_and_kills_process(monkeypatch) -> None:
         exporter._run_bounded_ssh(["ssh", "safe-target"])
 
     assert process.killed is True
+
+
+def test_bounded_ssh_interactive_mode_inherits_owner_tty(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = io.BytesIO(b"")
+            self.stderr = io.BytesIO(b"")
+
+        def wait(self, timeout):
+            return 0
+
+        def kill(self):
+            raise AssertionError("successful interactive SSH must not be killed")
+
+    def fake_popen(args, **kwargs):
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(exporter.subprocess, "Popen", fake_popen)
+
+    completed = exporter._run_bounded_ssh(
+        ["ssh", "-tt", "rosmol"],
+        interactive=True,
+    )
+
+    assert completed.returncode == 0
+    assert captured["stdin"] is None
+    assert captured["stdout"] is subprocess.PIPE
+    assert captured["stderr"] is subprocess.PIPE
+
+
+def test_interactive_sudo_fails_closed_without_owner_tty(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    private_root = tmp_path / "data" / "private"
+    _approved_inputs(private_root, monkeypatch)
+    output = private_root / "review.json"
+    monkeypatch.setattr(exporter.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(
+        exporter,
+        "_run_bounded_ssh",
+        lambda *_args, **_kwargs: pytest.fail("SSH must not start without an owner TTY"),
+    )
+
+    with pytest.raises(exporter.SafeExportFailure, match="interactive_tty_required"):
+        exporter.export_phase0_trace_review(
+            ssh_target="rosmol",
+            eval_run_id=exporter.PHASE0_EVAL_RUN_ID,
+            output_path=output,
+            interactive_sudo=True,
+        )
+
+    assert not output.exists()
 
 
 @pytest.mark.parametrize(
