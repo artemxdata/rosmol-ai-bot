@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import hmac
 import re
@@ -1325,7 +1326,7 @@ async def _prewarm_ml_runtime(fastapi_app: FastAPI, settings: Any) -> None:
     }
     try:
         await asyncio.wait_for(
-            _run_ml_prewarm(fastapi_app),
+            _run_ml_prewarm(fastapi_app, settings),
             timeout=float(getattr(settings, "ml_prewarm_timeout_seconds", 120.0)),
         )
     except Exception as exc:
@@ -1348,7 +1349,7 @@ async def _prewarm_ml_runtime(fastapi_app: FastAPI, settings: Any) -> None:
     logger.info("ml_prewarm_ok", latency_ms=latency_ms)
 
 
-async def _run_ml_prewarm(fastapi_app: FastAPI) -> None:
+async def _run_ml_prewarm(fastapi_app: FastAPI, settings: Any) -> None:
     query = "регистрация на форум"
     masked_probe, pii_mapping = await asyncio.to_thread(
         fastapi_app.state.pii_masker.mask,
@@ -1356,14 +1357,37 @@ async def _run_ml_prewarm(fastapi_app: FastAPI) -> None:
     )
     if not pii_mapping.get("name") or "Иван Иванов" in masked_probe:
         raise PIIMaskingUnavailable("pii_ner_prewarm_probe_failed")
-    await asyncio.to_thread(fastapi_app.state.embedder.encode, query)
+    try:
+        await asyncio.to_thread(fastapi_app.state.embedder.encode, query)
+    finally:
+        if _prewarm_should_unload_model(settings, "ml_unload_embedder_after_use"):
+            await _unload_prewarm_model(fastapi_app.state.embedder)
     warm_chunk = Chunk(
         chunk_id="ml_prewarm",
         text="Регистрация на форум Росмолодёжи.",
         metadata={"chunk_id": "ml_prewarm"},
         score=1.0,
     )
-    await asyncio.to_thread(fastapi_app.state.reranker.rerank, query, [warm_chunk], 1)
+    try:
+        await asyncio.to_thread(fastapi_app.state.reranker.rerank, query, [warm_chunk], 1)
+    finally:
+        if _prewarm_should_unload_model(settings, "ml_unload_reranker_after_use"):
+            await _unload_prewarm_model(fastapi_app.state.reranker)
+
+
+def _prewarm_should_unload_model(settings: Any, field_name: str) -> bool:
+    explicit_value = getattr(settings, field_name, None)
+    if explicit_value is not None:
+        return bool(explicit_value)
+    return bool(getattr(settings, "ml_unload_after_use", False))
+
+
+async def _unload_prewarm_model(owner: Any) -> None:
+    unload = getattr(owner, "unload", None)
+    if not callable(unload):
+        return
+    await asyncio.to_thread(unload)
+    gc.collect()
 
 
 async def _admin_reindex_record(request: Request, record: dict[str, Any]) -> dict[str, Any]:

@@ -1371,6 +1371,349 @@ def test_pilot50_repricing_rejects_analyzer_fallback_without_usage() -> None:
     assert failure == "llm_repricing_zero_usage_ambiguous"
 
 
+def _pilot50_candidate_contract_kwargs() -> dict[str, object]:
+    return {
+        "cases": [{"id": str(index)} for index in range(50)],
+        "cases_file_sha256": run_ask_module.PILOT50_CANDIDATE_CASES_SHA256,
+        "target": run_ask_module.PILOT50_CANDIDATE_TARGET,
+        "concurrency": 1,
+        "trace_lookup": True,
+        "bypass_cache": True,
+        "max_llm_cost_rub": run_ask_module.PILOT50_CANDIDATE_COST_CAP_RUB,
+        "max_cases": None,
+        "auto_smoke_cases": False,
+        "generated_user_prefix": None,
+        "private_contract_run": False,
+        "source_diagnostic_cases": False,
+        "phase0_contract": None,
+        "strict_live": True,
+        "high_cost_approval_id": "owner-approved-pilot50-v2",
+        "expected_runtime_git_sha": "b" * 40,
+        "require_budget_for_large_runs": True,
+        "require_complete_traces": True,
+    }
+
+
+def test_pilot50_candidate_contract_fixes_runtime_target_and_cost_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RELEASE_GIT_SHA", "b" * 40)
+
+    contract = run_ask_module._validated_pilot50_candidate_contract(
+        run_ask_module.PILOT50_CANDIDATE_CONTRACT_ID,
+        **_pilot50_candidate_contract_kwargs(),
+    )
+
+    assert contract is not None
+    assert contract["runtime_git_sha"] == "b" * 40
+    assert contract["target"] == run_ask_module.PILOT50_CANDIDATE_TARGET
+    assert contract["cases_file_sha256"] == (
+        run_ask_module.PILOT50_CANDIDATE_CASES_SHA256
+    )
+    assert contract["max_llm_cost_rub"] == 30.0
+    assert contract["reservation_private_full"] is True
+    assert contract["pricing_source"] == "target_reported"
+    assert contract["target_telemetry_pricing_complete"] is True
+    assert contract["repricing_applied"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("target", "http://app-ml:8000/ask"),
+        ("concurrency", 2),
+        ("trace_lookup", False),
+        ("bypass_cache", False),
+        ("max_llm_cost_rub", 29.0),
+        ("require_budget_for_large_runs", False),
+        ("require_complete_traces", False),
+        ("expected_runtime_git_sha", "c" * 40),
+    ],
+)
+def test_pilot50_candidate_contract_rejects_any_binding_change(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    monkeypatch.setenv("RELEASE_GIT_SHA", "b" * 40)
+    kwargs = _pilot50_candidate_contract_kwargs()
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match="candidate contract rejected"):
+        run_ask_module._validated_pilot50_candidate_contract(
+            run_ask_module.PILOT50_CANDIDATE_CONTRACT_ID,
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("ai-sage/GigaChat3-10B-A1.8B", 0.00122),
+        ("GigaChat/GigaChat-2-Max", 0.056934),
+    ],
+)
+def test_pilot50_candidate_accepts_exact_target_reported_pricing(
+    model: str,
+    expected_cost: float,
+) -> None:
+    result = {
+        "trace_found": True,
+        "http_status": 200,
+        "http_success": True,
+        "error": None,
+        "trace_error": None,
+        "generate_retry_reasons": [],
+        "generator_model": model,
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 80,
+        "llm_completion_tokens": 20,
+        "llm_total_tokens": 100,
+        "llm_estimated_cost_rub": expected_cost,
+        "llm_usage": [
+            {
+                "model": model,
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+                "estimated_cost_rub": expected_cost,
+                "priced": True,
+            }
+        ],
+    }
+
+    assert run_ask_module._pilot50_candidate_accounting_failure(result) is None
+
+
+def test_pilot50_candidate_accepts_only_proven_deterministic_not_run_zero() -> None:
+    result = {
+        "trace_found": True,
+        "http_status": 200,
+        "http_success": True,
+        "error": None,
+        "trace_error": None,
+        "generate_retry_reasons": [],
+        "generator_model": "not_run",
+        "analyzer_execution_mode": "deterministic",
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 0,
+        "llm_completion_tokens": 0,
+        "llm_total_tokens": 0,
+        "llm_estimated_cost_rub": 0.0,
+        "llm_usage": [],
+    }
+
+    assert run_ask_module._pilot50_candidate_accounting_failure(result) is None
+    result["analyzer_execution_mode"] = "fallback"
+    assert (
+        run_ask_module._pilot50_candidate_accounting_failure(result)
+        == "pilot50_candidate_zero_usage_ambiguous"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_failure"),
+    [
+        ({"model": "unknown"}, "pilot50_candidate_unknown_model"),
+        ({"total_tokens": 99}, "pilot50_candidate_event_token_mismatch"),
+        ({"priced": False}, "pilot50_candidate_event_cost_mismatch"),
+        ({"estimated_cost_rub": 0.001221}, "pilot50_candidate_event_cost_mismatch"),
+    ],
+)
+def test_pilot50_candidate_fails_closed_on_usage_drift(
+    mutation: dict[str, object],
+    expected_failure: str,
+) -> None:
+    result = {
+        "trace_found": True,
+        "http_status": 200,
+        "http_success": True,
+        "error": None,
+        "trace_error": None,
+        "generate_retry_reasons": [],
+        "generator_model": "ai-sage/GigaChat3-10B-A1.8B",
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 80,
+        "llm_completion_tokens": 20,
+        "llm_total_tokens": 100,
+        "llm_estimated_cost_rub": 0.00122,
+        "llm_usage": [
+            {
+                "model": "ai-sage/GigaChat3-10B-A1.8B",
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+                "estimated_cost_rub": 0.00122,
+                "priced": True,
+            }
+        ],
+    }
+    result["llm_usage"][0].update(mutation)
+
+    assert (
+        run_ask_module._pilot50_candidate_accounting_failure(result)
+        == expected_failure
+    )
+
+
+@pytest.mark.asyncio
+async def test_pilot50_candidate_run_binds_ready_reservation_and_complete_traces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_sha = "b" * 40
+    cases = [
+        {
+            "id": f"pilot50-v2-{index:02d}",
+            "query": f"Question {index}",
+            "user_id": f"pilot50-v2-user-{index:02d}",
+            "channel": "api",
+            "expected_behavior": "answer",
+            "expected_escalated": False,
+            "tags": [
+                "pilot50:v2",
+                f"type:{'typical' if index < 25 else 'atypical'}",
+            ],
+        }
+        for index in range(50)
+    ]
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_text(json.dumps(cases), encoding="utf-8")
+    cases_sha = run_ask_module._file_sha256(cases_path)
+    output_path = tmp_path / "pilot50-v2-report.json"
+    reservation_path = tmp_path / "candidate-reservation.json"
+    events: list[str] = []
+
+    class FakePool:
+        async def close(self) -> None:
+            events.append("trace-close")
+
+    async def fake_create_pool(*args: object, **kwargs: object) -> FakePool:
+        return FakePool()
+
+    async def fake_verify_runtime(**kwargs: object) -> str:
+        events.append("ready")
+        assert kwargs["target"] == run_ask_module.PILOT50_CANDIDATE_TARGET
+        assert kwargs["expected_git_sha"] == runtime_sha
+        return runtime_sha
+
+    def fake_reserve(**kwargs: object) -> object:
+        events.append("reserve")
+        reservation_path.write_text("reserved", encoding="utf-8")
+        return run_ask_module.LiveEvalCostReservation(
+            path=reservation_path,
+            record={
+                **kwargs,
+                "reservation_class": "private_full",
+                "private_full": True,
+                "approval_required": True,
+            },
+        )
+
+    async def fake_run_case(**kwargs: object) -> dict[str, object]:
+        case = kwargs["case"]
+        case_id = str(case["id"])
+        case_index = int(case_id.rsplit("-", maxsplit=1)[-1]) + 1
+        events.append(f"case:{case_index}")
+        return {
+            "id": case_id,
+            "request_id": f"00000000-0000-0000-0000-{case_index:012d}",
+            "http_status": 200,
+            "http_success": True,
+            "trace_found": True,
+            "cache_hit": False,
+            "trace_binding_match": True,
+            "trace_error": None,
+            "error": None,
+            "passed": True,
+            "was_escalated": False,
+            "observed_behavior": "answer",
+            "trace_total_latency_ms": 10,
+            "generator_model": "not_run",
+            "analyzer_execution_mode": "deterministic",
+            "generate_retry_reasons": [],
+            "llm_accounting_present": True,
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "llm_total_tokens": 0,
+            "llm_estimated_cost_rub": 0.0,
+            "llm_usage": [],
+        }
+
+    async def fake_cardinality(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        events.append("cardinality")
+        expected_case_ids = list(kwargs["expected_case_ids"])
+        return {
+            "eval_run_id": kwargs["eval_run_id"],
+            "expected_cases_total": 50,
+            "traces_total": 50,
+            "case_counts": {case_id: 1 for case_id in expected_case_ids},
+            "missing_case_ids": [],
+            "duplicate_case_ids": [],
+            "unknown_case_ids": [],
+        }
+
+    monkeypatch.setenv("RELEASE_GIT_SHA", runtime_sha)
+    monkeypatch.setenv("PILOT50_TEST_AUTH", "test-only-cache-bypass-secret")
+    monkeypatch.setenv(
+        "ASK_EVAL_POSTGRES_DSN",
+        "postgresql://eval:test@127.0.0.1:6543/eval",
+    )
+    monkeypatch.setattr(
+        run_ask_module,
+        "PILOT50_CANDIDATE_CASES_SHA256",
+        cases_sha,
+    )
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_verify_cache_bypass_runtime",
+        fake_verify_runtime,
+    )
+    monkeypatch.setattr(run_ask_module, "reserve_live_eval_cost", fake_reserve)
+    monkeypatch.setattr(run_ask_module, "_run_case", fake_run_case)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_fetch_eval_trace_cardinality",
+        fake_cardinality,
+    )
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    metrics = await run_eval(
+        cases_path=cases_path,
+        output_path=output_path,
+        target=run_ask_module.PILOT50_CANDIDATE_TARGET,
+        concurrency=1,
+        api_key_env="PILOT50_TEST_AUTH",
+        trace_lookup=True,
+        bypass_cache=True,
+        max_llm_cost_rub=run_ask_module.PILOT50_CANDIDATE_COST_CAP_RUB,
+        high_cost_approval_id="owner-approved-pilot50-v2",
+        expected_runtime_git_sha=runtime_sha,
+        pilot50_candidate_contract=run_ask_module.PILOT50_CANDIDATE_CONTRACT_ID,
+        require_complete_traces=True,
+        markdown_path=None,
+    )
+
+    assert events[0:2] == ["ready", "reserve"]
+    assert events[-3:] == ["ready", "cardinality", "trace-close"]
+    assert metrics["pilot50_candidate"]["completed"] is True
+    assert metrics["runtime_identity"]["status"] == "verified"
+    assert metrics["cost_control"]["reservation"]["private_full"] is True
+    assert metrics["cost_control"]["reservation"]["reservation_class"] == (
+        "private_full"
+    )
+    assert "pricing_projection" not in metrics["cost_control"]
+    assert output_path.is_file()
+
+
 def test_score_case_preserves_null_llm_accounting_as_missing() -> None:
     result = score_case(
         _normalize_case({"id": "cost-null", "query": "Р’РѕРїСЂРѕСЃ"}),
@@ -1495,6 +1838,13 @@ def test_score_case_normalizes_spacing_inside_numeric_dates() -> None:
 
     assert result["answer_contains_match"] is True
     assert result["passed"] is True
+
+
+@pytest.mark.parametrize("separator", ["–", "—", "−"])
+def test_answer_contains_normalizes_unicode_range_dashes(separator: str) -> None:
+    assert run_ask_module._normalize_answer_contains_text(
+        f"26{separator}30 июля 2026"
+    ) == run_ask_module._normalize_answer_contains_text("26-30 июля 2026")
 
 
 def test_normalize_case_accepts_expected_behavior_aliases() -> None:

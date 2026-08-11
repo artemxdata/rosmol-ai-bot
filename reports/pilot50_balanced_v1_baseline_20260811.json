@@ -1,0 +1,180 @@
+{
+  "schema_version": "pilot50-baseline-artifact-v1",
+  "classification": "calibration_only",
+  "dataset": {
+    "id": "pilot50_balanced_v1",
+    "composition": {
+      "typical": 25,
+      "atypical": 25,
+      "total": 50
+    }
+  },
+  "provenance": {
+    "runtime_git_sha": "c38f0e055630fae2af50720fae81acee20ff4f6a",
+    "cases_sha256": "65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed",
+    "report_sha256": "b3f771036f34299f59bbe3f060b4fa93d7d3653f4a6a1cddc8f2c168216c74a4",
+    "safe_result_sha256": "0950cc14c4e951857809592adf736f0f73b23af33a889ed1310d1bab536c093b",
+    "rate_card_sha256": "3aebb12db82391bad23ec9256781e3439f2692ad63814070e4341bd28ea27bd6"
+  },
+  "run_window_utc": {
+    "started_at": "2026-08-11T02:21:50.194758+00:00",
+    "completed_at": "2026-08-11T02:24:43.589106+00:00"
+  },
+  "mechanical_first_turn_closure": {
+    "typical": {
+      "closed": 11,
+      "total": 25,
+      "rate": 0.44
+    },
+    "atypical": {
+      "closed": 7,
+      "total": 25,
+      "rate": 0.28
+    },
+    "overall": {
+      "closed": 18,
+      "total": 50,
+      "rate": 0.36
+    }
+  },
+  "failure_breakdown": {
+    "failed_total": 32,
+    "escalated": 24,
+    "failed_non_escalated": 8
+  },
+  "escalation_reasons": {
+    "final_response_too_long": 1,
+    "insufficient_sources": 3,
+    "llm_response_contract_failed": 3,
+    "llm_response_profile_failed": 1,
+    "llm_response_too_long": 2,
+    "llm_source_fact_binding_failed": 5,
+    "low_confidence": 2,
+    "no_relevant_chunks": 1,
+    "source_response_contract_failed": 6
+  },
+  "escalation_buckets": {
+    "output_contract": {
+      "count": 18,
+      "reasons": [
+        "final_response_too_long",
+        "llm_response_contract_failed",
+        "llm_response_profile_failed",
+        "llm_response_too_long",
+        "llm_source_fact_binding_failed",
+        "source_response_contract_failed"
+      ]
+    },
+    "retrieval_or_source_confidence": {
+      "count": 6,
+      "reasons": [
+        "insufficient_sources",
+        "low_confidence",
+        "no_relevant_chunks"
+      ]
+    }
+  },
+  "runtime_metrics": {
+    "latency_ms": {
+      "p50": 1997,
+      "p95": 14235
+    },
+    "llm_cost_rub": 11.647398,
+    "trace_coverage": {
+      "found": 50,
+      "total": 50,
+      "rate": 1.0
+    },
+    "cache_hits": 0,
+    "cache_hit_rate": 0.0,
+    "billing_status": "pending_provider_reconciliation",
+    "pricing": {
+      "source": "eval_repriced",
+      "complete": true,
+      "target_telemetry_preserved": true,
+      "target_telemetry_pricing_complete": false
+    }
+  },
+  "interpretation": {
+    "metric": "mechanical_first_turn_closure",
+    "scope": "balanced_tracked_regression_calibration",
+    "not_claimed": [
+      "independent_holdout_quality",
+      "human_product_verdict",
+      "ticket_level_conversion",
+      "production_traffic_conversion"
+    ]
+  },
+  "evaluation_contract_audit": {
+    "factual_authority": "published_yonote_only",
+    "mechanically_compatible_cases": 39,
+    "legacy_qrel_incompatible_cases": 11,
+    "affected_group": "atypical",
+    "affected_source": "pre_pilot_forums",
+    "implication": "The observed v1 result remains historical calibration evidence, but v1 must not be reused as the candidate acceptance set because 11 answer-labelled cases cannot satisfy the published-Yonote scorer contract."
+  },
+  "next_candidate_plan": {
+    "hypothesis": "Most recoverable loss is concentrated in output-contract handling and multi-aspect assembly, with a smaller entity/intent retrieval gap.",
+    "changes": [
+      "Route multi-aspect questions through complete source-bound synthesis instead of the source-only fast path.",
+      "Strengthen entity and intent binding for generic FGAIS and grants questions.",
+      "Compact generated answers before the length gate while preserving fact-binding checks.",
+      "Keep all 32 baseline failures in the regression scope for the candidate cycle."
+    ],
+    "verification_sequence": [
+      "Run local unit and regression tests without paid model calls.",
+      "Review every baseline failure against the frozen source and expected checks.",
+      "Freeze a versioned Pilot50 v2 whose every factual qrel resolves to published Yonote.",
+      "Run one bounded server-local calibration only after the candidate, v2 dataset hashes, budget, and owner approval are fixed."
+    ],
+    "paid_calibration_gate": {
+      "required_dataset_id": "pilot50_balanced_v2",
+      "published_yonote_qrels_required": true,
+      "new_runtime_and_tooling_sha_required": true,
+      "one_time_owner_approval_required": true,
+      "runner_projected_stop_limit_rub_maximum": 30,
+      "single_server_local_run": true
+    },
+    "acceptance_criteria": {
+      "mechanical_first_turn_closure": {
+        "minimum_closed": 30,
+        "denominator": 50
+      },
+      "slice_floor": {
+        "typical": {
+          "minimum_closed": 11,
+          "denominator": 25
+        },
+        "atypical": {
+          "minimum_closed": 7,
+          "denominator": 25
+        }
+      },
+      "output_contract_escalations": {
+        "maximum": 6
+      },
+      "source_binding_failures": {
+        "maximum": 0,
+        "applicable_qrel_cases": 38,
+        "denominator": 50
+      },
+      "critical_case_failures": {
+        "maximum": 0,
+        "applicable_critical_cases": 15,
+        "denominator": 50,
+        "definition_tags": [
+          "adversarial",
+          "off_aspect_guard"
+        ]
+      }
+    },
+    "constraints": [
+      "Do not claim independent holdout or production conversion from this calibration set.",
+      "Do not use HDE or VK as the calibration transport.",
+      "Do not run another paid calibration before the candidate change and offline gate are complete.",
+      "Keep the immutable v1 evidence, KB, Yonote, safety policy, API, and production runtime unchanged.",
+      "Do not compare the changed v2 atypical slice to v1 as an apples-to-apples before/after estimate.",
+      "Do not weaken source grounding, published-source requirements, or fail-closed guards."
+    ]
+  }
+}

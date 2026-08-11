@@ -15,6 +15,7 @@ from src.graph.nodes.generate import (
     _is_redundant_source_chunk,
     _linked_named_section_date_source,
     _llm_claims_have_bound_source_facts,
+    _question_topic_group,
     _source_chunk_covers_question,
     _source_matches_explicit_question_constraints,
     generate,
@@ -56,6 +57,26 @@ class SequenceLLM(StubLLM):
         self.calls += 1
         self.requests.append(kwargs)
         return self.responses[self.calls - 1]
+
+
+def test_question_topic_alias_normalization_is_bounded() -> None:
+    assert (
+        _question_topic_group(
+            Question(text="Кто оплачивает дорогу?", topic="оплата_проезда")
+        )
+        == _question_topic_group(
+            Question(text="Кто оплачивает дорогу?", topic="oplata_proezda")
+        )
+    )
+    assert (
+        _question_topic_group(
+            Question(
+                text="Какие документы нужны для подачи заявки?",
+                topic="документы_для_заявки",
+            )
+        )
+        == "документы_для_заявки"
+    )
 
 
 def test_claim_fact_numbers_ignores_each_numbered_list_marker() -> None:
@@ -349,6 +370,7 @@ async def test_overlong_llm_response_is_rejected_without_substring_truncation(
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "llm_response_too_long"
     assert result["generated_response"] == ""
+    assert "_rejected_candidate" not in result
 
 
 @pytest.mark.asyncio
@@ -379,6 +401,8 @@ async def test_complex_llm_response_uses_900_character_budget(
     assert result["escalation_reason"] == "llm_response_too_long"
     assert result["generated_response"] == ""
     assert llm.requests[0]["max_tokens"] == 900
+    assert "720 символов" in llm.requests[0]["user"]
+    assert "585 символов" in llm.requests[1]["user"]
 
 
 @pytest.mark.asyncio
@@ -409,9 +433,14 @@ async def test_invalid_first_synthesis_is_retried_once_then_succeeds(
 
     assert llm.calls == 2
     assert result.get("should_escalate") is not True
+    assert "_rejected_candidate" not in result
     assert result["generated_response"] == (
         "В программе будут лекции. [src:yonote_program]"
     )
+    assert "360 символов" in llm.requests[0]["user"]
+    assert "292 символов" in llm.requests[1]["user"]
+    assert "Отклонённый черновик" in llm.requests[1]["user"]
+    assert "Д" * 80 in llm.requests[1]["user"]
 
 
 @pytest.mark.asyncio
@@ -778,6 +807,8 @@ async def test_multi_source_answer_retries_swapped_nonnumeric_citations(
     assert result.get("should_escalate") is not True
     assert result["cited_sources"] == ["yonote_application", "yonote_travel"]
     assert llm.requests[1]["user"].count("llm_source_fact_binding_failed") == 1
+    assert "Отклонённый черновик" in llm.requests[1]["user"]
+    assert "ровно одним соответствующим source-маркером" in llm.requests[1]["user"]
 
 
 @pytest.mark.asyncio
@@ -1612,6 +1643,30 @@ def test_generator_prompt_locks_structure_and_response_budget() -> None:
     assert "Начинай с прямого ответа" in RESPONSE_GENERATOR_SYSTEM
     assert "не более одной" in RESPONSE_GENERATOR_SYSTEM
     assert "эмодзи" in RESPONSE_GENERATOR_SYSTEM
+    assert "ровно один source-маркер" in RESPONSE_GENERATOR_SYSTEM
+    assert "не ставь несколько source-маркеров" in prompt
+    assert "не создавай такой пункт" in prompt
+    assert "что в источниках нет достаточных данных" not in prompt
+
+
+def test_generator_retry_prompt_bounds_rejected_draft() -> None:
+    prompt = build_generator_user(
+        questions=[Question(text="Когда проходит Машук?")],
+        chunks=[
+            Chunk(
+                chunk_id="yonote_dates",
+                text="Машук пройдёт в августе.",
+                metadata={"source_type": "yonote"},
+            )
+        ],
+        session=None,
+        max_chars=SIMPLE_RESPONSE_MAX_CHARS,
+        retry_reason="llm_response_too_long",
+        rejected_draft="Я" * 1500,
+    )
+
+    assert "Я" * 1200 + "…" in prompt
+    assert "Я" * 1201 not in prompt
 
 
 def test_specific_profile_needs_fact_anchor_not_only_two_shared_tokens() -> None:

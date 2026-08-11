@@ -8259,6 +8259,198 @@ async def test_generate_prioritizes_exact_fallback_sources(
 
 
 @pytest.mark.asyncio
+async def test_generate_synthesizes_distinct_aspects_from_one_yonote_source_with_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="application_and_travel",
+        text=(
+            "Заявку на форум подают на платформе Росмолодёжь.События. "
+            "Проезд участник оплачивает самостоятельно."
+        ),
+        metadata={
+            "source_type": "yonote",
+            "forum_normalized": "Амур",
+            "category": "форумы",
+            "topic": "podacha_zayavki_na_proekt",
+            "intent_examples": ["Как подать заявку?", "Кто оплачивает проезд?"],
+        },
+        score=0.95,
+        reranker_score=0.9,
+    )
+    llm = CapturingLLM(
+        "Заявку подают на платформе Росмолодёжь.События. "
+        "[src:application_and_travel]\n\n"
+        "Проезд участник оплачивает самостоятельно. "
+        "[src:application_and_travel]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": "Как подать заявку на Амур и кто оплачивает проезд?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Амур",
+                questions=[
+                    Question(
+                        text="Как подать заявку?",
+                        category="форумы",
+                        forum_normalized="Амур",
+                    ),
+                    Question(
+                        text="Кто оплачивает проезд?",
+                        category="форумы",
+                        forum_normalized="Амур",
+                    ),
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert result.get("should_escalate") is not True
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert result["cited_sources"] == ["application_and_travel"]
+    assert "Заявку подают" in result["generated_response"]
+    assert "Проезд участник оплачивает" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_omitted_aspect_from_one_yonote_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="travel_and_transfer",
+        text=(
+            "Проезд участник оплачивает самостоятельно. "
+            "От вокзала до площадки будет организован трансфер."
+        ),
+        metadata={
+            "source_type": "yonote",
+            "forum_normalized": "Амур",
+            "category": "форумы",
+            "topic": "oplata_proezda_i_transfer",
+        },
+        score=0.95,
+        reranker_score=0.9,
+    )
+    omitted = (
+        "Проезд участник оплачивает самостоятельно. "
+        "[src:travel_and_transfer]\n\n"
+        "Дорогу участник также оплачивает сам. "
+        "[src:travel_and_transfer]"
+    )
+    llm = CapturingLLM(omitted)
+
+    result = await generate(
+        {
+            "message_masked": "Кто оплачивает проезд и есть ли трансфер?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Амур",
+                questions=[
+                    Question(
+                        text="Кто оплачивает проезд?",
+                        topic="oplata_proezda",
+                    ),
+                    Question(
+                        text="Есть ли трансфер?",
+                        topic="transfer_do_mesta_provedeniya_meropriyatiya",
+                    ),
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_source_coverage_failed"
+    assert result["generated_response"] == ""
+    assert "_rejected_candidate" not in result
+    assert (
+        "Проезд участник оплачивает самостоятельно. [src:travel_and_transfer] "
+        "Дорогу участник также оплачивает сам. [src:travel_and_transfer]"
+        in llm.kwargs[1]["user"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_omitted_volunteer_step_from_account_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    chunk = ScoredChunk(
+        chunk_id="both",
+        text=(
+            "Зарегистрируйся по ссылке https://dobro.ru. "
+            "Затем выбери волонтёрскую вакансию и подай заявку."
+        ),
+        metadata={
+            "source_type": "yonote",
+            "category": "форумы",
+            "topic": "registraciya_s_pomoschyu_sozdaniya_kabineta",
+            "intent_examples": [
+                "Как создать кабинет?",
+                "Как подать заявку волонтёром?",
+            ],
+        },
+        score=0.95,
+        reranker_score=0.9,
+    )
+    omitted = (
+        "Зарегистрируйся по ссылке https://dobro.ru. [src:both]"
+    )
+    llm = CapturingLLM(omitted)
+
+    result = await generate(
+        {
+            "message_masked": "Как создать кабинет и подать заявку волонтёром?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                questions=[
+                    Question(
+                        text="Как создать кабинет?",
+                        topic="registraciya_s_pomoschyu_sozdaniya_kabineta",
+                    ),
+                    Question(
+                        text="Как подать заявку волонтёром?",
+                        topic="volonterskaya_pomosch",
+                    ),
+                ],
+            ),
+            "reranked_chunks": [chunk],
+            "max_confidence": 0.9,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_source_coverage_failed"
+    assert result["generated_response"] == ""
+
+
+@pytest.mark.asyncio
 async def test_generate_returns_source_chunk_for_duplicate_covered_aspect_questions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

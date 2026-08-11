@@ -92,6 +92,14 @@ PILOT50_REPRICING_MODELS: dict[str, tuple[Decimal, Decimal]] = {
     "ai-sage/GigaChat3-10B-A1.8B": (Decimal("12.2"), Decimal("12.2")),
     "GigaChat/GigaChat-2-Max": (Decimal("569.34"), Decimal("569.34")),
 }
+PILOT50_CANDIDATE_CONTRACT_ID = "pilot50-v2-candidate-v1"
+PILOT50_CANDIDATE_CASES_SHA256 = (
+    "b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
+)
+PILOT50_CANDIDATE_TARGET = "http://pilot50-candidate-ml:8000/ask"
+PILOT50_CANDIDATE_CASES_TOTAL = 50
+PILOT50_CANDIDATE_COST_CAP_RUB = 30.0
+PILOT50_CANDIDATE_COST_SCOPE = "pilot50-v2-candidate"
 PHASE0_RUNNER_CASE_FIELDS = frozenset(
     {
         "id",
@@ -720,6 +728,8 @@ async def run_eval(
     cost_runtime_git_sha: str | None = None,
     cost_reservation: LiveEvalCostReservation | None = None,
     llm_cost_repricing_contract: str | None = None,
+    pilot50_candidate_contract: str | None = None,
+    require_complete_traces: bool = False,
     allow_source_observed_diagnostic: bool = False,
     phase0_manifest_path: Path | None = None,
     phase0_server_local: bool = False,
@@ -729,6 +739,12 @@ async def run_eval(
     eval_run_id = f"ask-eval-{uuid4()}"
     if sealed_holdout and calibration_replay:
         raise ValueError("sealed_holdout and calibration_replay are mutually exclusive")
+    if str(llm_cost_repricing_contract or "").strip() and str(
+        pilot50_candidate_contract or ""
+    ).strip():
+        raise ValueError(
+            "Pilot50 repricing and candidate contracts are mutually exclusive"
+        )
     private_contract_run = sealed_holdout or calibration_replay
     source_diagnostic_requested = allow_source_observed_diagnostic
     strict_live = not _is_in_process_mock_transport(transport)
@@ -877,6 +893,7 @@ async def run_eval(
         calibration_replay
         or source_diagnostic_cases
         or bool(str(llm_cost_repricing_contract or "").strip())
+        or bool(str(pilot50_candidate_contract or "").strip())
     ):
         raise ValueError(
             "expected_runtime_git_sha is only valid for calibration_replay "
@@ -1148,6 +1165,30 @@ async def run_eval(
     )
     if validated_repricing_contract is not None:
         evaluation_runtime_git_sha = PILOT50_REPRICING_RUNTIME_SHA
+    validated_candidate_contract = _validated_pilot50_candidate_contract(
+        pilot50_candidate_contract,
+        cases=cases,
+        cases_file_sha256=cases_file_sha256,
+        target=target,
+        concurrency=concurrency,
+        trace_lookup=trace_lookup,
+        bypass_cache=bypass_cache,
+        max_llm_cost_rub=max_llm_cost_rub,
+        max_cases=max_cases,
+        auto_smoke_cases=auto_smoke_cases,
+        generated_user_prefix=generated_user_prefix,
+        private_contract_run=private_contract_run,
+        source_diagnostic_cases=bool(source_diagnostic_cases),
+        phase0_contract=phase0_contract,
+        strict_live=strict_live,
+        high_cost_approval_id=high_cost_approval_id,
+        expected_runtime_git_sha=expected_runtime_git_sha,
+        require_budget_for_large_runs=require_budget_for_large_runs,
+        require_complete_traces=require_complete_traces,
+    )
+    candidate_contract_run = validated_candidate_contract is not None
+    if validated_candidate_contract is not None:
+        evaluation_runtime_git_sha = validated_candidate_contract["runtime_git_sha"]
     original_cases_total = len(cases)
     if max_cases is not None:
         if holdout_contract is not None:
@@ -1166,7 +1207,7 @@ async def run_eval(
             require_budget=require_budget_for_large_runs,
             large_run_threshold=large_run_threshold,
             trace_lookup=trace_lookup,
-            private_contract_run=private_contract_run,
+            private_contract_run=(private_contract_run or candidate_contract_run),
             high_cost_approval_id=high_cost_approval_id,
         )
         if not _is_in_process_mock_transport(transport):
@@ -1260,6 +1301,7 @@ async def run_eval(
         not _is_in_process_mock_transport(transport)
         and cases
         and phase0_contract is None
+        and validated_candidate_contract is None
     ):
         try:
             if validated_cost_reservation is None:
@@ -1446,6 +1488,45 @@ async def run_eval(
                         raise RuntimeError(
                             f"{private_run_label} started receipt could not be created"
                         ) from exc
+                if validated_candidate_contract is not None:
+                    phase0_execution_stage = "candidate_cost_reservation"
+                    try:
+                        if validated_cost_reservation is None:
+                            validated_cost_reservation = reserve_live_eval_cost(
+                                scope=PILOT50_CANDIDATE_COST_SCOPE,
+                                run_id=eval_run_id,
+                                runtime_git_sha=validated_candidate_contract[
+                                    "runtime_git_sha"
+                                ],
+                                manifest_sha256=PILOT50_CANDIDATE_CASES_SHA256,
+                                case_count=PILOT50_CANDIDATE_CASES_TOTAL,
+                                approved_cap_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
+                                private_full=True,
+                                high_cost_approval_id=(
+                                    validated_high_cost_approval_id
+                                ),
+                                ledger_dir=cost_ledger_dir,
+                            )
+                        else:
+                            _validate_cost_reservation_for_child_run(
+                                validated_cost_reservation,
+                                case_count=PILOT50_CANDIDATE_CASES_TOTAL,
+                                max_llm_cost_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
+                                private_full=True,
+                            )
+                        _validate_pilot50_candidate_cost_reservation(
+                            validated_cost_reservation,
+                            eval_run_id=eval_run_id,
+                            contract=validated_candidate_contract,
+                            high_cost_approval_id=(
+                                validated_high_cost_approval_id
+                            ),
+                        )
+                    except (OSError, ValueError) as exc:
+                        raise ValueError(
+                            "Pilot50 candidate cost-governance preflight failed "
+                            f"after runtime verification: {exc}"
+                        ) from exc
                 if phase0_contract is not None:
                     phase0_execution_stage = "cost_reservation"
                     phase0_reservation_started = True
@@ -1527,7 +1608,12 @@ async def run_eval(
                     results.append(result)
                     if strict_live_cost_control:
                         llm_pricing_failure = (
-                            repricing_failure or _llm_cost_accounting_failure(result)
+                            repricing_failure
+                            or (
+                                _pilot50_candidate_accounting_failure(result)
+                                if validated_candidate_contract is not None
+                                else _llm_cost_accounting_failure(result)
+                            )
                         )
                         if llm_pricing_failure is not None:
                             break
@@ -1548,6 +1634,7 @@ async def run_eval(
                 holdout_contract is not None
                 or source_diagnostic_cases
                 or validated_repricing_contract is not None
+                or validated_candidate_contract is not None
             ):
                 phase0_execution_stage = "runtime_postflight"
                 try:
@@ -1588,7 +1675,11 @@ async def run_eval(
                             **private_report_context,
                         )
                     raise
-                if holdout_contract is not None or phase0_contract is not None:
+                if (
+                    holdout_contract is not None
+                    or phase0_contract is not None
+                    or validated_candidate_contract is not None
+                ):
                     assert trace_pool is not None
                     phase0_execution_stage = "trace_cardinality"
                     try:
@@ -1744,6 +1835,7 @@ async def run_eval(
             or bool(source_diagnostic_cases)
             and (strict_live or evaluation_runtime_git_sha is not None)
             or validated_repricing_contract is not None
+            or validated_candidate_contract is not None
         ),
     )
     if (
@@ -1759,6 +1851,11 @@ async def run_eval(
         and runtime_identity["status"] != "verified"
     ):
         raise RuntimeError("Pilot50 repricing runtime identity was not verified")
+    if (
+        validated_candidate_contract is not None
+        and runtime_identity["status"] != "verified"
+    ):
+        raise RuntimeError("Pilot50 candidate runtime identity was not verified")
     metrics["runtime_identity"] = runtime_identity
     metrics["cost_control"] = {
         "strict_live": strict_live,
@@ -1769,10 +1866,15 @@ async def run_eval(
         "reservation": _safe_cost_reservation_report(
             validated_cost_reservation,
             cases_file_sha256=cases_file_sha256,
+            include_private_full=validated_candidate_contract is not None,
         ),
     }
     if validated_repricing_contract is not None:
         metrics["cost_control"]["pricing_projection"] = validated_repricing_contract
+    if validated_candidate_contract is not None:
+        metrics["cost_control"]["candidate_contract"] = (
+            validated_candidate_contract
+        )
     if budget_stopped:
         metrics["cases_original_total"] = original_cases_total
         metrics["cases_limited"] = True
@@ -1782,6 +1884,56 @@ async def run_eval(
         metrics["cases_limited"] = True
         metrics["llm_pricing_stopped"] = True
         metrics["llm_pricing_failure"] = llm_pricing_failure
+    candidate_failures: list[str] = []
+    if validated_candidate_contract is not None:
+        candidate_failures = _holdout_integrity_failures(
+            metrics,
+            results=results,
+            expected_cases_total=PILOT50_CANDIDATE_CASES_TOTAL,
+            executed_cases_total=len(results),
+            trace_cardinality=holdout_trace_cardinality,
+            trace_cardinality_error=holdout_trace_cardinality_error,
+        )
+        if budget_stopped:
+            candidate_failures.append("llm_budget_stopped")
+        if llm_pricing_failure is not None:
+            candidate_failures.append("llm_pricing_unavailable")
+        if runtime_identity["status"] != "verified":
+            candidate_failures.append("runtime_identity_invalid")
+        reservation_report = metrics["cost_control"].get("reservation")
+        if not isinstance(reservation_report, Mapping) or any(
+            (
+                reservation_report.get("valid") is not True,
+                reservation_report.get("scope")
+                != PILOT50_CANDIDATE_COST_SCOPE,
+                reservation_report.get("case_count")
+                != PILOT50_CANDIDATE_CASES_TOTAL,
+                reservation_report.get("approved_cap_rub")
+                != PILOT50_CANDIDATE_COST_CAP_RUB,
+                reservation_report.get("private_full") is not True,
+                reservation_report.get("reservation_class") != "private_full",
+                reservation_report.get("high_cost_approval_id")
+                != validated_high_cost_approval_id,
+            )
+        ):
+            candidate_failures.append("cost_reservation_invalid")
+        candidate_failures = list(dict.fromkeys(candidate_failures))
+        metrics["trace_cardinality"] = holdout_trace_cardinality
+        if holdout_trace_cardinality_error is not None:
+            metrics["trace_cardinality_error"] = holdout_trace_cardinality_error
+        metrics["pilot50_candidate"] = {
+            "status": (
+                "completed" if not candidate_failures else "integrity_rejected"
+            ),
+            "completed": not candidate_failures,
+            "contract_id": PILOT50_CANDIDATE_CONTRACT_ID,
+            "expected_cases_total": PILOT50_CANDIDATE_CASES_TOTAL,
+            "executed_cases_total": len(results),
+            "cases_file_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+            "runtime_git_sha": validated_candidate_contract["runtime_git_sha"],
+            "integrity_failures": candidate_failures,
+            "selective_reruns_forbidden": True,
+        }
     phase0_failures: list[str] = []
     if phase0_contract is not None:
         phase0_failures = _phase0_integrity_failures(
@@ -1831,6 +1983,17 @@ async def run_eval(
             "Phase 0 failed run-integrity checks; private rejection evidence was "
             "written and the canonical report was not created: "
             + ", ".join(phase0_failures)
+        )
+    if candidate_failures:
+        rejection_path = output_path.with_name(
+            f"{output_path.stem}.{eval_run_id}.rejected.json"
+        )
+        metrics["pilot50_candidate"]["rejection_evidence"] = rejection_path.name
+        await asyncio.to_thread(_write_json_exclusive, rejection_path, metrics)
+        raise RuntimeError(
+            "Pilot50 candidate failed run-integrity checks; private rejection "
+            "evidence was written and the canonical report was not created: "
+            + ", ".join(candidate_failures)
         )
     holdout_failures: list[str] = []
     if holdout_contract is not None:
@@ -1962,6 +2125,14 @@ async def run_eval(
             metrics=metrics,
             eval_run_id=eval_run_id,
         )
+    elif validated_candidate_contract is not None:
+        await asyncio.to_thread(_write_json_exclusive, output_path, metrics)
+        if markdown_path:
+            await asyncio.to_thread(
+                _write_markdown_exclusive,
+                markdown_path,
+                metrics,
+            )
     else:
         await asyncio.to_thread(_write_json, output_path, metrics)
         if markdown_path:
@@ -2231,6 +2402,93 @@ def _validated_pilot50_repricing_contract(
     }
 
 
+def _validated_pilot50_candidate_contract(
+    value: str | None,
+    *,
+    cases: list[dict[str, Any]],
+    cases_file_sha256: str,
+    target: str,
+    concurrency: int,
+    trace_lookup: bool,
+    bypass_cache: bool,
+    max_llm_cost_rub: float | None,
+    max_cases: int | None,
+    auto_smoke_cases: bool,
+    generated_user_prefix: str | None,
+    private_contract_run: bool,
+    source_diagnostic_cases: bool,
+    phase0_contract: Mapping[str, Any] | None,
+    strict_live: bool,
+    high_cost_approval_id: str | None,
+    expected_runtime_git_sha: str | None,
+    require_budget_for_large_runs: bool,
+    require_complete_traces: bool,
+) -> dict[str, Any] | None:
+    contract_id = str(value or "").strip()
+    if not contract_id:
+        return None
+    runtime_sha = str(os.getenv("RELEASE_GIT_SHA") or "").strip()
+    approval_id = str(high_cost_approval_id or "").strip()
+    failures: list[str] = []
+    if contract_id != PILOT50_CANDIDATE_CONTRACT_ID:
+        failures.append("contract_id")
+    if (
+        FULL_GIT_SHA_RE.fullmatch(runtime_sha) is None
+        or runtime_sha == "0" * 40
+        or expected_runtime_git_sha != runtime_sha
+    ):
+        failures.append("runtime_sha")
+    if cases_file_sha256 != PILOT50_CANDIDATE_CASES_SHA256:
+        failures.append("cases_sha")
+    if len(cases) != PILOT50_CANDIDATE_CASES_TOTAL:
+        failures.append("case_count")
+    if target != PILOT50_CANDIDATE_TARGET:
+        failures.append("target")
+    if concurrency != 1:
+        failures.append("concurrency")
+    if trace_lookup is not True or require_complete_traces is not True:
+        failures.append("complete_traces")
+    if bypass_cache is not True:
+        failures.append("bypass_cache")
+    if max_llm_cost_rub != PILOT50_CANDIDATE_COST_CAP_RUB:
+        failures.append("cost_cap")
+    if require_budget_for_large_runs is not True:
+        failures.append("bounded_cost")
+    if max_cases is not None or auto_smoke_cases:
+        failures.append("case_selection")
+    if generated_user_prefix is not None:
+        failures.append("user_prefix")
+    if private_contract_run or source_diagnostic_cases or phase0_contract is not None:
+        failures.append("run_class")
+    if not strict_live:
+        failures.append("strict_live")
+    if SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
+        failures.append("approval")
+    if failures:
+        raise ValueError(
+            "Pilot50 candidate contract rejected: " + ", ".join(failures)
+        )
+    return {
+        "schema_version": "pilot50-candidate-eval-v1",
+        "contract_id": PILOT50_CANDIDATE_CONTRACT_ID,
+        "runtime_git_sha": runtime_sha,
+        "cases_file_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+        "cases_total": PILOT50_CANDIDATE_CASES_TOTAL,
+        "target": PILOT50_CANDIDATE_TARGET,
+        "concurrency": 1,
+        "cache_bypass": "signed_pre_and_per_request",
+        "runtime_ready_checks": "signed_pre_and_post",
+        "complete_traces_required": True,
+        "max_llm_cost_rub": PILOT50_CANDIDATE_COST_CAP_RUB,
+        "cost_scope": PILOT50_CANDIDATE_COST_SCOPE,
+        "reservation_private_full": True,
+        "pricing_source": "target_reported",
+        "pricing_rate_card_sha256": PILOT50_REPRICING_RATE_CARD_SHA256,
+        "target_telemetry_pricing_complete": True,
+        "repricing_applied": False,
+    }
+
+
 def _pilot50_reprice_result(
     result: dict[str, Any],
     *,
@@ -2378,6 +2636,105 @@ def _pilot50_reprice_result(
     projected["llm_usage"] = repriced_usage
     projected["llm_estimated_cost_rub"] = float(cost_total)
     return projected, None
+
+
+def _pilot50_candidate_accounting_failure(result: Mapping[str, Any]) -> str | None:
+    if result.get("trace_found") is not True:
+        return "pilot50_candidate_trace_missing"
+    usage = result.get("llm_usage")
+    if result.get("llm_accounting_present") is not True or not isinstance(usage, list):
+        return "pilot50_candidate_usage_missing"
+    try:
+        aggregate_prompt = _strict_nonnegative_int(result.get("llm_prompt_tokens"))
+        aggregate_completion = _strict_nonnegative_int(
+            result.get("llm_completion_tokens")
+        )
+        aggregate_total = _strict_nonnegative_int(result.get("llm_total_tokens"))
+        aggregate_cost = Decimal(str(result.get("llm_estimated_cost_rub")))
+    except (ArithmeticError, TypeError, ValueError):
+        return "pilot50_candidate_aggregate_invalid"
+    if not aggregate_cost.is_finite() or aggregate_cost < 0:
+        return "pilot50_candidate_aggregate_invalid"
+    if aggregate_prompt + aggregate_completion != aggregate_total:
+        return "pilot50_candidate_aggregate_token_mismatch"
+
+    if not usage:
+        if any((aggregate_prompt, aggregate_completion, aggregate_total)):
+            return "pilot50_candidate_empty_usage_mismatch"
+        if aggregate_cost != 0:
+            return "pilot50_candidate_empty_usage_mismatch"
+        if result.get("generator_model") not in {
+            None,
+            "not_run",
+            "source_only",
+            "source_chunk",
+        }:
+            return "pilot50_candidate_zero_usage_model_ambiguous"
+        if result.get("analyzer_execution_mode") != "deterministic":
+            return "pilot50_candidate_zero_usage_ambiguous"
+        if (
+            result.get("http_status") != 200
+            or result.get("http_success") is not True
+            or result.get("error") not in (None, "")
+            or result.get("trace_error") not in (None, "")
+            or bool(result.get("generate_retry_reasons"))
+        ):
+            return "pilot50_candidate_zero_usage_ambiguous"
+        return None
+
+    prompt_total = 0
+    completion_total = 0
+    token_total = 0
+    cost_total = Decimal("0")
+    for event in usage:
+        if not isinstance(event, Mapping):
+            return "pilot50_candidate_event_invalid"
+        model = str(event.get("model") or "").strip()
+        prices = PILOT50_REPRICING_MODELS.get(model)
+        if prices is None:
+            return "pilot50_candidate_unknown_model"
+        try:
+            prompt_tokens = _strict_nonnegative_int(event.get("prompt_tokens"))
+            completion_tokens = _strict_nonnegative_int(
+                event.get("completion_tokens")
+            )
+            total_tokens = _strict_nonnegative_int(event.get("total_tokens"))
+            event_cost = Decimal(str(event.get("estimated_cost_rub")))
+        except (ArithmeticError, TypeError, ValueError):
+            return "pilot50_candidate_event_invalid"
+        if (
+            total_tokens <= 0
+            or prompt_tokens + completion_tokens != total_tokens
+        ):
+            return "pilot50_candidate_event_token_mismatch"
+        input_price, output_price = prices
+        expected_cost = (
+            (
+                Decimal(prompt_tokens) * input_price
+                + Decimal(completion_tokens) * output_price
+            )
+            / Decimal(1_000_000)
+        ).quantize(Decimal("0.000001"))
+        if (
+            event.get("priced") is not True
+            or not event_cost.is_finite()
+            or event_cost <= 0
+            or event_cost != expected_cost
+        ):
+            return "pilot50_candidate_event_cost_mismatch"
+        prompt_total += prompt_tokens
+        completion_total += completion_tokens
+        token_total += total_tokens
+        cost_total += event_cost
+    if (
+        prompt_total != aggregate_prompt
+        or completion_total != aggregate_completion
+        or token_total != aggregate_total
+    ):
+        return "pilot50_candidate_aggregate_token_mismatch"
+    if aggregate_cost != cost_total:
+        return "pilot50_candidate_aggregate_cost_mismatch"
+    return None
 
 
 def _guard_large_live_run_budget(
@@ -2819,6 +3176,7 @@ def _safe_cost_reservation_report(
     reservation: LiveEvalCostReservation | None,
     *,
     cases_file_sha256: str | None,
+    include_private_full: bool = False,
 ) -> dict[str, Any] | None:
     if reservation is None:
         return None
@@ -2829,6 +3187,13 @@ def _safe_cost_reservation_report(
     run_id = str(record.get("run_id") or "") or None
     scope = str(record.get("scope") or "") or None
     approval_required = record.get("approval_required")
+    private_full = record.get("private_full")
+    reservation_class_value = record.get("reservation_class")
+    reservation_class = (
+        reservation_class_value
+        if reservation_class_value in {"routine", "private_full"}
+        else None
+    )
     try:
         case_count = _strict_nonnegative_int(record.get("case_count"))
     except ValueError:
@@ -2851,7 +3216,14 @@ def _safe_cost_reservation_report(
     approval_valid = approval_id is None or (
         SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is not None
     )
-    return {
+    private_shape_valid = (
+        private_full is None and reservation_class_value is None
+    ) or (
+        type(private_full) is bool
+        and reservation_class
+        == ("private_full" if private_full else "routine")
+    )
+    report = {
         "valid": all(
             (
                 runtime_valid,
@@ -2864,6 +3236,7 @@ def _safe_cost_reservation_report(
                 bool(scope),
                 type(approval_required) is bool,
                 manifest_sha256 == safe_cases_sha,
+                private_shape_valid,
             )
         ),
         "run_id": run_id,
@@ -2883,6 +3256,14 @@ def _safe_cost_reservation_report(
         ),
         "high_cost_approval_id": approval_id if approval_valid else None,
     }
+    if (
+        include_private_full
+        and private_full is True
+        and reservation_class == "private_full"
+    ):
+        report["private_full"] = True
+        report["reservation_class"] = "private_full"
+    return report
 
 
 def _validate_cost_reservation_for_child_run(
@@ -2929,6 +3310,32 @@ def _validate_phase0_cost_reservation(
     if any(record.get(field) != value for field, value in expected.items()):
         raise CostGovernanceError(
             "Phase 0 cost reservation differs from the approved execution tuple"
+        )
+
+
+def _validate_pilot50_candidate_cost_reservation(
+    reservation: LiveEvalCostReservation,
+    *,
+    eval_run_id: str,
+    contract: Mapping[str, Any],
+    high_cost_approval_id: str | None,
+) -> None:
+    record = reservation.record
+    expected = {
+        "reservation_class": "private_full",
+        "scope": PILOT50_CANDIDATE_COST_SCOPE,
+        "run_id": eval_run_id,
+        "runtime_git_sha": contract["runtime_git_sha"],
+        "manifest_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+        "case_count": PILOT50_CANDIDATE_CASES_TOTAL,
+        "approved_cap_rub": PILOT50_CANDIDATE_COST_CAP_RUB,
+        "private_full": True,
+        "approval_required": True,
+        "high_cost_approval_id": high_cost_approval_id,
+    }
+    if any(record.get(field) != value for field, value in expected.items()):
+        raise CostGovernanceError(
+            "Pilot50 candidate cost reservation differs from the fixed execution tuple"
         )
 
 
@@ -5556,7 +5963,12 @@ def _equivalent_chunk_id_map(value: Any, expected_chunk_ids: list[str]) -> dict[
 
 
 def _normalize_answer_contains_text(value: Any) -> str:
-    normalized = str(value or "").casefold().replace("ё", "е")
+    normalized = (
+        str(value or "")
+        .casefold()
+        .replace("ё", "е")
+        .translate(str.maketrans({"–": "-", "—": "-", "−": "-"}))
+    )
     normalized = DATE_SEPARATOR_SPACING_RE.sub(r"\1", normalized)
     return " ".join(normalized.split())
 
@@ -6017,6 +6429,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--pilot50-candidate-contract",
+        choices=(PILOT50_CANDIDATE_CONTRACT_ID,),
+        default="",
+        help=(
+            "Exact fail-closed Pilot50 v2 candidate contract. It fixes the "
+            "target, 50-case payload, signed cache bypass, trace coverage, "
+            "runtime identity, target-reported pricing, and 30 RUB cap."
+        ),
+    )
+    parser.add_argument(
         "--large-run-threshold",
         type=int,
         default=20,
@@ -6172,6 +6594,10 @@ def main() -> None:
             llm_cost_repricing_contract=(
                 args.llm_cost_repricing_contract or None
             ),
+            pilot50_candidate_contract=(
+                args.pilot50_candidate_contract or None
+            ),
+            require_complete_traces=args.require_complete_traces,
             require_budget_for_large_runs=not args.allow_unbounded_llm_cost,
             large_run_threshold=args.large_run_threshold,
             sealed_holdout=args.sealed_holdout,

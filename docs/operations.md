@@ -44,60 +44,39 @@
 
 ### Balanced Pilot50: server-local 25 typical + 25 atypical
 
-Pilot50 — one-shot regression calibration уже работающего `app-ml`, а не deployment и не
-независимая оценка product conversion. Набор содержит ровно 25 типовых single-intent и
-25 нетиповых noisy/multi/precise-aspect вопросов; все 50 заранее ожидают полноценный
-опубликованный ответ без оператора. Итоговая безопасная метрика — mechanical first-turn closure
-по каждой группе и всему balanced-набору. Её нельзя переносить на production traffic mix или
-называть ticket-level conversion/human verdict.
+Pilot50 — one-shot regression calibration, а не deployment и не независимая оценка product
+conversion. Итоговая безопасная метрика — mechanical first-turn closure по каждой группе и всему
+balanced-набору. Её нельзя переносить на production traffic mix или называть ticket-level
+conversion/human verdict.
 
-Контур выполняется только после local tests, commit/push и server checkout exact 40-character
-SHA из GitHub. Codex не подключается к серверу. Сначала владелец запускает бесплатный preflight:
+Первый контур D-039 уже полностью израсходован и успешно завершён: runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, cases SHA-256
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`, `50/50` trace,
+`0` cache hits и `18/50 = 36%` mechanical closure. Повторно запускать `preflight`, `run` или
+`recover-pre-request`, удалять markers либо очищать ledger запрещено. Историческая команда
+continuation намеренно не приводится как действующая инструкция.
 
-```bash
-bash scripts/run_pilot50_server_local.sh preflight
-```
+Tracked safe baseline находится в
+`reports/pilot50_balanced_v1_baseline_20260811.json`. Raw cases/report остаются mode `0600`
+только в `/var/lib/rosmol/pilot50/`; query/response, IDs и approval reference не переносятся в
+Git или workstation. Phase A остаётся отдельным `pending/evidence-at-risk` аудитом, а Phase 0
+billing — `unreconciled`; это не меняет quality baseline и не разрешает replay.
 
-Preflight не вызывает `/ask`: он проверяет clean Git snapshot, exact runtime `/ready`, image
-identity, manifest/source/membership/PII, materializes `50 = 25 + 25` и печатает только SHA,
-counts, forecast `10 RUB` и runner projected stop-limit `20 RUB` (это не provider hard cap).
-Исторический Phase A остаётся отдельным
-`pending/evidence-at-risk` аудитом: его unresolved export `FAIL` не блокирует новый Pilot50,
-Pilot50 не заменяет это evidence, а replay Phase 0 запрещён. Первая попытка exact Pilot50 уже
-создала `run.started`, но payload-free диагностика доказала остановку pricing preflight до
-reservation, `/ask` и LLM-cost. Поэтому обычный `run` и удаление marker запрещены.
+Post-run аудит v1 выявил: `11` atypical qrels требуют legacy XLSX/DOCX и несовместимы с
+published-Yonote-only runtime. Поэтому v1 не повторяется. Candidate использует versioned
+`pilot50_balanced_v2` с теми же `39` совместимыми кейсами и `11` published-Yonote replacements;
+его atypical slice нельзя сравнивать с v1 как процентный рост.
 
-По D-039 владелец принял residual provider-risk до `100 RUB` только для одного exact
-pre-request continuation: runtime `c38f0e055630fae2af50720fae81acee20ff4f6a`, cases SHA-256
-`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`, forecast `10 RUB` и
-runner projected stop-limit `20 RUB`. Phase 0 billing остаётся `unreconciled`; подставлять
-`PHASE0_BILLING_VERDICT=PASS` запрещено. После checkout exact recovery commit владелец выполняет
-только одно продолжение с тем же неизрасходованным non-secret approval reference:
-
-```bash
-env -u PHASE0_BILLING_VERDICT \
-  PILOT50_PHASE0_BILLING_RISK_ACCEPTANCE_ID='<EXACT_OWNER_APPROVAL_REFERENCE>' \
-  HIGH_COST_APPROVAL_ID='<EXACT_OWNER_APPROVAL_REFERENCE>' \
-  bash scripts/run_pilot50_server_local.sh recover-pre-request
-```
-
-Launcher не rebuild/restart/deploy services, не использует HDE/VK и отказывается от второго
-continuation после exclusive recovery receipt. Raw cases/report остаются mode `0600` только в
-`/var/lib/rosmol/pilot50/`; stdout содержит только allowlist aggregate, exact run/runtime/
-approval/window hashes и `billing_status=pending_provider_reconciliation`. После run владелец
-снова вручную сверяет Cloud.ru billing; до этой сверки следующие paid eval запрещены.
-
-После успешного `run` владелец может один раз вывести обезличенную проекцию 50 вопросов и ответов
-непосредственно в свой интерактивный server terminal:
-
-```bash
-bash scripts/run_pilot50_server_local.sh review
-```
-
-`review` не вызывает `/ask` и не меняет артефакты. Launcher требует прямой TTY и fail-closed
-отказывает при pipe, redirect, `tee`, command substitution или automation capture. Это также
-операционный запрет: строки review не копировать на workstation, в Git или чат; наружу передавать
-только safe aggregate/status/SHA из `run`.
+Следующий запуск регулируется D-040 и выполняется только новым
+`scripts/run_pilot50_candidate_server_local.sh`. После local Ruff/full pytest/KB validation и
+exact GitHub push владелец сначала запускает бесплатный `preflight <40-SHA>`. Он не делает
+`/ask`, не включает HDE/VK и не меняет production; при недостатке памяти/swap/disk, изменении
+production identity или Qdrant fingerprint возвращается STOP. Только `GO` разрешает отдельный
+one-shot `run <40-SHA>` с новым approval. Критерии: `>=30/50`, typical `>=11/25`, atypical
+`>=7/25` как абсолютные floors, output-contract эскалации `<=6`, ноль source-binding failures на
+`38/50` кейсах с qrels, ноль провалов `15/50` critical regression-кейсов, полные trace и
+`cache_hit=0`; runner projected stop-limit — `30 RUB`, а не `500 RUB`. Это механический gate с
+`human_product_verdict=false`, а не ручной semantic verdict по каждому ответу.
 
 ### Real-RAG Phase 0: server-local one-shot
 

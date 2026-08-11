@@ -15,7 +15,17 @@ from src.graph.provenance import (
     safe_filter,
     truncation_counts,
 )
-from src.graph.query_normalization import expand_query_aliases
+from src.graph.query_normalization import (
+    ACCOUNT_DATA_RECOVERY,
+    FORUM_DISCOVERY,
+    GENERIC_PLATFORM_REGISTRATION,
+    GRANT_DIRECTIONS,
+    PHYSICAL_GRANTS_OVERVIEW,
+    PLATFORM_EVENT_NAVIGATION,
+    bounded_query_intent,
+    bounded_query_intent_hint,
+    expand_query_aliases,
+)
 from src.graph.question_utils import build_effective_questions
 from src.graph.state import BotState
 from src.models import Question
@@ -164,6 +174,9 @@ async def retrieve(state: BotState) -> dict:
         or state.get("message_masked")
         or state.get("message")
     )
+    query_scope_override = _query_scope_override(message, analysis)
+    if query_scope_override:
+        filters.update(query_scope_override)
     base_questions = build_effective_questions(analysis, message)
     allow_strict_forum_stop = len(base_questions) <= 1 and not _has_multi_aspect_message(
         message
@@ -203,9 +216,15 @@ async def retrieve(state: BotState) -> dict:
             "forum_normalized": question.forum_normalized or filters.get("forum_normalized"),
             "category": question.category or filters.get("category"),
         }
+        if query_scope_override:
+            question_filters.update(query_scope_override)
         try:
             found = []
-            retrieval_query = expand_query_aliases(question.text)
+            retrieval_query = _retrieval_query_for_intent(
+                question.text,
+                message,
+                analysis,
+            )
             requires_exact_topic = _requires_exact_topic_coverage(question_filters)
             strict_topic_only = requires_exact_topic or _should_defer_broad_topic_attempts(
                 question_filters,
@@ -678,3 +697,42 @@ def _dedupe_filters(filters: list[dict]) -> list[dict]:
 
 def _normalize_question_text(text: str) -> str:
     return " ".join(str(text or "").casefold().replace("ё", "е").split())
+
+
+def _query_scope_override(
+    message: str | None,
+    analysis: object | None = None,
+) -> dict[str, str | None]:
+    """Keep generic platform/grant intents out of event-specific retrieval scopes."""
+    forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
+    intent = bounded_query_intent(
+        str(message or ""),
+        forum_normalized=forum,
+    )
+    if intent is None:
+        return {}
+    if not forum and intent in {
+        GENERIC_PLATFORM_REGISTRATION,
+        PLATFORM_EVENT_NAVIGATION,
+        ACCOUNT_DATA_RECOVERY,
+    }:
+        return {"category": "платформа_фгаис", "forum_normalized": None}
+    if intent in {GRANT_DIRECTIONS, PHYSICAL_GRANTS_OVERVIEW}:
+        return {"category": "гранты", "forum_normalized": None}
+    if intent == FORUM_DISCOVERY:
+        return {"category": "общее", "forum_normalized": None}
+    return {}
+
+
+def _retrieval_query_for_intent(
+    question: str,
+    message: str | None,
+    analysis: object | None = None,
+) -> str:
+    query = expand_query_aliases(question)
+    forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
+    hint = bounded_query_intent_hint(
+        f"{message or ''} {question}",
+        forum_normalized=forum,
+    )
+    return " ".join((query, hint)).strip()

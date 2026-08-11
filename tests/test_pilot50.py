@@ -14,6 +14,9 @@ import pytest
 from scripts import pilot50
 
 MANIFEST_PATH = pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v1.json"
+V2_MANIFEST_PATH = (
+    pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v2.json"
+)
 EVAL_RUN_ID = "ask-eval-11111111-1111-1111-1111-111111111111"
 RUNTIME_GIT_SHA = "a" * 40
 APPROVAL_ID = "PILOT50-OWNER-20260810"
@@ -165,6 +168,117 @@ def _raw_report(
     return report, trace_rows
 
 
+def _candidate_raw_report(
+    cases: list[dict[str, Any]],
+    *,
+    cases_sha256: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    report, trace_rows = _raw_report(cases, cases_sha256=cases_sha256)
+    report["target"] = pilot50.PILOT50_CANDIDATE_TARGET
+    report["llm_budget_rub"] = pilot50.CANDIDATE_MAX_LLM_COST_RUB
+    cost_control = report["cost_control"]
+    cost_control.pop("pricing_projection")
+    cost_control["candidate_contract"] = {
+        "schema_version": "pilot50-candidate-eval-v1",
+        "contract_id": pilot50.CANDIDATE_CONTRACT_ID,
+        "runtime_git_sha": RUNTIME_GIT_SHA,
+        "cases_file_sha256": cases_sha256,
+        "cases_total": 50,
+        "target": pilot50.PILOT50_CANDIDATE_TARGET,
+        "concurrency": 1,
+        "cache_bypass": "signed_pre_and_per_request",
+        "runtime_ready_checks": "signed_pre_and_post",
+        "complete_traces_required": True,
+        "max_llm_cost_rub": pilot50.CANDIDATE_MAX_LLM_COST_RUB,
+        "cost_scope": pilot50.CANDIDATE_COST_SCOPE,
+        "reservation_private_full": True,
+        "pricing_source": pilot50.CANDIDATE_PRICING_SOURCE,
+        "pricing_rate_card_sha256": pilot50.PRICING_RATE_CARD_SHA256,
+        "target_telemetry_pricing_complete": True,
+        "repricing_applied": False,
+    }
+    reservation = cost_control["reservation"]
+    reservation.update(
+        {
+            "scope": pilot50.CANDIDATE_COST_SCOPE,
+            "approved_cap_rub": pilot50.CANDIDATE_MAX_LLM_COST_RUB,
+            "private_full": True,
+            "reservation_class": "private_full",
+        }
+    )
+    cases_by_id = {str(case["id"]): case for case in cases}
+    for result in report["results"]:
+        case = cases_by_id[str(result["id"])]
+        if (
+            set(case.get("tags") or []) & pilot50.CANDIDATE_CRITICAL_CASE_TAGS
+            and result["passed"] is False
+        ):
+            result.update(
+                {
+                    "passed": True,
+                    "observed_behavior": "answer",
+                    "was_escalated": False,
+                    "escalation_reason": None,
+                }
+            )
+        if case.get("expected_chunk_ids"):
+            result["expected_chunk_hit"] = True
+            result["expected_or_equivalent_chunk_hit"] = True
+        if case.get("expected_cited_chunk_ids"):
+            result["expected_cited_chunk_hit"] = True
+            result["expected_cited_or_equivalent_chunk_hit"] = True
+        usage = []
+        for event in result["llm_usage"]:
+            usage.append(
+                {
+                    key: value
+                    for key, value in event.items()
+                    if key
+                    not in {
+                        "pricing_source",
+                        "pricing_contract_id",
+                        "pricing_rate_card_sha256",
+                    }
+                }
+            )
+        result["llm_usage"] = usage
+        for field in list(result):
+            if field.startswith("target_reported_llm_"):
+                result.pop(field)
+        result.pop("llm_cost_pricing_provenance")
+    report["pilot50_candidate"] = {
+        "status": "completed",
+        "completed": True,
+        "contract_id": pilot50.CANDIDATE_CONTRACT_ID,
+        "expected_cases_total": 50,
+        "executed_cases_total": 50,
+        "cases_file_sha256": cases_sha256,
+        "runtime_git_sha": RUNTIME_GIT_SHA,
+        "integrity_failures": [],
+        "selective_reruns_forbidden": True,
+    }
+    return report, trace_rows
+
+
+def _candidate_quality_gate(
+    *,
+    typical_closed: int = 15,
+    atypical_closed: int = 15,
+    output_contract_escalations: int = 0,
+    source_binding_failures: int = 0,
+    critical_case_failures: int = 0,
+) -> dict[str, Any]:
+    return pilot50._build_candidate_quality_gate(
+        typical_closed=typical_closed,
+        atypical_closed=atypical_closed,
+        output_contract_escalations=output_contract_escalations,
+        source_binding_failures=source_binding_failures,
+        applicable_qrel_cases=38,
+        critical_case_failures=critical_case_failures,
+        applicable_critical_cases=15,
+    )
+
+
 def _write_report(
     tmp_path: Path,
     cases: list[dict[str, Any]],
@@ -312,6 +426,489 @@ def test_prepare_materializes_exact_balanced_answer_only_set(
         assert f"type:{group}" in case["tags"]
         assert not any("holdout" in tag.casefold() for tag in case["tags"])
         assert not (pilot50.FORBIDDEN_CASE_FIELDS & set(case))
+
+
+def test_safe_result_preserves_v2_dataset_identity(
+    tmp_path: Path,
+) -> None:
+    cases, receipt = pilot50.build_materialized_cases(V2_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    cases_sha = str(receipt["cases_sha256"])
+    assert cases_sha == pilot50.CANDIDATE_CASES_SHA256
+    report, trace_rows = _candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha,
+    )
+    report_path = tmp_path / "pilot50-v2-report.json"
+    _write_json(report_path, report)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V2_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=APPROVAL_ID,
+        candidate_contract=pilot50.CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["dataset_id"] == "pilot50_balanced_v2"
+    assert safe["status"] == "OK"
+    assert safe["quality_gate"]["status"] == "GO"
+    assert safe["quality_gate"]["criteria"]["source_binding_failures"] == {
+        "actual": 0,
+        "maximum": 0,
+        "passed": True,
+        "applicable_qrel_cases": 38,
+        "total_cases": 50,
+    }
+    assert safe["quality_gate"]["criteria"]["critical_case_failures"] == {
+        "actual": 0,
+        "maximum": 0,
+        "passed": True,
+        "applicable_critical_cases": 15,
+        "total_cases": 50,
+    }
+    assert pilot50.validate_safe_result(safe)["dataset_id"] == "pilot50_balanced_v2"
+    safe_path = tmp_path / "pilot50-v2-safe.json"
+    _write_json(safe_path, safe)
+    review = pilot50.build_review_rows(
+        manifest_path=V2_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        safe_result_path=safe_path,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+    )
+    assert len(review) == 50
+
+
+@pytest.mark.parametrize(
+    ("typical_closed", "atypical_closed", "expected_status", "failed_criteria"),
+    [
+        (11, 18, "STOP", ["overall_closed"]),
+        (12, 18, "GO", []),
+    ],
+)
+def test_candidate_quality_gate_overall_boundary(
+    typical_closed: int,
+    atypical_closed: int,
+    expected_status: str,
+    failed_criteria: list[str],
+) -> None:
+    gate = _candidate_quality_gate(
+        typical_closed=typical_closed,
+        atypical_closed=atypical_closed,
+    )
+
+    assert gate["status"] == expected_status
+    assert gate["failed_criteria"] == failed_criteria
+
+
+@pytest.mark.parametrize(
+    ("typical_closed", "atypical_closed", "failed_criterion"),
+    [
+        (10, 20, "typical_closed"),
+        (24, 6, "atypical_closed"),
+    ],
+)
+def test_candidate_quality_gate_slice_floor_boundary(
+    typical_closed: int,
+    atypical_closed: int,
+    failed_criterion: str,
+) -> None:
+    failing = _candidate_quality_gate(
+        typical_closed=typical_closed,
+        atypical_closed=atypical_closed,
+    )
+    passing = _candidate_quality_gate(
+        typical_closed=(11 if failed_criterion == "typical_closed" else 23),
+        atypical_closed=(19 if failed_criterion == "typical_closed" else 7),
+    )
+
+    assert failing["status"] == "STOP"
+    assert failing["failed_criteria"] == [failed_criterion]
+    assert passing["status"] == "GO"
+
+
+@pytest.mark.parametrize(
+    ("output_contract_escalations", "expected_status"),
+    [(6, "GO"), (7, "STOP")],
+)
+def test_candidate_quality_gate_output_contract_boundary(
+    output_contract_escalations: int,
+    expected_status: str,
+) -> None:
+    gate = _candidate_quality_gate(
+        output_contract_escalations=output_contract_escalations,
+    )
+
+    assert gate["status"] == expected_status
+
+
+@pytest.mark.parametrize(
+    ("source_binding_failures", "expected_status"),
+    [(0, "GO"), (1, "STOP")],
+)
+def test_candidate_quality_gate_source_binding_boundary(
+    source_binding_failures: int,
+    expected_status: str,
+) -> None:
+    gate = _candidate_quality_gate(
+        source_binding_failures=source_binding_failures,
+    )
+
+    assert gate["status"] == expected_status
+
+
+@pytest.mark.parametrize(
+    ("critical_case_failures", "expected_status"),
+    [(0, "GO"), (1, "STOP")],
+)
+def test_candidate_quality_gate_critical_case_boundary(
+    critical_case_failures: int,
+    expected_status: str,
+) -> None:
+    gate = _candidate_quality_gate(critical_case_failures=critical_case_failures)
+
+    assert gate["status"] == expected_status
+
+
+def test_candidate_output_contract_escalation_bucket_is_fixed() -> None:
+    assert pilot50.CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS == frozenset(
+        {
+            "empty_generated_response",
+            "final_response_empty",
+            "final_response_too_long",
+            "final_response_too_many_links",
+            "final_response_unapproved_emoji",
+            "llm_response_contract_failed",
+            "llm_response_profile_failed",
+            "llm_response_too_long",
+            "llm_source_citation_failed",
+            "llm_source_coverage_failed",
+            "llm_source_fact_binding_failed",
+            "source_response_contract_failed",
+        }
+    )
+    assert {
+        "generation_failed",
+        "llm_generation_failed",
+    }.isdisjoint(pilot50.CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS)
+
+
+def test_candidate_source_binding_uses_equivalent_source_checks() -> None:
+    expected = {
+        "expected_chunk_ids": ["expected"],
+        "expected_cited_chunk_ids": ["expected"],
+        "equivalent_chunk_ids": {"expected": ["equivalent"]},
+    }
+    result = {
+        "was_escalated": False,
+        "expected_chunk_hit": False,
+        "expected_or_equivalent_chunk_hit": True,
+        "expected_cited_chunk_hit": False,
+        "expected_cited_or_equivalent_chunk_hit": True,
+    }
+
+    assert pilot50._candidate_source_binding_failed(expected, result) is False
+    result["expected_cited_or_equivalent_chunk_hit"] = None
+    assert pilot50._candidate_source_binding_failed(expected, result) is True
+    result["was_escalated"] = True
+    assert pilot50._candidate_source_binding_failed(expected, result) is False
+
+
+@pytest.mark.parametrize(
+    ("output_contract_escalations", "expected_status"),
+    [(6, "GO"), (7, "STOP")],
+)
+def test_candidate_safe_result_derives_output_contract_gate(
+    tmp_path: Path,
+    output_contract_escalations: int,
+    expected_status: str,
+) -> None:
+    cases, receipt = pilot50.build_materialized_cases(V2_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    cases_sha = str(receipt["cases_sha256"])
+    report, trace_rows = _candidate_raw_report(cases, cases_sha256=cases_sha)
+    noncritical_results = [
+        result
+        for result in report["results"]
+        if not (
+            set(result.get("tags") or [])
+            & pilot50.CANDIDATE_CRITICAL_CASE_TAGS
+        )
+    ]
+    for result in noncritical_results[:output_contract_escalations]:
+        result["passed"] = False
+        result["observed_behavior"] = "escalate"
+        result["was_escalated"] = True
+        result["escalation_reason"] = "llm_source_coverage_failed"
+    report_path = tmp_path / "pilot50-v2-report.json"
+    _write_json(report_path, report)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V2_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=APPROVAL_ID,
+        candidate_contract=pilot50.CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["status"] == "OK"
+    assert safe["quality_gate"]["status"] == expected_status
+    assert (
+        safe["quality_gate"]["criteria"]["output_contract_escalations"]["actual"]
+        == output_contract_escalations
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_check", "expected_failures", "expected_status"),
+    [(True, 0, "GO"), (False, 1, "STOP")],
+)
+def test_candidate_safe_result_derives_source_binding_gate(
+    tmp_path: Path,
+    source_check: bool,
+    expected_failures: int,
+    expected_status: str,
+) -> None:
+    cases, receipt = pilot50.build_materialized_cases(V2_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    cases_sha = str(receipt["cases_sha256"])
+    report, trace_rows = _candidate_raw_report(cases, cases_sha256=cases_sha)
+    report["results"][0]["expected_chunk_hit"] = source_check
+    report_path = tmp_path / "pilot50-v2-report.json"
+    _write_json(report_path, report)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V2_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=APPROVAL_ID,
+        candidate_contract=pilot50.CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["status"] == "OK"
+    assert safe["quality_gate"]["status"] == expected_status
+    assert (
+        safe["quality_gate"]["criteria"]["source_binding_failures"]["actual"]
+        == expected_failures
+    )
+
+
+@pytest.mark.parametrize(
+    ("critical_case_passed", "expected_failures", "expected_status"),
+    [(True, 0, "GO"), (False, 1, "STOP")],
+)
+def test_candidate_safe_result_derives_critical_case_gate(
+    tmp_path: Path,
+    critical_case_passed: bool,
+    expected_failures: int,
+    expected_status: str,
+) -> None:
+    cases, receipt = pilot50.build_materialized_cases(V2_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    cases_sha = str(receipt["cases_sha256"])
+    report, trace_rows = _candidate_raw_report(cases, cases_sha256=cases_sha)
+    critical_result = next(
+        result
+        for result in report["results"]
+        if set(result.get("tags") or [])
+        & pilot50.CANDIDATE_CRITICAL_CASE_TAGS
+    )
+    critical_result["passed"] = critical_case_passed
+    report_path = tmp_path / "pilot50-v2-report.json"
+    _write_json(report_path, report)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V2_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=APPROVAL_ID,
+        candidate_contract=pilot50.CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["status"] == "OK"
+    assert safe["quality_gate"]["status"] == expected_status
+    assert (
+        safe["quality_gate"]["criteria"]["critical_case_failures"]["actual"]
+        == expected_failures
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda gate: gate["criteria"]["source_binding_failures"].__setitem__(
+            "applicable_qrel_cases", 37
+        ),
+        lambda gate: gate["criteria"]["source_binding_failures"].__setitem__(
+            "total_cases", 49
+        ),
+        lambda gate: gate["criteria"]["critical_case_failures"].__setitem__(
+            "applicable_critical_cases", 14
+        ),
+        lambda gate: gate["criteria"]["critical_case_failures"].__setitem__(
+            "total_cases", 49
+        ),
+        lambda gate: gate.__setitem__(
+            "source_binding_definition", "semantic_wrong_entity"
+        ),
+        lambda gate: gate.__setitem__(
+            "critical_case_definition", "mutable_critical_cases"
+        ),
+    ],
+)
+def test_candidate_quality_gate_rejects_coverage_or_definition_tampering(
+    mutation: Any,
+) -> None:
+    gate = _candidate_quality_gate()
+    mutation(gate)
+
+    with pytest.raises(pilot50.Pilot50Error, match="candidate quality gate"):
+        pilot50._validate_candidate_quality_gate(
+            gate,
+            typical_closed=15,
+            atypical_closed=15,
+        )
+
+
+def test_v2_safe_result_requires_exact_candidate_contract(tmp_path: Path) -> None:
+    cases, receipt = pilot50.build_materialized_cases(V2_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    report, trace_rows = _candidate_raw_report(
+        cases,
+        cases_sha256=str(receipt["cases_sha256"]),
+    )
+    report_path = tmp_path / "pilot50-v2-report.json"
+    _write_json(report_path, report)
+
+    with pytest.raises(pilot50.Pilot50Error, match="exact candidate contract"):
+        pilot50.build_safe_result(
+            manifest_path=V2_MANIFEST_PATH,
+            cases_path=cases_path,
+            report_path=report_path,
+            trace_rows=trace_rows,
+            expected_runtime_git_sha=RUNTIME_GIT_SHA,
+            expected_approval_id=APPROVAL_ID,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("ai-sage/GigaChat3-10B-A1.8B", 0.000024),
+        ("GigaChat/GigaChat-2-Max", 0.001139),
+    ],
+)
+def test_candidate_target_reported_cost_accepts_both_fixed_models(
+    model: str,
+    expected_cost: float,
+) -> None:
+    result = {
+        "http_status": 200,
+        "http_success": True,
+        "error": None,
+        "trace_error": None,
+        "generate_retry_reasons": [],
+        "generator_model": model,
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 1,
+        "llm_completion_tokens": 1,
+        "llm_total_tokens": 2,
+        "llm_estimated_cost_rub": expected_cost,
+        "llm_usage": [
+            {
+                "model": model,
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+                "estimated_cost_rub": expected_cost,
+                "priced": True,
+            }
+        ],
+    }
+
+    assert pilot50._validated_target_reported_case_cost(result) == expected_cost
+
+
+def test_candidate_target_reported_cost_accepts_only_deterministic_not_run() -> None:
+    result = {
+        "http_status": 200,
+        "http_success": True,
+        "error": None,
+        "trace_error": None,
+        "generate_retry_reasons": [],
+        "generator_model": "not_run",
+        "analyzer_execution_mode": "deterministic",
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 0,
+        "llm_completion_tokens": 0,
+        "llm_total_tokens": 0,
+        "llm_estimated_cost_rub": 0.0,
+        "llm_usage": [],
+    }
+
+    assert pilot50._validated_target_reported_case_cost(result) == 0.0
+    result["analyzer_execution_mode"] = "fallback"
+    with pytest.raises(pilot50.Pilot50Error, match="not-run"):
+        pilot50._validated_target_reported_case_cost(result)
+
+
+def test_candidate_target_reported_cost_rejects_repricing_metadata() -> None:
+    result = {
+        "llm_accounting_present": True,
+        "llm_prompt_tokens": 1,
+        "llm_completion_tokens": 1,
+        "llm_total_tokens": 2,
+        "llm_estimated_cost_rub": 0.000024,
+        "llm_usage": [
+            {
+                "model": "ai-sage/GigaChat3-10B-A1.8B",
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+                "estimated_cost_rub": 0.000024,
+                "priced": True,
+                "pricing_source": "eval_repriced",
+            }
+        ],
+    }
+
+    with pytest.raises(pilot50.Pilot50Error, match="repricing metadata"):
+        pilot50._validated_target_reported_case_cost(result)
+
+
+def test_summarize_candidate_contract_cli_is_bounded(tmp_path: Path) -> None:
+    base = [
+        "summarize",
+        "--cases",
+        str(tmp_path / "cases.json"),
+        "--report",
+        str(tmp_path / "report.json"),
+        "--output",
+        str(tmp_path / "safe.json"),
+        "--expected-runtime-git-sha",
+        RUNTIME_GIT_SHA,
+        "--expected-approval-id",
+        APPROVAL_ID,
+        "--candidate-contract",
+    ]
+    args = pilot50._parse_args([*base, pilot50.CANDIDATE_CONTRACT_ID])
+    assert args.candidate_contract == pilot50.CANDIDATE_CONTRACT_ID
+    with pytest.raises(SystemExit):
+        pilot50._parse_args([*base, "mutable-candidate-contract"])
 
 
 def test_prepare_refuses_existing_output(tmp_path: Path) -> None:
@@ -551,6 +1148,8 @@ def test_summarize_builds_only_safe_balanced_aggregates(
     stdout = capsys.readouterr().out
     safe = json.loads(stdout)
     assert safe == json.loads(safe_path.read_text(encoding="utf-8"))
+    assert set(safe) == pilot50.SAFE_FIELDS
+    assert "quality_gate" not in safe
     assert safe["classification"] == "calibration_only"
     assert safe["human_product_verdict"] is False
     assert safe["eval_run_id"] == EVAL_RUN_ID

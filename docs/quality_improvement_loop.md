@@ -23,6 +23,42 @@ calibration/regression backlog; они не исправляются по одн
 конверсии. Автоматический ops-report остаётся containment proxy, а окончательный verdict даёт
 оператор по полному тикету.
 
+### Активный цикл Pilot50 от 11 августа 2026
+
+Frozen balanced calibration baseline равен `18/50 = 36%` mechanical first-turn closure:
+`11/25 = 44%` на typical и `7/25 = 28%` на atypical. Из `24` эскалаций `18` относятся к
+output-contract/fact-binding/length/profile, ещё `6` — к retrieval/source coverage. Поэтому
+активная гипотеза ограничена двумя слоями: source-bound сборка короткого multi-aspect ответа и
+entity/intent binding retrieval. KB, Yonote, safety rules, thresholds как общий класс и
+production runtime не меняются без нового evidence.
+
+V1 содержит измерительный дефект: `11` atypical multi-aspect qrels ссылаются на legacy XLSX/DOCX,
+которые published-Yonote-only runtime обязан отбрасывать. V1 сохраняется как historical evidence;
+candidate оценивается на v2, где те же `39` совместимых кейсов дополнены `11` replacement-кейсами
+с проверенными published-Yonote qrels. Поэтому atypical v1/v2 не является apples-to-apples
+сравнением, а slice thresholds v2 — только абсолютные floors.
+
+Порядок цикла:
+
+1. Сохранить baseline и frozen membership отдельным tracked safe artifact без вопросов,
+   ответов, идентификаторов и approval reference.
+2. Добавить regression-тесты на наблюдаемые output-contract и entity-binding отказы.
+3. Исправить существующие generation/retrieval/rerank пути минимально, не ослабляя guard и
+   grounding.
+4. Выполнить focused tests, полный `pytest`, Ruff и `scripts/index_kb.py --validate-only`.
+5. Только после зелёного локального gate сформировать immutable v2 candidate и выполнить
+   бесплатный isolated-capacity preflight; production не останавливать и не менять.
+6. При preflight GO выполнить один server-local v2 run без HDE/VK/rollout. Принять цикл только
+   при `>=30/50`, typical `>=11/25`, atypical `>=7/25`, output-contract эскалациях `<=6`, нуле
+   source-binding failures на `38/50` qrel-кейсах и нуле провалов `15/50` critical
+   regression-кейсов. Это mechanical gate с `human_product_verdict=false`; human-semantic
+   качество всех 50 ответов он не заявляет. Иначе STOP, разбор evidence и новая гипотеза до
+   следующего платного запуска.
+
+Стоимость baseline eval-проекции — `11.647398 RUB`. Для следующей проверки достаточно runner
+projected stop-limit `30 RUB`; разрешённые владельцем `500 RUB` остаются верхней границей на
+обоснованный прогон, а не бюджетом, который нужно израсходовать.
+
 ## Источники данных
 
 - HDE: деперсонализированные тикеты и причины эскалаций.

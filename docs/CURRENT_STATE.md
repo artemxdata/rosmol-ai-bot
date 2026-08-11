@@ -4,7 +4,47 @@
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50: 25+25 frozen; первый paid path остановлен до `/ask`, готовится exact continuation
+## Pilot50: baseline завершён; локально реализуется первый evidence-driven quality cycle
+
+11 августа exact continuation успешно завершил `50/50` server-local `/ask` без HDE/VK,
+production restart или rollout. Safe result SHA-256 —
+`0950cc14c4e951857809592adf736f0f73b23af33a889ed1310d1bab536c093b`, raw-report SHA-256 —
+`b3f771036f34299f59bbe3f060b4fa93d7d3653f4a6a1cddc8f2c168216c74a4`. Runtime остался
+`c38f0e055630fae2af50720fae81acee20ff4f6a`; frozen cases SHA-256 —
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`.
+
+Baseline mechanical first-turn closure равен `18/50 = 36%`: typical — `11/25 = 44%`,
+atypical — `7/25 = 28%`. Trace coverage — `50/50`, cache hits — `0`, eval-repriced LLM cost —
+`11.647398 RUB`, latency p50/p95 — `1997/14235 ms`. Это calibration-only proxy, а не
+production conversion, независимый holdout или human product verdict.
+
+Наблюдаемая декомпозиция: `24` эскалации и `8` неуспешных ответов без эскалации. Из эскалаций
+`18` вызваны output-contract/fact-binding/length/profile, `6` — retrieval/source coverage.
+Post-run аудит выявил дефект самого v1: `39/50` qrels совместимы с действующей политикой
+published-Yonote-only, а `11` atypical multi-aspect кейсов требуют legacy XLSX/DOCX IDs, которые
+runtime намеренно не использует. Поэтому v1 остаётся неизменным историческим baseline, но не
+является честным acceptance-набором следующего кандидата и не задаёт apples-to-apples изменение
+atypical slice.
+
+Regression-first change set исправляет только доказанные классы: exact entity/intent binding в
+retrieval/rerank, source-bound multi-aspect synthesis и повтор generation с bounded rejected
+draft. KB, Yonote, safety, public API и работающий production runtime не меняются. Для проверки
+подготовлен versioned `pilot50_balanced_v2`: те же `39` совместимых кейсов в прежнем порядке и
+`11` новых atypical кейсов с qrels, проверенными против frozen published-Yonote seed. Materialized v2
+cases SHA-256 — `b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d`.
+Acceptance v2: `>=30/50`, typical `>=11/25`, atypical `>=7/25` как абсолютные slice floors,
+output-contract эскалации `<=6`, ноль source-binding failures на `38/50` кейсах с qrels и ноль
+провалов `15/50` critical regression-кейсов (`adversarial` или `off_aspect_guard`), `50/50` trace
+и `cache_hit=0`. Это machine-checkable quality gate с `human_product_verdict=false`, а не
+семантический human verdict по всем 50 ответам.
+Поскольку `11` atypical кейсов заменены, результат v2 нельзя описывать как процентный рост
+atypical относительно v1. HDE/VK и rollout не выполняются.
+
+Безопасный aggregate baseline и аудит измерительного контракта хранятся в tracked
+`reports/pilot50_balanced_v1_baseline_20260811.json`; вопросы, ответы и identifiers туда не
+переносятся. D-040 фиксирует решение и stop-criteria.
+
+### Контекст frozen набора и завершённого запуска
 
 10 августа подготовлен отдельный one-shot контур для сегодняшней проверки 25 типовых и
 25 нетиповых вопросов. Это не повтор Phase 0 и не переход к фазам B–E. В tracked manifest
@@ -30,6 +70,23 @@ timestamp-bound user prefix, а повтор после `run.started` запре
 launcher требует прямой TTY и отказывает при redirect/pipe/`tee`. По операционному контракту
 queries/responses не копируются в Git, workstation или чат.
 
+### Pilot50 v2 и изолированный candidate-контур
+
+`eval/cases/pilot50_balanced_v2.json` — calibration v2, а не изменение или переоценка v1.
+Manifest raw SHA-256 — `6995b96b4658f53e40a0bb982145465cbc347d9df041fc4dd66a9d15687b822b`,
+semantic manifest SHA-256 — `13a706f713eef7c54337bd7cf6efdb38e898dde71089ea7e51a2c34fca3fcb91`.
+Все новые qrels проверяются против frozen seed: только `status=published`, `source_type=yonote`,
+без XLSX/DOCX и выдуманных equivalents.
+
+Candidate не подменяет и не перезапускает `rosmol-app-ml`. Новый
+`docker-compose.pilot50-candidate.yml` строит exact Git snapshot в отдельный image и запускает
+один `pilot50-candidate-ml` без ports/edge, HDE/VK/Yonote sync/admin mutations; production image,
+container ID, health/restart/OOM state и Qdrant fingerprint проверяются до и после. ML prewarm
+последовательно загружает и выгружает embedder/reranker, container ограничен `6 GiB`, `2 CPU` и
+`256` pids. Бесплатный `preflight` даёт STOP при недостатке host capacity; production ради теста
+не останавливается. Paid `run` возможен только после GO, exact SHA/hashes, нового одноразового
+approval и runner projected stop-limit `30 RUB`.
+
 Сегодняшняя метрика называется **mechanical first-turn closure на balanced Pilot50**:
 `closed` требует одновременно полного pass всех зафиксированных для кейса content/retrieval/
 citation/profile checks, ответа в первом ходе и отсутствия эскалации. Safe result показывает
@@ -54,11 +111,11 @@ risk до `100 RUB` и разрешил ровно одно exact продолж
 runner projected stop-limit `20 RUB`. Это исключение не означает billing PASS и не разрешает
 следующий paid eval.
 
-После запуска safe result сохраняет exact `eval_run_id`, UTC run window, runtime SHA, approval
-reference, hashes и `billing_status=pending_provider_reconciliation`. До второй ручной сверки
-Cloud.ru этот результат не разрешает следующий paid eval. На текущем этапе live `/ask` не было,
-стоимость запуска — `0 RUB`, production behavior не менялся. Финальный локальный gate recovery/
-repricing change set: focused Pilot50/runner suite — `307 passed`; полный pytest —
+Завершённый safe result сохраняет exact `eval_run_id`, UTC run window, runtime SHA, approval
+reference, hashes и `billing_status=pending_provider_reconciliation`. Provider-сверка остаётся
+отдельным финансовым handoff; следующий платный eval дополнительно заблокирован до реализации и
+проверки quality change set. Production behavior этим запуском не менялся. Финальный локальный
+gate recovery/repricing change set: focused Pilot50/runner suite — `307 passed`; полный pytest —
 `2621 passed, 1 skipped, 0 failed`; Ruff и `bash -n` — pass; KB validation —
 `2186 valid / 2152 published`.
 
@@ -95,8 +152,9 @@ prompt/completion tokens и тарифам `12.2/12.2` для 10B и `569.34/569
 неоднозначно отсутствующая usage telemetry, несовпадение token totals, runtime/cases/receipt или
 превышение `20 RUB` означают STOP без retry. Proven deterministic not-run остаётся валидным
 нулевым cost path.
-Следующий шаг после локального полного gate и GitHub push — один owner-run
-`recover-pre-request`; HDE/VK, rebuild, production restart и rollout не выполняются.
+Завершённый owner-run `recover-pre-request` использовал этот контракт ровно один раз и больше не
+повторяется. Следующий шаг — локальный regression-first quality change set, полный gate,
+commit/push и только затем новый отдельно согласованный server-local candidate eval.
 
 **Phase A implementation commits:** `c95fb4a` (`Add Phase A escalation evidence audit`),
 `52bd5ac` (`Support owner-authenticated Phase A export`) и `eea8062`
@@ -202,14 +260,18 @@ payload, а отказ произошёл уже в локальном validator
 остаётся отдельным `pending/evidence-at-risk` аудитом и не блокирует Pilot50; новый Pilot50 не
 заменяет старые evidence и не разрешает replay Phase 0.
 
-**Точный следующий шаг:** после нового commit/push владелец сам выполняет `ssh rosmol`, получает
-exact commit из GitHub detached checkout и запускает только один D-039
-`recover-pre-request` с тем же неизрасходованным approval reference и без ложного
-`PHASE0_BILLING_VERDICT=PASS`. Повторный `preflight`, обычный `run`, удаление marker и второй
-continuation запрещены. После успешного safe aggregate разрешён offline `review` для просмотра
-50 вопросов/ответов в server terminal. Никаких deployment,
-restart, HDE/VK или повторного Phase 0 в этой последовательности нет. В чат возвращаются только
-safe aggregate/status/SHA; owner-only review rows остаются на server terminal.
+Локальный candidate gate завершён: focused quality/core/eval набор — `788 passed`; все `131`
+test-файла (`2756 passed, 1 skipped`) прошли изолированными Windows-шардами
+после зависания монолитного pytest-harness без test failure; полный Ruff — pass, Git Bash
+`bash -n` — pass, KB validation — `2186 valid / 2152 published`. Независимый финальный review
+не нашёл оставшихся P0/P1.
+
+**Точный следующий шаг:** зафиксировать candidate commit в GitHub и передать владельцу один
+server-local блок только для бесплатного v2 `preflight`.
+Лишь его `GO` разрешает отдельный one-shot `run`; capacity `STOP` не обходится остановкой
+production. Старый v1 launcher и D-039 continuation не повторяются; deployment/restart, HDE/VK,
+повтор Phase 0 и удаление evidence/ledger markers запрещены. В чат возвращаются только safe
+aggregate/status/SHA; owner-only review rows остаются на server terminal.
 
 ## Real-RAG Phase 0: live-прогон завершён, fail-closed STOP
 

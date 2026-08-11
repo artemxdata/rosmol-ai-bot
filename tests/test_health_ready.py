@@ -35,21 +35,39 @@ class FakeQdrant:
 
 
 class FakeEmbedder:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
         self.queries: list[str] = []
+        self.unload_calls = 0
+        self.events = events
 
     def encode(self, query: str) -> tuple[list[float], dict[str, float]]:
         self.queries.append(query)
+        if self.events is not None:
+            self.events.append("embedder_probe")
         return [0.1], {"1": 0.5}
+
+    def unload(self) -> None:
+        self.unload_calls += 1
+        if self.events is not None:
+            self.events.append("embedder_unload")
 
 
 class FakeReranker:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
         self.calls: list[tuple[str, int, int]] = []
+        self.unload_calls = 0
+        self.events = events
 
     def rerank(self, query: str, chunks: list, top_k: int) -> list:
         self.calls.append((query, len(chunks), top_k))
+        if self.events is not None:
+            self.events.append("reranker_probe")
         return []
+
+    def unload(self) -> None:
+        self.unload_calls += 1
+        if self.events is not None:
+            self.events.append("reranker_unload")
 
 
 class FakePIIMasker:
@@ -283,11 +301,47 @@ async def test_run_ml_prewarm_loads_embedder_and_reranker() -> None:
         )
     )
 
-    await _run_ml_prewarm(app)  # type: ignore[arg-type]
+    settings = SimpleNamespace(
+        ml_unload_after_use=False,
+        ml_unload_embedder_after_use=False,
+        ml_unload_reranker_after_use=False,
+    )
+
+    await _run_ml_prewarm(app, settings)  # type: ignore[arg-type]
 
     assert pii_masker.texts == ["Иван Иванов спрашивает о регистрации на форум."]
     assert embedder.queries == ["регистрация на форум"]
     assert reranker.calls == [("регистрация на форум", 1, 1)]
+    assert embedder.unload_calls == 0
+    assert reranker.unload_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_ml_prewarm_unloads_models_in_low_memory_probe_order() -> None:
+    events: list[str] = []
+    embedder = FakeEmbedder(events)
+    reranker = FakeReranker(events)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            embedder=embedder,
+            reranker=reranker,
+            pii_masker=FakePIIMasker(),
+        )
+    )
+    settings = SimpleNamespace(
+        ml_unload_after_use=False,
+        ml_unload_embedder_after_use=True,
+        ml_unload_reranker_after_use=True,
+    )
+
+    await _run_ml_prewarm(app, settings)  # type: ignore[arg-type]
+
+    assert events == [
+        "embedder_probe",
+        "embedder_unload",
+        "reranker_probe",
+        "reranker_unload",
+    ]
 
 
 @pytest.mark.asyncio
@@ -306,6 +360,13 @@ async def test_run_ml_prewarm_rejects_fail_open_name_masking() -> None:
     )
 
     with pytest.raises(PIIMaskingUnavailable, match="pii_ner_prewarm_probe_failed"):
-        await _run_ml_prewarm(app)  # type: ignore[arg-type]
+        await _run_ml_prewarm(
+            app,
+            SimpleNamespace(
+                ml_unload_after_use=False,
+                ml_unload_embedder_after_use=False,
+                ml_unload_reranker_after_use=False,
+            ),
+        )  # type: ignore[arg-type]
 
     assert embedder.queries == []

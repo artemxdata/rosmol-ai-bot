@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from time import perf_counter
 
 from src.config import get_settings
@@ -576,6 +577,7 @@ async def _generate_with_llm_or_source_fallback(
     tracer = state.get("trace")
     last_result: dict = {}
     retry_reason: str | None = None
+    rejected_draft: str | None = None
     for attempt in range(2):
         result = await _generate_with_llm(
             state=state,
@@ -585,8 +587,12 @@ async def _generate_with_llm_or_source_fallback(
             started_at=started_at,
             response_limit=response_limit,
             retry_reason=retry_reason,
+            rejected_draft=rejected_draft,
         )
         last_result = result
+        candidate = str(result.get("_rejected_candidate") or "").strip()
+        if candidate:
+            rejected_draft = candidate
         invalid_coverage = (
             not result.get("should_escalate")
             and (
@@ -594,12 +600,15 @@ async def _generate_with_llm_or_source_fallback(
                     result,
                     questions,
                     source_chunks,
+                    explicit_questions=list(analysis.questions or []),
                 )
                 or _response_signals_insufficient_sources(
                     str(result.get("generated_response") or ""),
                 )
             )
         )
+        if invalid_coverage:
+            rejected_draft = str(result.get("generated_response") or "").strip()
         if not result.get("should_escalate") and not invalid_coverage:
             return _with_selected_source_ids(result, source_chunks)
         retry_reason = (
@@ -637,6 +646,17 @@ def _response_char_limit(
     return SIMPLE_RESPONSE_MAX_CHARS
 
 
+def _generator_prompt_char_limit(
+    response_limit: int,
+    retry_reason: str | None,
+) -> int:
+    # Leave deterministic headroom for tone/spacing normalization. On retry the
+    # model sees the rejected draft and can repair it to a tighter target while
+    # the immutable response-contract limit remains unchanged.
+    numerator = 13 if retry_reason else 16
+    return max(1, response_limit * numerator // 20)
+
+
 def _visible_response_length(response: str) -> int:
     return len(normalize_final_response(response))
 
@@ -663,14 +683,22 @@ def _generation_contract_failure(result: dict, *, reason: str) -> dict:
     }
     if error := result.get("error"):
         failed["error"] = error
+    if rejected_candidate := str(result.get("_rejected_candidate") or "").strip():
+        failed["_rejected_candidate"] = rejected_candidate
     return failed
 
 
 def _without_internal_generation_markers(result: dict) -> dict:
-    if not ({"_llm_synthesis_attempted", "_selected_source_ids"} & result.keys()):
+    internal_markers = {
+        "_llm_synthesis_attempted",
+        "_rejected_candidate",
+        "_selected_source_ids",
+    }
+    if not (internal_markers & result.keys()):
         return result
     cleaned = dict(result)
     cleaned.pop("_llm_synthesis_attempted", None)
+    cleaned.pop("_rejected_candidate", None)
     cleaned.pop("_selected_source_ids", None)
     return cleaned
 
@@ -809,9 +837,17 @@ def _llm_result_misses_source_coverage(
     result: dict,
     questions: list[Question],
     source_chunks: list[ScoredChunk],
+    *,
+    explicit_questions: list[Question] | None = None,
 ) -> bool:
     if result.get("should_escalate"):
         return False
+    response = str(result.get("generated_response") or "")
+    if len(source_chunks) == 1 and _response_misses_explicit_answer_aspect(
+        response,
+        explicit_questions or [],
+    ):
+        return True
     if len(source_chunks) <= 1:
         return False
 
@@ -837,6 +873,96 @@ def _llm_result_misses_source_coverage(
     return any(chunk.chunk_id not in cited_ids for chunk in source_chunks)
 
 
+def _response_misses_explicit_answer_aspect(
+    response: str,
+    questions: list[Question],
+) -> bool:
+    """Fail closed when grounded claims omit a bounded explicit aspect.
+
+    Counting citations is not enough: a model can repeat the same cited fact
+    twice and still omit the second question.  Only explicit analyzer
+    questions whose topic has a deterministic text predicate participate here;
+    contextual/inferred questions and unknown topics keep the older source
+    coverage contract instead of being guessed from free text.
+    """
+
+    detectors_by_group: dict[str, list[Callable[[str], bool]]] = {}
+    for topic, detector in _answer_aspect_text_detectors():
+        detectors_by_group.setdefault(_answer_aspect_topic_key(topic), []).append(detector)
+    required: dict[str, tuple[Callable[[str], bool], ...]] = {}
+    for question in questions:
+        if not str(question.text or "").strip() or not str(question.topic or "").strip():
+            continue
+        topic_group = _question_answer_aspect_key(question)
+        detectors = detectors_by_group.get(topic_group or "")
+        if detectors:
+            required[topic_group or ""] = tuple(detectors)
+
+    if len(required) < 2:
+        return False
+
+    claims = _grounded_claim_texts(response)
+    if not claims:
+        return True
+    normalized_claims = [_normalize(claim) for claim in claims]
+    return any(
+        not any(
+            detector(claim)
+            for detector in detectors
+            for claim in normalized_claims
+        )
+        for detectors in required.values()
+    )
+
+
+def _grounded_claim_texts(response: str) -> list[str]:
+    claims: list[str] = []
+    previous_end = 0
+    for marker_group in SOURCE_GROUP_RE.finditer(response):
+        claim = SOURCE_RE.sub("", response[previous_end : marker_group.start()]).strip()
+        previous_end = marker_group.end()
+        if claim:
+            claims.append(claim)
+    return claims
+
+
+def _answer_aspect_text_detectors() -> tuple[
+    tuple[str, Callable[[str], bool]],
+    ...,
+]:
+    """Return the bounded topic-to-text contract used for aspect coverage."""
+
+    return (
+        ("otkaz_ot_uchastiya", _asks_decline_participation),
+        ("podtverzhdenie_uchastiya_i_org_momenty", _asks_confirmation_org),
+        ("cifrovaya_nedelya", _asks_digital_week),
+        ("poseschenie_festivalya_s_detmi", _asks_child_visit),
+        ("programma_foruma", _asks_event_program),
+        ("vozrastnye_ogranicheniya", _asks_age_restrictions),
+        ("rosmolodezh_granty", _asks_forum_grants),
+        ("dobavlenie_v_chat_meropriyatiya", _asks_event_chat),
+        ("inostrannye_grazhdane", _asks_foreign_citizens),
+        ("uchastniki_s_ovz", _asks_ovz_participation),
+        ("voprosy_po_zdorovyu_medpunkt", _asks_medical_help),
+        ("vnesti_izmeneniya_v_zayavku", _asks_application_change),
+        ("rezultaty_rm", _asks_selection_results),
+        ("sut_foruma_i_napravleniya", _asks_event_overview),
+        ("pismo_vyzov", _asks_invitation_letter),
+        ("pamyatka_uchastnika_foruma", _asks_documents_or_packing),
+        ("oplata_proezda", _asks_travel_payment),
+        ("transfer_do_mesta_provedeniya_meropriyatiya", _asks_transfer),
+        ("usloviya_prozhivaniya", _asks_housing_conditions),
+        ("daty_nachala_meropriyatiya", _asks_event_dates_or_marker),
+        ("podacha_zayavki_na_proekt", _asks_registration),
+        ("podat_zayavku_na_uchastie", _asks_grant_application),
+        (
+            "registraciya_s_pomoschyu_sozdaniya_kabineta",
+            _asks_account_creation,
+        ),
+        ("volonterskaya_pomosch", _asks_volunteer_application),
+    )
+
+
 async def _generate_with_llm(
     *,
     state: BotState,
@@ -846,6 +972,7 @@ async def _generate_with_llm(
     started_at: float,
     response_limit: int | None = None,
     retry_reason: str | None = None,
+    rejected_draft: str | None = None,
 ) -> dict:
     tracer = state.get("trace")
     generator_complexity = _generator_complexity(
@@ -855,6 +982,7 @@ async def _generate_with_llm(
         source_chunks,
     )
     effective_limit = response_limit or _response_char_limit(analysis, questions)
+    prompt_limit = _generator_prompt_char_limit(effective_limit, retry_reason)
     model = select_generator_model(generator_complexity)
     try:
         response_profile = _RESPONSE_CONTRACT.profile(analysis.response_profile)
@@ -866,10 +994,11 @@ async def _generate_with_llm(
                 chunks=source_chunks,
                 session=state.get("session"),
                 params=analysis.extracted_params,
-                max_chars=effective_limit,
+                max_chars=prompt_limit,
                 response_profile=response_profile.name.value,
                 profile_guidance=response_profile.guidance,
                 retry_reason=retry_reason,
+                rejected_draft=rejected_draft,
             ),
             response_format="text",
             temperature=0.1,
@@ -897,17 +1026,17 @@ async def _generate_with_llm(
         )
     if _visible_response_length(content) > effective_limit:
         return _generation_contract_failure(
-            {"generator_model": model},
+            {"generator_model": model, "_rejected_candidate": content},
             reason="llm_response_too_long",
         )
     if _response_url_count(content) > 1:
         return _generation_contract_failure(
-            {"generator_model": model},
+            {"generator_model": model, "_rejected_candidate": content},
             reason="llm_response_contract_failed",
         )
     if _response_signals_insufficient_sources(content):
         return _generation_contract_failure(
-            {"generator_model": model},
+            {"generator_model": model, "_rejected_candidate": content},
             reason="llm_response_contract_failed",
         )
     cited_sources = _known_source_refs(content, source_chunks)
@@ -920,12 +1049,12 @@ async def _generate_with_llm(
         )
     ):
         return _generation_contract_failure(
-            {"generator_model": model},
+            {"generator_model": model, "_rejected_candidate": content},
             reason="llm_source_citation_failed",
         )
     if _violates_response_profile(content, analysis, questions):
         return _generation_contract_failure(
-            {"generator_model": model},
+            {"generator_model": model, "_rejected_candidate": content},
             reason="llm_response_profile_failed",
         )
     if not _llm_claims_have_bound_source_facts(
@@ -934,7 +1063,7 @@ async def _generate_with_llm(
         questions,
     ):
         return _generation_contract_failure(
-            {"generator_model": model},
+            {"generator_model": model, "_rejected_candidate": content},
             reason="llm_source_fact_binding_failed",
         )
     if tracer:
@@ -1541,6 +1670,8 @@ def _should_synthesize_with_llm(
         return True
     if _violates_response_profile(source_response, analysis, questions):
         return True
+    if _has_multiple_answer_aspects(questions):
+        return True
     if _is_contextual_synthesis_case(state) and _single_source_has_unrequested_clauses(
         questions,
         source_chunks,
@@ -1734,7 +1865,7 @@ def _generator_complexity(
         return Complexity.COMPLEX
     if analysis.complexity == Complexity.COMPLEX:
         return Complexity.COMPLEX
-    if len(source_chunks) > 1 and _has_multiple_distinct_questions(questions):
+    if _has_multiple_answer_aspects(questions):
         return Complexity.COMPLEX
     return Complexity.SIMPLE
 
@@ -2313,6 +2444,60 @@ def _has_multiple_distinct_questions(questions: list[Question]) -> bool:
     return len(normalized_questions) > 1
 
 
+def _has_multiple_answer_aspects(questions: list[Question]) -> bool:
+    return len(_answer_aspect_keys(questions)) > 1
+
+
+def _answer_aspect_keys(questions: list[Question]) -> set[tuple[str, str]]:
+    aspects: set[tuple[str, str]] = set()
+    for question in questions:
+        if not str(question.text or "").strip():
+            continue
+        if topic_group := _question_answer_aspect_key(question):
+            aspects.add(("topic", topic_group))
+            continue
+        aspects.add(("profile", _question_response_profile(question).value))
+    return aspects
+
+
+ANSWER_ASPECT_TOPIC_ALIAS_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"oplata_proezda", "oplata_proezda_palatok_i_pitaniya", "kompensaciya"}),
+    frozenset(
+        {
+            "transfer_do_mesta_provedeniya",
+            "transfer_do_mesta_provedeniya_meropriyatiya",
+            "transfer_do_ploschadki_festivalya",
+            "transfer_po_gorodu",
+        }
+    ),
+    frozenset({"programma_foruma", "programma_i_artisty", "programma_artisty"}),
+    frozenset(
+        {
+            "spisok_veschey_i_dokumentov",
+            "dokumenty_meropriyatiya",
+            "pamyatka_uchastnika_foruma",
+        }
+    ),
+    frozenset({"rezultaty_rm", "rezultaty_otbora_i_spiski"}),
+)
+
+
+def _question_answer_aspect_key(question: Question) -> str | None:
+    topic = str(question.topic or "").strip()
+    if _normalize(topic).replace(" ", "_") == "оплата_проезда":
+        topic = "oplata_proezda"
+    if not topic:
+        topic = _infer_topic_from_question_text(_normalize(question.text)) or ""
+    return _answer_aspect_topic_key(topic) if topic else None
+
+
+def _answer_aspect_topic_key(topic: str) -> str:
+    for group in ANSWER_ASPECT_TOPIC_ALIAS_GROUPS:
+        if topic in group:
+            return "|".join(sorted(group))
+    return topic
+
+
 def build_deterministic_source_response(chunks: list[ScoredChunk] | ScoredChunk) -> str | None:
     if isinstance(chunks, ScoredChunk):
         chunks = [chunks]
@@ -2660,6 +2845,12 @@ def _is_preferred_fresh_topic_replacement(
 
 def _question_topic_group(question: Question) -> str | None:
     question_topic = str(question.topic or "").strip()
+    # Keep explicit analyzer topics authoritative. Only normalize the one
+    # observed human-readable alias that is equivalent to the canonical KB
+    # topic; inferring from arbitrary Cyrillic topics can silently change an
+    # application's "documents" aspect into a forum packing-list aspect.
+    if _normalize(question_topic).replace(" ", "_") == "оплата_проезда":
+        question_topic = "oplata_proezda"
     if question_topic:
         return _equivalent_topic_group(question_topic)
     inferred_topic = _infer_topic_from_question_text(_normalize(question.text))
@@ -2725,6 +2916,8 @@ def _infer_topic_from_question_text(question_normalized: str) -> str | None:
         return "pismo_vyzov"
     if _asks_documents_or_packing(question_normalized):
         return "pamyatka_uchastnika_foruma"
+    if _asks_travel_payment(question_normalized):
+        return "oplata_proezda"
     if _asks_transfer(question_normalized):
         return "transfer_do_mesta_provedeniya_meropriyatiya"
     if _asks_housing_conditions(question_normalized):
@@ -3770,6 +3963,20 @@ def _asks_registration(question_normalized: str) -> bool:
     return any(marker in question_normalized for marker in ("регистрац", "зарегистр"))
 
 
+def _asks_account_creation(question_normalized: str) -> bool:
+    return _asks_registration(question_normalized) or any(
+        marker in question_normalized
+        for marker in ("создать аккаунт", "создать кабинет", "аккаунт будет создан")
+    )
+
+
+def _asks_volunteer_application(question_normalized: str) -> bool:
+    return "волонт" in question_normalized and any(
+        marker in question_normalized
+        for marker in ("заяв", "мероприят", "ваканс", "помощ")
+    )
+
+
 def _asks_profile_id(question_normalized: str) -> bool:
     return any(marker in question_normalized for marker in ("id проф", "айди", "ид проф"))
 
@@ -4065,6 +4272,16 @@ def _asks_access_or_technical_error(question_normalized: str) -> bool:
 
 def _asks_transfer(question_normalized: str) -> bool:
     return any(marker in question_normalized for marker in ("трансфер", "шаттл", "автобус"))
+
+
+def _asks_travel_payment(question_normalized: str) -> bool:
+    return any(
+        marker in question_normalized
+        for marker in ("проезд", "дорог", "билет")
+    ) and any(
+        marker in question_normalized
+        for marker in ("оплач", "платит", "за счет", "за счёт", "компенс")
+    )
 
 
 def _asks_arrival_departure(question_normalized: str) -> bool:

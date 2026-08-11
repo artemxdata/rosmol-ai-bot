@@ -9,7 +9,16 @@ from typing import Any
 
 from src.config import get_settings
 from src.graph.provenance import finite_score, rerank_question_provenance
-from src.graph.query_normalization import expand_query_aliases
+from src.graph.query_normalization import (
+    ACCOUNT_DATA_RECOVERY,
+    FORUM_DISCOVERY,
+    GENERIC_PLATFORM_REGISTRATION,
+    GRANT_DIRECTIONS,
+    PHYSICAL_GRANTS_OVERVIEW,
+    PLATFORM_EVENT_NAVIGATION,
+    bounded_query_intent,
+    expand_query_aliases,
+)
 from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
 from src.graph.response_profiles import (
     asks_event_dates as asks_profile_event_dates,
@@ -253,7 +262,15 @@ async def rerank(state: BotState) -> dict:
     )
     max_confidence = reranked_output_max
     confidence_source = "reranker"
-    retrieval_confidence_floor = _retrieval_confidence_floor(state, chunks)
+    confidence_floor_chunks = _scoped_chunks_for_analysis(
+        state.get("analysis"),
+        chunks,
+        query,
+    )
+    retrieval_confidence_floor = _retrieval_confidence_floor(
+        state,
+        confidence_floor_chunks,
+    )
     floor_applied = retrieval_confidence_floor > max_confidence
     if floor_applied:
         max_confidence = retrieval_confidence_floor
@@ -318,7 +335,12 @@ def _rerank_for_state(
     query = expand_query_aliases(query)
     analysis = state.get("analysis")
     scoped_chunks = _scoped_chunks_for_analysis(analysis, chunks, query)
-    original_priority_candidate = _priority_source_candidate(query, scoped_chunks)
+    forum_normalized = str(getattr(analysis, "forum_normalized", None) or "")
+    original_priority_candidate = _priority_source_candidate(
+        query,
+        scoped_chunks,
+        forum_normalized=forum_normalized,
+    )
     questions = (
         [
             question
@@ -345,7 +367,12 @@ def _rerank_for_state(
         priority_candidate = _priority_source_candidate(
             query,
             scoped_chunks,
-        ) or original_priority_candidate or _priority_source_candidate(rerank_query, scoped_chunks)
+            forum_normalized=forum_normalized,
+        ) or original_priority_candidate or _priority_source_candidate(
+            rerank_query,
+            scoped_chunks,
+            forum_normalized=forum_normalized,
+        )
         candidates = _candidate_chunks_for_question(
             rerank_query,
             scoped_chunks,
@@ -360,6 +387,7 @@ def _rerank_for_state(
             query,
             rerank_query,
             priority_candidate,
+            forum_normalized=forum_normalized,
         ):
             selected: list[ScoredChunk] = [_priority_scored_candidate(priority_candidate)]
             seen = {priority_candidate.chunk_id}
@@ -384,6 +412,7 @@ def _rerank_for_state(
             query,
             rerank_query,
             priority_candidate,
+            forum_normalized=forum_normalized,
         ):
             return _prepend_priority_candidate(ranked, priority_candidate)[:4]
         if priority_candidate and priority_candidate.chunk_id not in {
@@ -398,6 +427,7 @@ def _rerank_for_state(
         query,
         query,
         original_priority_candidate,
+        forum_normalized=forum_normalized,
     ):
         _append_chunk(selected, seen, _priority_scored_candidate(original_priority_candidate))
     per_question_limit = 2 if len(questions) <= 5 else 1
@@ -453,6 +483,9 @@ def _scoped_chunks_for_analysis(
     chunks: list[Chunk],
     query: str = "",
 ) -> list[Chunk]:
+    entity_scoped_chunks = _query_entity_scoped_chunks(query, chunks, analysis)
+    if entity_scoped_chunks is not None:
+        chunks = entity_scoped_chunks
     if not analysis or not chunks:
         return chunks
     exact_example_chunks = [
@@ -886,6 +919,8 @@ def _is_promotable_priority_candidate(
     query: str,
     rerank_query: str,
     priority_candidate: Chunk,
+    *,
+    forum_normalized: str = "",
 ) -> bool:
     return (
         _intent_example_matches_question(query, priority_candidate)
@@ -893,10 +928,12 @@ def _is_promotable_priority_candidate(
         or _metadata_matches_promotable_priority_question(
             _normalize(query),
             priority_candidate,
+            forum_normalized=forum_normalized,
         )
         or _metadata_matches_promotable_priority_question(
             _normalize(rerank_query),
             priority_candidate,
+            forum_normalized=forum_normalized,
         )
     )
 
@@ -1178,15 +1215,33 @@ def _candidate_chunks_for_question(
     return ranked[:limit] or chunks[:limit]
 
 
-def _priority_source_candidate(question: str, chunks: list[Chunk]) -> Chunk | None:
+def _priority_source_candidate(
+    question: str,
+    chunks: list[Chunk],
+    *,
+    forum_normalized: str = "",
+) -> Chunk | None:
     normalized_question = _normalize(question)
+    if _has_bounded_metadata_intent(
+        normalized_question,
+        forum_normalized=forum_normalized,
+    ):
+        return _metadata_priority_candidate(
+            normalized_question,
+            chunks,
+            forum_normalized=forum_normalized,
+        )
     if (
         _asks_specific_technical_question(normalized_question)
         or _asks_feedback_question(normalized_question)
         or _asks_grant_application(normalized_question)
         or _asks_invitation_letter(normalized_question)
     ):
-        metadata_match = _metadata_priority_candidate(normalized_question, chunks)
+        metadata_match = _metadata_priority_candidate(
+            normalized_question,
+            chunks,
+            forum_normalized=forum_normalized,
+        )
         if metadata_match:
             return metadata_match
 
@@ -1202,22 +1257,50 @@ def _priority_source_candidate(question: str, chunks: list[Chunk]) -> Chunk | No
     if intent_matches:
         return max(intent_matches)[2]
 
-    return _metadata_priority_candidate(normalized_question, chunks)
+    return _metadata_priority_candidate(
+        normalized_question,
+        chunks,
+        forum_normalized=forum_normalized,
+    )
 
 
 def _metadata_priority_candidate(
     normalized_question: str,
     chunks: list[Chunk],
+    *,
+    forum_normalized: str = "",
 ) -> Chunk | None:
     for chunk in chunks:
-        if _metadata_matches_priority_question(normalized_question, chunk):
+        if _metadata_matches_priority_question(
+            normalized_question,
+            chunk,
+            forum_normalized=forum_normalized,
+        ):
             return chunk
     return None
 
 
-def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) -> bool:
+def _metadata_matches_priority_question(
+    normalized_question: str,
+    chunk: Chunk,
+    *,
+    forum_normalized: str = "",
+) -> bool:
+    if forum_normalized and not _chunk_matches_explicit_forum(
+        chunk,
+        forum_normalized,
+    ):
+        return False
     metadata_haystack = _metadata_haystack(chunk)
     text_haystack = _normalize(chunk.text)
+
+    bounded_match = _bounded_metadata_intent_match(
+        normalized_question,
+        chunk,
+        forum_normalized=forum_normalized,
+    )
+    if bounded_match is not None:
+        return bounded_match
 
     if _asks_staff_feedback(normalized_question):
         return "ostavit_obratnuyu_svyaz_o_sotrudn" in metadata_haystack
@@ -1373,9 +1456,23 @@ def _metadata_matches_priority_question(normalized_question: str, chunk: Chunk) 
 def _metadata_matches_promotable_priority_question(
     normalized_question: str,
     chunk: Chunk,
+    *,
+    forum_normalized: str = "",
 ) -> bool:
+    if forum_normalized and not _chunk_matches_explicit_forum(
+        chunk,
+        forum_normalized,
+    ):
+        return False
     metadata_haystack = _metadata_haystack(chunk)
     text_haystack = _normalize(chunk.text)
+    bounded_match = _bounded_metadata_intent_match(
+        normalized_question,
+        chunk,
+        forum_normalized=forum_normalized,
+    )
+    if bounded_match is not None:
+        return bounded_match
     if _asks_staff_feedback(normalized_question):
         return "ostavit_obratnuyu_svyaz_o_sotrudn" in metadata_haystack
     if _asks_leave_feedback(normalized_question):
@@ -1449,6 +1546,11 @@ def _metadata_matches_promotable_priority_question(
     if _asks_invitation_letter(normalized_question):
         return "pismo_vyzov" in metadata_haystack or "письмо-вызов" in metadata_haystack
     return False
+
+
+def _chunk_matches_explicit_forum(chunk: Chunk, forum_normalized: str) -> bool:
+    chunk_forum = str((chunk.metadata or {}).get("forum_normalized") or "")
+    return bool(chunk_forum) and _normalize(chunk_forum) == _normalize(forum_normalized)
 
 
 def _tokens(text: str) -> set[str]:
@@ -1643,6 +1745,131 @@ def _metadata_haystack(chunk: Chunk) -> str:
 
 def _asks_registration(normalized_question: str) -> bool:
     return any(marker in normalized_question for marker in ("регистрац", "зарегистр"))
+
+
+def _query_entity_scoped_chunks(
+    query: str,
+    chunks: list[Chunk],
+    analysis: Any = None,
+) -> list[Chunk] | None:
+    """Apply query-proven entity scope before analyzer-derived soft category scope."""
+    forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
+    normalized = _normalize(query)
+    intent = bounded_query_intent(normalized, forum_normalized=forum)
+    if not forum and intent in {
+        GENERIC_PLATFORM_REGISTRATION,
+        PLATFORM_EVENT_NAVIGATION,
+        ACCOUNT_DATA_RECOVERY,
+    }:
+        return [
+            chunk
+            for chunk in chunks
+            if _bounded_metadata_intent_match(normalized, chunk) is True
+        ]
+    if intent == GRANT_DIRECTIONS:
+        return [
+            chunk
+            for chunk in chunks
+            if _bounded_metadata_intent_match(normalized, chunk) is True
+        ]
+    if intent == PHYSICAL_GRANTS_OVERVIEW:
+        return [
+            chunk
+            for chunk in chunks
+            if _bounded_metadata_intent_match(normalized, chunk) is True
+        ]
+    if intent == FORUM_DISCOVERY:
+        return [
+            chunk
+            for chunk in chunks
+            if _bounded_metadata_intent_match(normalized, chunk) is True
+        ]
+    return None
+
+
+def _has_bounded_metadata_intent(
+    normalized_question: str,
+    *,
+    forum_normalized: str = "",
+) -> bool:
+    return (
+        bounded_query_intent(
+            normalized_question,
+            forum_normalized=forum_normalized,
+        )
+        is not None
+    )
+
+
+def _bounded_metadata_intent_match(
+    normalized_question: str,
+    chunk: Chunk,
+    *,
+    forum_normalized: str = "",
+) -> bool | None:
+    metadata = chunk.metadata or {}
+    metadata_haystack = _metadata_haystack(chunk)
+    text_haystack = _normalize(chunk.text)
+    intent = bounded_query_intent(
+        normalized_question,
+        forum_normalized=forum_normalized,
+    )
+    if intent == GENERIC_PLATFORM_REGISTRATION:
+        return (
+            metadata.get("category") == "платформа_фгаис"
+            and not str(metadata.get("forum_normalized") or "").strip()
+            and (
+                "registraciya_prohodit_po_ssylke" in metadata_haystack
+                or "auth/register" in text_haystack
+            )
+        )
+    if intent == PLATFORM_EVENT_NAVIGATION:
+        return (
+            metadata.get("category") == "платформа_фгаис"
+            and not str(metadata.get("forum_normalized") or "").strip()
+            and "poisk_i_navigaciya_po_meropriyatiyam" in metadata_haystack
+        )
+    if intent == ACCOUNT_DATA_RECOVERY:
+        return (
+            metadata.get("category") == "платформа_фгаис"
+            and not str(metadata.get("forum_normalized") or "").strip()
+            and "obedinenie_akkauntov" in metadata_haystack
+        )
+    if intent == GRANT_DIRECTIONS:
+        return _is_generic_rosmol_grants_chunk(chunk) and "nominac" in metadata_haystack
+    if intent == PHYSICAL_GRANTS_OVERVIEW:
+        return _is_physical_grants_chunk(chunk) and "obschaya_informaciya" in metadata_haystack
+    if intent == FORUM_DISCOVERY:
+        return (
+            not str(metadata.get("forum_normalized") or "").strip()
+            and metadata.get("category") in {"общее", "платформа_фгаис"}
+            and (
+                "events_myrosmol_ru" in metadata_haystack
+                or "events.myrosmol.ru" in text_haystack
+            )
+        )
+    return None
+
+
+def _is_generic_rosmol_grants_chunk(chunk: Chunk) -> bool:
+    metadata = chunk.metadata or {}
+    if metadata.get("category") != "гранты":
+        return False
+    forum = _normalize(str(metadata.get("forum_normalized") or ""))
+    if not forum:
+        return True
+    return forum in {
+        "гранты",
+        "росмолодежь гранты",
+        "росмолодежь.гранты",
+    }
+
+
+def _is_physical_grants_chunk(chunk: Chunk) -> bool:
+    metadata = chunk.metadata or {}
+    return metadata.get("category") == "гранты" and "физичес" in _normalize(
+        str(metadata.get("forum_normalized") or metadata.get("source_category") or "")
+    )
 
 
 def _asks_profile_id(normalized_question: str) -> bool:

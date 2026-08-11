@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     reranker_threshold_high: float = Field(default=0.7, ge=0, le=1)
     cache_similarity_threshold: float = Field(default=0.95, ge=0, le=1)
     cache_ttl_hours: int = Field(default=24, ge=1)
-    prompt_version: str = "v1.0"
+    prompt_version: str = "pilot50-quality-v2"
 
     session_ttl_seconds: int = Field(default=1800, ge=60)
     rate_limit_messages: int = Field(default=20, ge=1)

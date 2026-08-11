@@ -1,0 +1,448 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_fgais_registration_navigation",
+    "query": "Без канцелярита: где зарегистрироваться во ФГАИС и как потом найти мероприятие по региону?",
+    "user_id": "synthetic-pilot50-v2-fgais-registration-navigation",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "https://myrosmol.ru/auth/register",
+      "регион проведения",
+      "регион участников"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "fgais"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_fgais_lost_email_statuses",
+    "query": "Почта от старого профиля ФГАИС потеряна: как перенести данные и заодно что значит статус «Одобрена»?",
+    "user_id": "synthetic-pilot50-v2-fgais-lost-email-statuses",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov",
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov",
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+        "создать аккаунт",
+        "Госуслуг",
+        "ID этого аккаунта",
+        "support@myrosmol.ru",
+        "организаторы одобрили участие"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "fgais"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_ladoga_deadline_food_travel",
+    "query": "По «Ладоге» сразу три вещи: до какого числа заявка, кто платит за проживание с едой и могут ли компенсировать дорогу?",
+    "user_id": "synthetic-pilot50-v2-ladoga-deadline-food-travel",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum",
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie",
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum",
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie",
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "30 июня 2026",
+      "3-разовое питание",
+      "за счет организаторов форума",
+      "могут быть компенсированы"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Ладога"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_patriot_deadline_participants",
+    "query": "Премия «Патриот»: кто вообще может участвовать и когда крайний срок подачи?",
+    "user_id": "synthetic-pilot50-v2-patriot-deadline-participants",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya",
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya",
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "12.09.2026",
+      "гражданин Российской Федерации",
+      "18 до 35 лет",
+      "юридическое лицо",
+      "иностранного государства",
+      "18 до 55 лет"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "event:Патриот"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_territory_overview_shifts",
+    "query": "В двух словах, что за «Территория смыслов», когда она идёт и какие там смены?",
+    "user_id": "synthetic-pilot50-v2-territory-overview-shifts",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "главная общественно-политическая площадка",
+      "20 июля 2026",
+      "6 августа 2026",
+      "Единство",
+      "Правда",
+      "Родина"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Территория смыслов"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_grant_directions_application",
+    "query": "По опубликованной инструкции первого сезона: что такое номинация, сколько их стандартно и какие основные шаги подачи?",
+    "user_id": "synthetic-pilot50-v2-grant-directions-application",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov",
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov",
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "это тематика проекта",
+      "18 стандартных номинаций",
+      "верифицировать профиль",
+      "Оформить идею проекта",
+      "Подать заявку на ФГАИС"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "grants"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_grant_review_timelines",
+    "query": "Не смешивай этапы: сколько проверяют проект грантового соглашения и сколько — уже итоговый отчёт?",
+    "user_id": "synthetic-pilot50-v2-grant-review-timelines",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya",
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya",
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "до 30 дней",
+      "до 30 рабочих дней"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "grants"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_dobro_registration_volunteering",
+    "query": "На Добро.РФ хочу с нуля: как создать кабинет, а потом отфильтровать мероприятие и подать заявку волонтёром?",
+    "user_id": "synthetic-pilot50-v2-dobro-registration-volunteering",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta",
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta",
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+        "письмо",
+        "подтвержд",
+        "аккаунт будет создан",
+        "фильтров поиска",
+        "заявк"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "dobro"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_mashuk_results_program",
+    "query": "По «Машуку» без догадок: когда объявят результаты отбора и когда дадут программу?",
+    "user_id": "synthetic-pilot50-v2-mashuk-results-program",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty",
+      "yonote_api_pmbmqm6lug_s0013_programma_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty",
+      "yonote_api_pmbmqm6lug_s0013_programma_foruma"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+      "14 календарных дней",
+      "за сутки до начала"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Машук"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_mashuk_shift_dates",
+    "query": "Сверь календарь «Машука»: какие даты у первой и второй смен и когда разъезд каждой?",
+    "user_id": "synthetic-pilot50-v2-mashuk-shift-dates",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta",
+      "yonote_api_pmbmqm6lug_s0003_2_smena_15_22_avgusta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta",
+      "yonote_api_pmbmqm6lug_s0003_2_smena_15_22_avgusta"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+        "8 августа",
+        "15 августа",
+        "22 августа",
+        "разъезд",
+        "отъезд"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Машук",
+      "dates"
+    ]
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "pilot50_v2_territory_forum_pravda_dates",
+    "query": "У «Территории смыслов» назови общий период форума и отдельно даты смены «Правда» — не перепутай.",
+    "user_id": "synthetic-pilot50-v2-territory-forum-pravda-dates",
+    "channel": "api",
+    "privacy_class": "standard",
+    "label_status": "synthetic_curated",
+    "requires_human_review": false,
+    "split": "calibration",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "expected_answer_contains": [
+        "20 июля 2026",
+        "6 августа 2026",
+        "26-30 июля 2026"
+    ],
+    "expected_escalated": false,
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Территория смыслов",
+      "dates"
+    ]
+  }
+]

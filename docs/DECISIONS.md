@@ -598,3 +598,53 @@ provider-сверка Phase 0 не выполнялась, а владелец �
 Phase 0 остаётся `unreconciled`, строка `PASS` не является billing evidence и не используется
 для продолжения. Продолжение использует отдельное явное owner-risk acceptance только для этого
 Pilot50; safe result по-прежнему получает `billing_status=pending_provider_reconciliation`.
+
+## D-040. Pilot50 фиксирует baseline и разрешает только regression-first quality cycle
+
+**Статус:** принято 11 августа 2026; дополняет D-017, D-035, D-036 и D-039.
+
+Единственный завершённый запуск `pilot50_balanced_v1` на runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a` и frozen cases SHA-256
+`65da11ebc790b37e0b8e5dff2601f6cc2cd3956d17652f7d74ab95eb1c21c6ed`
+зафиксирован как calibration baseline: mechanical first-turn closure `18/50 = 36%`, в том числе
+`11/25 = 44%` для typical и `7/25 = 28%` для atypical. Это не product conversion, не
+независимый holdout и не human verdict. Полные trace получены для `50/50`, cache hits отсутствуют,
+eval-проекция стоимости равна `11.647398 RUB`; provider billing остаётся
+`pending_provider_reconciliation`.
+
+Tracked safe evidence: `reports/pilot50_balanced_v1_baseline_20260811.json`. Он содержит только
+агрегаты, provenance SHA и критерии следующего кандидата; query/response, eval/request/user/case
+IDs и approval reference в Git не переносятся.
+
+Post-run аудит фиксирует measurement defect v1: `39/50` qrels совместимы с
+published-Yonote-only runtime, а `11` atypical multi-aspect кейсов механически требуют legacy
+XLSX/DOCX IDs. V1 остаётся immutable historical baseline, но его нельзя повторно использовать как
+candidate acceptance или выдавать изменение atypical slice за apples-to-apples рост.
+
+Разрешён локальный quality change set без rollout: KB, Yonote, safety, API и работающий production
+runtime не меняются. Изменения допускаются только в существующих generation/output-contract и
+retrieval/rerank слоях и начинаются с regression-тестов на наблюдаемые классы отказов. Guard,
+source grounding и обязательность опубликованных источников не ослабляются. Простые вопросы
+продолжают обслуживаться `source_only`/10B, а multi-aspect синтез может использовать Max только
+при source-bound coverage всех аспектов и ограниченном размере ответа.
+
+Acceptance выполняется на versioned `pilot50_balanced_v2`: те же `39` совместимых кейсов в том же
+порядке и `11` replacement-кейсов с qrels только на published Yonote. Exact materialized cases
+SHA-256 — `b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d`. V2 остаётся
+calibration, не independent holdout и не product conversion.
+
+Новый платный прогон запрещён до зелёных focused tests, полного `pytest`, Ruff и
+`scripts/index_kb.py --validate-only`. До него фиксируются новый exact runtime/tooling SHA,
+exact v2 cases SHA, одноразовый approval и runner projected stop-limit не выше `30 RUB`;
+владелец ранее назвал `500 RUB` только абсолютной верхней границей, а не целью расхода.
+Acceptance v2: не менее `30/50 = 60%` mechanical closure, typical `>=11/25`, atypical `>=7/25`
+как абсолютные floors, output-contract эскалации не более `6`, ноль source-binding failures на
+точных `38/50` кейсах с retrieval/citation qrels и ноль провалов точных `15/50` critical
+regression-кейсов с тегами `adversarial` или `off_aspect_guard`. Последний критерий относится к
+machine-checkable frozen cases; полный локальный pre-run gate отдельно обязан сохранять зелёными
+все guard/safety/grounding regression tests. Safe result сохраняет
+`human_product_verdict=false`: нулевой source-binding count не выдаётся за human-semantic review
+всех 50 ответов. Из-за replacement 11 atypical-кейсов процентный рост этого slice относительно
+v1 не заявляется. Проверка идёт только в отдельном candidate container после capacity GO;
+production не останавливается и не изменяется. Неполные trace, cache hit, pricing STOP,
+membership mismatch или провал любого quality criterion означает STOP без выборочного повтора.

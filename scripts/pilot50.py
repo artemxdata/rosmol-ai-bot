@@ -27,10 +27,15 @@ DEFAULT_MANIFEST = PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v1.json"
 MANIFEST_SCHEMA_VERSION = "1.0.0"
 SAFE_SCHEMA_VERSION = "pilot50-safe-result-v1"
 DATASET_ID = "pilot50_balanced_v1"
+V2_DATASET_ID = "pilot50_balanced_v2"
 CLASSIFICATION = "calibration_only"
 PILOT50_TARGET = "http://app-ml:8000/ask"
+PILOT50_CANDIDATE_TARGET = "http://pilot50-candidate-ml:8000/ask"
 EXPECTED_MANIFEST_CANONICAL_SHA256 = (
     "d591a02da2b616c1dc89931371184c762e0c9e1d3b68a50fd9ae33f9a5cf98f4"
+)
+V2_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
+    "13a706f713eef7c54337bd7cf6efdb38e898dde71089ea7e51a2c34fca3fcb91"
 )
 DISCLAIMER = (
     "Tracked regression calibration only. This is a mechanical first-turn "
@@ -42,8 +47,50 @@ EXPECTED_TYPE_COUNTS = {"typical": 25, "atypical": 25}
 EXPECTED_BEHAVIOR = "answer"
 EXPECTED_ESCALATED = False
 MAX_LLM_COST_RUB = 20.0
+CANDIDATE_MAX_LLM_COST_RUB = 30.0
 PRICING_SOURCE = "eval_repriced"
 PRICING_CONTRACT_ID = "pilot50-c38-pricing-v1"
+CANDIDATE_CONTRACT_ID = "pilot50-v2-candidate-v1"
+CANDIDATE_CASES_SHA256 = (
+    "b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
+)
+CANDIDATE_PRICING_SOURCE = "target_reported"
+CANDIDATE_COST_SCOPE = "pilot50-v2-candidate"
+CANDIDATE_QUALITY_GATE_SCHEMA_VERSION = "pilot50-v2-quality-gate-v1"
+CANDIDATE_QUALITY_GATE_CRITERIA = (
+    "overall_closed",
+    "typical_closed",
+    "atypical_closed",
+    "output_contract_escalations",
+    "source_binding_failures",
+    "critical_case_failures",
+)
+CANDIDATE_EXPECTED_QREL_CASES = 38
+CANDIDATE_EXPECTED_CRITICAL_CASES = 15
+CANDIDATE_CRITICAL_CASE_TAGS = frozenset({"adversarial", "off_aspect_guard"})
+CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS = frozenset(
+    {
+        "empty_generated_response",
+        "final_response_empty",
+        "final_response_too_long",
+        "final_response_too_many_links",
+        "final_response_unapproved_emoji",
+        "llm_response_contract_failed",
+        "llm_response_profile_failed",
+        "llm_response_too_long",
+        "llm_source_citation_failed",
+        "llm_source_coverage_failed",
+        "llm_source_fact_binding_failed",
+        "source_response_contract_failed",
+    }
+)
+CANDIDATE_SOURCE_BINDING_DEFINITION = (
+    "non_escalated_result_with_qrels_failing_any_effective_expected_retrieval_"
+    "or_citation_source_check"
+)
+CANDIDATE_CRITICAL_CASE_DEFINITION = (
+    "result_passed_is_not_true_for_case_tagged_adversarial_or_off_aspect_guard"
+)
 PRICING_RATE_CARD = {
     "complex_input_price_rub_per_million": "569.34",
     "complex_model": "GigaChat/GigaChat-2-Max",
@@ -92,6 +139,7 @@ PRICING_PROVENANCE_BASE = {
 }
 MAX_MANIFEST_BYTES = 128 * 1024
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
+MAX_KB_SEED_BYTES = 16 * 1024 * 1024
 MAX_CASES_BYTES = 4 * 1024 * 1024
 MAX_REPORT_BYTES = 32 * 1024 * 1024
 MAX_SAFE_BYTES = 128 * 1024
@@ -124,6 +172,32 @@ ALLOWED_SOURCE_PATHS = frozenset(
         "eval/cases/product_date_aspect_regression_v1.json",
     }
 )
+V2_ALLOWED_SOURCE_PATHS = frozenset(
+    {
+        "eval/cases/pre_pilot_yonote.json",
+        "eval/cases/product_calibration_synthetic_pilot_20.json",
+        "eval/cases/pilot50_atypical_yonote_v2.json",
+        "eval/cases/pre_pilot_adversarial.json",
+        "eval/cases/product_date_aspect_regression_v1.json",
+    }
+)
+DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
+    DATASET_ID: {
+        "manifest_canonical_sha256": EXPECTED_MANIFEST_CANONICAL_SHA256,
+        "source_paths": ALLOWED_SOURCE_PATHS,
+        "tag": "pilot50:v1",
+        "user_prefix": "pilot50-v1",
+        "version_label": "v1",
+    },
+    V2_DATASET_ID: {
+        "manifest_canonical_sha256": V2_EXPECTED_MANIFEST_CANONICAL_SHA256,
+        "source_paths": V2_ALLOWED_SOURCE_PATHS,
+        "tag": "pilot50:v2",
+        "user_prefix": "pilot50-v2",
+        "version_label": "v2",
+        "requires_published_yonote_qrels": True,
+    },
+}
 FORBIDDEN_CASE_FIELDS = frozenset(
     {
         "ticket_id",
@@ -190,6 +264,7 @@ SAFE_FIELDS = frozenset(
         "disclaimer",
     }
 )
+CANDIDATE_SAFE_FIELDS = SAFE_FIELDS | {"quality_gate"}
 
 
 class Pilot50Error(ValueError):
@@ -311,13 +386,62 @@ def _manifest_snapshot(path: Path) -> tuple[dict[str, Any], bytes, str]:
     return manifest, payload, _sha256(payload)
 
 
+def _dataset_contract(dataset_id: Any) -> dict[str, Any]:
+    if not isinstance(dataset_id, str) or dataset_id not in DATASET_CONTRACTS:
+        raise Pilot50Error("manifest dataset id is invalid")
+    return DATASET_CONTRACTS[dataset_id]
+
+
+def _evidence_contract(
+    dataset_id: str,
+    *,
+    candidate_contract: str | None = None,
+) -> dict[str, Any]:
+    requested_candidate = str(candidate_contract or "").strip()
+    if dataset_id == DATASET_ID:
+        if requested_candidate:
+            raise Pilot50Error(
+                "candidate contract cannot be used with the Pilot50 v1 dataset"
+            )
+        return {
+            "target": PILOT50_TARGET,
+            "max_llm_cost_rub": MAX_LLM_COST_RUB,
+            "pricing_source": PRICING_SOURCE,
+            "pricing_contract_id": PRICING_CONTRACT_ID,
+            "target_telemetry_pricing_complete": False,
+            "cost_scope": "ask-eval",
+            "reservation_private_full": False,
+        }
+    if dataset_id != V2_DATASET_ID or requested_candidate != CANDIDATE_CONTRACT_ID:
+        raise Pilot50Error(
+            "Pilot50 v2 evidence requires the exact candidate contract"
+        )
+    return {
+        "target": PILOT50_CANDIDATE_TARGET,
+        "max_llm_cost_rub": CANDIDATE_MAX_LLM_COST_RUB,
+        "pricing_source": CANDIDATE_PRICING_SOURCE,
+        "pricing_contract_id": CANDIDATE_CONTRACT_ID,
+        "target_telemetry_pricing_complete": True,
+        "cost_scope": CANDIDATE_COST_SCOPE,
+        "reservation_private_full": True,
+    }
+
+
+def _safe_result_evidence_contract(dataset_id: str) -> dict[str, Any]:
+    return _evidence_contract(
+        dataset_id,
+        candidate_contract=(
+            CANDIDATE_CONTRACT_ID if dataset_id == V2_DATASET_ID else None
+        ),
+    )
+
+
 def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     if set(manifest) != MANIFEST_FIELDS:
         raise Pilot50Error("manifest fields do not match the Pilot50 schema")
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         raise Pilot50Error("manifest schema version is invalid")
-    if manifest.get("dataset_id") != DATASET_ID:
-        raise Pilot50Error("manifest dataset id is invalid")
+    dataset_contract = _dataset_contract(manifest.get("dataset_id"))
     if manifest.get("classification") != CLASSIFICATION:
         raise Pilot50Error("manifest classification is invalid")
     if manifest.get("human_product_verdict") is not False:
@@ -342,7 +466,8 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     if contract != expected_contract:
         raise Pilot50Error("manifest expected contract is invalid")
     sources = manifest.get("sources")
-    if not isinstance(sources, list) or len(sources) != len(ALLOWED_SOURCE_PATHS):
+    allowed_source_paths = dataset_contract["source_paths"]
+    if not isinstance(sources, list) or len(sources) != len(allowed_source_paths):
         raise Pilot50Error("manifest sources are invalid")
     observed_paths: set[str] = set()
     selected_ids: list[str] = []
@@ -355,7 +480,7 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
         group = source.get("type")
         rule = source.get("selection_rule")
         case_ids = source.get("case_ids")
-        if source_path not in ALLOWED_SOURCE_PATHS or source_path in observed_paths:
+        if source_path not in allowed_source_paths or source_path in observed_paths:
             raise Pilot50Error("manifest source path is invalid")
         if not isinstance(source_hash, str) or SHA256_RE.fullmatch(source_hash) is None:
             raise Pilot50Error("manifest source hash is invalid")
@@ -373,7 +498,7 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
         observed_paths.add(source_path)
         selected_ids.extend(case_ids)
         type_counts[group] += len(case_ids)
-    if observed_paths != ALLOWED_SOURCE_PATHS:
+    if observed_paths != allowed_source_paths:
         raise Pilot50Error("manifest source membership is invalid")
     if len(selected_ids) != EXPECTED_CASES_TOTAL or len(set(selected_ids)) != len(
         selected_ids
@@ -410,8 +535,86 @@ def _case_tags(value: Any) -> list[str]:
     return tags
 
 
+def _qrel_ids_from_case(case: Mapping[str, Any]) -> set[str]:
+    qrel_ids: set[str] = set()
+    for field in ("expected_chunk_ids", "expected_cited_chunk_ids"):
+        value = case.get(field)
+        if value is None:
+            continue
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(item, str) or not item for item in value)
+            or len(value) != len(set(value))
+        ):
+            raise Pilot50Error(f"selected case {field} is invalid")
+        qrel_ids.update(value)
+
+    equivalents = case.get("equivalent_chunk_ids")
+    if equivalents is None:
+        return qrel_ids
+    if isinstance(equivalents, dict):
+        for expected_id, accepted_ids in equivalents.items():
+            if not isinstance(expected_id, str) or not expected_id:
+                raise Pilot50Error("selected case equivalent chunk IDs are invalid")
+            if isinstance(accepted_ids, str):
+                accepted_ids = [accepted_ids]
+            if (
+                not isinstance(accepted_ids, list)
+                or any(not isinstance(item, str) or not item for item in accepted_ids)
+                or len(accepted_ids) != len(set(accepted_ids))
+            ):
+                raise Pilot50Error("selected case equivalent chunk IDs are invalid")
+            qrel_ids.add(expected_id)
+            qrel_ids.update(accepted_ids)
+        return qrel_ids
+    if isinstance(equivalents, str):
+        equivalents = [equivalents]
+    if (
+        not isinstance(equivalents, list)
+        or any(not isinstance(item, str) or not item for item in equivalents)
+        or len(equivalents) != len(set(equivalents))
+    ):
+        raise Pilot50Error("selected case equivalent chunk IDs are invalid")
+    qrel_ids.update(equivalents)
+    return qrel_ids
+
+
+def _validate_published_yonote_qrels(cases: Sequence[Mapping[str, Any]]) -> None:
+    seed_path = _source_path("data/knowledge_base_seed.json")
+    seed_bytes = _read_regular_bytes(
+        seed_path,
+        max_bytes=MAX_KB_SEED_BYTES,
+        label="frozen knowledge seed",
+    )
+    seed_rows = _load_json_bytes(seed_bytes, label="frozen knowledge seed")
+    if not isinstance(seed_rows, list) or not all(
+        isinstance(row, dict) for row in seed_rows
+    ):
+        raise Pilot50Error("frozen knowledge seed must contain a JSON object array")
+    seed_by_id: dict[str, Mapping[str, Any]] = {}
+    for row in seed_rows:
+        chunk_id = row.get("chunk_id")
+        if not isinstance(chunk_id, str) or not chunk_id or chunk_id in seed_by_id:
+            raise Pilot50Error("frozen knowledge seed chunk IDs are invalid")
+        seed_by_id[chunk_id] = row
+
+    for case in cases:
+        for qrel_id in _qrel_ids_from_case(case):
+            source = seed_by_id.get(qrel_id)
+            if (
+                source is None
+                or source.get("status") != "published"
+                or source.get("source_type") != "yonote"
+            ):
+                raise Pilot50Error(
+                    "Pilot50 v2 qrel is not a published Yonote source"
+                )
+
+
 def build_materialized_cases(manifest_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     manifest, _manifest_bytes, manifest_sha = _manifest_snapshot(manifest_path)
+    dataset_id = str(manifest["dataset_id"])
+    dataset_contract = _dataset_contract(dataset_id)
     materialized: list[dict[str, Any]] = []
     seen_queries: set[str] = set()
     seen_ids: set[str] = set()
@@ -468,26 +671,35 @@ def build_materialized_cases(manifest_path: Path) -> tuple[list[dict[str, Any]],
             group = source["type"]
             enriched = dict(source_case)
             enriched["privacy_class"] = "standard"
-            enriched["user_id"] = f"pilot50-v1-{len(materialized) + 1:02d}"
+            enriched["user_id"] = (
+                f"{dataset_contract['user_prefix']}-{len(materialized) + 1:02d}"
+            )
             enriched["pilot50_group"] = group
             enriched["tags"] = list(
-                dict.fromkeys([*tags, "pilot50:v1", f"type:{group}"])
+                dict.fromkeys([*tags, dataset_contract["tag"], f"type:{group}"])
             )
             materialized.append(enriched)
             seen_ids.add(case_id)
             seen_queries.add(normalized_query)
             type_counts[group] += 1
-    if _sha256(_canonical_json_bytes(manifest)) != EXPECTED_MANIFEST_CANONICAL_SHA256:
-        raise Pilot50Error("manifest differs from the frozen Pilot50 v1 selection")
+    if _sha256(_canonical_json_bytes(manifest)) != dataset_contract[
+        "manifest_canonical_sha256"
+    ]:
+        raise Pilot50Error(
+            "manifest differs from the frozen Pilot50 "
+            f"{dataset_contract['version_label']} selection"
+        )
     if len(materialized) != EXPECTED_CASES_TOTAL:
         raise Pilot50Error("materialized case count is invalid")
     if dict(type_counts) != EXPECTED_TYPE_COUNTS:
         raise Pilot50Error("materialized type counts are invalid")
+    if dataset_contract.get("requires_published_yonote_qrels") is True:
+        _validate_published_yonote_qrels(materialized)
     cases_bytes = _canonical_json_bytes(materialized)
     receipt = {
         "status": "OK",
         "operation": "prepare",
-        "dataset_id": DATASET_ID,
+        "dataset_id": dataset_id,
         "cases_total": EXPECTED_CASES_TOTAL,
         "type_counts": EXPECTED_TYPE_COUNTS,
         "expected_behavior": EXPECTED_BEHAVIOR,
@@ -501,8 +713,8 @@ def build_materialized_cases(manifest_path: Path) -> tuple[list[dict[str, Any]],
 def _validate_materialized_cases(
     manifest_path: Path,
     cases_path: Path,
-) -> tuple[list[dict[str, Any]], bytes, str]:
-    expected_cases, _receipt = build_materialized_cases(manifest_path)
+) -> tuple[list[dict[str, Any]], bytes, str, dict[str, Any]]:
+    expected_cases, receipt = build_materialized_cases(manifest_path)
     expected_bytes = _canonical_json_bytes(expected_cases)
     observed_bytes = _read_regular_bytes(
         cases_path,
@@ -514,7 +726,7 @@ def _validate_materialized_cases(
     observed = _load_json_bytes(observed_bytes, label="materialized cases")
     if observed != expected_cases:
         raise Pilot50Error("materialized cases payload is invalid")
-    return expected_cases, observed_bytes, _sha256(observed_bytes)
+    return expected_cases, observed_bytes, _sha256(observed_bytes), receipt
 
 
 def _finite_nonnegative_number(value: Any, *, label: str) -> float:
@@ -694,6 +906,119 @@ def _validated_repriced_case_cost(result: Mapping[str, Any]) -> float:
     return float(projected_cost_sum)
 
 
+def _validated_target_reported_case_cost(result: Mapping[str, Any]) -> float:
+    if result.get("llm_accounting_present") is not True:
+        raise Pilot50Error("ask result LLM accounting is missing")
+    if "llm_cost_pricing_provenance" in result or any(
+        field.startswith("target_reported_llm_") for field in result
+    ):
+        raise Pilot50Error("candidate result must not contain repriced telemetry")
+    usage = result.get("llm_usage")
+    if not isinstance(usage, list):
+        raise Pilot50Error("candidate target-reported usage is invalid")
+    aggregate_prompt = _strict_nonnegative_int(
+        result.get("llm_prompt_tokens"), label="target-reported prompt tokens"
+    )
+    aggregate_completion = _strict_nonnegative_int(
+        result.get("llm_completion_tokens"),
+        label="target-reported completion tokens",
+    )
+    aggregate_total = _strict_nonnegative_int(
+        result.get("llm_total_tokens"), label="target-reported total tokens"
+    )
+    aggregate_cost = Decimal(
+        str(
+            _finite_nonnegative_number(
+                result.get("llm_estimated_cost_rub"),
+                label="target-reported case LLM cost",
+            )
+        )
+    )
+    if aggregate_prompt + aggregate_completion != aggregate_total:
+        raise Pilot50Error("candidate aggregate token accounting is inconsistent")
+    if not usage:
+        if (
+            any((aggregate_prompt, aggregate_completion, aggregate_total))
+            or aggregate_cost != 0
+            or result.get("generator_model")
+            not in {None, "not_run", "source_only", "source_chunk"}
+            or result.get("analyzer_execution_mode") != "deterministic"
+            or result.get("http_status") != 200
+            or result.get("http_success") is not True
+            or result.get("error") not in (None, "")
+            or result.get("trace_error") not in (None, "")
+            or bool(result.get("generate_retry_reasons"))
+        ):
+            raise Pilot50Error("candidate not-run LLM accounting is inconsistent")
+        return 0.0
+
+    prompt_sum = 0
+    completion_sum = 0
+    total_sum = 0
+    cost_sum = Decimal("0")
+    for event in usage:
+        if not isinstance(event, dict):
+            raise Pilot50Error("candidate usage event must be an object")
+        if any(
+            field in event
+            for field in (
+                "pricing_source",
+                "pricing_contract_id",
+                "pricing_rate_card_sha256",
+            )
+        ):
+            raise Pilot50Error("candidate usage event contains repricing metadata")
+        model = str(event.get("model") or "").strip()
+        prices = PRICING_MODELS.get(model)
+        if prices is None:
+            raise Pilot50Error("candidate usage event model is not approved")
+        prompt_tokens = _strict_nonnegative_int(
+            event.get("prompt_tokens"), label="candidate event prompt tokens"
+        )
+        completion_tokens = _strict_nonnegative_int(
+            event.get("completion_tokens"),
+            label="candidate event completion tokens",
+        )
+        total_tokens = _strict_nonnegative_int(
+            event.get("total_tokens"), label="candidate event total tokens"
+        )
+        if total_tokens <= 0 or prompt_tokens + completion_tokens != total_tokens:
+            raise Pilot50Error("candidate event token accounting is inconsistent")
+        event_cost = Decimal(
+            str(
+                _finite_nonnegative_number(
+                    event.get("estimated_cost_rub"),
+                    label="candidate event LLM cost",
+                )
+            )
+        )
+        input_price, output_price = prices
+        expected_cost = (
+            (
+                Decimal(prompt_tokens) * input_price
+                + Decimal(completion_tokens) * output_price
+            )
+            / Decimal(1_000_000)
+        ).quantize(Decimal("0.000001"))
+        if (
+            event.get("priced") is not True
+            or event_cost <= 0
+            or event_cost != expected_cost
+        ):
+            raise Pilot50Error("candidate target-reported event cost is inconsistent")
+        prompt_sum += prompt_tokens
+        completion_sum += completion_tokens
+        total_sum += total_tokens
+        cost_sum += event_cost
+    if (
+        (aggregate_prompt, aggregate_completion, aggregate_total)
+        != (prompt_sum, completion_sum, total_sum)
+        or aggregate_cost != cost_sum
+    ):
+        raise Pilot50Error("candidate case LLM cost accounting is inconsistent")
+    return float(cost_sum)
+
+
 def _validated_eval_run_id(value: Any) -> str:
     eval_run_id = str(value or "")
     if EVAL_RUN_ID_RE.fullmatch(eval_run_id) is None:
@@ -771,6 +1096,188 @@ def _pass_row(numerator: int, denominator: int) -> dict[str, Any]:
         "total": denominator,
         "rate": round(numerator / denominator, 6),
     }
+
+
+def _validated_candidate_quality_count(
+    value: Any,
+    *,
+    label: str,
+    maximum: int,
+) -> int:
+    if type(value) is not int or not 0 <= value <= maximum:
+        raise Pilot50Error(f"candidate quality {label} count is invalid")
+    return value
+
+
+def _build_candidate_quality_gate(
+    *,
+    typical_closed: int,
+    atypical_closed: int,
+    output_contract_escalations: int,
+    source_binding_failures: int,
+    applicable_qrel_cases: int,
+    critical_case_failures: int,
+    applicable_critical_cases: int,
+) -> dict[str, Any]:
+    typical_closed = _validated_candidate_quality_count(
+        typical_closed,
+        label="typical closure",
+        maximum=EXPECTED_TYPE_COUNTS["typical"],
+    )
+    atypical_closed = _validated_candidate_quality_count(
+        atypical_closed,
+        label="atypical closure",
+        maximum=EXPECTED_TYPE_COUNTS["atypical"],
+    )
+    output_contract_escalations = _validated_candidate_quality_count(
+        output_contract_escalations,
+        label="output-contract escalation",
+        maximum=EXPECTED_CASES_TOTAL,
+    )
+    applicable_qrel_cases = _validated_candidate_quality_count(
+        applicable_qrel_cases,
+        label="qrel coverage",
+        maximum=EXPECTED_CASES_TOTAL,
+    )
+    if applicable_qrel_cases != CANDIDATE_EXPECTED_QREL_CASES:
+        raise Pilot50Error("candidate quality gate qrel coverage is invalid")
+    source_binding_failures = _validated_candidate_quality_count(
+        source_binding_failures,
+        label="source-binding failure",
+        maximum=applicable_qrel_cases,
+    )
+    applicable_critical_cases = _validated_candidate_quality_count(
+        applicable_critical_cases,
+        label="critical-case coverage",
+        maximum=EXPECTED_CASES_TOTAL,
+    )
+    if applicable_critical_cases != CANDIDATE_EXPECTED_CRITICAL_CASES:
+        raise Pilot50Error("candidate quality gate critical-case coverage is invalid")
+    critical_case_failures = _validated_candidate_quality_count(
+        critical_case_failures,
+        label="critical-case failure",
+        maximum=applicable_critical_cases,
+    )
+    overall_closed = typical_closed + atypical_closed
+    criteria = {
+        "overall_closed": {
+            "actual": overall_closed,
+            "minimum": 30,
+            "passed": overall_closed >= 30,
+        },
+        "typical_closed": {
+            "actual": typical_closed,
+            "minimum": 11,
+            "passed": typical_closed >= 11,
+        },
+        "atypical_closed": {
+            "actual": atypical_closed,
+            "minimum": 7,
+            "passed": atypical_closed >= 7,
+        },
+        "output_contract_escalations": {
+            "actual": output_contract_escalations,
+            "maximum": 6,
+            "passed": output_contract_escalations <= 6,
+        },
+        "source_binding_failures": {
+            "actual": source_binding_failures,
+            "maximum": 0,
+            "passed": source_binding_failures == 0,
+            "applicable_qrel_cases": applicable_qrel_cases,
+            "total_cases": EXPECTED_CASES_TOTAL,
+        },
+        "critical_case_failures": {
+            "actual": critical_case_failures,
+            "maximum": 0,
+            "passed": critical_case_failures == 0,
+            "applicable_critical_cases": applicable_critical_cases,
+            "total_cases": EXPECTED_CASES_TOTAL,
+        },
+    }
+    failed_criteria = [
+        criterion
+        for criterion in CANDIDATE_QUALITY_GATE_CRITERIA
+        if criteria[criterion]["passed"] is not True
+    ]
+    return {
+        "schema_version": CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
+        "status": "STOP" if failed_criteria else "GO",
+        "criteria": criteria,
+        "failed_criteria": failed_criteria,
+        "output_contract_reasons": sorted(
+            CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS
+        ),
+        "source_binding_definition": CANDIDATE_SOURCE_BINDING_DEFINITION,
+        "critical_case_definition": CANDIDATE_CRITICAL_CASE_DEFINITION,
+    }
+
+
+def _candidate_source_binding_failed(
+    expected: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> bool:
+    """Conservatively fail a non-escalated qrel case on any missing effective check."""
+
+    if result.get("was_escalated") is not False:
+        return False
+    has_equivalent_chunks = bool(expected.get("equivalent_chunk_ids"))
+    effective_checks: list[str] = []
+    if expected.get("expected_chunk_ids"):
+        effective_checks.append(
+            "expected_or_equivalent_chunk_hit"
+            if has_equivalent_chunks
+            else "expected_chunk_hit"
+        )
+    if expected.get("expected_cited_chunk_ids"):
+        effective_checks.append(
+            "expected_cited_or_equivalent_chunk_hit"
+            if has_equivalent_chunks
+            else "expected_cited_chunk_hit"
+        )
+    return bool(effective_checks) and any(
+        result.get(field) is not True for field in effective_checks
+    )
+
+
+def _candidate_case_is_critical(case: Mapping[str, Any]) -> bool:
+    tags = case.get("tags")
+    return isinstance(tags, list) and bool(
+        CANDIDATE_CRITICAL_CASE_TAGS.intersection(tags)
+    )
+
+
+def _validate_candidate_quality_gate(
+    value: Any,
+    *,
+    typical_closed: int,
+    atypical_closed: int,
+) -> None:
+    if not isinstance(value, dict):
+        raise Pilot50Error("candidate quality gate is invalid")
+    criteria = value.get("criteria")
+    if not isinstance(criteria, dict):
+        raise Pilot50Error("candidate quality gate criteria are invalid")
+    output_row = criteria.get("output_contract_escalations")
+    source_row = criteria.get("source_binding_failures")
+    critical_row = criteria.get("critical_case_failures")
+    if (
+        not isinstance(output_row, dict)
+        or not isinstance(source_row, dict)
+        or not isinstance(critical_row, dict)
+    ):
+        raise Pilot50Error("candidate quality gate count rows are invalid")
+    expected = _build_candidate_quality_gate(
+        typical_closed=typical_closed,
+        atypical_closed=atypical_closed,
+        output_contract_escalations=output_row.get("actual"),
+        source_binding_failures=source_row.get("actual"),
+        applicable_qrel_cases=source_row.get("applicable_qrel_cases"),
+        critical_case_failures=critical_row.get("actual"),
+        applicable_critical_cases=critical_row.get("applicable_critical_cases"),
+    )
+    if value != expected:
+        raise Pilot50Error("candidate quality gate is inconsistent")
 
 
 def _percentile(values: Sequence[int], percentile: int) -> int:
@@ -870,14 +1377,22 @@ def build_safe_result(
     trace_rows: Sequence[Mapping[str, Any]],
     expected_runtime_git_sha: str,
     expected_approval_id: str,
+    candidate_contract: str | None = None,
     report_snapshot: bytes | None = None,
 ) -> dict[str, Any]:
     runtime_git_sha = _validated_runtime_git_sha(expected_runtime_git_sha)
     approval_id = _validated_approval_id(expected_approval_id)
-    cases, cases_bytes, cases_sha = _validate_materialized_cases(
+    cases, cases_bytes, cases_sha, receipt = _validate_materialized_cases(
         manifest_path,
         cases_path,
     )
+    dataset_id = str(receipt["dataset_id"])
+    evidence_contract = _evidence_contract(
+        dataset_id,
+        candidate_contract=candidate_contract,
+    )
+    if dataset_id == V2_DATASET_ID and cases_sha != CANDIDATE_CASES_SHA256:
+        raise Pilot50Error("materialized cases differ from the frozen candidate set")
     report_bytes = report_snapshot
     if report_bytes is None:
         report_bytes = _read_regular_bytes(
@@ -896,7 +1411,7 @@ def build_safe_result(
     if report.get("cases_total") != EXPECTED_CASES_TOTAL:
         raise Pilot50Error("ask report case count is invalid")
     eval_run_id = _validated_eval_run_id(report.get("eval_run_id"))
-    if report.get("target") != PILOT50_TARGET:
+    if report.get("target") != evidence_contract["target"]:
         raise Pilot50Error("ask report target is invalid")
     run_window = _validated_run_window(report)
     runtime_identity = report.get("runtime_identity")
@@ -918,6 +1433,11 @@ def build_safe_result(
     group_closed: Counter[str] = Counter()
     group_passed: Counter[str] = Counter()
     group_totals: Counter[str] = Counter()
+    output_contract_escalations = 0
+    source_binding_failures = 0
+    applicable_qrel_cases = 0
+    critical_case_failures = 0
+    applicable_critical_cases = 0
     total_cost = 0.0
     for result in results:
         if not isinstance(result, dict):
@@ -960,16 +1480,46 @@ def build_safe_result(
         if isinstance(latency, bool) or not isinstance(latency, int) or latency < 0:
             raise Pilot50Error("ask result latency is invalid")
         latencies.append(latency)
-        total_cost += _validated_repriced_case_cost(result)
+        total_cost += (
+            _validated_target_reported_case_cost(result)
+            if dataset_id == V2_DATASET_ID
+            else _validated_repriced_case_cost(result)
+        )
         group_totals[group] += 1
         if passed:
             group_passed[group] += 1
         if passed and observed_behavior == "answer" and was_escalated is False:
             group_closed[group] += 1
+        if dataset_id == V2_DATASET_ID:
+            has_qrels = bool(
+                expected.get("expected_chunk_ids")
+                or expected.get("expected_cited_chunk_ids")
+            )
+            if has_qrels:
+                applicable_qrel_cases += 1
+                if _candidate_source_binding_failed(expected, result):
+                    source_binding_failures += 1
+            if _candidate_case_is_critical(expected):
+                applicable_critical_cases += 1
+                if passed is not True:
+                    critical_case_failures += 1
+            escalation_reason = result.get("escalation_reason")
+            if (
+                was_escalated is True
+                and isinstance(escalation_reason, str)
+                and escalation_reason
+                in CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS
+            ):
+                output_contract_escalations += 1
     if set(observed_by_id) != set(expected_by_id):
         raise Pilot50Error("ask report case membership does not match Pilot50")
     if dict(group_totals) != EXPECTED_TYPE_COUNTS:
         raise Pilot50Error("ask report type counts are invalid")
+    if dataset_id == V2_DATASET_ID and (
+        applicable_qrel_cases != CANDIDATE_EXPECTED_QREL_CASES
+        or applicable_critical_cases != CANDIDATE_EXPECTED_CRITICAL_CASES
+    ):
+        raise Pilot50Error("candidate quality coverage differs from the frozen set")
     validate_trace_rows(
         trace_rows,
         eval_run_id=eval_run_id,
@@ -984,13 +1534,17 @@ def build_safe_result(
     if report.get("llm_pricing_stopped") is True:
         raise Pilot50Error("ask report stopped on pricing")
     budget_value = report.get("llm_budget_rub")
-    if _finite_nonnegative_number(budget_value, label="report LLM budget") != MAX_LLM_COST_RUB:
+    max_llm_cost_rub = float(evidence_contract["max_llm_cost_rub"])
+    if (
+        _finite_nonnegative_number(budget_value, label="report LLM budget")
+        != max_llm_cost_rub
+    ):
         raise Pilot50Error("ask report budget differs from the Pilot50 cap")
     reported_cost = _finite_nonnegative_number(
         report.get("llm_estimated_cost_rub"),
         label="report LLM cost",
     )
-    if abs(reported_cost - total_cost) > 0.000001 or reported_cost > MAX_LLM_COST_RUB:
+    if abs(reported_cost - total_cost) > 0.000001 or reported_cost > max_llm_cost_rub:
         raise Pilot50Error("ask report cost accounting is inconsistent")
     cost_control = report.get("cost_control")
     if (
@@ -998,8 +1552,47 @@ def build_safe_result(
         or cost_control.get("strict_live") is not True
         or cost_control.get("pricing_complete") is not True
         or cost_control.get("high_cost_approval_id") != approval_id
-        or cost_control.get("pricing_projection") != PRICING_PROJECTION
     ):
+        raise Pilot50Error("ask report cost-control evidence is incomplete")
+    if dataset_id == V2_DATASET_ID:
+        candidate_evidence = cost_control.get("candidate_contract")
+        if (
+            not isinstance(candidate_evidence, dict)
+            or candidate_evidence.get("contract_id") != CANDIDATE_CONTRACT_ID
+            or candidate_evidence.get("runtime_git_sha") != runtime_git_sha
+            or candidate_evidence.get("cases_file_sha256") != cases_sha
+            or candidate_evidence.get("target") != PILOT50_CANDIDATE_TARGET
+            or candidate_evidence.get("cases_total") != EXPECTED_CASES_TOTAL
+            or candidate_evidence.get("concurrency") != 1
+            or candidate_evidence.get("complete_traces_required") is not True
+            or candidate_evidence.get("max_llm_cost_rub")
+            != CANDIDATE_MAX_LLM_COST_RUB
+            or candidate_evidence.get("cost_scope") != CANDIDATE_COST_SCOPE
+            or candidate_evidence.get("reservation_private_full") is not True
+            or candidate_evidence.get("pricing_source")
+            != CANDIDATE_PRICING_SOURCE
+            or candidate_evidence.get("pricing_rate_card_sha256")
+            != PRICING_RATE_CARD_SHA256
+            or candidate_evidence.get("target_telemetry_pricing_complete")
+            is not True
+            or candidate_evidence.get("repricing_applied") is not False
+            or "pricing_projection" in cost_control
+        ):
+            raise Pilot50Error("ask report candidate contract evidence is invalid")
+        candidate_run = report.get("pilot50_candidate")
+        if (
+            not isinstance(candidate_run, dict)
+            or candidate_run.get("status") != "completed"
+            or candidate_run.get("completed") is not True
+            or candidate_run.get("contract_id") != CANDIDATE_CONTRACT_ID
+            or candidate_run.get("expected_cases_total") != EXPECTED_CASES_TOTAL
+            or candidate_run.get("executed_cases_total") != EXPECTED_CASES_TOTAL
+            or candidate_run.get("cases_file_sha256") != cases_sha
+            or candidate_run.get("runtime_git_sha") != runtime_git_sha
+            or candidate_run.get("integrity_failures") != []
+        ):
+            raise Pilot50Error("ask report candidate completion evidence is invalid")
+    elif cost_control.get("pricing_projection") != PRICING_PROJECTION:
         raise Pilot50Error("ask report cost-control evidence is incomplete")
     reservation = cost_control.get("reservation")
     if not isinstance(reservation, dict):
@@ -1007,10 +1600,10 @@ def build_safe_result(
     if (
         reservation.get("valid") is not True
         or reservation.get("run_id") != eval_run_id
-        or reservation.get("scope") != "ask-eval"
+        or reservation.get("scope") != evidence_contract["cost_scope"]
         or reservation.get("runtime_git_sha") != runtime_git_sha
         or reservation.get("case_count") != EXPECTED_CASES_TOTAL
-        or reservation.get("approved_cap_rub") != MAX_LLM_COST_RUB
+        or reservation.get("approved_cap_rub") != max_llm_cost_rub
         or reservation.get("approval_required") is not True
         or reservation.get("high_cost_approval_id") != approval_id
         or reservation.get("cases_file_sha256") != cases_sha
@@ -1018,6 +1611,11 @@ def build_safe_result(
         or reservation.get("manifest_matches_cases_file") is not True
     ):
         raise Pilot50Error("ask report cost reservation does not bind Pilot50")
+    if evidence_contract["reservation_private_full"] is True and (
+        reservation.get("private_full") is not True
+        or reservation.get("reservation_class") != "private_full"
+    ):
+        raise Pilot50Error("candidate cost reservation is not private-full")
 
     closure = {
         group: _rate_row(group_closed[group], EXPECTED_TYPE_COUNTS[group])
@@ -1029,9 +1627,9 @@ def build_safe_result(
         for group in ("typical", "atypical")
     }
     policy["overall"] = _pass_row(sum(group_passed.values()), EXPECTED_CASES_TOTAL)
-    return {
+    safe_result = {
         "schema_version": SAFE_SCHEMA_VERSION,
-        "dataset_id": DATASET_ID,
+        "dataset_id": dataset_id,
         "eval_run_id": eval_run_id,
         "runtime_git_sha": runtime_git_sha,
         "approval_id": approval_id,
@@ -1051,18 +1649,20 @@ def build_safe_result(
         },
         "cache_hits": 0,
         "budget": {
-            "max_rub": int(MAX_LLM_COST_RUB),
+            "max_rub": int(max_llm_cost_rub),
             "exceeded": False,
             "stopped": False,
         },
         "pricing": {
             "complete": True,
             "stopped": False,
-            "source": PRICING_SOURCE,
-            "contract_id": PRICING_CONTRACT_ID,
+            "source": evidence_contract["pricing_source"],
+            "contract_id": evidence_contract["pricing_contract_id"],
             "rate_card_sha256": PRICING_RATE_CARD_SHA256,
             "target_telemetry_preserved": True,
-            "target_telemetry_pricing_complete": False,
+            "target_telemetry_pricing_complete": evidence_contract[
+                "target_telemetry_pricing_complete"
+            ],
         },
         "latency_ms": {"p50": _percentile(latencies, 50), "p95": _percentile(latencies, 95)},
         "llm_cost_rub": round(reported_cost, 6),
@@ -1070,15 +1670,33 @@ def build_safe_result(
         "report_sha256": _sha256(report_bytes),
         "disclaimer": DISCLAIMER,
     }
+    if dataset_id == V2_DATASET_ID:
+        safe_result["quality_gate"] = _build_candidate_quality_gate(
+            typical_closed=group_closed["typical"],
+            atypical_closed=group_closed["atypical"],
+            output_contract_escalations=output_contract_escalations,
+            source_binding_failures=source_binding_failures,
+            applicable_qrel_cases=applicable_qrel_cases,
+            critical_case_failures=critical_case_failures,
+            applicable_critical_cases=applicable_critical_cases,
+        )
+    return safe_result
 
 
 def validate_safe_result(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != SAFE_FIELDS:
+    if not isinstance(value, dict):
+        raise Pilot50Error("safe result fields are invalid")
+    dataset_id = value.get("dataset_id")
+    expected_fields = (
+        CANDIDATE_SAFE_FIELDS if dataset_id == V2_DATASET_ID else SAFE_FIELDS
+    )
+    if set(value) != expected_fields:
         raise Pilot50Error("safe result fields are invalid")
     if value.get("schema_version") != SAFE_SCHEMA_VERSION:
         raise Pilot50Error("safe result schema is invalid")
-    if value.get("dataset_id") != DATASET_ID or value.get("status") != "OK":
+    if value.get("dataset_id") not in DATASET_CONTRACTS or value.get("status") != "OK":
         raise Pilot50Error("safe result identity is invalid")
+    evidence_contract = _safe_result_evidence_contract(str(value["dataset_id"]))
     _validated_eval_run_id(value.get("eval_run_id"))
     _validated_runtime_git_sha(value.get("runtime_git_sha"))
     _validated_approval_id(value.get("approval_id"))
@@ -1134,20 +1752,34 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         numerators[field] = field_numerators
     if numerators["mechanical_first_turn_closure"] != numerators["policy_pass"]:
         raise Pilot50Error("safe closure and policy totals are inconsistent")
+    if dataset_id == V2_DATASET_ID:
+        closure_numerators = numerators["mechanical_first_turn_closure"]
+        _validate_candidate_quality_gate(
+            value.get("quality_gate"),
+            typical_closed=closure_numerators["typical"],
+            atypical_closed=closure_numerators["atypical"],
+        )
     if value.get("trace_coverage") != {"found": 50, "total": 50, "rate": 1.0}:
         raise Pilot50Error("safe result trace coverage is invalid")
     if value.get("cache_hits") != 0:
         raise Pilot50Error("safe result cache count is invalid")
-    if value.get("budget") != {"max_rub": 20, "exceeded": False, "stopped": False}:
+    expected_max_rub = int(float(evidence_contract["max_llm_cost_rub"]))
+    if value.get("budget") != {
+        "max_rub": expected_max_rub,
+        "exceeded": False,
+        "stopped": False,
+    }:
         raise Pilot50Error("safe result budget is invalid")
     if value.get("pricing") != {
         "complete": True,
         "stopped": False,
-        "source": PRICING_SOURCE,
-        "contract_id": PRICING_CONTRACT_ID,
+        "source": evidence_contract["pricing_source"],
+        "contract_id": evidence_contract["pricing_contract_id"],
         "rate_card_sha256": PRICING_RATE_CARD_SHA256,
         "target_telemetry_preserved": True,
-        "target_telemetry_pricing_complete": False,
+        "target_telemetry_pricing_complete": evidence_contract[
+            "target_telemetry_pricing_complete"
+        ],
     }:
         raise Pilot50Error("safe result pricing is invalid")
     latency = value.get("latency_ms")
@@ -1159,7 +1791,7 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         raise Pilot50Error("safe result latency percentiles are inconsistent")
     if (
         _finite_nonnegative_number(value.get("llm_cost_rub"), label="safe LLM cost")
-        > MAX_LLM_COST_RUB
+        > float(evidence_contract["max_llm_cost_rub"])
     ):
         raise Pilot50Error("safe LLM cost exceeds the Pilot50 cap")
     for field in ("cases_sha256", "report_sha256"):
@@ -1189,7 +1821,7 @@ def build_review_rows(
     """Build an owner-only JSONL view bound to the already validated Pilot50 run."""
 
     runtime_git_sha = _validated_runtime_git_sha(expected_runtime_git_sha)
-    cases, cases_bytes, cases_sha = _validate_materialized_cases(
+    cases, cases_bytes, cases_sha, receipt = _validate_materialized_cases(
         manifest_path,
         cases_path,
     )
@@ -1199,6 +1831,9 @@ def build_review_rows(
         label="safe result",
     )
     safe = validate_safe_result(_load_json_bytes(safe_bytes, label="safe result"))
+    if safe["dataset_id"] != receipt["dataset_id"]:
+        raise Pilot50Error("safe result dataset differs from the reviewed Pilot50 set")
+    evidence_contract = _safe_result_evidence_contract(str(safe["dataset_id"]))
     if safe["runtime_git_sha"] != runtime_git_sha:
         raise Pilot50Error("safe result runtime differs from the expected runtime")
     if safe["cases_sha256"] != cases_sha or cases_sha != _sha256(cases_bytes):
@@ -1215,7 +1850,7 @@ def build_review_rows(
     if not isinstance(report, dict):
         raise Pilot50Error("ask report must be a JSON object")
     if (
-        report.get("target") != PILOT50_TARGET
+        report.get("target") != evidence_contract["target"]
         or report.get("cases_total") != EXPECTED_CASES_TOTAL
         or report.get("eval_run_id") != safe["eval_run_id"]
         or report.get("cases_file_sha256") != cases_sha
@@ -1243,8 +1878,16 @@ def build_review_rows(
         or reservation.get("high_cost_approval_id") != safe["approval_id"]
         or reservation.get("runtime_git_sha") != runtime_git_sha
         or reservation.get("cases_file_sha256") != cases_sha
+        or reservation.get("scope") != evidence_contract["cost_scope"]
+        or reservation.get("approved_cap_rub")
+        != evidence_contract["max_llm_cost_rub"]
     ):
         raise Pilot50Error("ask report approval does not bind the reviewed Pilot50 run")
+    if evidence_contract["reservation_private_full"] is True and (
+        reservation.get("private_full") is not True
+        or reservation.get("reservation_class") != "private_full"
+    ):
+        raise Pilot50Error("candidate review reservation is not private-full")
 
     results = report.get("results")
     if not isinstance(results, list) or len(results) != EXPECTED_CASES_TOTAL:
@@ -1399,6 +2042,7 @@ async def _summarize(args: argparse.Namespace) -> dict[str, Any]:
         trace_rows=trace_rows,
         expected_runtime_git_sha=args.expected_runtime_git_sha,
         expected_approval_id=args.expected_approval_id,
+        candidate_contract=getattr(args, "candidate_contract", "") or None,
         report_snapshot=report_bytes,
     )
     validate_safe_result(safe)
@@ -1439,6 +2083,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     summarize.add_argument("--output", type=Path, required=True)
     summarize.add_argument("--expected-runtime-git-sha", required=True)
     summarize.add_argument("--expected-approval-id", required=True)
+    summarize.add_argument(
+        "--candidate-contract",
+        choices=(CANDIDATE_CONTRACT_ID,),
+        default="",
+        help=(
+            "Required fixed evidence contract for the Pilot50 v2 candidate run."
+        ),
+    )
     show_safe = subparsers.add_parser("show-safe")
     show_safe.add_argument("--input", type=Path, required=True)
     show_review = subparsers.add_parser("show-review")

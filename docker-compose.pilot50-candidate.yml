@@ -1,0 +1,161 @@
+name: rosmol-pilot50-candidate
+
+services:
+  pilot50-candidate-ml:
+    image: rosmol-ai-bot-pilot50-candidate:${PILOT50_CANDIDATE_GIT_SHA:?PILOT50_CANDIDATE_GIT_SHA is required}
+    pull_policy: never
+    platform: linux/amd64
+    build:
+      context: ${PILOT50_CANDIDATE_SOURCE_DIR:?PILOT50_CANDIDATE_SOURCE_DIR is required}
+      target: runtime
+      args:
+        INSTALL_ML: "true"
+        RELEASE_GIT_SHA: ${PILOT50_CANDIDATE_GIT_SHA:?PILOT50_CANDIDATE_GIT_SHA is required}
+    container_name: rosmol-pilot50-candidate-ml
+    labels:
+      com.rosmol.purpose: pilot50-candidate
+      com.rosmol.dataset: pilot50_balanced_v2
+      com.rosmol.candidate-git-sha: ${PILOT50_CANDIDATE_GIT_SHA:?PILOT50_CANDIDATE_GIT_SHA is required}
+    restart: "no"
+    user: app
+    command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      APP_ENV: staging
+      RUNTIME_ROLE: ml
+      RELEASE_GIT_SHA: ${PILOT50_CANDIDATE_GIT_SHA:?PILOT50_CANDIDATE_GIT_SHA is required}
+      LOG_LEVEL: INFO
+      API_AUTH_TOKEN: ${PILOT50_CANDIDATE_API_AUTH_TOKEN:?PILOT50_CANDIDATE_API_AUTH_TOKEN is required}
+      USER_HASH_SECRET: ${PILOT50_CANDIDATE_USER_HASH_SECRET:?PILOT50_CANDIDATE_USER_HASH_SECRET is required}
+      WEBHOOK_AUTH_TOKEN: ""
+      ADMIN_AUTH_TOKEN: ""
+      ADMIN_READ_ONLY: "true"
+      ADMIN_MUTATIONS_ENABLED: "false"
+      ADMIN_QUALITY_REPORT_PATH: /app/reports/presentation_quality/presentation_quality_report.json
+      HDE_TRIGGER_PREFIX: ""
+      HDE_BASE_URL: ""
+      HDE_API_EMAIL: ""
+      HDE_API_KEY: ""
+      HDE_BOT_USER_ID: ""
+      HDE_TRANSPORT_ENABLED: "false"
+      HDE_TRANSPORT_EVENT_KEY_SECRET: ""
+      HDE_TRANSPORT_ENCRYPTION_KEY: ""
+      VK_API_TOKEN: ""
+      VK_GROUP_TOKEN: ""
+      VK_CONFIRMATION_CODE: ""
+      VK_SECRET: ""
+      VK_CALLBACK_SECRET: ""
+      YONOTE_API_TOKEN: ""
+      YONOTE_SYNC_ENABLED: "false"
+      YONOTE_SYNC_MODE: manual
+      YONOTE_BASE_URL: ""
+      YONOTE_COLLECTION_NAMES: ""
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+      QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
+      KB_SEED_PATH: /app/data/knowledge_base_seed.json
+      CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:?CLOUD_RU_API_KEY is required}
+      CLOUD_RU_CHAT_COMPLETIONS_URL: ${CLOUD_RU_CHAT_COMPLETIONS_URL:?CLOUD_RU_CHAT_COMPLETIONS_URL is required}
+      CLOUD_RU_MODEL: ""
+      CLOUD_RU_MODEL_SIMPLE: ai-sage/GigaChat3-10B-A1.8B
+      CLOUD_RU_MODEL_COMPLEX: GigaChat/GigaChat-2-Max
+      CLOUD_RU_MODEL_ANALYZER: ""
+      CLOUD_RU_MODEL_JUDGE: ""
+      CLOUD_RU_MODEL_SIMPLE_INPUT_PRICE_RUB_PER_MILLION: ${PILOT50_SIMPLE_INPUT_PRICE_RUB_PER_MILLION:?simple input price is required}
+      CLOUD_RU_MODEL_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION: ${PILOT50_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION:?simple output price is required}
+      CLOUD_RU_MODEL_COMPLEX_INPUT_PRICE_RUB_PER_MILLION: ${PILOT50_COMPLEX_INPUT_PRICE_RUB_PER_MILLION:?complex input price is required}
+      CLOUD_RU_MODEL_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION: ${PILOT50_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION:?complex output price is required}
+      CLOUD_RU_REQUEST_TIMEOUT_SECONDS: "45"
+      CLOUD_RU_MAX_RETRIES: "2"
+      PROMPT_VERSION: pilot50-quality-v2
+      ML_PREWARM_ON_STARTUP: "true"
+      ML_UNLOAD_AFTER_USE: "true"
+      ML_UNLOAD_EMBEDDER_AFTER_USE: "true"
+      ML_UNLOAD_RERANKER_AFTER_USE: "true"
+      HF_HOME: /home/app/.cache/huggingface
+      TORCH_HOME: /home/app/.cache/torch
+      BGE_M3_MODEL_PATH: /opt/models/bge-m3
+      BGE_RERANKER_MODEL_PATH: /opt/models/bge-reranker-v2-m3
+      HF_MODEL_LOCK_PATH: /app/deploy/huggingface_models.lock.json
+      HF_MODEL_VERIFICATION_RECEIPT: /opt/models/.verified-models.json
+      HF_HUB_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: http://runtime-egress-proxy:3128
+      ALL_PROXY: ""
+      NO_PROXY: 127.0.0.1,localhost,postgres,redis,qdrant,pilot50-candidate-ml
+    ports: []
+    volumes:
+      - type: bind
+        source: ${PILOT50_KB_SEED_PATH:?PILOT50_KB_SEED_PATH is required}
+        target: /app/data/knowledge_base_seed.json
+        read_only: true
+      - type: bind
+        source: ${PILOT50_ADMIN_KB_DIR:?PILOT50_ADMIN_KB_DIR is required}
+        target: /app/data/private/admin-kb
+        read_only: true
+      - type: volume
+        source: hf_cache
+        target: /home/app/.cache/huggingface
+        read_only: true
+      - type: volume
+        source: torch_cache
+        target: /home/app/.cache/torch
+        read_only: true
+      - type: volume
+        source: model_cache
+        target: /opt/models
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=1g,mode=1777
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      data:
+        aliases: [pilot50-candidate-ml]
+      runtime_egress: {}
+    mem_limit: 6g
+    cpus: 2.0
+    pids_limit: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 6G
+          pids: 256
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=8).read()",
+        ]
+      start_period: 30s
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+networks:
+  data:
+    external: true
+    name: ${PILOT50_DATA_NETWORK:?PILOT50_DATA_NETWORK is required}
+  runtime_egress:
+    external: true
+    name: ${PILOT50_RUNTIME_EGRESS_NETWORK:?PILOT50_RUNTIME_EGRESS_NETWORK is required}
+
+volumes:
+  hf_cache:
+    external: true
+    name: ${PILOT50_HF_CACHE_VOLUME:?PILOT50_HF_CACHE_VOLUME is required}
+  torch_cache:
+    external: true
+    name: ${PILOT50_TORCH_CACHE_VOLUME:?PILOT50_TORCH_CACHE_VOLUME is required}
+  model_cache:
+    external: true
+    name: ${PILOT50_MODEL_CACHE_VOLUME:?PILOT50_MODEL_CACHE_VOLUME is required}
