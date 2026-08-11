@@ -651,6 +651,13 @@ for key in (
 assert environment["API_AUTH_TOKEN"] and environment["USER_HASH_SECRET"]
 assert environment["CLOUD_RU_MODEL_SIMPLE"] == "ai-sage/GigaChat3-10B-A1.8B"
 assert environment["CLOUD_RU_MODEL_COMPLEX"] == "GigaChat/GigaChat-2-Max"
+assert environment["REQUEST_TIMEOUT_SECONDS"] == "150"
+assert environment["CLOUD_RU_REQUEST_TIMEOUT_SECONDS"] == "45"
+assert environment["CLOUD_RU_MAX_RETRIES"] == "2"
+assert float(environment["REQUEST_TIMEOUT_SECONDS"]) > (
+    float(environment["CLOUD_RU_REQUEST_TIMEOUT_SECONDS"])
+    * int(environment["CLOUD_RU_MAX_RETRIES"])
+)
 for key in (
     "CLOUD_RU_MODEL_SIMPLE_INPUT_PRICE_RUB_PER_MILLION",
     "CLOUD_RU_MODEL_SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION",
@@ -1078,6 +1085,15 @@ try:
         and env.get("RELEASE_GIT_SHA") == sha,
     )
     require(
+        "deadline_budget",
+        env.get("REQUEST_TIMEOUT_SECONDS") == "150"
+        and env.get("CLOUD_RU_REQUEST_TIMEOUT_SECONDS") == "45"
+        and env.get("CLOUD_RU_MAX_RETRIES") == "2"
+        and float(env["REQUEST_TIMEOUT_SECONDS"])
+        > float(env["CLOUD_RU_REQUEST_TIMEOUT_SECONDS"])
+        * int(env["CLOUD_RU_MAX_RETRIES"]),
+    )
+    require(
         "ml_lifecycle",
         all(
             env.get(key) == "true"
@@ -1144,7 +1160,7 @@ require_candidate_runtime() {
   case "$stage" in
     identity | inspect | state | rootfs | memory | cpu | pids | restart | \
       cap_drop | no_new_privileges | ports | networks | labels | runtime_env | \
-      ml_lifecycle | transports | secrets | mounts)
+      deadline_budget | ml_lifecycle | transports | secrets | mounts)
       fail "candidate_isolation_$stage"
       ;;
     *) fail "candidate_isolation_inspect" ;;

@@ -6,6 +6,8 @@ from time import perf_counter
 
 import pytest
 
+import src.graph.nodes.generate as generate_node
+from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.generate import (
     _bounded_published_source_result,
     _generate_with_llm_or_source_fallback,
@@ -221,6 +223,233 @@ def test_grant_application_selected_source_has_bounded_grounded_answer() -> None
     assert result["cited_sources"] == [chunk_id]
     assert "Госуслуг" in result["generated_response"]
     assert "ФГАИС" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_first_season_grant_application_deterministic_path_skips_llm() -> None:
+    query = "Как подать заявку на первый сезон Росмолодёжь.Гранты?"
+    chunk_id = "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    llm = ForbiddenLLM()
+
+    analyzed = await analyze_query(
+        {
+            "message": query,
+            "message_masked": query,
+            "routing_hint": {"complexity": "complex"},
+            "llm_client": llm,
+        }
+    )
+    analysis = analyzed["analysis"]
+
+    assert analyzed["analyzer_mode"] == "deterministic"
+    assert analysis.complexity == Complexity.COMPLEX
+    assert analysis.category == "гранты"
+    assert analysis.forum_normalized is None
+    assert [question.topic for question in analysis.questions] == [
+        "podacha_zayavki_na_proekt"
+    ]
+
+    result = await generate(
+        {
+            "message": query,
+            "message_masked": query,
+            "contextual_message": analyzed["contextual_message"],
+            "analysis": analysis,
+            "reranked_chunks": [_chunk(chunk_id)],
+            "max_confidence": 0.98,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result.get("should_escalate") is not True
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == [chunk_id]
+    assert "Госуслуг" in result["generated_response"]
+    assert "ФГАИС" in result["generated_response"]
+
+
+@pytest.mark.parametrize(
+    "metadata_update",
+    [
+        {"category": "форумы"},
+        {"forum_normalized": "Росмолодёжь.Гранты 2 сезон"},
+        {"source": "yonote_backup"},
+    ],
+    ids=("wrong-category", "wrong-season-forum", "wrong-source"),
+)
+def test_first_season_grant_application_alias_rejects_wrong_source_scope(
+    metadata_update: dict[str, str],
+) -> None:
+    query = "Как подать заявку на первый сезон Росмолодёжь.Гранты?"
+    question = Question(
+        text="Как подать заявку?",
+        category="гранты",
+        topic="podacha_zayavki_na_proekt",
+    )
+    analysis = QueryAnalysis(
+        complexity=Complexity.COMPLEX,
+        category="гранты",
+        response_profile=ResponseProfileName.APPLICATION,
+        questions=[question],
+    )
+    source = _chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")
+    source = source.model_copy(
+        update={"metadata": {**source.metadata, **metadata_update}}
+    )
+
+    assert (
+        _bounded_published_source_result(
+            analysis=analysis,
+            questions=[question],
+            source_chunks=[source],
+            response_limit=900,
+            request_text=query,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("category", "profile"),
+    [
+        ("форумы", ResponseProfileName.APPLICATION),
+        ("гранты", ResponseProfileName.GENERIC),
+    ],
+    ids=("non-grant", "non-application"),
+)
+def test_first_season_grant_application_alias_requires_grant_application_contract(
+    category: str,
+    profile: ResponseProfileName,
+) -> None:
+    query = "Как подать заявку на первый сезон Росмолодёжь.Гранты?"
+    question = Question(
+        text="Как подать заявку?",
+        category=category,
+        topic="podacha_zayavki_na_proekt",
+    )
+    analysis = QueryAnalysis(
+        complexity=Complexity.COMPLEX,
+        category=category,
+        response_profile=profile,
+        questions=[question],
+    )
+
+    assert (
+        _bounded_published_source_result(
+            analysis=analysis,
+            questions=[question],
+            source_chunks=[_chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")],
+            response_limit=900,
+            request_text=query,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Как подать заявку на второй сезон Росмолодёжь.Гранты?",
+        "Как подать заявку не на первый сезон Росмолодёжь.Гранты?",
+        "Как подать заявку на первый или второй сезон Росмолодёжь.Гранты?",
+        "Как подать заявку на первый сезон Росмолодёжь.Гранты или на второй?",
+        (
+            "Как подать заявку на первый сезон Росмолодёжь.Гранты, "
+            "если проект относится ко 2-му сезону?"
+        ),
+    ],
+    ids=(
+        "second-only",
+        "negated-first",
+        "first-or-second",
+        "first-season-or-implied-second",
+        "first-and-numeric-second",
+    ),
+)
+def test_first_season_grant_application_alias_requires_unambiguous_first_season(
+    query: str,
+) -> None:
+    question = Question(
+        text="Как подать заявку?",
+        category="гранты",
+        topic="podacha_zayavki_na_proekt",
+    )
+    analysis = QueryAnalysis(
+        complexity=Complexity.COMPLEX,
+        category="гранты",
+        response_profile=ResponseProfileName.APPLICATION,
+        questions=[question],
+    )
+
+    assert (
+        _bounded_published_source_result(
+            analysis=analysis,
+            questions=[question],
+            source_chunks=[_chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")],
+            response_limit=900,
+            request_text=query,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_season_fast_path_uses_current_message_not_contextual_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_message = "Как подать заявку на второй сезон Росмолодёжь.Гранты?"
+    contextual_message = (
+        "Пользователь: Как подать заявку на первый сезон Росмолодёжь.Гранты?\n"
+        f"Пользователь: {current_message}"
+    )
+    question = Question(
+        text="Как подать заявку?",
+        category="гранты",
+        topic="podacha_zayavki_na_proekt",
+    )
+    analysis = QueryAnalysis(
+        complexity=Complexity.COMPLEX,
+        category="гранты",
+        response_profile=ResponseProfileName.APPLICATION,
+        questions=[question],
+    )
+    observed_request_texts: list[str] = []
+
+    def capture_bounded_request(**kwargs: object) -> dict[str, object]:
+        observed_request_texts.append(str(kwargs.get("request_text") or ""))
+        return {
+            "generated_response": "Проверочный ответ.",
+            "generator_model": "source_chunk",
+            "cited_sources": ["yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"],
+        }
+
+    monkeypatch.setattr(
+        generate_node,
+        "_bounded_published_source_result",
+        capture_bounded_request,
+    )
+
+    result = await _generate_with_llm_or_source_fallback(
+        state={
+            "message": current_message,
+            "message_masked": current_message,
+            "contextual_message": contextual_message,
+            "analysis": analysis,
+            "reranked_chunks": [
+                _chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")
+            ],
+            "max_confidence": 0.98,
+            "llm_client": ForbiddenLLM(),
+        },
+        analysis=analysis,
+        questions=[question],
+        source_chunks=[_chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")],
+        started_at=perf_counter(),
+    )
+
+    assert result["generator_model"] == "source_chunk"
+    assert observed_request_texts == [current_message]
 
 
 @pytest.mark.asyncio

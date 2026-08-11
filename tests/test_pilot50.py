@@ -304,6 +304,91 @@ def _v3_candidate_raw_report(
     return report, trace_rows
 
 
+def _v3_candidate_materialized_workspace(
+    tmp_path: Path,
+) -> tuple[list[dict[str, Any]], Path, str]:
+    cases, receipt = pilot50.build_materialized_cases(V3_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v3-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    return cases, cases_path, str(receipt["cases_sha256"])
+
+
+def _write_v3_rejected_diagnostics_fixture(
+    tmp_path: Path,
+    *,
+    canary: str = "private-timeout-canary",
+) -> tuple[Path, Path, dict[str, str], dict[str, Any]]:
+    cases, cases_path, cases_sha = _v3_candidate_materialized_workspace(tmp_path)
+    report, _trace_rows = _v3_candidate_raw_report(cases, cases_sha256=cases_sha)
+    _add_diagnostic_checks(cases, report)
+    timeout = report["results"][19]
+    timeout.update(
+        {
+            "passed": False,
+            "observed_behavior": "escalate",
+            "was_escalated": True,
+            "escalation_reason": "request_timeout",
+            "error": "request_timeout",
+            "trace_error": "request_timeout",
+            "trace_total_latency_ms": 45_012,
+            "behavior_match": False,
+            "escalation_match": False,
+            "failure_reasons": [canary],
+        }
+    )
+    report["pilot50_candidate"].update(
+        {
+            "status": "integrity_rejected",
+            "completed": False,
+            "integrity_failures": ["trace_error_present"],
+            "rejection_evidence": "private-rejected-report-name",
+        }
+    )
+    report["trace_cardinality"] = {
+        "eval_run_id": EVAL_RUN_ID,
+        "expected_cases_total": 50,
+        "traces_total": 50,
+        "case_counts": {str(case["id"]): 1 for case in cases},
+        "missing_case_ids": [],
+        "duplicate_case_ids": [],
+        "unknown_case_ids": [],
+    }
+    report_path = tmp_path / "pilot50-v3-rejected.json"
+    _write_json(report_path, report)
+    hashes = {
+        "manifest": hashlib.sha256(V3_MANIFEST_PATH.read_bytes()).hexdigest(),
+        "cases": hashlib.sha256(cases_path.read_bytes()).hexdigest(),
+        "report": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+    }
+    return cases_path, report_path, hashes, report
+
+
+def _diagnose_rejected_v3_argv(
+    *,
+    cases_path: Path,
+    report_path: Path,
+    hashes: dict[str, str],
+    expected_runtime_git_sha: str = RUNTIME_GIT_SHA,
+) -> list[str]:
+    return [
+        "diagnose-rejected-v3",
+        "--manifest",
+        str(V3_MANIFEST_PATH),
+        "--cases",
+        str(cases_path),
+        "--report",
+        str(report_path),
+        "--expected-manifest-sha256",
+        hashes["manifest"],
+        "--expected-cases-sha256",
+        hashes["cases"],
+        "--expected-report-sha256",
+        hashes["report"],
+        "--expected-runtime-git-sha",
+        expected_runtime_git_sha,
+    ]
+
+
 def _candidate_quality_gate(
     *,
     typical_closed: int = 15,
@@ -2203,6 +2288,224 @@ def test_diagnose_prints_one_bounded_payload_free_failure_matrix(
         '"private_boolean_canary"',
     ):
         assert forbidden_key not in stdout
+
+
+def test_diagnose_rejected_v3_prints_only_directional_payload_free_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary = "PRIVATE-REJECTED-V3-CANARY"
+    cases_path, report_path, hashes, report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path, canary=canary)
+    )
+
+    assert (
+        pilot50.main(
+            _diagnose_rejected_v3_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                hashes=hashes,
+            )
+        )
+        == 0
+    )
+    stdout = capsys.readouterr().out
+    assert stdout.count("\n") == 1
+    assert len(stdout.encode("utf-8")) <= pilot50.MAX_DIAGNOSTICS_BYTES
+    diagnostics = json.loads(stdout)
+    assert stdout == pilot50._compact_canonical_json(diagnostics) + "\n"
+    assert set(diagnostics) == pilot50.REJECTED_V3_DIAGNOSTIC_FIELDS
+    assert (
+        diagnostics["schema_version"]
+        == pilot50.REJECTED_V3_DIAGNOSTIC_SCHEMA_VERSION
+    )
+    assert diagnostics["bindings"] == {
+        "manifest_sha256": hashes["manifest"],
+        "cases_sha256": hashes["cases"],
+        "report_sha256": hashes["report"],
+        "runtime_git_sha": RUNTIME_GIT_SHA,
+    }
+    assert diagnostics["integrity"] == {
+        "status": "integrity_rejected",
+        "failures": ["trace_error_present"],
+        "executed_cases_total": 50,
+        "canonical_quality_gate_eligible": False,
+        "selective_reruns_forbidden": True,
+    }
+    directional = diagnostics["directional_quality"]
+    assert directional["classification"] == (
+        "directional_calibration_only_integrity_rejected"
+    )
+    assert directional["human_product_verdict"] is False
+    assert directional["mechanical_first_turn_closure"]["overall"] == {
+        "closed": 49,
+        "total": 50,
+        "rate": 0.98,
+    }
+    assert directional["trace_coverage"] == {"found": 50, "total": 50, "rate": 1.0}
+    matrix = diagnostics["failure_matrix"]
+    assert len(matrix) == 50
+    assert [row["ordinal"] for row in matrix] == list(range(1, 51))
+    assert all(
+        set(row) == pilot50.REJECTED_V3_DIAGNOSTIC_ROW_FIELDS for row in matrix
+    )
+    timeout = matrix[19]
+    assert timeout["failure_stage"] == "execution"
+    assert timeout["execution_issue"] == "request_timeout"
+    assert timeout["latency_bucket"] == ">=30s"
+    assert timeout["escalation_reason"] == "request_timeout"
+    assert all(
+        row["execution_issue"] == "none"
+        for index, row in enumerate(matrix)
+        if index != 19
+    )
+
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    forbidden_values = {
+        canary,
+        str(cases[19]["id"]),
+        str(cases[19]["query"]),
+        str(report["results"][19]["request_id"]),
+        EVAL_RUN_ID,
+        "private-rejected-report-name",
+    }
+    assert all(value not in stdout for value in forbidden_values)
+    for forbidden_key in (
+        '"query"',
+        '"response"',
+        '"id"',
+        '"request_id"',
+        '"eval_run_id"',
+        '"trace_metadata"',
+        '"failure_reasons"',
+        '"error"',
+    ):
+        assert forbidden_key not in stdout
+
+
+def test_diagnose_rejected_v3_rejects_wrong_report_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cases_path, report_path, hashes, _report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path)
+    )
+    argv = _diagnose_rejected_v3_argv(
+        cases_path=cases_path,
+        report_path=report_path,
+        hashes=hashes,
+    )
+    argv[argv.index("--expected-report-sha256") + 1] = "b" * 64
+
+    assert pilot50.main(argv) == 2
+    assert capsys.readouterr().out == (
+        "pilot50=DIAGNOSE-REJECTED-V3 reason=validation_failed\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--expected-manifest-sha256", "a" * 64),
+        ("--expected-cases-sha256", "c" * 64),
+        ("--expected-runtime-git-sha", "d" * 40),
+    ],
+)
+def test_diagnose_rejected_v3_rejects_wrong_manifest_cases_or_runtime_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    flag: str,
+    value: str,
+) -> None:
+    cases_path, report_path, hashes, _report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path)
+    )
+    argv = _diagnose_rejected_v3_argv(
+        cases_path=cases_path,
+        report_path=report_path,
+        hashes=hashes,
+    )
+    argv[argv.index(flag) + 1] = value
+
+    assert pilot50.main(argv) == 2
+    assert capsys.readouterr().out == (
+        "pilot50=DIAGNOSE-REJECTED-V3 reason=validation_failed\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "error_mismatch",
+        "unknown_error",
+        "second_error",
+        "timeout_row_moved",
+        "row_order_mismatch",
+    ],
+)
+def test_diagnose_rejected_v3_rejects_non_exact_timeout_error_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    cases_path, report_path, hashes, report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path)
+    )
+    if mutation == "error_mismatch":
+        report["results"][19]["trace_error"] = "different_error"
+    elif mutation == "unknown_error":
+        report["results"][19]["error"] = "unknown_execution_error"
+        report["results"][19]["trace_error"] = "unknown_execution_error"
+    elif mutation == "second_error":
+        report["results"][20]["error"] = "request_timeout"
+        report["results"][20]["trace_error"] = "request_timeout"
+    elif mutation == "timeout_row_moved":
+        report["results"][19].update(
+            {
+                "passed": True,
+                "observed_behavior": "answer",
+                "was_escalated": False,
+                "escalation_reason": None,
+                "error": None,
+                "trace_error": None,
+                "behavior_match": True,
+                "escalation_match": True,
+            }
+        )
+        report["results"][20].update(
+            {
+                "passed": False,
+                "observed_behavior": "escalate",
+                "was_escalated": True,
+                "escalation_reason": "request_timeout",
+                "error": "request_timeout",
+                "trace_error": "request_timeout",
+                "trace_total_latency_ms": 45_012,
+                "behavior_match": False,
+                "escalation_match": False,
+            }
+        )
+    else:
+        report["results"][0], report["results"][1] = (
+            report["results"][1],
+            report["results"][0],
+        )
+    _write_json(report_path, report)
+    hashes["report"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+    assert (
+        pilot50.main(
+            _diagnose_rejected_v3_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                hashes=hashes,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == (
+        "pilot50=DIAGNOSE-REJECTED-V3 reason=validation_failed\n"
+    )
 
 
 @pytest.mark.parametrize(

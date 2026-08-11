@@ -102,6 +102,9 @@ def _runtime_inspect_payload() -> list[dict[str, object]]:
         "ML_UNLOAD_AFTER_USE": "true",
         "ML_UNLOAD_EMBEDDER_AFTER_USE": "true",
         "ML_UNLOAD_RERANKER_AFTER_USE": "true",
+        "REQUEST_TIMEOUT_SECONDS": "150",
+        "CLOUD_RU_REQUEST_TIMEOUT_SECONDS": "45",
+        "CLOUD_RU_MAX_RETRIES": "2",
         "HDE_TRANSPORT_ENABLED": "false",
         "YONOTE_SYNC_ENABLED": "false",
         "ADMIN_READ_ONLY": "true",
@@ -411,6 +414,13 @@ def test_candidate_environment_is_staging_ml_with_only_required_secrets() -> Non
     assert environment["ML_UNLOAD_AFTER_USE"] == "true"
     assert environment["ML_UNLOAD_EMBEDDER_AFTER_USE"] == "true"
     assert environment["ML_UNLOAD_RERANKER_AFTER_USE"] == "true"
+    assert environment["REQUEST_TIMEOUT_SECONDS"] == "150"
+    assert environment["CLOUD_RU_REQUEST_TIMEOUT_SECONDS"] == "45"
+    assert environment["CLOUD_RU_MAX_RETRIES"] == "2"
+    assert float(environment["REQUEST_TIMEOUT_SECONDS"]) > (
+        float(environment["CLOUD_RU_REQUEST_TIMEOUT_SECONDS"])
+        * int(environment["CLOUD_RU_MAX_RETRIES"])
+    )
     assert environment["ADMIN_READ_ONLY"] == "true"
     assert environment["ADMIN_MUTATIONS_ENABLED"] == "false"
     assert environment["HDE_TRANSPORT_ENABLED"] == "false"
@@ -636,6 +646,33 @@ def test_runtime_requires_candidate_alias_on_data_network() -> None:
     assert result.stderr == ""
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("REQUEST_TIMEOUT_SECONDS", "45"),
+        ("CLOUD_RU_REQUEST_TIMEOUT_SECONDS", "150"),
+        ("CLOUD_RU_MAX_RETRIES", "3"),
+    ],
+)
+def test_runtime_rejects_candidate_deadline_budget_drift(
+    key: str,
+    value: str,
+) -> None:
+    payload = _runtime_inspect_payload()
+    raw_env = payload[0]["Config"]["Env"]
+    environment = dict(item.split("=", 1) for item in raw_env)
+    environment[key] = value
+    payload[0]["Config"]["Env"] = [
+        f"{env_key}={env_value}" for env_key, env_value in environment.items()
+    ]
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 1
+    assert result.stdout == "deadline_budget\n"
+    assert result.stderr == ""
+
+
 def test_modes_are_explicit_and_review_rejects_non_tty_before_private_reads() -> None:
     text = _text()
     invocation = _function(text, "validate_invocation")
@@ -785,6 +822,9 @@ def test_effective_compose_and_started_container_are_both_fail_closed() -> None:
         assert "HDE_TRANSPORT_ENABLED" in validator
         assert "YONOTE_SYNC_ENABLED" in validator
         assert "ADMIN_MUTATIONS_ENABLED" in validator
+        assert "REQUEST_TIMEOUT_SECONDS" in validator
+        assert "CLOUD_RU_REQUEST_TIMEOUT_SECONDS" in validator
+        assert "CLOUD_RU_MAX_RETRIES" in validator
     assert "config --format json" in compose_validator
     assert "NetworkSettings" in runtime_validator
     assert "ReadonlyRootfs" in runtime_validator
@@ -814,6 +854,7 @@ def test_runtime_isolation_errors_are_payload_free_allowlisted_stage_reasons() -
         "networks",
         "labels",
         "runtime_env",
+        "deadline_budget",
         "ml_lifecycle",
         "transports",
         "secrets",
@@ -833,6 +874,7 @@ def test_run_uses_exact_bounded_candidate_contract_without_repricing() -> None:
     assert 'TARGET="http://pilot50-candidate-ml:8000/ask"' in text
     assert 'COST_CAP_RUB="30"' in text
     assert "--concurrency 1" in run
+    assert "--timeout 180" in run
     assert '--max-llm-cost-rub "$COST_CAP_RUB"' in run
     assert '--pilot50-candidate-contract "$CANDIDATE_CONTRACT_ID"' in run
     assert '--expected-runtime-git-sha "$EXPECTED_SHA"' in run

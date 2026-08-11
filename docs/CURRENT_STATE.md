@@ -4,7 +4,54 @@
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50: candidate v2 завершён со STOP; начинается второй evidence-driven quality cycle
+## Pilot50: v3 выполнил 50/50, но evidence integrity-rejected из-за одного timeout
+
+11 августа isolated candidate
+`a5c5539ce2e8487418ed78ba64ae8ed9eab54863` выполнил все `50/50` server-local `/ask`
+на frozen `pilot50_balanced_v3` без HDE/VK, deploy, production restart и изменения Qdrant.
+Trace coverage и cardinality равны `50/50`, cache hits — `0`, pricing/budget не остановили
+прогон, target-reported LLM cost — `13.318250 RUB`. Однако canonical report, safe result и
+`run.completed` намеренно не созданы: финальная integrity-проверка обнаружила
+`trace_error_present`, поэтому evidence имеет статус `integrity_rejected`, а не quality GO/STOP.
+Private rejected-report SHA-256 —
+`151d282ea78c532742343b2f901766ed4e42fbe761c551657ba03748d5cb95da`.
+
+Payload-safe диагностика локализовала ровно один execution error: ordinal `20`,
+`synthetic_grant_application_steps`, controlled escalation `request_timeout`; runner latency
+`45022 ms`, trace latency `45012 ms`. Остальные `49` rows не содержат trace error. Exact v3
+schema `1.1.0` reservation и D-041 waiver уже атомарно записаны и связаны с run; approval/waiver
+считаются использованными. Повтор этого SHA, selective retry и второй запуск по D-041 запрещены.
+Candidate container после EXIT cleanup отсутствует; production не перезапускался. Из-за
+integrity rejection post-run Qdrant invariant receipt не был запечатан, поэтому неизменность
+Qdrant не заявляется как post-run evidence, хотя candidate `/ask` path не содержит mutation/sync
+операций и до платной границы fingerprint совпадал с frozen seed.
+
+Exact причина integrity rejection доказана серверным evidence: candidate не задавал
+`REQUEST_TIMEOUT_SECONDS` и наследовал общий app default `45s`, равный одному Cloud attempt при
+`CLOUD_RU_REQUEST_TIMEOUT_SECONDS=45`; outer deadline завершил graph с `request_timeout`.
+Payload-safe server diagnostics не снимала промежуточные `trace_events`, поэтому точная стадия
+таймаута на сервере не заявляется. Отдельное локальное воспроизведение обнаружило contributing
+seam: deterministic analyzer обозначает вопрос как `podacha_zayavki_na_proekt`, тогда как
+опубликованный first-season Yonote source имеет topic `poshagovyy_algoritm`; слишком узкий
+generation fast-path не связывал эти совместимые значения и мог провести выбранный источник мимо
+grounded `source_chunk` в LLM generation.
+
+Локальный correction patch делает только bounded first-season grant/application binding:
+требует original request, exact category/profile/topic, exact source forum/topic и published
+Yonote provenance; wrong category, second season, wrong source и wrong profile fail closed.
+Реальный `analyze -> generate` regression теперь возвращает exact cited `source_chunk` без LLM.
+Candidate дополнительно получает explicit graph budget `150s`, как default ML Compose, при Cloud
+`45s x 2` и runner `180s`; effective compose и фактический container валидируются fail closed.
+Это устраняет наблюдённую коллизию timeout, но не объявляется гарантией любого worst-case
+многошагового LLM path и не доказывает фактический env работающего production container.
+
+Текущий следующий шаг — завершить privacy-safe offline projection уже сохранённых 50 results,
+пройти полный local gate, commit/push и выполнить на сервере только read-only/network-none
+diagnostics нового tooling SHA. Новый paid run сейчас не разрешён и текущим ledger будет
+заблокирован: он потребует отдельного нового решения владельца и нового exact governance
+контракта после анализа directional matrix и provider billing reconciliation.
+
+## Pilot50 v2: завершённый STOP и исходный evidence-driven quality cycle
 
 11 августа изолированный candidate
 `64cc182d37a3c060439ed7a55f5cc875a27d786d` завершил exact `50/50` server-local `/ask`

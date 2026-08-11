@@ -513,6 +513,7 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                 questions=questions,
                 source_chunks=selected_chunks,
                 response_limit=response_limit,
+                request_text=_state_current_user_message(state),
             )
             if bounded_source_result is not None:
                 if tracer := state.get("trace"):
@@ -611,6 +612,7 @@ async def _generate_with_llm_or_source_fallback(
         response_limit=(
             response_limit or _response_char_limit(analysis, questions)
         ),
+        request_text=_state_current_user_message(state),
     )
     if bounded_source_result is not None:
         if tracer:
@@ -2576,6 +2578,7 @@ def _bounded_published_source_result(
     questions: list[Question],
     source_chunks: list[ScoredChunk],
     response_limit: int,
+    request_text: str = "",
 ) -> dict | None:
     """Build a strict, bounded answer from selected published Yonote clauses.
 
@@ -2607,11 +2610,16 @@ def _bounded_published_source_result(
             analysis,
             contract_questions,
             chunk,
+            request_text=request_text,
         )
         if not matching_questions:
             return None
         covered_question_ids.update(id(question) for question in matching_questions)
-        excerpts = _published_source_excerpts(chunk, matching_questions)
+        excerpts = _published_source_excerpts(
+            chunk,
+            matching_questions,
+            request_text=request_text,
+        )
         if not excerpts:
             return None
         cited_sources.append(chunk.chunk_id)
@@ -2643,6 +2651,7 @@ def _bounded_published_source_result(
         source_chunks,
         analysis,
         contract_questions,
+        request_text=request_text,
     ):
         return None
 
@@ -2689,6 +2698,8 @@ def _questions_matching_published_source(
     analysis: QueryAnalysis,
     questions: list[Question],
     chunk: ScoredChunk,
+    *,
+    request_text: str = "",
 ) -> list[Question]:
     chunk_topic = str((chunk.metadata or {}).get("topic") or "").strip()
     matching: list[Question] = []
@@ -2701,6 +2712,11 @@ def _questions_matching_published_source(
                 chunk_topic,
                 explicit_topic,
                 question.text,
+            ) or _published_grant_application_alias_matches(
+                analysis,
+                question,
+                chunk,
+                request_text=request_text,
             ):
                 matching.append(question)
             continue
@@ -2765,6 +2781,100 @@ def _published_topic_matches_question(
     return False
 
 
+def _published_grant_application_alias_matches(
+    analysis: QueryAnalysis,
+    question: Question,
+    chunk: ScoredChunk,
+    *,
+    request_text: str,
+) -> bool:
+    """Bind the first-season grant application intent to its published guide.
+
+    The deterministic analyzer intentionally uses the generic application topic
+    and drops grant pseudo-forums. Keep this bridge tied to the explicit user
+    wording and the exact published first-season source scope so another grant
+    season, category or response profile cannot inherit these instructions.
+    """
+
+    metadata = chunk.metadata or {}
+    if analysis.response_profile != ResponseProfileName.APPLICATION:
+        return False
+    if str(question.topic or "").strip().casefold() != "podacha_zayavki_na_proekt":
+        return False
+    if str(metadata.get("topic") or "").strip().casefold() != "poshagovyy_algoritm":
+        return False
+    if str(question.category or analysis.category or "").strip() != "гранты":
+        return False
+    if str(metadata.get("category") or "").strip() != "гранты":
+        return False
+    if _normalize(str(metadata.get("forum_normalized") or "").strip()) != _normalize(
+        "Росмолодёжь.Гранты 1 сезон"
+    ):
+        return False
+
+    normalized_request = _normalize(request_text)
+    return (
+        _asks_grant_application(normalized_request)
+        and "росмолодеж" in normalized_request
+        and _explicit_grant_season_ordinals(normalized_request) == {1}
+        and not _grant_first_season_is_negated(normalized_request)
+    )
+
+
+def _grant_first_season_is_negated(normalized_request: str) -> bool:
+    first_season = r"(?:перв\w*|1\s*(?:[-–]?\s*(?:й|ый|ой))?)\s+сезон\w*"
+    return re.search(
+        rf"\bне\s+(?:(?:на|в)\s+)?{first_season}\b",
+        normalized_request,
+    ) is not None
+
+
+def _explicit_grant_season_ordinals(normalized_request: str) -> set[int]:
+    if "сезон" not in normalized_request:
+        return set()
+
+    ordinals: set[int] = set()
+    word_stems = (
+        ("перв", 1),
+        ("втор", 2),
+        ("трет", 3),
+        ("четверт", 4),
+        ("пят", 5),
+        ("шест", 6),
+        ("седьм", 7),
+        ("восьм", 8),
+        ("девят", 9),
+        ("десят", 10),
+    )
+    for stem, ordinal in word_stems:
+        if re.search(rf"\b{stem}\w*\b", normalized_request):
+            ordinals.add(ordinal)
+
+    ordinal_suffix = r"(?:[-–]?\s*(?:й|ый|ой|го|му|м|я|ая|ую|ом))?"
+    ordinals.update(
+        int(value)
+        for value in re.findall(
+            r"\b(\d+)\s*[-–]?\s*(?:й|ый|ой|го|му|м|я|ая|ую|ом)\b",
+            normalized_request,
+        )
+    )
+    ordinals.update(
+        int(value)
+        for value in re.findall(
+            rf"\b(\d+)\s*{ordinal_suffix}\s+сезон\w*\b",
+            normalized_request,
+        )
+    )
+    ordinals.update(
+        int(value)
+        for value in re.findall(
+            rf"\bсезон\w*\s+(\d+)\s*{ordinal_suffix}\b",
+            normalized_request,
+        )
+    )
+    return ordinals
+
+
 def _question_shift_ordinals(question_text: str, question_topic: str) -> set[int]:
     normalized = _normalize(question_text)
     ordinals: set[int] = set()
@@ -2789,6 +2899,8 @@ def _bounded_claims_have_bound_source_facts(
     source_chunks: list[ScoredChunk],
     analysis: QueryAnalysis,
     questions: list[Question],
+    *,
+    request_text: str = "",
 ) -> bool:
     """Apply fact binding with exact published-topic question attribution.
 
@@ -2817,6 +2929,7 @@ def _bounded_claims_have_bound_source_facts(
             analysis,
             questions,
             cited_chunk,
+            request_text=request_text,
         )
         if not relevant_questions or not _chunk_supports_claim_facts(
             cited_chunk,
@@ -2834,9 +2947,13 @@ def _bounded_claims_have_bound_source_facts(
 def _published_source_excerpts(
     chunk: ScoredChunk,
     questions: list[Question],
+    *,
+    request_text: str = "",
 ) -> list[str]:
     topic = str((chunk.metadata or {}).get("topic") or "").strip().casefold()
-    question_text = _normalize(" ".join(question.text for question in questions))
+    question_text = _normalize(
+        " ".join([*(question.text for question in questions), request_text])
+    )
     lines = [line.strip() for line in chunk.text.splitlines() if line.strip()]
     sentences = _published_source_sentences(lines[1:] if len(lines) > 1 else lines)
 
@@ -5067,3 +5184,7 @@ def _state_message_for_search(state: BotState) -> str:
         or state.get("message")
         or ""
     )
+
+
+def _state_current_user_message(state: BotState) -> str:
+    return str(state.get("message_masked") or state.get("message") or "")

@@ -206,6 +206,62 @@ DIAGNOSTIC_FIELDS = frozenset(
     {"schema_version", "bindings", "failure_matrix"}
 )
 DIAGNOSTIC_SCHEMA_VERSION = "pilot50-v2-failure-diagnostics-v1"
+REJECTED_V3_DIAGNOSTIC_SCHEMA_VERSION = (
+    "pilot50-v3-integrity-rejected-diagnostics-v1"
+)
+REJECTED_V3_DIAGNOSTIC_ROW_FIELDS = DIAGNOSTIC_ROW_FIELDS | frozenset(
+    {"failure_stage", "execution_issue"}
+)
+REJECTED_V3_DIAGNOSTIC_FIELDS = frozenset(
+    {"schema_version", "bindings", "integrity", "directional_quality", "failure_matrix"}
+)
+REJECTED_V3_DIAGNOSTIC_BINDING_FIELDS = frozenset(
+    {
+        "manifest_sha256",
+        "cases_sha256",
+        "report_sha256",
+        "runtime_git_sha",
+    }
+)
+REJECTED_V3_DIAGNOSTIC_INTEGRITY_FIELDS = frozenset(
+    {
+        "status",
+        "failures",
+        "executed_cases_total",
+        "canonical_quality_gate_eligible",
+        "selective_reruns_forbidden",
+    }
+)
+REJECTED_V3_DIRECTIONAL_QUALITY_FIELDS = frozenset(
+    {
+        "classification",
+        "human_product_verdict",
+        "denominator",
+        "counts",
+        "mechanical_first_turn_closure",
+        "policy_pass",
+        "trace_coverage",
+        "cache_hits",
+        "llm_cost_rub",
+        "latency_ms",
+        "projected_quality_gate",
+    }
+)
+REJECTED_V3_FAILURE_STAGES = frozenset(
+    {
+        "pass",
+        "execution",
+        "retrieval",
+        "citation_binding",
+        "generation",
+        "verification",
+        "response_policy",
+        "other",
+    }
+)
+REJECTED_V3_EXECUTION_ISSUES = frozenset(
+    {"none", "request_timeout", "trace_error_present"}
+)
 DIAGNOSTIC_BOOLEAN_CHECK_FIELDS = frozenset(
     {
         "answer_contains_match",
@@ -2459,6 +2515,66 @@ def _diagnostic_latency_bucket(value: Any) -> str:
     return ">=30s"
 
 
+def _rejected_v3_execution_issue(result: Mapping[str, Any]) -> str:
+    trace_error = result.get("trace_error")
+    if trace_error in (None, ""):
+        return "none"
+    if not isinstance(trace_error, str):
+        raise Pilot50Error("rejected diagnostic trace error marker is invalid")
+    reason = _diagnostic_escalation_reason(result.get("escalation_reason"))
+    issue = "request_timeout" if reason == "request_timeout" else "trace_error_present"
+    if issue not in REJECTED_V3_EXECUTION_ISSUES:
+        raise Pilot50Error("rejected diagnostic execution issue is invalid")
+    return issue
+
+
+def _rejected_v3_failure_stage(
+    *,
+    passed: bool,
+    execution_issue: str,
+    failed_checks: Sequence[str],
+    retry_reasons: Sequence[str],
+    escalation_reason: str | None,
+) -> str:
+    if execution_issue != "none":
+        return "execution"
+    if passed:
+        return "pass"
+    failed = set(failed_checks)
+    if failed & {
+        "expected_chunk_hit",
+        "expected_or_equivalent_chunk_hit",
+    }:
+        return "retrieval"
+    if failed & {
+        "expected_cited_chunk_hit",
+        "expected_cited_or_equivalent_chunk_hit",
+    }:
+        return "citation_binding"
+    if retry_reasons or failed & {"generator_model_match"}:
+        return "generation"
+    if failed & {
+        "cited_source_types_allowed",
+        "forbidden_response_profiles_absent",
+        "message_masked_forbidden_absent_match",
+        "no_false_insufficient_source_response",
+        "no_non_answer_response",
+    }:
+        return "verification"
+    if failed & {
+        "answer_contains_match",
+        "behavior_match",
+        "escalation_match",
+        "escalation_reason_match",
+        "message_masked_contains_match",
+        "routing_response_profile_match",
+    }:
+        return "response_policy"
+    if escalation_reason in CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS:
+        return "generation"
+    return "other"
+
+
 def build_failure_diagnostics(
     *,
     manifest_path: Path,
@@ -2640,6 +2756,417 @@ def build_failure_diagnostics(
     return diagnostics
 
 
+def build_rejected_v3_diagnostics(
+    *,
+    manifest_path: Path,
+    cases_path: Path,
+    report_path: Path,
+    expected_manifest_sha256: str,
+    expected_cases_sha256: str,
+    expected_report_sha256: str,
+    expected_runtime_git_sha: str,
+) -> dict[str, Any]:
+    """Project one exact Pilot50 v3 integrity rejection without private payloads."""
+
+    expected_hashes = {
+        "manifest": _validated_sha256(
+            expected_manifest_sha256,
+            label="expected manifest",
+        ),
+        "cases": _validated_sha256(expected_cases_sha256, label="expected cases"),
+        "report": _validated_sha256(expected_report_sha256, label="expected report"),
+    }
+    runtime_git_sha = _validated_runtime_git_sha(expected_runtime_git_sha)
+    paths = {
+        "manifest": (manifest_path, MAX_MANIFEST_BYTES),
+        "cases": (cases_path, MAX_CASES_BYTES),
+        "report": (report_path, MAX_REPORT_BYTES),
+    }
+    snapshots: dict[str, bytes] = {}
+    for label, (path, maximum) in paths.items():
+        snapshot = _read_regular_bytes(path, max_bytes=maximum, label=label)
+        if _sha256(snapshot) != expected_hashes[label]:
+            raise Pilot50Error(f"{label} differs from the expected sealed artifact")
+        snapshots[label] = snapshot
+
+    cases, cases_bytes, cases_sha, receipt = _validate_materialized_cases(
+        manifest_path,
+        cases_path,
+    )
+    if (
+        receipt.get("dataset_id") != V3_DATASET_ID
+        or receipt.get("manifest_sha256") != expected_hashes["manifest"]
+        or cases_bytes != snapshots["cases"]
+        or cases_sha != expected_hashes["cases"]
+        or cases_sha != V3_CANDIDATE_CASES_SHA256
+    ):
+        raise Pilot50Error(
+            "rejected diagnostics require the exact frozen Pilot50 v3 selection"
+        )
+
+    report = _load_json_bytes(snapshots["report"], label="rejected ask report")
+    if not isinstance(report, dict):
+        raise Pilot50Error("rejected ask report must be a JSON object")
+    results = report.get("results")
+    if not isinstance(results, list) or len(results) != EXPECTED_CASES_TOTAL:
+        raise Pilot50Error("rejected ask report must contain exactly 50 result rows")
+    if (
+        report.get("target") != PILOT50_CANDIDATE_TARGET
+        or report.get("cases_total") != EXPECTED_CASES_TOTAL
+        or report.get("cases_file_sha256") != cases_sha
+    ):
+        raise Pilot50Error("rejected ask report identity is invalid")
+    eval_run_id = _validated_eval_run_id(report.get("eval_run_id"))
+    _validated_run_window(report)
+    runtime_identity = report.get("runtime_identity")
+    if (
+        not isinstance(runtime_identity, dict)
+        or set(runtime_identity) != RUNTIME_IDENTITY_FIELDS
+        or runtime_identity.get("required") is not True
+        or runtime_identity.get("status") != "verified"
+        or runtime_identity.get("expected_runtime_git_sha") != runtime_git_sha
+        or runtime_identity.get("preflight_release_git_sha") != runtime_git_sha
+        or runtime_identity.get("postflight_release_git_sha") != runtime_git_sha
+        or runtime_identity.get("verified_release_git_sha") != runtime_git_sha
+        or runtime_identity.get("matched_expected_runtime") is not True
+    ):
+        raise Pilot50Error("rejected ask report runtime identity is invalid")
+
+    candidate_run = report.get("pilot50_candidate")
+    if (
+        not isinstance(candidate_run, dict)
+        or candidate_run.get("status") != "integrity_rejected"
+        or candidate_run.get("completed") is not False
+        or candidate_run.get("contract_id") != V3_CANDIDATE_CONTRACT_ID
+        or candidate_run.get("expected_cases_total") != EXPECTED_CASES_TOTAL
+        or candidate_run.get("executed_cases_total") != EXPECTED_CASES_TOTAL
+        or candidate_run.get("cases_file_sha256") != cases_sha
+        or candidate_run.get("runtime_git_sha") != runtime_git_sha
+        or candidate_run.get("integrity_failures") != ["trace_error_present"]
+        or candidate_run.get("selective_reruns_forbidden") is not True
+    ):
+        raise Pilot50Error("rejected ask report integrity marker is invalid")
+
+    approval_id = _v3_expected_approval_id(runtime_git_sha)
+    waiver_id = _v3_expected_waiver_id(runtime_git_sha)
+    cost_control = report.get("cost_control")
+    if (
+        not isinstance(cost_control, dict)
+        or cost_control.get("strict_live") is not True
+        or cost_control.get("pricing_complete") is not True
+        or cost_control.get("high_cost_approval_id") != approval_id
+    ):
+        raise Pilot50Error("rejected ask report cost control is invalid")
+    candidate_contract = cost_control.get("candidate_contract")
+    if (
+        not isinstance(candidate_contract, dict)
+        or candidate_contract.get("contract_id") != V3_CANDIDATE_CONTRACT_ID
+        or candidate_contract.get("runtime_git_sha") != runtime_git_sha
+        or candidate_contract.get("cases_file_sha256") != cases_sha
+        or candidate_contract.get("cost_scope") != V3_CANDIDATE_COST_SCOPE
+        or candidate_contract.get("target") != PILOT50_CANDIDATE_TARGET
+        or candidate_contract.get("cases_total") != EXPECTED_CASES_TOTAL
+        or candidate_contract.get("complete_traces_required") is not True
+        or candidate_contract.get("max_llm_cost_rub")
+        != CANDIDATE_MAX_LLM_COST_RUB
+        or candidate_contract.get("rolling_24h_comparison_waiver_id") != waiver_id
+        or candidate_contract.get("rolling_24h_comparison_waiver_decision_id")
+        != V3_COMPARISON_WAIVER_DECISION_ID
+    ):
+        raise Pilot50Error("rejected ask report candidate contract is invalid")
+    reservation = cost_control.get("reservation")
+    if (
+        not isinstance(reservation, dict)
+        or reservation.get("valid") is not True
+        or reservation.get("run_id") != eval_run_id
+        or reservation.get("scope") != V3_CANDIDATE_COST_SCOPE
+        or reservation.get("runtime_git_sha") != runtime_git_sha
+        or reservation.get("manifest_sha256") != cases_sha
+        or reservation.get("cases_file_sha256") != cases_sha
+        or reservation.get("manifest_matches_cases_file") is not True
+        or reservation.get("case_count") != EXPECTED_CASES_TOTAL
+        or reservation.get("approved_cap_rub") != CANDIDATE_MAX_LLM_COST_RUB
+        or reservation.get("private_full") is not True
+        or reservation.get("reservation_class") != "private_full"
+        or reservation.get("approval_required") is not True
+        or reservation.get("high_cost_approval_id") != approval_id
+    ):
+        raise Pilot50Error("rejected ask report reservation binding is invalid")
+    _validated_v3_reservation_waiver(
+        reservation,
+        runtime_git_sha=runtime_git_sha,
+        expected_waiver_id=waiver_id,
+    )
+
+    trace_cardinality = report.get("trace_cardinality")
+    expected_case_ids = {str(case["id"]) for case in cases}
+    if not isinstance(trace_cardinality, dict):
+        raise Pilot50Error("rejected ask report trace cardinality is invalid")
+    case_counts = trace_cardinality.get("case_counts")
+    if (
+        trace_cardinality.get("eval_run_id") != eval_run_id
+        or trace_cardinality.get("expected_cases_total") != EXPECTED_CASES_TOTAL
+        or trace_cardinality.get("traces_total") != EXPECTED_CASES_TOTAL
+        or not isinstance(case_counts, dict)
+        or set(case_counts) != expected_case_ids
+        or any(type(value) is not int or value != 1 for value in case_counts.values())
+        or trace_cardinality.get("missing_case_ids") != []
+        or trace_cardinality.get("duplicate_case_ids") != []
+        or trace_cardinality.get("unknown_case_ids") != []
+    ):
+        raise Pilot50Error("rejected ask report trace cardinality is invalid")
+    if (
+        report.get("trace_coverage_rate") != 1.0
+        or report.get("cache_hit_rate") != 0.0
+        or report.get("llm_budget_stopped") is True
+        or report.get("llm_budget_exceeded") is True
+        or report.get("llm_pricing_stopped") is True
+        or report.get("llm_budget_rub") != CANDIDATE_MAX_LLM_COST_RUB
+    ):
+        raise Pilot50Error("rejected ask report aggregate execution evidence is invalid")
+
+    reported_cost = _finite_nonnegative_number(
+        report.get("llm_estimated_cost_rub"),
+        label="rejected report LLM cost",
+    )
+    if reported_cost > CANDIDATE_MAX_LLM_COST_RUB:
+        raise Pilot50Error("rejected report LLM cost exceeds the candidate cap")
+
+    expected_by_id = {str(case["id"]): case for case in cases}
+    observed_by_id: dict[str, Mapping[str, Any]] = {}
+    group_closed: Counter[str] = Counter()
+    group_passed: Counter[str] = Counter()
+    group_totals: Counter[str] = Counter()
+    latencies: list[int] = []
+    output_contract_escalations = 0
+    source_binding_failures = 0
+    applicable_qrel_cases = 0
+    critical_case_failures = 0
+    applicable_critical_cases = 0
+    trace_error_ordinals: list[int] = []
+    failure_matrix: list[dict[str, Any]] = []
+
+    for ordinal, result in enumerate(results, start=1):
+        if not isinstance(result, Mapping):
+            raise Pilot50Error("rejected ask result row must be an object")
+        case_id = str(result.get("id") or "")
+        expected = expected_by_id.get(case_id)
+        if expected is None or case_id in observed_by_id:
+            raise Pilot50Error("rejected ask result membership is invalid")
+        if case_id != str(cases[ordinal - 1]["id"]):
+            raise Pilot50Error("rejected ask result order is invalid")
+        observed_by_id[case_id] = result
+        if result.get("query") != expected.get("query"):
+            raise Pilot50Error("rejected ask result query binding is invalid")
+        group = str(expected.get("pilot50_group") or "")
+        tags = result.get("tags")
+        if (
+            group not in EXPECTED_TYPE_COUNTS
+            or not isinstance(tags, list)
+            or f"type:{group}" not in tags
+        ):
+            raise Pilot50Error("rejected ask result type binding is invalid")
+        if (
+            result.get("http_status") != 200
+            or result.get("http_success") is not True
+            or result.get("trace_found") is not True
+            or result.get("cache_hit") is not False
+            or result.get("trace_eval_run_id") != eval_run_id
+            or result.get("trace_eval_case_id") != case_id
+            or result.get("trace_binding_match") is not True
+        ):
+            raise Pilot50Error("rejected ask result execution binding is invalid")
+        raw_error = result.get("error")
+        raw_trace_error = result.get("trace_error")
+        if ordinal == 20:
+            if raw_error != "request_timeout" or raw_trace_error != "request_timeout":
+                raise Pilot50Error("rejected ask timeout error binding is invalid")
+        elif raw_error not in (None, "") or raw_trace_error not in (None, ""):
+            raise Pilot50Error("rejected ask result contains an extra execution error")
+        passed = result.get("passed")
+        was_escalated = result.get("was_escalated")
+        observed_behavior = result.get("observed_behavior")
+        if (
+            type(passed) is not bool
+            or type(was_escalated) is not bool
+            or observed_behavior not in OBSERVED_BEHAVIORS
+        ):
+            raise Pilot50Error("rejected ask result verdict is invalid")
+        latency = result.get("trace_total_latency_ms")
+        latency_bucket = _diagnostic_latency_bucket(latency)
+        latencies.append(int(latency))
+        escalation_reason = _diagnostic_escalation_reason(
+            result.get("escalation_reason")
+        )
+        check_fields = _diagnostic_boolean_checks(
+            expected,
+            result,
+            was_escalated=was_escalated,
+        )
+        failed_checks = sorted(
+            field for field in check_fields if result.get(field) is False
+        )
+        retry_reasons = _diagnostic_generate_retry_reasons(
+            result.get("generate_retry_reasons")
+        )
+        generator_path = _diagnostic_generator_path(result.get("generator_model"))
+        execution_issue = _rejected_v3_execution_issue(result)
+        if execution_issue != "none":
+            trace_error_ordinals.append(ordinal)
+        expected_passed = not failed_checks and execution_issue == "none"
+        if passed != expected_passed:
+            raise Pilot50Error(
+                "rejected diagnostic checks do not match the directional verdict"
+            )
+        failure_stage = _rejected_v3_failure_stage(
+            passed=passed,
+            execution_issue=execution_issue,
+            failed_checks=failed_checks,
+            retry_reasons=retry_reasons,
+            escalation_reason=escalation_reason,
+        )
+        if failure_stage not in REJECTED_V3_FAILURE_STAGES:
+            raise Pilot50Error("rejected diagnostic failure stage is invalid")
+        row = {
+            "ordinal": ordinal,
+            "group": group,
+            "passed": passed,
+            "was_escalated": was_escalated,
+            "escalation_reason": escalation_reason,
+            "observed_behavior": observed_behavior,
+            "failed_boolean_checks": failed_checks,
+            "generator_path": generator_path,
+            "generate_retry_reasons": retry_reasons,
+            "latency_bucket": latency_bucket,
+            "failure_stage": failure_stage,
+            "execution_issue": execution_issue,
+        }
+        if set(row) != REJECTED_V3_DIAGNOSTIC_ROW_FIELDS:
+            raise Pilot50Error("rejected diagnostic row fields are invalid")
+        failure_matrix.append(row)
+
+        group_totals[group] += 1
+        if passed:
+            group_passed[group] += 1
+        if passed and observed_behavior == "answer" and was_escalated is False:
+            group_closed[group] += 1
+        has_qrels = bool(
+            expected.get("expected_chunk_ids")
+            or expected.get("expected_cited_chunk_ids")
+        )
+        if has_qrels:
+            applicable_qrel_cases += 1
+            if _candidate_source_binding_failed(expected, result):
+                source_binding_failures += 1
+        if _candidate_case_is_critical(expected):
+            applicable_critical_cases += 1
+            if passed is not True:
+                critical_case_failures += 1
+        if (
+            was_escalated is True
+            and escalation_reason in CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS
+        ):
+            output_contract_escalations += 1
+
+    if (
+        set(observed_by_id) != expected_case_ids
+        or dict(group_totals) != EXPECTED_TYPE_COUNTS
+        or applicable_qrel_cases != V3_CANDIDATE_EXPECTED_QREL_CASES
+        or applicable_critical_cases != V3_CANDIDATE_EXPECTED_CRITICAL_CASES
+    ):
+        raise Pilot50Error("rejected diagnostic case coverage is invalid")
+    timeout_row = failure_matrix[19]
+    if (
+        trace_error_ordinals != [20]
+        or timeout_row.get("execution_issue") != "request_timeout"
+        or timeout_row.get("failure_stage") != "execution"
+        or timeout_row.get("latency_bucket") != ">=30s"
+    ):
+        raise Pilot50Error("rejected diagnostic timeout row is invalid")
+
+    closure = {
+        group: _rate_row(group_closed[group], EXPECTED_TYPE_COUNTS[group])
+        for group in ("typical", "atypical")
+    }
+    closure["overall"] = _rate_row(sum(group_closed.values()), EXPECTED_CASES_TOTAL)
+    policy = {
+        group: _pass_row(group_passed[group], EXPECTED_TYPE_COUNTS[group])
+        for group in ("typical", "atypical")
+    }
+    policy["overall"] = _pass_row(sum(group_passed.values()), EXPECTED_CASES_TOTAL)
+    projected_gate = _build_candidate_quality_gate(
+        dataset_id=V3_DATASET_ID,
+        typical_closed=group_closed["typical"],
+        atypical_closed=group_closed["atypical"],
+        output_contract_escalations=output_contract_escalations,
+        source_binding_failures=source_binding_failures,
+        applicable_qrel_cases=applicable_qrel_cases,
+        critical_case_failures=critical_case_failures,
+        applicable_critical_cases=applicable_critical_cases,
+    )
+    bindings = {
+        "manifest_sha256": expected_hashes["manifest"],
+        "cases_sha256": expected_hashes["cases"],
+        "report_sha256": expected_hashes["report"],
+        "runtime_git_sha": runtime_git_sha,
+    }
+    integrity = {
+        "status": "integrity_rejected",
+        "failures": ["trace_error_present"],
+        "executed_cases_total": EXPECTED_CASES_TOTAL,
+        "canonical_quality_gate_eligible": False,
+        "selective_reruns_forbidden": True,
+    }
+    directional_quality = {
+        "classification": "directional_calibration_only_integrity_rejected",
+        "human_product_verdict": False,
+        "denominator": EXPECTED_CASES_TOTAL,
+        "counts": EXPECTED_TYPE_COUNTS,
+        "mechanical_first_turn_closure": closure,
+        "policy_pass": policy,
+        "trace_coverage": {
+            "found": EXPECTED_CASES_TOTAL,
+            "total": EXPECTED_CASES_TOTAL,
+            "rate": 1.0,
+        },
+        "cache_hits": 0,
+        "llm_cost_rub": round(reported_cost, 6),
+        "latency_ms": {
+            "p50": _percentile(latencies, 50),
+            "p95": _percentile(latencies, 95),
+        },
+        "projected_quality_gate": projected_gate,
+    }
+    if (
+        set(bindings) != REJECTED_V3_DIAGNOSTIC_BINDING_FIELDS
+        or set(integrity) != REJECTED_V3_DIAGNOSTIC_INTEGRITY_FIELDS
+        or set(directional_quality) != REJECTED_V3_DIRECTIONAL_QUALITY_FIELDS
+    ):
+        raise Pilot50Error("rejected diagnostic projection fields are invalid")
+    diagnostics = {
+        "schema_version": REJECTED_V3_DIAGNOSTIC_SCHEMA_VERSION,
+        "bindings": bindings,
+        "integrity": integrity,
+        "directional_quality": directional_quality,
+        "failure_matrix": failure_matrix,
+    }
+    if (
+        set(diagnostics) != REJECTED_V3_DIAGNOSTIC_FIELDS
+        or len(failure_matrix) != EXPECTED_CASES_TOTAL
+    ):
+        raise Pilot50Error("rejected diagnostic output fields are invalid")
+    diagnostic_stdout = (_compact_canonical_json(diagnostics) + "\n").encode("utf-8")
+    if len(diagnostic_stdout) > MAX_DIAGNOSTICS_BYTES:
+        raise Pilot50Error("rejected diagnostic output exceeds the safe size limit")
+    for label, (path, maximum) in paths.items():
+        if (
+            _read_regular_bytes(path, max_bytes=maximum, label=label)
+            != snapshots[label]
+        ):
+            raise Pilot50Error("rejected diagnostic artifacts changed during validation")
+    return diagnostics
+
+
 def _validated_output_parent(path: Path) -> Path:
     if path.exists() or path.is_symlink():
         raise Pilot50Error("output already exists")
@@ -2755,6 +3282,18 @@ def _diagnose(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _diagnose_rejected_v3(args: argparse.Namespace) -> dict[str, Any]:
+    return build_rejected_v3_diagnostics(
+        manifest_path=args.manifest,
+        cases_path=args.cases,
+        report_path=args.report,
+        expected_manifest_sha256=args.expected_manifest_sha256,
+        expected_cases_sha256=args.expected_cases_sha256,
+        expected_report_sha256=args.expected_report_sha256,
+        expected_runtime_git_sha=args.expected_runtime_git_sha,
+    )
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare and summarize Pilot50 evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2802,6 +3341,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     diagnose.add_argument("--expected-report-sha256", required=True)
     diagnose.add_argument("--expected-safe-result-sha256", required=True)
     diagnose.add_argument("--expected-runtime-git-sha", required=True)
+    diagnose_rejected_v3 = subparsers.add_parser("diagnose-rejected-v3")
+    diagnose_rejected_v3.add_argument("--manifest", type=Path, required=True)
+    diagnose_rejected_v3.add_argument("--cases", type=Path, required=True)
+    diagnose_rejected_v3.add_argument("--report", type=Path, required=True)
+    diagnose_rejected_v3.add_argument("--expected-manifest-sha256", required=True)
+    diagnose_rejected_v3.add_argument("--expected-cases-sha256", required=True)
+    diagnose_rejected_v3.add_argument("--expected-report-sha256", required=True)
+    diagnose_rejected_v3.add_argument("--expected-runtime-git-sha", required=True)
     return parser.parse_args(argv)
 
 
@@ -2816,6 +3363,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _show_review(args)
         elif args.command == "diagnose":
             result = _diagnose(args)
+        elif args.command == "diagnose-rejected-v3":
+            result = _diagnose_rejected_v3(args)
         else:
             result = _show_safe(args)
     except (Pilot50Error, OSError) as exc:
