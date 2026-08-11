@@ -82,6 +82,24 @@ def _row(ordinal: int) -> dict[str, object]:
             "latency_bucket": ">=30s",
             "failure_stage": "execution",
             "execution_issue": "request_timeout",
+            "answer_anchor_matches": [True],
+            "pipeline_qrel_matches": [True],
+            "retrieved_qrel_matches": [True],
+            "reranked_qrel_matches": [True],
+            "selected_qrel_matches": [True],
+            "citation_qrel_matches": [True],
+            "pipeline_observed_source_count": 1,
+            "retrieved_source_count": 1,
+            "reranked_source_count": 1,
+            "selected_source_count": 1,
+            "cited_source_count": 1,
+            "lineage_stage_available": {
+                "retrieve": True,
+                "rerank": True,
+                "source_selection": True,
+                "citation": True,
+                "verify": True,
+            },
         }
     return {
         "ordinal": ordinal,
@@ -96,6 +114,24 @@ def _row(ordinal: int) -> dict[str, object]:
         "latency_bucket": "<5s",
         "failure_stage": "pass",
         "execution_issue": "none",
+        "answer_anchor_matches": [True],
+        "pipeline_qrel_matches": [True],
+        "retrieved_qrel_matches": [True],
+        "reranked_qrel_matches": [True],
+        "selected_qrel_matches": [True],
+        "citation_qrel_matches": [True],
+        "pipeline_observed_source_count": 1,
+        "retrieved_source_count": 1,
+        "reranked_source_count": 1,
+        "selected_source_count": 1,
+        "cited_source_count": 1,
+        "lineage_stage_available": {
+            "retrieve": True,
+            "rerank": True,
+            "source_selection": True,
+            "citation": True,
+            "verify": True,
+        },
     }
 
 
@@ -143,7 +179,7 @@ def _payload() -> dict[str, object]:
         },
     }
     return {
-        "schema_version": "pilot50-v3-integrity-rejected-diagnostics-v1",
+        "schema_version": "pilot50-v3-integrity-rejected-diagnostics-v2",
         "bindings": {
             "manifest_sha256": MANIFEST_SHA,
             "cases_sha256": CASES_SHA,
@@ -305,6 +341,16 @@ def test_tooling_snapshot_is_exact_detached_clean_and_excludes_private_state() -
     assert '"$TOOLING_SOURCE/.env.production"' in snapshot
 
 
+def test_host_python_validators_are_isolated_from_untracked_project_modules() -> None:
+    text = _text()
+    sealed = _function(text, "validate_sealed_run")
+    stdout = _function(text, "validate_diagnostic_stdout")
+    assert "sudo python3 -I -S -" in sealed
+    assert "python3 -I -S /dev/fd/3" in stdout
+    assert "python3 -E" not in sealed
+    assert "python3 -E" not in stdout
+
+
 def test_diagnostic_container_is_read_only_offline_and_cannot_call_runtime() -> None:
     run = _function(_text(), "run_diagnostics")
     for required in (
@@ -369,6 +415,12 @@ def test_stdout_validator_fails_closed_under_python_optimize(tmp_path: Path) -> 
         "unknown_reason",
         "extra_trace_error",
         "timeout_row_moved",
+        "slot_free_text",
+        "slot_aggregate_mismatch",
+        "citation_count_exceeds_pipeline",
+        "slot_count_zero_mismatch",
+        "source_gate_tamper",
+        "critical_gate_tamper",
         "directional_extra_field",
         "integrity_changed",
     ],
@@ -396,6 +448,33 @@ def test_stdout_validator_rejects_binding_schema_privacy_and_timeout_tampering(
         moved["ordinal"] = 21
         moved["group"] = "typical"
         rows[20] = moved
+    elif mutation == "slot_free_text":
+        rows[0]["answer_anchor_matches"] = ["private_canary"]
+    elif mutation == "slot_aggregate_mismatch":
+        rows[0]["pipeline_qrel_matches"] = [False]
+    elif mutation == "citation_count_exceeds_pipeline":
+        rows[0]["pipeline_observed_source_count"] = 0
+        rows[0]["cited_source_count"] = 1
+    elif mutation == "slot_count_zero_mismatch":
+        rows[0]["pipeline_observed_source_count"] = 0
+        rows[0]["retrieved_source_count"] = 0
+        rows[0]["reranked_source_count"] = 0
+        rows[0]["selected_source_count"] = 0
+        rows[0]["cited_source_count"] = 0
+    elif mutation == "source_gate_tamper":
+        gate = payload["directional_quality"]["projected_quality_gate"]
+        gate["criteria"]["source_binding_failures"].update(
+            {"actual": 1, "passed": False}
+        )
+        gate["failed_criteria"] = ["source_binding_failures"]
+        gate["status"] = "STOP"
+    elif mutation == "critical_gate_tamper":
+        gate = payload["directional_quality"]["projected_quality_gate"]
+        gate["criteria"]["critical_case_failures"].update(
+            {"actual": 1, "passed": False}
+        )
+        gate["failed_criteria"] = ["critical_case_failures"]
+        gate["status"] = "STOP"
     elif mutation == "directional_extra_field":
         payload["directional_quality"]["raw_latency"] = 45_022
     else:

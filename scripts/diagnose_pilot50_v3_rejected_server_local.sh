@@ -158,7 +158,7 @@ create_tooling_snapshot() {
 }
 
 validate_sealed_run() {
-  sudo python3 -E - \
+  sudo python3 -I -S - \
     "$SEALED_RUN_DIR" "$MANIFEST_REL" "$SEALED_RUNTIME_SHA" \
     "$SEALED_MANIFEST_SHA256" "$SEALED_CASES_SHA256" \
     "$SEALED_REPORT_SHA256" <<'PY' 2>/dev/null
@@ -321,7 +321,7 @@ run_diagnostics() {
 }
 
 validate_diagnostic_stdout() {
-  python3 -E /dev/fd/3 "$1" "$MAX_DIAGNOSTIC_STDOUT_BYTES" \
+  python3 -I -S /dev/fd/3 "$1" "$MAX_DIAGNOSTIC_STDOUT_BYTES" \
     "$SEALED_MANIFEST_SHA256" "$SEALED_CASES_SHA256" \
     "$SEALED_REPORT_SHA256" "$SEALED_RUNTIME_SHA" \
     3<<'PY' 2>/dev/null
@@ -358,7 +358,7 @@ assert set(payload) == {
     "failure_matrix",
 }
 assert payload["schema_version"] == (
-    "pilot50-v3-integrity-rejected-diagnostics-v1"
+    "pilot50-v3-integrity-rejected-diagnostics-v2"
 )
 assert payload["bindings"] == {
     "manifest_sha256": manifest_sha,
@@ -438,13 +438,21 @@ row_fields = {
     "ordinal", "group", "passed", "was_escalated", "escalation_reason",
     "observed_behavior", "failed_boolean_checks", "generator_path",
     "generate_retry_reasons", "latency_bucket", "failure_stage",
-    "execution_issue",
+    "execution_issue", "answer_anchor_matches", "pipeline_qrel_matches",
+    "retrieved_qrel_matches", "reranked_qrel_matches",
+    "selected_qrel_matches", "citation_qrel_matches",
+    "pipeline_observed_source_count", "retrieved_source_count",
+    "reranked_source_count", "selected_source_count", "cited_source_count",
+    "lineage_stage_available",
 }
 rows = payload["failure_matrix"]
 assert type(rows) is list and len(rows) == 50
 closed = {"typical": 0, "atypical": 0}
 passed = {"typical": 0, "atypical": 0}
 output_escalations = 0
+source_binding_failures = 0
+critical_case_failures = 0
+critical_ordinals = {25, *range(37, 51)}
 for ordinal, row in enumerate(rows, start=1):
     assert type(row) is dict and set(row) == row_fields
     assert type(row["ordinal"]) is int and row["ordinal"] == ordinal
@@ -466,6 +474,69 @@ for ordinal, row in enumerate(rows, start=1):
     checks = row["failed_boolean_checks"]
     assert type(checks) is list and checks == sorted(set(checks))
     assert all(type(check) is str and check in allowed_checks for check in checks)
+    answer_slots = row["answer_anchor_matches"]
+    pipeline_slots = row["pipeline_qrel_matches"]
+    retrieved_slots = row["retrieved_qrel_matches"]
+    reranked_slots = row["reranked_qrel_matches"]
+    selected_slots = row["selected_qrel_matches"]
+    citation_slots = row["citation_qrel_matches"]
+    for slots in (
+        answer_slots,
+        pipeline_slots,
+        retrieved_slots,
+        reranked_slots,
+        selected_slots,
+        citation_slots,
+    ):
+        assert type(slots) is list and 1 <= len(slots) <= 10
+        assert all(type(value) is bool for value in slots)
+    assert len(retrieved_slots) == len(pipeline_slots)
+    assert len(reranked_slots) == len(pipeline_slots)
+    assert len(selected_slots) == len(pipeline_slots)
+    assert ("answer_contains_match" in checks) == (not all(answer_slots))
+    assert (
+        bool({"expected_chunk_hit", "expected_or_equivalent_chunk_hit"} & set(checks))
+        == (not all(pipeline_slots))
+    )
+    assert (
+        bool(
+            {
+                "expected_cited_chunk_hit",
+                "expected_cited_or_equivalent_chunk_hit",
+            }
+            & set(checks)
+        )
+        == (not all(citation_slots))
+    )
+    pipeline_count = row["pipeline_observed_source_count"]
+    stage_counts = [
+        row["retrieved_source_count"],
+        row["reranked_source_count"],
+        row["selected_source_count"],
+        row["cited_source_count"],
+    ]
+    assert type(pipeline_count) is int and 0 <= pipeline_count <= 100
+    assert all(
+        type(value) is int and 0 <= value <= pipeline_count
+        for value in stage_counts
+    )
+    for slots, count in zip(
+        (
+            pipeline_slots,
+            retrieved_slots,
+            reranked_slots,
+            selected_slots,
+            citation_slots,
+        ),
+        (pipeline_count, *stage_counts),
+        strict=True,
+    ):
+        assert not any(slots) or count >= 1
+    lineage = row["lineage_stage_available"]
+    assert type(lineage) is dict and set(lineage) == {
+        "retrieve", "rerank", "source_selection", "citation", "verify",
+    }
+    assert all(type(value) is bool for value in lineage.values())
     retries = row["generate_retry_reasons"]
     assert type(retries) is list and len(retries) <= 2
     assert retries == list(dict.fromkeys(retries))
@@ -490,6 +561,12 @@ for ordinal, row in enumerate(rows, start=1):
         closed[expected_group] += 1
     if row["was_escalated"] and reason in output_contract_reasons:
         output_escalations += 1
+    if not row["was_escalated"] and (
+        not all(pipeline_slots) or not all(citation_slots)
+    ):
+        source_binding_failures += 1
+    if ordinal in critical_ordinals and not row["passed"]:
+        critical_case_failures += 1
 
 directional = payload["directional_quality"]
 assert type(directional) is dict
@@ -574,20 +651,18 @@ source = criteria["source_binding_failures"]
 assert type(source) is dict and set(source) == {
     "actual", "maximum", "passed", "applicable_qrel_cases", "total_cases",
 }
-assert type(source["actual"]) is int and 0 <= source["actual"] <= 50
 assert source == {
-    "actual": source["actual"], "maximum": 0,
-    "passed": source["actual"] == 0,
+    "actual": source_binding_failures, "maximum": 0,
+    "passed": source_binding_failures == 0,
     "applicable_qrel_cases": 50, "total_cases": 50,
 }
 critical = criteria["critical_case_failures"]
 assert type(critical) is dict and set(critical) == {
     "actual", "maximum", "passed", "applicable_critical_cases", "total_cases",
 }
-assert type(critical["actual"]) is int and 0 <= critical["actual"] <= 15
 assert critical == {
-    "actual": critical["actual"], "maximum": 0,
-    "passed": critical["actual"] == 0,
+    "actual": critical_case_failures, "maximum": 0,
+    "passed": critical_case_failures == 0,
     "applicable_critical_cases": 15, "total_cases": 50,
 }
 expected_failed = [name for name in criterion_names if not criteria[name]["passed"]]

@@ -207,10 +207,25 @@ DIAGNOSTIC_FIELDS = frozenset(
 )
 DIAGNOSTIC_SCHEMA_VERSION = "pilot50-v2-failure-diagnostics-v1"
 REJECTED_V3_DIAGNOSTIC_SCHEMA_VERSION = (
-    "pilot50-v3-integrity-rejected-diagnostics-v1"
+    "pilot50-v3-integrity-rejected-diagnostics-v2"
 )
 REJECTED_V3_DIAGNOSTIC_ROW_FIELDS = DIAGNOSTIC_ROW_FIELDS | frozenset(
-    {"failure_stage", "execution_issue"}
+    {
+        "failure_stage",
+        "execution_issue",
+        "answer_anchor_matches",
+        "pipeline_qrel_matches",
+        "retrieved_qrel_matches",
+        "reranked_qrel_matches",
+        "selected_qrel_matches",
+        "citation_qrel_matches",
+        "pipeline_observed_source_count",
+        "retrieved_source_count",
+        "reranked_source_count",
+        "selected_source_count",
+        "cited_source_count",
+        "lineage_stage_available",
+    }
 )
 REJECTED_V3_DIAGNOSTIC_FIELDS = frozenset(
     {"schema_version", "bindings", "integrity", "directional_quality", "failure_matrix"}
@@ -2515,6 +2530,102 @@ def _diagnostic_latency_bucket(value: Any) -> str:
     return ">=30s"
 
 
+def _diagnostic_normalize_answer_text(value: Any) -> str:
+    normalized = (
+        str(value or "")
+        .casefold()
+        .replace("ё", "е")
+        .translate(str.maketrans({"–": "-", "—": "-", "−": "-"}))
+    )
+    normalized = re.sub(r"(?<=\d)\s*([./-])\s*(?=\d)", r"\1", normalized)
+    return " ".join(normalized.split())
+
+
+def _diagnostic_observed_source_ids(value: Any, *, label: str) -> set[str]:
+    if (
+        not isinstance(value, list)
+        or len(value) > 100
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise Pilot50Error(f"rejected diagnostic {label} source IDs are invalid")
+    return set(value)
+
+
+def _diagnostic_lineage_stage_available(value: Any) -> dict[str, bool]:
+    expected_keys = {
+        "retrieve",
+        "rerank",
+        "source_selection",
+        "citation",
+        "verify",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != expected_keys
+        or any(type(item) is not bool for item in value.values())
+    ):
+        raise Pilot50Error("rejected diagnostic lineage availability is invalid")
+    return {key: value[key] for key in sorted(expected_keys)}
+
+
+def _diagnostic_equivalent_ids(
+    case: Mapping[str, Any],
+    *,
+    expected_id: str,
+    expected_ids: Sequence[str],
+) -> set[str]:
+    equivalents = case.get("equivalent_chunk_ids")
+    if equivalents is None:
+        return set()
+    if isinstance(equivalents, Mapping):
+        accepted = equivalents.get(expected_id, [])
+    else:
+        accepted = equivalents
+    if isinstance(accepted, str):
+        accepted = [accepted]
+    if (
+        not isinstance(accepted, list)
+        or any(not isinstance(item, str) or not item for item in accepted)
+        or len(accepted) != len(set(accepted))
+    ):
+        raise Pilot50Error("rejected diagnostic equivalent source IDs are invalid")
+    if not isinstance(equivalents, Mapping) and expected_id not in expected_ids:
+        raise Pilot50Error("rejected diagnostic expected source ID is invalid")
+    return set(accepted)
+
+
+def _diagnostic_qrel_slots(
+    case: Mapping[str, Any],
+    *,
+    field: str,
+    observed_ids: set[str],
+) -> list[bool]:
+    expected_ids = case.get(field) or []
+    if (
+        not isinstance(expected_ids, list)
+        or not expected_ids
+        or len(expected_ids) > 10
+        or any(not isinstance(item, str) or not item for item in expected_ids)
+        or len(expected_ids) != len(set(expected_ids))
+    ):
+        raise Pilot50Error(f"rejected diagnostic {field} is invalid")
+    return [
+        bool(
+            {
+                expected_id,
+                *_diagnostic_equivalent_ids(
+                    case,
+                    expected_id=expected_id,
+                    expected_ids=expected_ids,
+                ),
+            }
+            & observed_ids
+        )
+        for expected_id in expected_ids
+    ]
+
+
 def _rejected_v3_execution_issue(result: Mapping[str, Any]) -> str:
     trace_error = result.get("trace_error")
     if trace_error in (None, ""):
@@ -2958,6 +3069,9 @@ def build_rejected_v3_diagnostics(
         observed_by_id[case_id] = result
         if result.get("query") != expected.get("query"):
             raise Pilot50Error("rejected ask result query binding is invalid")
+        response_text = result.get("response")
+        if not isinstance(response_text, str):
+            raise Pilot50Error("rejected ask result response is invalid")
         group = str(expected.get("pilot50_group") or "")
         tags = result.get("tags")
         if (
@@ -3010,6 +3124,99 @@ def build_rejected_v3_diagnostics(
             result.get("generate_retry_reasons")
         )
         generator_path = _diagnostic_generator_path(result.get("generator_model"))
+        expected_anchors = expected.get("expected_answer_contains") or []
+        if (
+            not isinstance(expected_anchors, list)
+            or not expected_anchors
+            or len(expected_anchors) > 10
+            or any(not isinstance(item, str) or not item for item in expected_anchors)
+        ):
+            raise Pilot50Error("rejected diagnostic answer anchors are invalid")
+        normalized_response = _diagnostic_normalize_answer_text(response_text)
+        answer_anchor_matches = [
+            _diagnostic_normalize_answer_text(anchor) in normalized_response
+            for anchor in expected_anchors
+        ]
+        pipeline_observed_ids = _diagnostic_observed_source_ids(
+            result.get("observed_chunk_ids"),
+            label="pipeline-observed",
+        )
+        retrieved_source_ids = _diagnostic_observed_source_ids(
+            result.get("retrieved_chunk_ids"),
+            label="retrieved",
+        )
+        reranked_source_ids = _diagnostic_observed_source_ids(
+            result.get("reranked_chunk_ids"),
+            label="reranked",
+        )
+        selected_source_ids = _diagnostic_observed_source_ids(
+            result.get("selected_source_ids"),
+            label="selected",
+        )
+        cited_source_ids = _diagnostic_observed_source_ids(
+            result.get("cited_source_ids"),
+            label="cited",
+        )
+        ordered_cited_source_ids = _diagnostic_observed_source_ids(
+            result.get("ordered_cited_source_ids"),
+            label="ordered-cited",
+        )
+        lineage_stage_available = _diagnostic_lineage_stage_available(
+            result.get("lineage_stage_available")
+        )
+        pipeline_qrel_matches = _diagnostic_qrel_slots(
+            expected,
+            field="expected_chunk_ids",
+            observed_ids=pipeline_observed_ids,
+        )
+        retrieved_qrel_matches = _diagnostic_qrel_slots(
+            expected,
+            field="expected_chunk_ids",
+            observed_ids=retrieved_source_ids,
+        )
+        reranked_qrel_matches = _diagnostic_qrel_slots(
+            expected,
+            field="expected_chunk_ids",
+            observed_ids=reranked_source_ids,
+        )
+        selected_qrel_matches = _diagnostic_qrel_slots(
+            expected,
+            field="expected_chunk_ids",
+            observed_ids=selected_source_ids,
+        )
+        citation_qrel_matches = _diagnostic_qrel_slots(
+            expected,
+            field="expected_cited_chunk_ids",
+            observed_ids=cited_source_ids,
+        )
+        has_equivalents = bool(expected.get("equivalent_chunk_ids"))
+        pipeline_check = (
+            "expected_or_equivalent_chunk_hit"
+            if has_equivalents
+            else "expected_chunk_hit"
+        )
+        citation_check = (
+            "expected_cited_or_equivalent_chunk_hit"
+            if has_equivalents
+            else "expected_cited_chunk_hit"
+        )
+        if (
+            all(answer_anchor_matches) is not result.get("answer_contains_match")
+            or all(pipeline_qrel_matches) is not result.get(pipeline_check)
+            or all(citation_qrel_matches) is not result.get(citation_check)
+            or ordered_cited_source_ids != cited_source_ids
+            or any(
+                not stage_ids.issubset(pipeline_observed_ids)
+                for stage_ids in (
+                    retrieved_source_ids,
+                    reranked_source_ids,
+                    selected_source_ids,
+                    cited_source_ids,
+                )
+            )
+            or not cited_source_ids.issubset(pipeline_observed_ids)
+        ):
+            raise Pilot50Error("rejected diagnostic slot evidence is inconsistent")
         execution_issue = _rejected_v3_execution_issue(result)
         if execution_issue != "none":
             trace_error_ordinals.append(ordinal)
@@ -3040,6 +3247,18 @@ def build_rejected_v3_diagnostics(
             "latency_bucket": latency_bucket,
             "failure_stage": failure_stage,
             "execution_issue": execution_issue,
+            "answer_anchor_matches": answer_anchor_matches,
+            "pipeline_qrel_matches": pipeline_qrel_matches,
+            "retrieved_qrel_matches": retrieved_qrel_matches,
+            "reranked_qrel_matches": reranked_qrel_matches,
+            "selected_qrel_matches": selected_qrel_matches,
+            "citation_qrel_matches": citation_qrel_matches,
+            "pipeline_observed_source_count": len(pipeline_observed_ids),
+            "retrieved_source_count": len(retrieved_source_ids),
+            "reranked_source_count": len(reranked_source_ids),
+            "selected_source_count": len(selected_source_ids),
+            "cited_source_count": len(cited_source_ids),
+            "lineage_stage_available": lineage_stage_available,
         }
         if set(row) != REJECTED_V3_DIAGNOSTIC_ROW_FIELDS:
             raise Pilot50Error("rejected diagnostic row fields are invalid")

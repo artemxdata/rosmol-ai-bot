@@ -321,6 +321,24 @@ def _write_v3_rejected_diagnostics_fixture(
     cases, cases_path, cases_sha = _v3_candidate_materialized_workspace(tmp_path)
     report, _trace_rows = _v3_candidate_raw_report(cases, cases_sha256=cases_sha)
     _add_diagnostic_checks(cases, report)
+    for case, result in zip(cases, report["results"], strict=True):
+        result["response"] = " ".join(case["expected_answer_contains"])
+        result["observed_chunk_ids"] = list(case["expected_chunk_ids"])
+        result["retrieved_chunk_ids"] = list(case["expected_chunk_ids"])
+        result["reranked_chunk_ids"] = list(case["expected_chunk_ids"])
+        result["selected_source_ids"] = list(case["expected_chunk_ids"])
+        result["cited_source_ids"] = list(case["expected_cited_chunk_ids"])
+        result["ordered_cited_source_ids"] = list(
+            case["expected_cited_chunk_ids"]
+        )
+        result["lineage_stage_available"] = {
+            "retrieve": True,
+            "rerank": True,
+            "source_selection": True,
+            "citation": True,
+            "verify": True,
+        }
+    report["results"][0]["observed_chunk_ids"].append(f"{canary}-source")
     timeout = report["results"][19]
     timeout.update(
         {
@@ -2349,6 +2367,40 @@ def test_diagnose_rejected_v3_prints_only_directional_payload_free_evidence(
     assert all(
         set(row) == pilot50.REJECTED_V3_DIAGNOSTIC_ROW_FIELDS for row in matrix
     )
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    for index, (case, row) in enumerate(zip(cases, matrix, strict=True)):
+        assert row["answer_anchor_matches"] == [
+            True for _ in case["expected_answer_contains"]
+        ]
+        assert row["pipeline_qrel_matches"] == [
+            True for _ in case["expected_chunk_ids"]
+        ]
+        assert row["retrieved_qrel_matches"] == [
+            True for _ in case["expected_chunk_ids"]
+        ]
+        assert row["reranked_qrel_matches"] == [
+            True for _ in case["expected_chunk_ids"]
+        ]
+        assert row["selected_qrel_matches"] == [
+            True for _ in case["expected_chunk_ids"]
+        ]
+        assert row["citation_qrel_matches"] == [
+            True for _ in case["expected_cited_chunk_ids"]
+        ]
+        assert row["pipeline_observed_source_count"] == len(
+            case["expected_chunk_ids"]
+        ) + (1 if index == 0 else 0)
+        assert row["retrieved_source_count"] == len(case["expected_chunk_ids"])
+        assert row["reranked_source_count"] == len(case["expected_chunk_ids"])
+        assert row["selected_source_count"] == len(case["expected_chunk_ids"])
+        assert row["cited_source_count"] == len(case["expected_cited_chunk_ids"])
+        assert row["lineage_stage_available"] == {
+            "citation": True,
+            "rerank": True,
+            "retrieve": True,
+            "source_selection": True,
+            "verify": True,
+        }
     timeout = matrix[19]
     assert timeout["failure_stage"] == "execution"
     assert timeout["execution_issue"] == "request_timeout"
@@ -2360,7 +2412,6 @@ def test_diagnose_rejected_v3_prints_only_directional_payload_free_evidence(
         if index != 19
     )
 
-    cases = json.loads(cases_path.read_text(encoding="utf-8"))
     forbidden_values = {
         canary,
         str(cases[19]["id"]),
@@ -2381,6 +2432,67 @@ def test_diagnose_rejected_v3_prints_only_directional_payload_free_evidence(
         '"error"',
     ):
         assert forbidden_key not in stdout
+
+
+def test_diagnose_rejected_v3_emits_ordered_boolean_fact_and_qrel_slots(
+    tmp_path: Path,
+) -> None:
+    cases_path, report_path, hashes, report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path)
+    )
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    case = cases[25]
+    result = report["results"][25]
+    result.update(
+        {
+            "response": str(case["expected_answer_contains"][0]),
+            "observed_chunk_ids": [case["expected_chunk_ids"][0]],
+            "retrieved_chunk_ids": [case["expected_chunk_ids"][0]],
+            "reranked_chunk_ids": [],
+            "selected_source_ids": [],
+            "cited_source_ids": [case["expected_cited_chunk_ids"][0]],
+            "ordered_cited_source_ids": [case["expected_cited_chunk_ids"][0]],
+            "lineage_stage_available": {
+                "retrieve": True,
+                "rerank": True,
+                "source_selection": True,
+                "citation": True,
+                "verify": True,
+            },
+            "expected_chunk_hit": False,
+            "expected_or_equivalent_chunk_hit": False,
+            "expected_cited_chunk_hit": False,
+            "expected_cited_or_equivalent_chunk_hit": False,
+            "answer_contains_match": False,
+            "passed": False,
+        }
+    )
+    _write_json(report_path, report)
+    hashes["report"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+    diagnostics = pilot50.build_rejected_v3_diagnostics(
+        manifest_path=V3_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        expected_manifest_sha256=hashes["manifest"],
+        expected_cases_sha256=hashes["cases"],
+        expected_report_sha256=hashes["report"],
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+    )
+
+    row = diagnostics["failure_matrix"][25]
+    assert row["answer_anchor_matches"] == [True, False, False]
+    assert row["pipeline_qrel_matches"] == [True, False]
+    assert row["retrieved_qrel_matches"] == [True, False]
+    assert row["reranked_qrel_matches"] == [False, False]
+    assert row["selected_qrel_matches"] == [False, False]
+    assert row["citation_qrel_matches"] == [True, False]
+    assert row["pipeline_observed_source_count"] == 1
+    assert row["retrieved_source_count"] == 1
+    assert row["reranked_source_count"] == 0
+    assert row["selected_source_count"] == 0
+    assert row["cited_source_count"] == 1
+    assert row["failure_stage"] == "retrieval"
 
 
 def test_diagnose_rejected_v3_rejects_wrong_report_binding(
@@ -2490,6 +2602,36 @@ def test_diagnose_rejected_v3_rejects_non_exact_timeout_error_evidence(
             report["results"][1],
             report["results"][0],
         )
+    _write_json(report_path, report)
+    hashes["report"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+    assert (
+        pilot50.main(
+            _diagnose_rejected_v3_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                hashes=hashes,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == (
+        "pilot50=DIAGNOSE-REJECTED-V3 reason=validation_failed\n"
+    )
+
+
+def test_diagnose_rejected_v3_rejects_qrel_slot_aggregate_mismatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cases_path, report_path, hashes, report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path)
+    )
+    result = report["results"][25]
+    result["observed_chunk_ids"] = []
+    result["cited_source_ids"] = []
+    assert result["expected_chunk_hit"] is True
+    assert result["expected_cited_chunk_hit"] is True
     _write_json(report_path, report)
     hashes["report"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
 
