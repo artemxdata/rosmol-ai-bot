@@ -334,6 +334,152 @@ def _show_review_argv(
     ]
 
 
+def _candidate_materialized_workspace(
+    tmp_path: Path,
+) -> tuple[list[dict[str, Any]], Path, str]:
+    cases, receipt = pilot50.build_materialized_cases(V2_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v2-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    return cases, cases_path, str(receipt["cases_sha256"])
+
+
+def _add_diagnostic_checks(
+    cases: list[dict[str, Any]],
+    report: dict[str, Any],
+) -> None:
+    assert len(cases) == 50
+    for result in report["results"]:
+        result.update(
+            {
+                "passed": True,
+                "observed_behavior": "answer",
+                "was_escalated": False,
+                "escalation_reason": None,
+                "private_boolean_canary": False,
+            }
+        )
+        for field in (
+            "expected_chunk_hit",
+            "expected_or_equivalent_chunk_hit",
+            "expected_cited_chunk_hit",
+            "expected_cited_or_equivalent_chunk_hit",
+            "cited_source_types_allowed",
+            "answer_contains_match",
+            "message_masked_contains_match",
+            "message_masked_forbidden_absent_match",
+            "behavior_match",
+            "routing_response_profile_match",
+            "forbidden_response_profiles_absent",
+            "escalation_match",
+            "escalation_reason_match",
+            "generator_model_match",
+            "no_false_insufficient_source_response",
+            "no_non_answer_response",
+        ):
+            result[field] = True
+
+
+def _write_candidate_diagnostics_fixture(
+    tmp_path: Path,
+    *,
+    failed_rows: int = 7,
+    canary: str = "",
+) -> tuple[Path, Path, Path, dict[str, str], dict[str, Any], dict[str, Any]]:
+    cases, cases_path, cases_sha = _candidate_materialized_workspace(tmp_path)
+    report, trace_rows = _candidate_raw_report(cases, cases_sha256=cases_sha)
+    _add_diagnostic_checks(cases, report)
+    generator_examples = [
+        ("source_chunk", 4_999),
+        ("source_only", 5_000),
+        (pilot50.PRICING_PROJECTION["simple_model"], 14_999),
+        (pilot50.PRICING_PROJECTION["complex_model"], 15_000),
+        (f"{canary}-private-model" if canary else "unrecognized-model", 29_999),
+        (None, 30_000),
+        ("not_run", 7_000),
+        ("unknown", 8_000),
+    ]
+    for result, (generator_model, latency_ms) in zip(
+        report["results"],
+        generator_examples,
+        strict=False,
+    ):
+        result["generator_model"] = generator_model
+        result["trace_total_latency_ms"] = latency_ms
+    report["results"][0]["generate_retry_reasons"] = [
+        "llm_response_contract_failed"
+    ]
+    for result in report["results"][:failed_rows]:
+        result.update(
+            {
+                "passed": False,
+                "observed_behavior": "escalate",
+                "was_escalated": True,
+                "escalation_reason": "llm_response_contract_failed",
+                "behavior_match": False,
+                "escalation_match": False,
+            }
+        )
+    if canary:
+        report["private_diagnostic_canary"] = canary
+        report["results"][0]["response"] = f"{canary}-response"
+        report["results"][0]["failure_reasons"] = [f"{canary}-failure"]
+        report["results"][0]["private_free_text"] = f"{canary}-private"
+        report["results"][0]["escalation_reason"] = (
+            "private_escalation_reason_canary"
+        )
+    report_path = tmp_path / "pilot50-v2-raw.json"
+    _write_json(report_path, report)
+    safe = pilot50.build_safe_result(
+        manifest_path=V2_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=APPROVAL_ID,
+        candidate_contract=pilot50.CANDIDATE_CONTRACT_ID,
+    )
+    safe_path = tmp_path / "pilot50-v2-safe.json"
+    _write_json(safe_path, safe)
+    hashes = {
+        "manifest": hashlib.sha256(V2_MANIFEST_PATH.read_bytes()).hexdigest(),
+        "cases": hashlib.sha256(cases_path.read_bytes()).hexdigest(),
+        "report": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        "safe": hashlib.sha256(safe_path.read_bytes()).hexdigest(),
+    }
+    return cases_path, report_path, safe_path, hashes, report, safe
+
+
+def _diagnose_argv(
+    *,
+    cases_path: Path,
+    report_path: Path,
+    safe_path: Path,
+    hashes: dict[str, str],
+    expected_runtime_git_sha: str = RUNTIME_GIT_SHA,
+) -> list[str]:
+    return [
+        "diagnose",
+        "--manifest",
+        str(V2_MANIFEST_PATH),
+        "--cases",
+        str(cases_path),
+        "--report",
+        str(report_path),
+        "--safe-result",
+        str(safe_path),
+        "--expected-manifest-sha256",
+        hashes["manifest"],
+        "--expected-cases-sha256",
+        hashes["cases"],
+        "--expected-report-sha256",
+        hashes["report"],
+        "--expected-safe-result-sha256",
+        hashes["safe"],
+        "--expected-runtime-git-sha",
+        expected_runtime_git_sha,
+    ]
+
+
 def _rewrite_report_and_rebind_safe_result(
     report_path: Path,
     report: dict[str, Any],
@@ -1826,3 +1972,306 @@ def test_show_safe_rejects_tampered_or_expanded_payload(
     stdout = capsys.readouterr().out
     assert stdout == "pilot50=SHOW-SAFE reason=validation_failed\n"
     assert "CANARY" not in stdout
+
+
+def test_diagnose_prints_one_bounded_payload_free_failure_matrix(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary = "PRIVATE-DIAGNOSTIC-CANARY"
+    cases_path, report_path, safe_path, hashes, report, safe = (
+        _write_candidate_diagnostics_fixture(tmp_path, failed_rows=8, canary=canary)
+    )
+    assert safe["quality_gate"]["status"] == "STOP"
+
+    assert (
+        pilot50.main(
+            _diagnose_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+                hashes=hashes,
+            )
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert stdout.count("\n") == 1
+    assert len(stdout.encode("utf-8")) <= pilot50.MAX_DIAGNOSTICS_BYTES
+    diagnostics = json.loads(stdout)
+    assert stdout == pilot50._compact_canonical_json(diagnostics) + "\n"
+    assert set(diagnostics) == {"schema_version", "bindings", "failure_matrix"}
+    assert diagnostics["schema_version"] == pilot50.DIAGNOSTIC_SCHEMA_VERSION
+    assert diagnostics["bindings"] == {
+        "manifest_sha256": hashes["manifest"],
+        "cases_sha256": hashes["cases"],
+        "report_sha256": hashes["report"],
+        "safe_result_sha256": hashes["safe"],
+        "quality_status": "STOP",
+    }
+    matrix = diagnostics["failure_matrix"]
+    assert len(matrix) == 50
+    assert [row["ordinal"] for row in matrix] == list(range(1, 51))
+    assert [row["group"] for row in matrix] == ["typical"] * 25 + [
+        "atypical"
+    ] * 25
+    assert all(set(row) == pilot50.DIAGNOSTIC_ROW_FIELDS for row in matrix)
+    assert all(
+        row["failed_boolean_checks"] == ["behavior_match", "escalation_match"]
+        for row in matrix[:8]
+    )
+    assert all(row["passed"] is False for row in matrix[:8])
+    assert all(row["failed_boolean_checks"] == [] for row in matrix[8:])
+    assert all(row["passed"] is True for row in matrix[8:])
+    assert matrix[0]["escalation_reason"] == "other"
+    assert all(
+        row["escalation_reason"] == "llm_response_contract_failed"
+        for row in matrix[1:8]
+    )
+    assert [row["generator_path"] for row in matrix[:8]] == [
+        "source_chunk",
+        "source_chunk",
+        "simple",
+        "complex",
+        "unknown",
+        "not_run",
+        "not_run",
+        "unknown",
+    ]
+    assert [row["latency_bucket"] for row in matrix[:8]] == [
+        "<5s",
+        "5-15s",
+        "5-15s",
+        "15-30s",
+        "15-30s",
+        ">=30s",
+        "5-15s",
+        "5-15s",
+    ]
+    assert matrix[0]["generate_retry_reasons"] == [
+        "llm_response_contract_failed"
+    ]
+    assert all(row["generate_retry_reasons"] == [] for row in matrix[1:])
+
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    forbidden_values = {
+        canary,
+        f"{canary}-response",
+        f"{canary}-failure",
+        "private_escalation_reason_canary",
+        str(cases[0]["id"]),
+        str(cases[0]["query"]),
+        str(report["results"][0]["request_id"]),
+        EVAL_RUN_ID,
+        RUNTIME_GIT_SHA,
+        APPROVAL_ID,
+    }
+    assert all(value not in stdout for value in forbidden_values)
+    for forbidden_key in (
+        '"query"',
+        '"response"',
+        '"id"',
+        '"request_id"',
+        '"eval_run_id"',
+        '"trace"',
+        '"chunk"',
+        '"timestamp"',
+        '"cost"',
+        '"failure_reasons"',
+        '"private_boolean_canary"',
+    ):
+        assert forbidden_key not in stdout
+
+
+@pytest.mark.parametrize(
+    ("binding", "flag"),
+    [
+        ("manifest", "--expected-manifest-sha256"),
+        ("cases", "--expected-cases-sha256"),
+        ("report", "--expected-report-sha256"),
+        ("safe", "--expected-safe-result-sha256"),
+    ],
+)
+def test_diagnose_rejects_each_incorrect_exact_artifact_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    binding: str,
+    flag: str,
+) -> None:
+    cases_path, report_path, safe_path, hashes, _report, _safe = (
+        _write_candidate_diagnostics_fixture(tmp_path)
+    )
+    argv = _diagnose_argv(
+        cases_path=cases_path,
+        report_path=report_path,
+        safe_path=safe_path,
+        hashes=hashes,
+    )
+    assert argv[argv.index(flag) + 1] == hashes[binding]
+    argv[argv.index(flag) + 1] = "b" * 64
+
+    assert pilot50.main(argv) == 2
+    assert capsys.readouterr().out == "pilot50=DIAGNOSE reason=validation_failed\n"
+
+
+def test_diagnose_rejects_incorrect_exact_runtime_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cases_path, report_path, safe_path, hashes, _report, _safe = (
+        _write_candidate_diagnostics_fixture(tmp_path)
+    )
+
+    assert (
+        pilot50.main(
+            _diagnose_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+                hashes=hashes,
+                expected_runtime_git_sha="b" * 40,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == "pilot50=DIAGNOSE reason=validation_failed\n"
+
+
+def test_diagnose_requires_quality_stop(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cases_path, report_path, safe_path, hashes, _report, safe = (
+        _write_candidate_diagnostics_fixture(tmp_path, failed_rows=0)
+    )
+    assert safe["quality_gate"]["status"] == "GO"
+
+    assert (
+        pilot50.main(
+            _diagnose_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+                hashes=hashes,
+            )
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == "pilot50=DIAGNOSE reason=validation_failed\n"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "untyped_check",
+        "verdict_mismatch",
+        "unknown_retry_reason",
+        "duplicate_retry_reason",
+        "untyped_latency",
+        "untyped_generator",
+    ],
+)
+def test_diagnose_rejects_tampered_boolean_failure_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    cases_path, report_path, safe_path, hashes, report, safe = (
+        _write_candidate_diagnostics_fixture(tmp_path)
+    )
+    if mutation == "untyped_check":
+        report["results"][0]["behavior_match"] = "false"
+    elif mutation == "verdict_mismatch":
+        report["results"][0]["behavior_match"] = True
+        report["results"][0]["escalation_match"] = True
+    elif mutation == "unknown_retry_reason":
+        report["results"][0]["generate_retry_reasons"] = ["PRIVATE-RETRY-CANARY"]
+    elif mutation == "duplicate_retry_reason":
+        report["results"][0]["generate_retry_reasons"] = [
+            "llm_response_contract_failed",
+            "llm_response_contract_failed",
+        ]
+    elif mutation == "untyped_latency":
+        report["results"][0]["trace_total_latency_ms"] = "40000"
+    else:
+        report["results"][0]["generator_model"] = {"private": "model"}
+    _rewrite_report_and_rebind_safe_result(report_path, report, safe_path, safe)
+    hashes["report"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    hashes["safe"] = hashlib.sha256(safe_path.read_bytes()).hexdigest()
+
+    assert (
+        pilot50.main(
+            _diagnose_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+                hashes=hashes,
+            )
+        )
+        == 2
+    )
+    stdout = capsys.readouterr().out
+    assert stdout == "pilot50=DIAGNOSE reason=validation_failed\n"
+    assert "PRIVATE" not in stdout
+
+
+def test_diagnose_rejects_duplicate_json_keys_without_echoing_payload(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary = "PRIVATE-DUPLICATE-CANARY"
+    cases_path, report_path, safe_path, hashes, _report, _safe = (
+        _write_candidate_diagnostics_fixture(tmp_path)
+    )
+    safe_text = safe_path.read_text(encoding="utf-8")
+    safe_path.write_text(
+        safe_text.replace("{", f'{{"schema_version":"{canary}",', 1),
+        encoding="utf-8",
+    )
+    hashes["safe"] = hashlib.sha256(safe_path.read_bytes()).hexdigest()
+
+    assert (
+        pilot50.main(
+            _diagnose_argv(
+                cases_path=cases_path,
+                report_path=report_path,
+                safe_path=safe_path,
+                hashes=hashes,
+            )
+        )
+        == 2
+    )
+    stdout = capsys.readouterr().out
+    assert stdout == "pilot50=DIAGNOSE reason=validation_failed\n"
+    assert canary not in stdout
+
+
+def test_diagnose_enforces_input_and_output_size_limits(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases_path, report_path, safe_path, hashes, _report, _safe = (
+        _write_candidate_diagnostics_fixture(tmp_path)
+    )
+    monkeypatch.setattr(pilot50, "MAX_DIAGNOSTICS_BYTES", 1)
+    argv = _diagnose_argv(
+        cases_path=cases_path,
+        report_path=report_path,
+        safe_path=safe_path,
+        hashes=hashes,
+    )
+    assert pilot50.main(argv) == 2
+    assert capsys.readouterr().out == "pilot50=DIAGNOSE reason=validation_failed\n"
+
+    monkeypatch.setattr(pilot50, "MAX_DIAGNOSTICS_BYTES", 64 * 1024)
+    oversized_canary = "PRIVATE-OVERSIZED-CANARY"
+    safe_path.write_bytes(
+        (oversized_canary + "x" * pilot50.MAX_SAFE_BYTES).encode("utf-8")
+    )
+    hashes["safe"] = hashlib.sha256(safe_path.read_bytes()).hexdigest()
+    assert pilot50.main(argv) == 2
+    stdout = capsys.readouterr().out
+    assert stdout == "pilot50=DIAGNOSE reason=validation_failed\n"
+    assert oversized_canary not in stdout

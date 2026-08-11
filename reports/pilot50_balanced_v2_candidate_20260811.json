@@ -1,0 +1,188 @@
+{
+  "schema_version": "pilot50-v2-candidate-result-artifact-v1",
+  "classification": "calibration_only",
+  "execution_status": "OK",
+  "quality_status": "STOP",
+  "dataset": {
+    "name": "pilot50_balanced_v2",
+    "composition": {
+      "typical": 25,
+      "atypical": 25,
+      "total": 50
+    }
+  },
+  "provenance": {
+    "runtime_git_sha": "64cc182d37a3c060439ed7a55f5cc875a27d786d",
+    "cases_sha256": "b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d",
+    "report_sha256": "07fdfebf505e3df9b2461386e37f89a836dd80f3a5c445ec93bfca765e47add9",
+    "safe_result_sha256": "4e5b0ebb4e04b9d449e7ed54db9a1167c19cce02ef27839073fba280e435b61d",
+    "rate_card_sha256": "3aebb12db82391bad23ec9256781e3439f2692ad63814070e4341bd28ea27bd6"
+  },
+  "mechanical_first_turn_closure": {
+    "typical": {
+      "closed": 17,
+      "total": 25,
+      "rate": 0.68
+    },
+    "atypical": {
+      "closed": 8,
+      "total": 25,
+      "rate": 0.32
+    },
+    "overall": {
+      "closed": 25,
+      "total": 50,
+      "rate": 0.5
+    }
+  },
+  "policy_pass": {
+    "typical": {
+      "passed": 17,
+      "total": 25,
+      "rate": 0.68
+    },
+    "atypical": {
+      "passed": 8,
+      "total": 25,
+      "rate": 0.32
+    },
+    "overall": {
+      "passed": 25,
+      "total": 50,
+      "rate": 0.5
+    }
+  },
+  "runtime_metrics": {
+    "latency_ms": {
+      "p50": 2988,
+      "p95": 40015
+    },
+    "llm_cost_rub": 13.375452,
+    "trace_coverage": {
+      "found": 50,
+      "total": 50,
+      "rate": 1.0
+    },
+    "cache_hits": 0,
+    "billing_status": "pending_provider_reconciliation"
+  },
+  "cost_guard": {
+    "maximum_rub": 30,
+    "exceeded": false,
+    "stopped": false
+  },
+  "pricing": {
+    "source": "target_reported",
+    "complete": true,
+    "stopped": false,
+    "target_telemetry_preserved": true,
+    "target_telemetry_pricing_complete": true
+  },
+  "quality_gate": {
+    "schema_version": "pilot50-v2-quality-gate-v1",
+    "status": "STOP",
+    "criteria": {
+      "overall_closed": {
+        "actual": 25,
+        "minimum": 30,
+        "passed": false
+      },
+      "typical_closed": {
+        "actual": 17,
+        "minimum": 11,
+        "passed": true
+      },
+      "atypical_closed": {
+        "actual": 8,
+        "minimum": 7,
+        "passed": true
+      },
+      "output_contract_escalations": {
+        "actual": 8,
+        "maximum": 6,
+        "passed": false
+      },
+      "source_binding_failures": {
+        "actual": 5,
+        "maximum": 0,
+        "applicable_cases": 38,
+        "total_cases": 50,
+        "passed": false
+      },
+      "critical_case_failures": {
+        "actual": 7,
+        "maximum": 0,
+        "applicable_cases": 15,
+        "total_cases": 50,
+        "passed": false
+      }
+    },
+    "failed_criteria": [
+      "overall_closed",
+      "output_contract_escalations",
+      "source_binding_failures",
+      "critical_case_failures"
+    ],
+    "output_contract_reasons": [
+      "empty_generated_response",
+      "final_response_empty",
+      "final_response_too_long",
+      "final_response_too_many_links",
+      "final_response_unapproved_emoji",
+      "llm_response_contract_failed",
+      "llm_response_profile_failed",
+      "llm_response_too_long",
+      "llm_source_citation_failed",
+      "llm_source_coverage_failed",
+      "llm_source_fact_binding_failed",
+      "source_response_contract_failed"
+    ],
+    "source_binding_definition": "non_escalated_result_with_qrels_failing_any_effective_expected_retrieval_or_citation_source_check",
+    "critical_case_definition": "result_passed_is_not_true_for_case_tagged_adversarial_or_off_aspect_guard"
+  },
+  "interpretation": {
+    "disclaimer": "Tracked regression calibration only. This is a mechanical first-turn closure result for the balanced Pilot50 set, not an independent holdout, a human product verdict, ticket-level conversion, or production traffic conversion.",
+    "human_product_verdict": false,
+    "not_claimed": [
+      "independent_holdout_quality",
+      "human_product_verdict",
+      "ticket_level_conversion",
+      "production_traffic_conversion"
+    ]
+  },
+  "contextual_baseline_comparison": {
+    "baseline_artifact": "reports/pilot50_balanced_v1_baseline_20260811.json",
+    "baseline": {
+      "mechanical_first_turn_closure": {
+        "typical": {
+          "closed": 11,
+          "total": 25,
+          "rate": 0.44
+        },
+        "atypical": {
+          "closed": 7,
+          "total": 25,
+          "rate": 0.28
+        },
+        "overall": {
+          "closed": 18,
+          "total": 50,
+          "rate": 0.36
+        }
+      }
+    },
+    "observed_delta": {
+      "typical_closed": 6,
+      "typical_rate": 0.24,
+      "atypical_closed": 1,
+      "atypical_rate": 0.04,
+      "overall_closed": 7,
+      "overall_rate": 0.14
+    },
+    "comparability": {
+      "typical": "The same 25 tracked typical cases were used, but this remains repeated calibration rather than an independent holdout.",
+      "atypical": "Not an apples-to-apples comparison: v2 replaced 11 legacy-qrel-incompatible atypical cases.",
+      "overall": "Context only: the observed delta is not an independent quality or production-conversion estimate because the atypical slice changed and the candidate was tuned against prior failures."
+    }
+  }
+}

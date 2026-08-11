@@ -86,6 +86,22 @@ false-negative строкового сравнения `no-new-privileges`; её
 не выполнялся. Этот SHA не повторять. Перед checkout исправленного SHA сначала выполнить
 `cleanup` старым launcher и требовать только `state=absent|removed`; при cleanup failure — STOP.
 
+Исправленный candidate `64cc182d37a3c060439ed7a55f5cc875a27d786d` завершил execution
+`50/50`, но quality gate дал `STOP`: closure `25/50`, output-contract escalations `8`,
+source-binding failures `5/38`, critical failures `7/15`. Report
+`07fdfebf505e3df9b2461386e37f89a836dd80f3a5c445ec93bfca765e47add9` и safe result
+`4e5b0ebb4e04b9d449e7ed54db9a1167c19cce02ef27839073fba280e435b61d` являются sealed
+evidence. Режимы `preflight`/`run` для этого SHA больше не запускать.
+
+Следующий операционный шаг — только новый tracked
+`scripts/diagnose_pilot50_candidate_server_local.sh <tooling-40-SHA>` после exact detached
+checkout диагностического commit. Скрипт не выполняет `/ask`, не использует сеть, HDE/VK,
+production API или cost ledger; он read-only проверяет sealed evidence и печатает bounded safe
+failure matrix. Не использовать `cat`, `jq` или копирование raw report. Новый paid candidate
+допускается только после адресных regression-first исправлений, полного local gate, отдельного
+commit/push и нового бесплатного candidate preflight `GO`. Один новый запуск разрешён владельцем,
+но обычные one-shot/approval/rolling-ledger controls сохраняются.
+
 ### Real-RAG Phase 0: server-local one-shot
 
 Phase 0 не требует и не допускает перенос API token или PostgreSQL DSN на workstation. Локальная

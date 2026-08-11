@@ -143,6 +143,7 @@ MAX_KB_SEED_BYTES = 16 * 1024 * 1024
 MAX_CASES_BYTES = 4 * 1024 * 1024
 MAX_REPORT_BYTES = 32 * 1024 * 1024
 MAX_SAFE_BYTES = 128 * 1024
+MAX_DIAGNOSTICS_BYTES = 64 * 1024
 MAX_REVIEW_TEXT_LENGTH = 50_000
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EVAL_RUN_ID_RE = re.compile(r"^ask-eval-[0-9a-f-]{36}$")
@@ -161,6 +162,127 @@ REVIEW_FIELDS = frozenset(
         "escalation_reason",
         "passed",
         "observed_behavior",
+    }
+)
+DIAGNOSTIC_ROW_FIELDS = frozenset(
+    {
+        "ordinal",
+        "group",
+        "passed",
+        "was_escalated",
+        "escalation_reason",
+        "observed_behavior",
+        "failed_boolean_checks",
+        "generator_path",
+        "generate_retry_reasons",
+        "latency_bucket",
+    }
+)
+DIAGNOSTIC_BINDING_FIELDS = frozenset(
+    {
+        "manifest_sha256",
+        "cases_sha256",
+        "report_sha256",
+        "safe_result_sha256",
+        "quality_status",
+    }
+)
+DIAGNOSTIC_FIELDS = frozenset(
+    {"schema_version", "bindings", "failure_matrix"}
+)
+DIAGNOSTIC_SCHEMA_VERSION = "pilot50-v2-failure-diagnostics-v1"
+DIAGNOSTIC_BOOLEAN_CHECK_FIELDS = frozenset(
+    {
+        "answer_contains_match",
+        "behavior_match",
+        "cited_source_types_allowed",
+        "escalation_match",
+        "escalation_reason_match",
+        "expected_chunk_hit",
+        "expected_cited_chunk_hit",
+        "expected_cited_or_equivalent_chunk_hit",
+        "expected_or_equivalent_chunk_hit",
+        "forbidden_response_profiles_absent",
+        "generator_model_match",
+        "message_masked_contains_match",
+        "message_masked_forbidden_absent_match",
+        "no_false_insufficient_source_response",
+        "no_non_answer_response",
+        "routing_response_profile_match",
+    }
+)
+DIAGNOSTIC_GENERATOR_PATHS = frozenset(
+    {"source_chunk", "not_run", "simple", "complex", "unknown"}
+)
+DIAGNOSTIC_LATENCY_BUCKETS = frozenset(
+    {"<5s", "5-15s", "15-30s", ">=30s"}
+)
+DIAGNOSTIC_GENERATE_RETRY_REASONS = frozenset(
+    {
+        "empty_generated_response",
+        "final_response_empty",
+        "final_response_too_long",
+        "final_response_too_many_links",
+        "final_response_unapproved_emoji",
+        "llm_generation_failed",
+        "llm_response_contract_failed",
+        "llm_response_profile_failed",
+        "llm_response_too_long",
+        "llm_source_citation_failed",
+        "llm_source_coverage_failed",
+        "llm_source_fact_binding_failed",
+        "source_response_contract_failed",
+    }
+)
+MAX_DIAGNOSTIC_GENERATE_RETRY_REASONS = 2
+DIAGNOSTIC_ESCALATION_REASONS = frozenset(
+    {
+        "analyzer_failed",
+        "attachment_only",
+        "empty_generated_response",
+        "final_response_empty",
+        "final_response_too_long",
+        "final_response_too_many_links",
+        "final_response_unapproved_emoji",
+        "hallucination_detected",
+        "insufficient_sources",
+        "llm_generation_failed",
+        "llm_not_configured",
+        "llm_response_contract_failed",
+        "llm_response_profile_failed",
+        "llm_response_too_long",
+        "llm_source_citation_failed",
+        "llm_source_coverage_failed",
+        "llm_source_fact_binding_failed",
+        "low_confidence",
+        "missing_source_citations",
+        "ml_dependency_missing",
+        "needs_operator",
+        "no_relevant_chunks",
+        "no_sources_for_generation",
+        "non_yonote_source",
+        "operator_requested",
+        "other",
+        "partial_source_coverage",
+        "personal_status",
+        "rate_limited",
+        "repeated_support_failure",
+        "request_timeout",
+        "rerank_failed",
+        "retrieval_failed",
+        "safety_abuse",
+        "safety_bullying",
+        "safety_dangerous_instruction",
+        "safety_medical_emergency",
+        "safety_psychological_crisis",
+        "safety_self_harm",
+        "safety_threat",
+        "source_response_contract_failed",
+        "technical_issue",
+        "unknown_source_citation",
+        "unsafe_sensitive_data_request",
+        "unsupported_instruction",
+        "upstream_escalation",
     }
 )
 ALLOWED_SOURCE_PATHS = frozenset(
@@ -362,6 +484,22 @@ def _load_json_bytes(payload: bytes, *, label: str) -> Any:
 
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _validated_sha256(value: Any, *, label: str) -> str:
+    if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+        raise Pilot50Error(f"{label} SHA-256 is invalid")
+    return value
+
+
+def _compact_canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -1972,6 +2110,312 @@ def build_review_rows(
     return review_rows
 
 
+def _diagnostic_boolean_checks(
+    case: Mapping[str, Any],
+    result: Mapping[str, Any],
+    *,
+    was_escalated: bool,
+) -> tuple[str, ...]:
+    fields: list[str] = []
+
+    def require(field: str, applicable: bool) -> None:
+        if not applicable:
+            return
+        if field not in DIAGNOSTIC_BOOLEAN_CHECK_FIELDS:
+            raise Pilot50Error("diagnostic boolean check is not allowlisted")
+        if type(result.get(field)) is not bool:
+            raise Pilot50Error(f"diagnostic check {field} is not a boolean")
+        fields.append(field)
+
+    expected_chunk_ids = case.get("expected_chunk_ids") or []
+    expected_cited_chunk_ids = case.get("expected_cited_chunk_ids") or []
+    has_equivalent_chunks = bool(case.get("equivalent_chunk_ids"))
+    require(
+        (
+            "expected_or_equivalent_chunk_hit"
+            if has_equivalent_chunks
+            else "expected_chunk_hit"
+        ),
+        bool(expected_chunk_ids),
+    )
+    require(
+        (
+            "expected_cited_or_equivalent_chunk_hit"
+            if has_equivalent_chunks
+            else "expected_cited_chunk_hit"
+        ),
+        bool(expected_cited_chunk_ids),
+    )
+    require("cited_source_types_allowed", bool(case.get("allowed_cited_source_types")))
+    require("answer_contains_match", bool(case.get("expected_answer_contains")))
+    require(
+        "message_masked_contains_match",
+        bool(case.get("expected_message_masked_contains")),
+    )
+    require(
+        "message_masked_forbidden_absent_match",
+        bool(case.get("forbidden_message_masked_contains")),
+    )
+    require("behavior_match", bool(case.get("expected_behavior")))
+    require(
+        "routing_response_profile_match",
+        bool(case.get("expected_response_profile")),
+    )
+    require(
+        "forbidden_response_profiles_absent",
+        bool(case.get("forbidden_response_profiles")),
+    )
+    require("escalation_match", case.get("expected_escalated") is not None)
+    require(
+        "escalation_reason_match",
+        bool(case.get("expected_escalation_reason")) and was_escalated,
+    )
+    require("generator_model_match", bool(case.get("expected_generator_model")))
+    require(
+        "no_false_insufficient_source_response",
+        bool(expected_chunk_ids) and case.get("expected_escalated") is not True,
+    )
+    require(
+        "no_non_answer_response",
+        bool(expected_chunk_ids) and case.get("expected_escalated") is not True,
+    )
+    if len(fields) != len(set(fields)):
+        raise Pilot50Error("diagnostic boolean check membership is invalid")
+    return tuple(fields)
+
+
+def _diagnostic_generator_path(value: Any) -> str:
+    if value in (None, "", "not_run"):
+        return "not_run"
+    if not isinstance(value, str):
+        raise Pilot50Error("diagnostic generator model is invalid")
+    if value in {"source_chunk", "source_only"}:
+        return "source_chunk"
+    if value == "unknown":
+        return "unknown"
+    if value == PRICING_PROJECTION["simple_model"]:
+        return "simple"
+    if value == PRICING_PROJECTION["complex_model"]:
+        return "complex"
+    return "unknown"
+
+
+def _diagnostic_escalation_reason(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or SAFE_REASON_RE.fullmatch(value) is None:
+        raise Pilot50Error("diagnostic escalation reason is invalid")
+    return value if value in DIAGNOSTIC_ESCALATION_REASONS else "other"
+
+
+def _diagnostic_generate_retry_reasons(value: Any) -> list[str]:
+    if not isinstance(value, list) or len(value) > MAX_DIAGNOSTIC_GENERATE_RETRY_REASONS:
+        raise Pilot50Error("diagnostic generate retry reasons are invalid")
+    reasons: list[str] = []
+    for reason in value:
+        if (
+            not isinstance(reason, str)
+            or reason not in DIAGNOSTIC_GENERATE_RETRY_REASONS
+            or reason in reasons
+        ):
+            raise Pilot50Error("diagnostic generate retry reason is not allowlisted")
+        reasons.append(reason)
+    return reasons
+
+
+def _diagnostic_latency_bucket(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise Pilot50Error("diagnostic latency is invalid")
+    if value < 5_000:
+        return "<5s"
+    if value < 15_000:
+        return "5-15s"
+    if value < 30_000:
+        return "15-30s"
+    return ">=30s"
+
+
+def build_failure_diagnostics(
+    *,
+    manifest_path: Path,
+    cases_path: Path,
+    report_path: Path,
+    safe_result_path: Path,
+    expected_manifest_sha256: str,
+    expected_cases_sha256: str,
+    expected_report_sha256: str,
+    expected_safe_result_sha256: str,
+    expected_runtime_git_sha: str,
+) -> dict[str, Any]:
+    """Build a payload-free failure matrix for one sealed Pilot50 v2 run."""
+
+    expected_hashes = {
+        "manifest": _validated_sha256(
+            expected_manifest_sha256,
+            label="expected manifest",
+        ),
+        "cases": _validated_sha256(
+            expected_cases_sha256,
+            label="expected cases",
+        ),
+        "report": _validated_sha256(
+            expected_report_sha256,
+            label="expected report",
+        ),
+        "safe result": _validated_sha256(
+            expected_safe_result_sha256,
+            label="expected safe result",
+        ),
+    }
+    runtime_git_sha = _validated_runtime_git_sha(expected_runtime_git_sha)
+    paths = {
+        "manifest": (manifest_path, MAX_MANIFEST_BYTES),
+        "cases": (cases_path, MAX_CASES_BYTES),
+        "report": (report_path, MAX_REPORT_BYTES),
+        "safe result": (safe_result_path, MAX_SAFE_BYTES),
+    }
+    snapshots: dict[str, bytes] = {}
+    for label, (path, maximum) in paths.items():
+        snapshot = _read_regular_bytes(path, max_bytes=maximum, label=label)
+        if _sha256(snapshot) != expected_hashes[label]:
+            raise Pilot50Error(f"{label} differs from the expected sealed artifact")
+        snapshots[label] = snapshot
+
+    cases, cases_bytes, cases_sha, receipt = _validate_materialized_cases(
+        manifest_path,
+        cases_path,
+    )
+    if (
+        receipt.get("dataset_id") != V2_DATASET_ID
+        or receipt.get("manifest_sha256") != expected_hashes["manifest"]
+        or cases_bytes != snapshots["cases"]
+        or cases_sha != expected_hashes["cases"]
+        or cases_sha != CANDIDATE_CASES_SHA256
+    ):
+        raise Pilot50Error("diagnostics require the exact frozen Pilot50 v2 selection")
+
+    review_rows = build_review_rows(
+        manifest_path=manifest_path,
+        cases_path=cases_path,
+        report_path=report_path,
+        safe_result_path=safe_result_path,
+        expected_runtime_git_sha=runtime_git_sha,
+    )
+    for label, (path, maximum) in paths.items():
+        if (
+            _read_regular_bytes(path, max_bytes=maximum, label=label)
+            != snapshots[label]
+        ):
+            raise Pilot50Error("sealed diagnostic artifacts changed during validation")
+
+    safe = validate_safe_result(
+        _load_json_bytes(snapshots["safe result"], label="safe result")
+    )
+    quality_gate = safe.get("quality_gate")
+    if (
+        safe.get("dataset_id") != V2_DATASET_ID
+        or safe.get("runtime_git_sha") != runtime_git_sha
+        or safe.get("cases_sha256") != expected_hashes["cases"]
+        or safe.get("report_sha256") != expected_hashes["report"]
+        or not isinstance(quality_gate, dict)
+        or quality_gate.get("status") != "STOP"
+    ):
+        raise Pilot50Error("diagnostics require the sealed Pilot50 v2 quality STOP")
+
+    report = _load_json_bytes(snapshots["report"], label="ask report")
+    if not isinstance(report, dict):
+        raise Pilot50Error("ask report must be a JSON object")
+    results = report.get("results")
+    if not isinstance(results, list) or len(results) != EXPECTED_CASES_TOTAL:
+        raise Pilot50Error("ask report must contain exactly 50 result rows")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for result in results:
+        if not isinstance(result, Mapping):
+            raise Pilot50Error("ask result row must be an object")
+        case_id = str(result.get("id") or "")
+        if not case_id or case_id in by_id:
+            raise Pilot50Error("ask result membership is invalid")
+        by_id[case_id] = result
+
+    failure_matrix: list[dict[str, Any]] = []
+    for ordinal, (case, review_row) in enumerate(
+        zip(cases, review_rows, strict=True),
+        start=1,
+    ):
+        result = by_id.get(str(case["id"]))
+        if result is None:
+            raise Pilot50Error("ask report membership does not match Pilot50")
+        was_escalated = review_row["was_escalated"]
+        check_fields = _diagnostic_boolean_checks(
+            case,
+            result,
+            was_escalated=was_escalated,
+        )
+        failed_checks = sorted(
+            field for field in check_fields if result.get(field) is False
+        )
+        passed = review_row["passed"]
+        if passed is not (not failed_checks):
+            raise Pilot50Error("diagnostic checks do not match the sealed verdict")
+        generator_path = _diagnostic_generator_path(result.get("generator_model"))
+        generate_retry_reasons = _diagnostic_generate_retry_reasons(
+            result.get("generate_retry_reasons")
+        )
+        latency_bucket = _diagnostic_latency_bucket(
+            result.get("trace_total_latency_ms")
+        )
+        escalation_reason = _diagnostic_escalation_reason(
+            review_row["escalation_reason"]
+        )
+        if (
+            generator_path not in DIAGNOSTIC_GENERATOR_PATHS
+            or latency_bucket not in DIAGNOSTIC_LATENCY_BUCKETS
+            or (
+                escalation_reason is not None
+                and escalation_reason not in DIAGNOSTIC_ESCALATION_REASONS
+            )
+        ):
+            raise Pilot50Error("diagnostic enum output is invalid")
+        row = {
+            "ordinal": ordinal,
+            "group": review_row["group"],
+            "passed": passed,
+            "was_escalated": was_escalated,
+            "escalation_reason": escalation_reason,
+            "observed_behavior": review_row["observed_behavior"],
+            "failed_boolean_checks": failed_checks,
+            "generator_path": generator_path,
+            "generate_retry_reasons": generate_retry_reasons,
+            "latency_bucket": latency_bucket,
+        }
+        if set(row) != DIAGNOSTIC_ROW_FIELDS:
+            raise Pilot50Error("diagnostic row fields are invalid")
+        failure_matrix.append(row)
+    if set(by_id) != {str(case["id"]) for case in cases}:
+        raise Pilot50Error("ask report membership does not match Pilot50")
+
+    bindings = {
+        "manifest_sha256": expected_hashes["manifest"],
+        "cases_sha256": expected_hashes["cases"],
+        "report_sha256": expected_hashes["report"],
+        "safe_result_sha256": expected_hashes["safe result"],
+        "quality_status": "STOP",
+    }
+    if set(bindings) != DIAGNOSTIC_BINDING_FIELDS:
+        raise Pilot50Error("diagnostic binding fields are invalid")
+    diagnostics = {
+        "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+        "bindings": bindings,
+        "failure_matrix": failure_matrix,
+    }
+    if set(diagnostics) != DIAGNOSTIC_FIELDS or len(failure_matrix) != 50:
+        raise Pilot50Error("diagnostic output fields are invalid")
+    diagnostic_stdout = (_compact_canonical_json(diagnostics) + "\n").encode("utf-8")
+    if len(diagnostic_stdout) > MAX_DIAGNOSTICS_BYTES:
+        raise Pilot50Error("diagnostic output exceeds the safe size limit")
+    return diagnostics
+
+
 def _validated_output_parent(path: Path) -> Path:
     if path.exists() or path.is_symlink():
         raise Pilot50Error("output already exists")
@@ -2070,6 +2514,20 @@ def _show_review(args: argparse.Namespace) -> list[dict[str, Any]]:
     )
 
 
+def _diagnose(args: argparse.Namespace) -> dict[str, Any]:
+    return build_failure_diagnostics(
+        manifest_path=args.manifest,
+        cases_path=args.cases,
+        report_path=args.report,
+        safe_result_path=args.safe_result,
+        expected_manifest_sha256=args.expected_manifest_sha256,
+        expected_cases_sha256=args.expected_cases_sha256,
+        expected_report_sha256=args.expected_report_sha256,
+        expected_safe_result_sha256=args.expected_safe_result_sha256,
+        expected_runtime_git_sha=args.expected_runtime_git_sha,
+    )
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare and summarize Pilot50 evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2099,6 +2557,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     show_review.add_argument("--report", type=Path, required=True)
     show_review.add_argument("--safe-result", type=Path, required=True)
     show_review.add_argument("--expected-runtime-git-sha", required=True)
+    diagnose = subparsers.add_parser("diagnose")
+    diagnose.add_argument("--manifest", type=Path, required=True)
+    diagnose.add_argument("--cases", type=Path, required=True)
+    diagnose.add_argument("--report", type=Path, required=True)
+    diagnose.add_argument("--safe-result", type=Path, required=True)
+    diagnose.add_argument("--expected-manifest-sha256", required=True)
+    diagnose.add_argument("--expected-cases-sha256", required=True)
+    diagnose.add_argument("--expected-report-sha256", required=True)
+    diagnose.add_argument("--expected-safe-result-sha256", required=True)
+    diagnose.add_argument("--expected-runtime-git-sha", required=True)
     return parser.parse_args(argv)
 
 
@@ -2111,6 +2579,8 @@ def main(argv: list[str] | None = None) -> int:
             result = asyncio.run(_summarize(args))
         elif args.command == "show-review":
             result = _show_review(args)
+        elif args.command == "diagnose":
+            result = _diagnose(args)
         else:
             result = _show_safe(args)
     except (Pilot50Error, OSError) as exc:
@@ -2119,9 +2589,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "show-review":
         for row in result:
-            print(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+            print(_compact_canonical_json(row))
         return 0
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    print(_compact_canonical_json(result))
     return 0
 
 

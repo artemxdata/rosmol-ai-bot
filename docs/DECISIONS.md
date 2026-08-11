@@ -662,3 +662,29 @@ candidate и проверки, что production snapshot и полный Qdrant
 Cleanup failure всегда видим и даёт non-zero exit. Поэтому paid `run` не может быть первым местом,
 где проверяется исполнимость candidate-контейнера. Перед следующим preflight старый exact-labeled
 container должен быть подтверждённо `absent` либо удалён old-SHA launcher-ом.
+
+## D-041. Quality STOP v2 закрывает первый candidate и разрешает один диагностический цикл
+
+**Статус:** принято 11 августа 2026; дополняет D-036 и D-040, не разрешая replay.
+
+Candidate `64cc182d37a3c060439ed7a55f5cc875a27d786d` технически завершил `50/50` cases с
+полными trace, нулевым cache и корректной target-reported стоимостью `13.375452 RUB`, но получил
+quality `STOP`: closure `25/50`, output-contract escalations `8`, source-binding failures `5/38`
+и critical failures `7/15`. Его raw/report/safe hashes sealed; quality STOP является завершённым
+evidence и запрещает повтор этого release candidate или выборочный replay проваленных кейсов.
+
+До нового платного запуска разрешён только payload-free offline diagnostic завершённого report.
+Он обязан быть привязан к exact manifest/cases/report/safe/runtime SHA, работать без сети и `/ask`
+и выводить лишь bounded allowlisted failure matrix без query/response, identifiers, chunks,
+timestamps, token/cost per case и arbitrary strings. Диагностика задаёт проверяемые гипотезы;
+изменения начинаются с regressions и не ослабляют published-Yonote grounding, entity binding,
+safety или output guards.
+
+Владелец разрешил один следующий осмысленный Pilot50 v2 run после исправления серьёзных причин.
+Разрешение условно: новый exact Git SHA, прежний frozen v2 cases SHA, полный Ruff/pytest/KB gate,
+бесплатный isolated preflight `GO`, новый одноразовый approval и runner projected stop-limit не
+выше `30 RUB`. Верхняя граница `500 RUB` не является программным cap или разрешением обходить
+ledger. Если новый candidate попадает в rolling-24h ограничение D-036, время/ledger/classification
+не подменяются: запуск либо ждёт окончания окна, либо требует отдельного exact, auditable,
+candidate-bound исключения. Любой новый execution failure или quality STOP снова завершает
+one-shot без retry. Acceptance и ограничения интерпретации остаются ровно D-040.

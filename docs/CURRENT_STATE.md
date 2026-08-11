@@ -4,7 +4,37 @@
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50: baseline завершён; локально реализуется первый evidence-driven quality cycle
+## Pilot50: candidate v2 завершён со STOP; начинается второй evidence-driven quality cycle
+
+11 августа изолированный candidate
+`64cc182d37a3c060439ed7a55f5cc875a27d786d` завершил exact `50/50` server-local `/ask`
+без HDE/VK, rollout и изменения production/Qdrant. Execution evidence валиден: trace coverage
+`50/50`, cache hits `0`, target-reported pricing complete, runner cost `13.375452 RUB`, budget
+`30 RUB` не остановлен. Latency p50/p95 — `2988/40015 ms`; рост p95 относительно baseline
+`14235 ms` является отдельной regression-гипотезой для Max/retry path и не должен скрываться
+общим quality score. Report SHA-256 —
+`07fdfebf505e3df9b2461386e37f89a836dd80f3a5c445ec93bfca765e47add9`, safe-result SHA-256 —
+`4e5b0ebb4e04b9d449e7ed54db9a1167c19cce02ef27839073fba280e435b61d`.
+
+Quality gate дал `STOP`: mechanical first-turn closure `25/50 = 50%`, typical
+`17/25 = 68%`, atypical `8/25 = 32%`; output-contract escalations `8 > 6`, source-binding
+failures `5 > 0` на `38` qrel-кейсах, critical failures `7 > 0` на `15` critical-кейсах.
+Typical slice состоит из тех же 25 кейсов, поэтому рост `11 -> 17` является полезным сигналом
+повторной calibration. Overall `18 -> 25` остаётся только контекстом, а atypical v1/v2 нельзя
+сравнивать как apples-to-apples: в v2 заменены 11 измерительно некорректных кейсов. Это не
+product conversion, independent holdout или human verdict. Quality STOP считается завершённым
+one-shot evidence; повтор candidate `64cc182...` запрещён.
+
+Safe aggregate сохранён в tracked
+`reports/pilot50_balanced_v2_candidate_20260811.json`. Следующий этап не делает новых `/ask`:
+отдельный offline `diagnose` читает sealed private report на сервере и выдаёт только bounded
+50-row failure matrix с ordinal/group, boolean checks, allowlisted escalation/retry/model-path и
+latency bucket — без query/response, IDs, chunks, timestamps и per-case cost. После этой карты
+исправляются только подтверждённые корневые дефекты с regression-тестами; затем обязательны
+полный local gate, новый GitHub SHA и бесплатный isolated preflight. Владелец разрешил ровно один
+следующий осмысленный paid run; runner projected stop-limit остаётся `30 RUB`, а ранее названные
+`500 RUB` — только верхняя остаточная provider-risk граница, не цель расхода и не blanket bypass
+cost ledger.
 
 11 августа exact continuation успешно завершил `50/50` server-local `/ask` без HDE/VK,
 production restart или rollout. Safe result SHA-256 —

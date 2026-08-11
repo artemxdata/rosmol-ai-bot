@@ -59,6 +59,26 @@ candidate оценивается на v2, где те же `39` совмести
 projected stop-limit `30 RUB`; разрешённые владельцем `500 RUB` остаются верхней границей на
 обоснованный прогон, а не бюджетом, который нужно израсходовать.
 
+Первый v2 candidate `64cc182d37a3c060439ed7a55f5cc875a27d786d` завершён: execution
+`50/50`, closure `25/50` (`17/25` typical, `8/25` atypical), cost `13.375452 RUB`, cache `0`,
+но quality gate — `STOP`. Не пройдены overall floor (`25 < 30`), output-contract ceiling
+(`8 > 6`), source-binding (`5/38`) и critical regression (`7/15`). Typical `11 -> 17` на тех же
+25 кейсах — полезный calibration-сигнал; overall/atypical v1/v2 не являются независимым или
+apples-to-apples измерением из-за 11 replacement-кейсов.
+
+Цикл продолжается без немедленного paid rerun:
+
+1. Получить из sealed report payload-free offline failure matrix без вопросов, ответов и ID.
+2. Сгруппировать провалы по boolean check, allowlisted escalation/retry path и latency bucket;
+   зафиксировать конкретные корневые гипотезы.
+3. Закрыть серьёзные source-binding, critical и output-contract дефекты regression-first, не
+   ослабляя grounding/guards и не меняя KB ради прохождения scorer. Отдельно разобрать рост p95
+   `14235 -> 40015 ms` по model/retry path; следующий candidate не должен улучшать closure ценой
+   необъяснённого трёхкратного хвоста latency.
+4. Пройти полный local gate и бесплатный isolated preflight нового immutable candidate.
+5. Выполнить ровно один разрешённый владельцем v2 run с projected stop-limit `30 RUB`; quality
+   GO/STOP снова считается завершённым one-shot без выборочного retry.
+
 ## Источники данных
 
 - HDE: деперсонализированные тикеты и причины эскалаций.
