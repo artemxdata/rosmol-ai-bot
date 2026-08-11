@@ -1203,7 +1203,7 @@ runner_command() {
 
 cost_governance_preflight() {
   local approval_id="$1" waiver_id="$2" cases_sha="$3"
-  sudo docker run --rm --pull never --network none \
+  sudo docker run --rm --interactive --pull never --network none \
     --user app --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
     --cap-drop ALL --security-opt no-new-privileges=true \
     -v "$SOURCE_DIR:/workspace:ro" -v "$COST_LEDGER_DIR:/cost-ledger:ro" \

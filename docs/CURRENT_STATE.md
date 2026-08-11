@@ -53,6 +53,18 @@ ledger. Повтор того же SHA, цепочка waiver, очистка le
 retry запрещены. Runner projected stop-limit остаётся `30 RUB`; `500 RUB` — только внешняя
 остаточная provider-risk граница нового candidate, не executable cap и не цель расхода.
 
+Бесплатный server preflight candidate `25f44320b14d4e205776ec17a1ac5426d57459c2` прошёл
+runtime, capacity, production и Qdrant gates, но первая команда `run` остановилась на
+`cost_governance_preflight_failed` до `run.started`, reservation и `/ask`. Read-only server
+диагностика подтвердила валидный ledger, ровно одну exact v2 private-full reservation, отсутствие
+v3 reservation/артефактов/container и неиспользованные approval/waiver references. Root cause —
+launcher не передавал `--interactive` в `docker run ... python -`: heredoc не подключался к stdin
+контейнера, Python завершался без выполнения проверки и digest оставался пустым. Это бесплатный
+pre-request false negative, а не paid retry: `0 /ask`, `0 RUB`, ledger не менялся. Исправление
+ограничено интерактивным stdin только для read-only/network-none governance check и покрыто
+регрессией. Перед единственным v3 run обязательны новый commit/push и новый бесплатный preflight
+на exact SHA; старый preflight `25f4432...` повторно не используется.
+
 11 августа exact continuation успешно завершил `50/50` server-local `/ask` без HDE/VK,
 production restart или rollout. Safe result SHA-256 —
 `0950cc14c4e951857809592adf736f0f73b23af33a889ed1310d1bab536c093b`, raw-report SHA-256 —

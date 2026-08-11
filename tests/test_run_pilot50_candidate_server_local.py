@@ -901,6 +901,71 @@ def test_cost_governance_eligibility_is_free_read_only_and_before_one_shot() -> 
     assert "cost_governance_preflight_failed" in run
 
 
+def test_cost_governance_preflight_attaches_heredoc_to_container_stdin() -> None:
+    preflight = _function(_text(), "cost_governance_preflight")
+
+    def run_contract(function: str) -> subprocess.CompletedProcess[str]:
+        harness = f"""
+set -Eeuo pipefail
+EXPECTED_SHA='{EXACT_SHA}'
+SOURCE_DIR='/workspace-source'
+COST_LEDGER_DIR='/cost-ledger-host'
+PRIOR_CANDIDATE_SCOPE='pilot50-v2-candidate'
+PRIOR_CANDIDATE_SHA='64cc182d37a3c060439ed7a55f5cc875a27d786d'
+PRIOR_CASES_SHA256='b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d'
+COMPARISON_WAIVER_DECISION_ID='D-041'
+COMPARISON_PROVIDER_RISK_CEILING_RUB='500'
+COST_CAP_RUB='30'
+
+sudo() {{
+  [[ "$1" == 'docker' && "$2" == 'run' ]] || return 40
+  shift 2
+  local joined=" $* " payload
+  if [[ "$joined" != *' --interactive '* && "$joined" != *' -i '* ]]; then
+    return 0
+  fi
+  [[ "$joined" == *' --entrypoint python '* && "$joined" == *' - '* ]] \
+    || return 41
+  IFS= read -r -d '' payload || true
+  [[ "$payload" == *'_scan_records'* ]] || return 42
+  [[ "$payload" == *'_reservation_payload_sha256(prior)'* ]] || return 43
+  printf '%s\n' '{WAIVED_RESERVATION_SHA256}'
+}}
+
+{function}
+
+digest="$(cost_governance_preflight \
+  '{EXACT_APPROVAL_ID}' '{EXACT_WAIVER_ID}' \
+  '3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112')"
+[[ "$digest" =~ ^[0-9a-f]{{64}}$ ]] || exit 91
+printf '%s\n' "$digest"
+"""
+        return subprocess.run(
+            [_bash(), "-c", harness],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+    attached = run_contract(preflight)
+
+    assert attached.returncode == 0, attached.stderr
+    assert attached.stdout == f"{WAIVED_RESERVATION_SHA256}\n"
+
+    without_interactive = preflight.replace("--interactive", "", 1)
+    if without_interactive == preflight:
+        without_interactive = preflight.replace(" -i ", " ", 1)
+    assert without_interactive != preflight
+
+    detached = run_contract(without_interactive)
+
+    assert detached.returncode == 91
+    assert detached.stdout == ""
+    assert detached.stderr == ""
+
+
 def test_v3_waiver_is_exact_and_bound_to_started_completed_review_receipts() -> None:
     text = _text()
     run = _function(text, "run_mode")
