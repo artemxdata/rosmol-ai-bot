@@ -121,6 +121,24 @@ TOPIC_LOOKUP_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ),
 )
 MULTI_ASPECT_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("регистрац", "зарегистр", "создать кабинет", "создать аккаунт"),
+    ("найти мероприят", "отфильтр", "фильтр", "по регион"),
+    ("потер", "старого профил", "перенест", "перенос данн"),
+    ("статус", "одобрен", "отклонен", "отклонён"),
+    ("номинац", "направлен", "тематика проект"),
+    ("шаги подач", "основные шаг", "подать заяв", "подач заяв"),
+    ("что за", "что такое", "в двух слов", "общий период"),
+    ("какие смен", "даты смен", "первая смен", "вторая смен"),
+    ("первой и второй", "первую и вторую", "каждой смен", "обеих смен"),
+    ("календар", "какие даты", "даты у"),
+    ("когда она идет", "когда она идёт", "период форума"),
+    ("кто может участв", "кто вообще может участв", "участник"),
+    ("крайний срок", "до какого числа", "срок подачи"),
+    ("соглашен",),
+    ("итоговый отчет", "итоговый отчёт", "грантовый отчет", "грантовый отчёт"),
+    ("результат", "отбор"),
+    ("программ",),
+    ("волонтер", "волонтёр"),
     ("документ", "паспорт", "справк"),
     ("трансфер", "автобус", "шаттл"),
     ("проезд", "оплат", "дорог", "билет"),
@@ -191,7 +209,17 @@ async def retrieve(state: BotState) -> dict:
     used_filters: list[dict] = []
     question_provenance: list[dict] = []
     topic_question_count = sum(1 for question in questions if question.topic)
-    needs_shared_broad_fallback = False
+    # Topic metadata is an efficient precision path, but a successful scroll only
+    # proves that *some* topic alias exists.  It does not prove that every aspect
+    # of a compound question (or the query-proven bounded source) was recalled.
+    # Keep one semantic pass inside the already proven category/forum scope for
+    # those cases.  Broader filter relaxation remains reserved for an actual
+    # strict-topic miss below.
+    proactive_shared_scope_recall = bool(query_scope_override) or _has_multi_aspect_message(
+        message
+    )
+    needs_shared_broad_fallback = proactive_shared_scope_recall
+    needs_relaxed_shared_fallback = False
     retrieval_methods: set[str] = set()
     metadata_lookup_attempted = False
     metadata_lookup_succeeded = False
@@ -322,6 +350,7 @@ async def retrieve(state: BotState) -> dict:
                     break
             if strict_topic_only and not strict_found and not requires_exact_topic:
                 needs_shared_broad_fallback = True
+                needs_relaxed_shared_fallback = True
             retrieved_ids, retrieved_counts = chunk_id_batch(found)
             provenance["retrieved_chunk_ids"] = retrieved_ids
             provenance.update(
@@ -370,7 +399,12 @@ async def retrieve(state: BotState) -> dict:
             fallback_query = expand_query_aliases(str(message or "").strip())
             fallback_filters = _compact_filter(filters)
             shared_found = []
-            for attempt_index, candidate_filters in enumerate(_filter_attempts(fallback_filters)):
+            shared_filter_attempts = (
+                _filter_attempts(fallback_filters)
+                if needs_relaxed_shared_fallback
+                else [fallback_filters]
+            )
+            for attempt_index, candidate_filters in enumerate(shared_filter_attempts):
                 used_filters.append(candidate_filters)
                 attempt_chunks = await state["retriever"].retrieve(
                     fallback_query,

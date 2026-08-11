@@ -1394,6 +1394,162 @@ def _pilot50_candidate_contract_kwargs() -> dict[str, object]:
     }
 
 
+def _pilot50_v3_candidate_contract_kwargs(
+    runtime_sha: str = "c" * 40,
+) -> dict[str, object]:
+    return {
+        **_pilot50_candidate_contract_kwargs(),
+        "cases_file_sha256": run_ask_module.PILOT50_V3_CANDIDATE_CASES_SHA256,
+        "high_cost_approval_id": (
+            run_ask_module._pilot50_v3_expected_approval_id(runtime_sha)
+        ),
+        "expected_runtime_git_sha": runtime_sha,
+        "rolling_24h_comparison_waiver_id": (
+            run_ask_module._pilot50_v3_expected_waiver_id(runtime_sha)
+        ),
+    }
+
+
+def test_pilot50_v3_candidate_constructs_exact_bounded_comparison_waiver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_sha = "c" * 40
+    monkeypatch.setenv("RELEASE_GIT_SHA", runtime_sha)
+    contract = run_ask_module._validated_pilot50_candidate_contract(
+        run_ask_module.PILOT50_V3_CANDIDATE_CONTRACT_ID,
+        **_pilot50_v3_candidate_contract_kwargs(runtime_sha),
+    )
+
+    waiver = run_ask_module._pilot50_candidate_comparison_waiver(
+        contract,
+        rolling_24h_comparison_waiver_id=(
+            run_ask_module._pilot50_v3_expected_waiver_id(runtime_sha)
+        ),
+    )
+
+    assert waiver is not None
+    assert waiver.waiver_id == run_ask_module._pilot50_v3_expected_waiver_id(
+        runtime_sha
+    )
+    assert waiver.decision_id == "D-041"
+    assert waiver.provider_risk_ceiling_rub == 500.0
+    assert waiver.prior_scope == "pilot50-v2-candidate"
+    assert waiver.prior_runtime_git_sha == (
+        "64cc182d37a3c060439ed7a55f5cc875a27d786d"
+    )
+    assert waiver.prior_manifest_sha256 == (
+        "b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
+    )
+    assert waiver.requested_scope == "pilot50-v3-candidate"
+    assert waiver.requested_runtime_git_sha == runtime_sha
+    assert waiver.requested_manifest_sha256 == (
+        run_ask_module.PILOT50_V3_CANDIDATE_CASES_SHA256
+    )
+    assert waiver.requested_approved_cap_rub == 30.0
+    assert contract is not None
+    assert contract["max_llm_cost_rub"] == 30.0
+    assert contract["provider_residual_risk_ceiling_rub"] == 500.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("high_cost_approval_id", "owner-wrong-v3-approval"),
+        ("rolling_24h_comparison_waiver_id", None),
+        ("rolling_24h_comparison_waiver_id", "owner-wrong-v3-waiver"),
+    ],
+)
+def test_pilot50_v3_candidate_rejects_missing_or_wrong_owner_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    runtime_sha = "c" * 40
+    monkeypatch.setenv("RELEASE_GIT_SHA", runtime_sha)
+    kwargs = _pilot50_v3_candidate_contract_kwargs(runtime_sha)
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match="candidate contract rejected"):
+        run_ask_module._validated_pilot50_candidate_contract(
+            run_ask_module.PILOT50_V3_CANDIDATE_CONTRACT_ID,
+            **kwargs,
+        )
+
+
+def test_pilot50_v2_and_generic_runs_reject_comparison_waiver_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RELEASE_GIT_SHA", "b" * 40)
+    kwargs = _pilot50_candidate_contract_kwargs()
+    kwargs["rolling_24h_comparison_waiver_id"] = "owner-v2-waiver-forbidden"
+    with pytest.raises(ValueError, match="candidate contract rejected"):
+        run_ask_module._validated_pilot50_candidate_contract(
+            run_ask_module.PILOT50_CANDIDATE_CONTRACT_ID,
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="requires the Pilot50 v3"):
+        run_ask_module._pilot50_candidate_comparison_waiver(
+            None,
+            rolling_24h_comparison_waiver_id="owner-generic-waiver-forbidden",
+        )
+
+
+def test_pilot50_v3_safe_reservation_report_preserves_exact_schema_1_1() -> None:
+    runtime_sha = "c" * 40
+    waiver_id = run_ask_module._pilot50_v3_expected_waiver_id(runtime_sha)
+    record = {
+        "schema_version": "1.1.0",
+        "reservation_class": "private_full",
+        "scope": "pilot50-v3-candidate",
+        "run_id": "ask-eval-11111111-1111-1111-1111-111111111111",
+        "runtime_git_sha": runtime_sha,
+        "manifest_sha256": run_ask_module.PILOT50_V3_CANDIDATE_CASES_SHA256,
+        "case_count": 50,
+        "approved_cap_rub": 30.0,
+        "private_full": True,
+        "approval_required": True,
+        "high_cost_approval_id": (
+            run_ask_module._pilot50_v3_expected_approval_id(runtime_sha)
+        ),
+        "rolling_24h_waiver_id": waiver_id,
+        "rolling_24h_waiver_decision_id": "D-041",
+        "waived_reservation_sha256": "d" * 64,
+        "provider_risk_ceiling_rub": 500.0,
+    }
+    reservation = run_ask_module.LiveEvalCostReservation(
+        path=Path("unused"),
+        record=record,
+    )
+
+    report = run_ask_module._safe_cost_reservation_report(
+        reservation,
+        cases_file_sha256=run_ask_module.PILOT50_V3_CANDIDATE_CASES_SHA256,
+        include_private_full=True,
+    )
+
+    assert report is not None and report["valid"] is True
+    assert report["schema_version"] == "1.1.0"
+    assert report["rolling_24h_waiver_id"] == waiver_id
+    assert report["rolling_24h_waiver_decision_id"] == "D-041"
+    assert report["waived_reservation_sha256"] == "d" * 64
+    assert report["provider_risk_ceiling_rub"] == 500.0
+    assert run_ask_module._pilot50_candidate_waiver_report_matches(
+        report,
+        contract={
+            "contract_id": run_ask_module.PILOT50_V3_CANDIDATE_CONTRACT_ID,
+            "runtime_git_sha": runtime_sha,
+        },
+    )
+
+    record["waived_reservation_sha256"] = "0" * 63
+    tampered = run_ask_module._safe_cost_reservation_report(
+        reservation,
+        cases_file_sha256=run_ask_module.PILOT50_V3_CANDIDATE_CASES_SHA256,
+        include_private_full=True,
+    )
+    assert tampered is not None and tampered["valid"] is False
+
+
 def test_pilot50_candidate_contract_fixes_runtime_target_and_cost_controls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -28,6 +28,7 @@ MANIFEST_SCHEMA_VERSION = "1.0.0"
 SAFE_SCHEMA_VERSION = "pilot50-safe-result-v1"
 DATASET_ID = "pilot50_balanced_v1"
 V2_DATASET_ID = "pilot50_balanced_v2"
+V3_DATASET_ID = "pilot50_balanced_v3"
 CLASSIFICATION = "calibration_only"
 PILOT50_TARGET = "http://app-ml:8000/ask"
 PILOT50_CANDIDATE_TARGET = "http://pilot50-candidate-ml:8000/ask"
@@ -36,6 +37,9 @@ EXPECTED_MANIFEST_CANONICAL_SHA256 = (
 )
 V2_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
     "13a706f713eef7c54337bd7cf6efdb38e898dde71089ea7e51a2c34fca3fcb91"
+)
+V3_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
+    "0d99fd8afe40f61957edce93af5719d05d004bb9649348a1143877d7270249ba"
 )
 DISCLAIMER = (
     "Tracked regression calibration only. This is a mechanical first-turn "
@@ -67,6 +71,17 @@ CANDIDATE_QUALITY_GATE_CRITERIA = (
 )
 CANDIDATE_EXPECTED_QREL_CASES = 38
 CANDIDATE_EXPECTED_CRITICAL_CASES = 15
+V3_CANDIDATE_CONTRACT_ID = "pilot50-v3-candidate-v1"
+V3_CANDIDATE_CASES_SHA256 = (
+    "3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112"
+)
+V3_CANDIDATE_COST_SCOPE = "pilot50-v3-candidate"
+V3_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION = "pilot50-v3-quality-gate-v1"
+V3_CANDIDATE_EXPECTED_QREL_CASES = 50
+V3_CANDIDATE_EXPECTED_CRITICAL_CASES = 15
+V3_COMPARISON_WAIVER_DECISION_ID = "D-041"
+V3_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500
+CANDIDATE_DATASET_IDS = frozenset({V2_DATASET_ID, V3_DATASET_ID})
 CANDIDATE_CRITICAL_CASE_TAGS = frozenset({"adversarial", "off_aspect_guard"})
 CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS = frozenset(
     {
@@ -303,6 +318,14 @@ V2_ALLOWED_SOURCE_PATHS = frozenset(
         "eval/cases/product_date_aspect_regression_v1.json",
     }
 )
+V3_ALLOWED_SOURCE_PATHS = frozenset(
+    {
+        "eval/cases/pre_pilot_yonote.json",
+        "eval/cases/product_calibration_synthetic_pilot_20.json",
+        "eval/cases/pilot50_atypical_yonote_v2.json",
+        "eval/cases/pilot50_critical_yonote_v3.json",
+    }
+)
 DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
     DATASET_ID: {
         "manifest_canonical_sha256": EXPECTED_MANIFEST_CANONICAL_SHA256,
@@ -317,6 +340,14 @@ DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
         "tag": "pilot50:v2",
         "user_prefix": "pilot50-v2",
         "version_label": "v2",
+        "requires_published_yonote_qrels": True,
+    },
+    V3_DATASET_ID: {
+        "manifest_canonical_sha256": V3_EXPECTED_MANIFEST_CANONICAL_SHA256,
+        "source_paths": V3_ALLOWED_SOURCE_PATHS,
+        "tag": "pilot50:v3",
+        "user_prefix": "pilot50-v3",
+        "version_label": "v3",
         "requires_published_yonote_qrels": True,
     },
 }
@@ -387,6 +418,25 @@ SAFE_FIELDS = frozenset(
     }
 )
 CANDIDATE_SAFE_FIELDS = SAFE_FIELDS | {"quality_gate"}
+V3_CANDIDATE_SAFE_FIELDS = CANDIDATE_SAFE_FIELDS | {"rolling_24h_waiver"}
+V3_COMPARISON_WAIVER_FIELDS = frozenset(
+    {
+        "waiver_id",
+        "decision_id",
+        "waived_reservation_sha256",
+        "provider_residual_risk_ceiling_rub",
+        "runner_projected_stop_limit_rub",
+    }
+)
+V3_RESERVATION_WAIVER_FIELDS = frozenset(
+    {
+        "schema_version",
+        "rolling_24h_waiver_id",
+        "rolling_24h_waiver_decision_id",
+        "waived_reservation_sha256",
+        "provider_risk_ceiling_rub",
+    }
+)
 
 
 class Pilot50Error(ValueError):
@@ -530,6 +580,28 @@ def _dataset_contract(dataset_id: Any) -> dict[str, Any]:
     return DATASET_CONTRACTS[dataset_id]
 
 
+def _candidate_contract_config(dataset_id: str) -> dict[str, Any]:
+    if dataset_id == V2_DATASET_ID:
+        return {
+            "contract_id": CANDIDATE_CONTRACT_ID,
+            "cases_sha256": CANDIDATE_CASES_SHA256,
+            "cost_scope": CANDIDATE_COST_SCOPE,
+            "quality_gate_schema_version": CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
+            "expected_qrel_cases": CANDIDATE_EXPECTED_QREL_CASES,
+            "expected_critical_cases": CANDIDATE_EXPECTED_CRITICAL_CASES,
+        }
+    if dataset_id == V3_DATASET_ID:
+        return {
+            "contract_id": V3_CANDIDATE_CONTRACT_ID,
+            "cases_sha256": V3_CANDIDATE_CASES_SHA256,
+            "cost_scope": V3_CANDIDATE_COST_SCOPE,
+            "quality_gate_schema_version": V3_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
+            "expected_qrel_cases": V3_CANDIDATE_EXPECTED_QREL_CASES,
+            "expected_critical_cases": V3_CANDIDATE_EXPECTED_CRITICAL_CASES,
+        }
+    raise Pilot50Error("dataset does not define a candidate evidence contract")
+
+
 def _evidence_contract(
     dataset_id: str,
     *,
@@ -550,27 +622,30 @@ def _evidence_contract(
             "cost_scope": "ask-eval",
             "reservation_private_full": False,
         }
-    if dataset_id != V2_DATASET_ID or requested_candidate != CANDIDATE_CONTRACT_ID:
+    candidate_config = _candidate_contract_config(dataset_id)
+    if requested_candidate != candidate_config["contract_id"]:
         raise Pilot50Error(
-            "Pilot50 v2 evidence requires the exact candidate contract"
+            f"Pilot50 {DATASET_CONTRACTS[dataset_id]['version_label']} evidence "
+            "requires the exact candidate contract"
         )
     return {
         "target": PILOT50_CANDIDATE_TARGET,
         "max_llm_cost_rub": CANDIDATE_MAX_LLM_COST_RUB,
         "pricing_source": CANDIDATE_PRICING_SOURCE,
-        "pricing_contract_id": CANDIDATE_CONTRACT_ID,
+        "pricing_contract_id": candidate_config["contract_id"],
         "target_telemetry_pricing_complete": True,
-        "cost_scope": CANDIDATE_COST_SCOPE,
+        "cost_scope": candidate_config["cost_scope"],
         "reservation_private_full": True,
     }
 
 
 def _safe_result_evidence_contract(dataset_id: str) -> dict[str, Any]:
+    candidate_contract = None
+    if dataset_id in CANDIDATE_DATASET_IDS:
+        candidate_contract = str(_candidate_contract_config(dataset_id)["contract_id"])
     return _evidence_contract(
         dataset_id,
-        candidate_contract=(
-            CANDIDATE_CONTRACT_ID if dataset_id == V2_DATASET_ID else None
-        ),
+        candidate_contract=candidate_contract,
     )
 
 
@@ -745,7 +820,7 @@ def _validate_published_yonote_qrels(cases: Sequence[Mapping[str, Any]]) -> None
                 or source.get("source_type") != "yonote"
             ):
                 raise Pilot50Error(
-                    "Pilot50 v2 qrel is not a published Yonote source"
+                    "Pilot50 qrel is not a published Yonote source"
                 )
 
 
@@ -1187,6 +1262,69 @@ def _validated_approval_id(value: Any) -> str:
     return approval_id
 
 
+def _v3_expected_approval_id(runtime_git_sha: str) -> str:
+    return f"owner-chat-20260811-pilot50-v3-{runtime_git_sha}-cap30"
+
+
+def _v3_expected_waiver_id(runtime_git_sha: str) -> str:
+    return (
+        "owner-chat-20260811-waive-rolling24h-v2-to-v3-"
+        f"{runtime_git_sha}-cap30"
+    )
+
+
+def _validated_v3_reservation_waiver(
+    reservation: Mapping[str, Any],
+    *,
+    runtime_git_sha: str,
+    expected_waiver_id: str,
+) -> dict[str, Any]:
+    exact_waiver_id = _v3_expected_waiver_id(runtime_git_sha)
+    waived_reservation_sha256 = reservation.get("waived_reservation_sha256")
+    if (
+        expected_waiver_id != exact_waiver_id
+        or reservation.get("schema_version") != "1.1.0"
+        or reservation.get("rolling_24h_waiver_id") != exact_waiver_id
+        or reservation.get("rolling_24h_waiver_decision_id")
+        != V3_COMPARISON_WAIVER_DECISION_ID
+        or not isinstance(waived_reservation_sha256, str)
+        or SHA256_RE.fullmatch(waived_reservation_sha256) is None
+        or reservation.get("provider_risk_ceiling_rub")
+        != V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+    ):
+        raise Pilot50Error("candidate comparison waiver evidence is invalid")
+    return {
+        "waiver_id": exact_waiver_id,
+        "decision_id": V3_COMPARISON_WAIVER_DECISION_ID,
+        "waived_reservation_sha256": waived_reservation_sha256,
+        "provider_residual_risk_ceiling_rub": (
+            V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        ),
+        "runner_projected_stop_limit_rub": int(CANDIDATE_MAX_LLM_COST_RUB),
+    }
+
+
+def _validate_v3_safe_waiver(
+    value: Any,
+    *,
+    runtime_git_sha: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != V3_COMPARISON_WAIVER_FIELDS:
+        raise Pilot50Error("safe result comparison waiver is invalid")
+    if (
+        value.get("waiver_id") != _v3_expected_waiver_id(runtime_git_sha)
+        or value.get("decision_id") != V3_COMPARISON_WAIVER_DECISION_ID
+        or not isinstance(value.get("waived_reservation_sha256"), str)
+        or SHA256_RE.fullmatch(value["waived_reservation_sha256"]) is None
+        or value.get("provider_residual_risk_ceiling_rub")
+        != V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        or value.get("runner_projected_stop_limit_rub")
+        != int(CANDIDATE_MAX_LLM_COST_RUB)
+    ):
+        raise Pilot50Error("safe result comparison waiver is invalid")
+    return dict(value)
+
+
 def _parse_utc_timestamp(value: Any, *, label: str) -> tuple[str, datetime]:
     raw = str(value or "")
     if not raw or len(raw) > 40:
@@ -1249,6 +1387,7 @@ def _validated_candidate_quality_count(
 
 def _build_candidate_quality_gate(
     *,
+    dataset_id: str = V2_DATASET_ID,
     typical_closed: int,
     atypical_closed: int,
     output_contract_escalations: int,
@@ -1257,6 +1396,7 @@ def _build_candidate_quality_gate(
     critical_case_failures: int,
     applicable_critical_cases: int,
 ) -> dict[str, Any]:
+    candidate_config = _candidate_contract_config(dataset_id)
     typical_closed = _validated_candidate_quality_count(
         typical_closed,
         label="typical closure",
@@ -1277,7 +1417,7 @@ def _build_candidate_quality_gate(
         label="qrel coverage",
         maximum=EXPECTED_CASES_TOTAL,
     )
-    if applicable_qrel_cases != CANDIDATE_EXPECTED_QREL_CASES:
+    if applicable_qrel_cases != candidate_config["expected_qrel_cases"]:
         raise Pilot50Error("candidate quality gate qrel coverage is invalid")
     source_binding_failures = _validated_candidate_quality_count(
         source_binding_failures,
@@ -1289,7 +1429,7 @@ def _build_candidate_quality_gate(
         label="critical-case coverage",
         maximum=EXPECTED_CASES_TOTAL,
     )
-    if applicable_critical_cases != CANDIDATE_EXPECTED_CRITICAL_CASES:
+    if applicable_critical_cases != candidate_config["expected_critical_cases"]:
         raise Pilot50Error("candidate quality gate critical-case coverage is invalid")
     critical_case_failures = _validated_candidate_quality_count(
         critical_case_failures,
@@ -1339,7 +1479,7 @@ def _build_candidate_quality_gate(
         if criteria[criterion]["passed"] is not True
     ]
     return {
-        "schema_version": CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
+        "schema_version": candidate_config["quality_gate_schema_version"],
         "status": "STOP" if failed_criteria else "GO",
         "criteria": criteria,
         "failed_criteria": failed_criteria,
@@ -1388,6 +1528,7 @@ def _candidate_case_is_critical(case: Mapping[str, Any]) -> bool:
 def _validate_candidate_quality_gate(
     value: Any,
     *,
+    dataset_id: str = V2_DATASET_ID,
     typical_closed: int,
     atypical_closed: int,
 ) -> None:
@@ -1406,6 +1547,7 @@ def _validate_candidate_quality_gate(
     ):
         raise Pilot50Error("candidate quality gate count rows are invalid")
     expected = _build_candidate_quality_gate(
+        dataset_id=dataset_id,
         typical_closed=typical_closed,
         atypical_closed=atypical_closed,
         output_contract_escalations=output_row.get("actual"),
@@ -1515,6 +1657,7 @@ def build_safe_result(
     trace_rows: Sequence[Mapping[str, Any]],
     expected_runtime_git_sha: str,
     expected_approval_id: str,
+    expected_rolling_24h_comparison_waiver_id: str | None = None,
     candidate_contract: str | None = None,
     report_snapshot: bytes | None = None,
 ) -> dict[str, Any]:
@@ -1525,11 +1668,29 @@ def build_safe_result(
         cases_path,
     )
     dataset_id = str(receipt["dataset_id"])
+    expected_waiver_id = str(
+        expected_rolling_24h_comparison_waiver_id or ""
+    ).strip()
+    if dataset_id == V3_DATASET_ID:
+        if approval_id != _v3_expected_approval_id(runtime_git_sha):
+            raise Pilot50Error("Pilot50 v3 approval reference is invalid")
+        if expected_waiver_id != _v3_expected_waiver_id(runtime_git_sha):
+            raise Pilot50Error("Pilot50 v3 comparison waiver reference is invalid")
+    elif expected_waiver_id:
+        raise Pilot50Error("comparison waiver is only valid for Pilot50 v3")
     evidence_contract = _evidence_contract(
         dataset_id,
         candidate_contract=candidate_contract,
     )
-    if dataset_id == V2_DATASET_ID and cases_sha != CANDIDATE_CASES_SHA256:
+    candidate_config = (
+        _candidate_contract_config(dataset_id)
+        if dataset_id in CANDIDATE_DATASET_IDS
+        else None
+    )
+    if (
+        candidate_config is not None
+        and cases_sha != candidate_config["cases_sha256"]
+    ):
         raise Pilot50Error("materialized cases differ from the frozen candidate set")
     report_bytes = report_snapshot
     if report_bytes is None:
@@ -1620,7 +1781,7 @@ def build_safe_result(
         latencies.append(latency)
         total_cost += (
             _validated_target_reported_case_cost(result)
-            if dataset_id == V2_DATASET_ID
+            if dataset_id in CANDIDATE_DATASET_IDS
             else _validated_repriced_case_cost(result)
         )
         group_totals[group] += 1
@@ -1628,7 +1789,7 @@ def build_safe_result(
             group_passed[group] += 1
         if passed and observed_behavior == "answer" and was_escalated is False:
             group_closed[group] += 1
-        if dataset_id == V2_DATASET_ID:
+        if dataset_id in CANDIDATE_DATASET_IDS:
             has_qrels = bool(
                 expected.get("expected_chunk_ids")
                 or expected.get("expected_cited_chunk_ids")
@@ -1653,9 +1814,9 @@ def build_safe_result(
         raise Pilot50Error("ask report case membership does not match Pilot50")
     if dict(group_totals) != EXPECTED_TYPE_COUNTS:
         raise Pilot50Error("ask report type counts are invalid")
-    if dataset_id == V2_DATASET_ID and (
-        applicable_qrel_cases != CANDIDATE_EXPECTED_QREL_CASES
-        or applicable_critical_cases != CANDIDATE_EXPECTED_CRITICAL_CASES
+    if candidate_config is not None and (
+        applicable_qrel_cases != candidate_config["expected_qrel_cases"]
+        or applicable_critical_cases != candidate_config["expected_critical_cases"]
     ):
         raise Pilot50Error("candidate quality coverage differs from the frozen set")
     validate_trace_rows(
@@ -1692,11 +1853,12 @@ def build_safe_result(
         or cost_control.get("high_cost_approval_id") != approval_id
     ):
         raise Pilot50Error("ask report cost-control evidence is incomplete")
-    if dataset_id == V2_DATASET_ID:
+    if candidate_config is not None:
         candidate_evidence = cost_control.get("candidate_contract")
         if (
             not isinstance(candidate_evidence, dict)
-            or candidate_evidence.get("contract_id") != CANDIDATE_CONTRACT_ID
+            or candidate_evidence.get("contract_id")
+            != candidate_config["contract_id"]
             or candidate_evidence.get("runtime_git_sha") != runtime_git_sha
             or candidate_evidence.get("cases_file_sha256") != cases_sha
             or candidate_evidence.get("target") != PILOT50_CANDIDATE_TARGET
@@ -1705,7 +1867,8 @@ def build_safe_result(
             or candidate_evidence.get("complete_traces_required") is not True
             or candidate_evidence.get("max_llm_cost_rub")
             != CANDIDATE_MAX_LLM_COST_RUB
-            or candidate_evidence.get("cost_scope") != CANDIDATE_COST_SCOPE
+            or candidate_evidence.get("cost_scope")
+            != candidate_config["cost_scope"]
             or candidate_evidence.get("reservation_private_full") is not True
             or candidate_evidence.get("pricing_source")
             != CANDIDATE_PRICING_SOURCE
@@ -1717,12 +1880,37 @@ def build_safe_result(
             or "pricing_projection" in cost_control
         ):
             raise Pilot50Error("ask report candidate contract evidence is invalid")
+        candidate_waiver_fields = {
+            "rolling_24h_comparison_waiver_id",
+            "rolling_24h_comparison_waiver_decision_id",
+            "provider_residual_risk_ceiling_rub",
+        }
+        if dataset_id == V3_DATASET_ID:
+            if (
+                candidate_evidence.get("rolling_24h_comparison_waiver_id")
+                != expected_waiver_id
+                or candidate_evidence.get(
+                    "rolling_24h_comparison_waiver_decision_id"
+                )
+                != V3_COMPARISON_WAIVER_DECISION_ID
+                or candidate_evidence.get(
+                    "provider_residual_risk_ceiling_rub"
+                )
+                != V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+            ):
+                raise Pilot50Error(
+                    "ask report candidate comparison waiver contract is invalid"
+                )
+        elif not candidate_waiver_fields.isdisjoint(candidate_evidence):
+            raise Pilot50Error(
+                "Pilot50 v2 report contains comparison waiver evidence"
+            )
         candidate_run = report.get("pilot50_candidate")
         if (
             not isinstance(candidate_run, dict)
             or candidate_run.get("status") != "completed"
             or candidate_run.get("completed") is not True
-            or candidate_run.get("contract_id") != CANDIDATE_CONTRACT_ID
+            or candidate_run.get("contract_id") != candidate_config["contract_id"]
             or candidate_run.get("expected_cases_total") != EXPECTED_CASES_TOTAL
             or candidate_run.get("executed_cases_total") != EXPECTED_CASES_TOTAL
             or candidate_run.get("cases_file_sha256") != cases_sha
@@ -1754,6 +1942,15 @@ def build_safe_result(
         or reservation.get("reservation_class") != "private_full"
     ):
         raise Pilot50Error("candidate cost reservation is not private-full")
+    v3_waiver: dict[str, Any] | None = None
+    if dataset_id == V3_DATASET_ID:
+        v3_waiver = _validated_v3_reservation_waiver(
+            reservation,
+            runtime_git_sha=runtime_git_sha,
+            expected_waiver_id=expected_waiver_id,
+        )
+    elif not V3_RESERVATION_WAIVER_FIELDS.isdisjoint(reservation):
+        raise Pilot50Error("Pilot50 v2 reservation contains comparison waiver evidence")
 
     closure = {
         group: _rate_row(group_closed[group], EXPECTED_TYPE_COUNTS[group])
@@ -1808,8 +2005,9 @@ def build_safe_result(
         "report_sha256": _sha256(report_bytes),
         "disclaimer": DISCLAIMER,
     }
-    if dataset_id == V2_DATASET_ID:
+    if candidate_config is not None:
         safe_result["quality_gate"] = _build_candidate_quality_gate(
+            dataset_id=dataset_id,
             typical_closed=group_closed["typical"],
             atypical_closed=group_closed["atypical"],
             output_contract_escalations=output_contract_escalations,
@@ -1818,6 +2016,8 @@ def build_safe_result(
             critical_case_failures=critical_case_failures,
             applicable_critical_cases=applicable_critical_cases,
         )
+    if v3_waiver is not None:
+        safe_result["rolling_24h_waiver"] = v3_waiver
     return safe_result
 
 
@@ -1826,7 +2026,13 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         raise Pilot50Error("safe result fields are invalid")
     dataset_id = value.get("dataset_id")
     expected_fields = (
-        CANDIDATE_SAFE_FIELDS if dataset_id == V2_DATASET_ID else SAFE_FIELDS
+        V3_CANDIDATE_SAFE_FIELDS
+        if dataset_id == V3_DATASET_ID
+        else (
+            CANDIDATE_SAFE_FIELDS
+            if dataset_id == V2_DATASET_ID
+            else SAFE_FIELDS
+        )
     )
     if set(value) != expected_fields:
         raise Pilot50Error("safe result fields are invalid")
@@ -1836,8 +2042,15 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         raise Pilot50Error("safe result identity is invalid")
     evidence_contract = _safe_result_evidence_contract(str(value["dataset_id"]))
     _validated_eval_run_id(value.get("eval_run_id"))
-    _validated_runtime_git_sha(value.get("runtime_git_sha"))
-    _validated_approval_id(value.get("approval_id"))
+    runtime_git_sha = _validated_runtime_git_sha(value.get("runtime_git_sha"))
+    approval_id = _validated_approval_id(value.get("approval_id"))
+    if dataset_id == V3_DATASET_ID:
+        if approval_id != _v3_expected_approval_id(runtime_git_sha):
+            raise Pilot50Error("safe result approval reference is invalid")
+        _validate_v3_safe_waiver(
+            value.get("rolling_24h_waiver"),
+            runtime_git_sha=runtime_git_sha,
+        )
     run_window = value.get("run_window_utc")
     if not isinstance(run_window, dict) or set(run_window) != {
         "started_at",
@@ -1890,10 +2103,11 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         numerators[field] = field_numerators
     if numerators["mechanical_first_turn_closure"] != numerators["policy_pass"]:
         raise Pilot50Error("safe closure and policy totals are inconsistent")
-    if dataset_id == V2_DATASET_ID:
+    if dataset_id in CANDIDATE_DATASET_IDS:
         closure_numerators = numerators["mechanical_first_turn_closure"]
         _validate_candidate_quality_gate(
             value.get("quality_gate"),
+            dataset_id=str(dataset_id),
             typical_closed=closure_numerators["typical"],
             atypical_closed=closure_numerators["atypical"],
         )
@@ -2026,6 +2240,16 @@ def build_review_rows(
         or reservation.get("reservation_class") != "private_full"
     ):
         raise Pilot50Error("candidate review reservation is not private-full")
+    if safe["dataset_id"] == V3_DATASET_ID:
+        report_waiver = _validated_v3_reservation_waiver(
+            reservation,
+            runtime_git_sha=runtime_git_sha,
+            expected_waiver_id=str(safe["rolling_24h_waiver"]["waiver_id"]),
+        )
+        if report_waiver != safe["rolling_24h_waiver"]:
+            raise Pilot50Error("candidate review comparison waiver binding is invalid")
+    elif not V3_RESERVATION_WAIVER_FIELDS.isdisjoint(reservation):
+        raise Pilot50Error("Pilot50 v2 review contains comparison waiver evidence")
 
     results = report.get("results")
     if not isinstance(results, list) or len(results) != EXPECTED_CASES_TOTAL:
@@ -2486,6 +2710,9 @@ async def _summarize(args: argparse.Namespace) -> dict[str, Any]:
         trace_rows=trace_rows,
         expected_runtime_git_sha=args.expected_runtime_git_sha,
         expected_approval_id=args.expected_approval_id,
+        expected_rolling_24h_comparison_waiver_id=(
+            getattr(args, "rolling_24h_comparison_waiver_id", "") or None
+        ),
         candidate_contract=getattr(args, "candidate_contract", "") or None,
         report_snapshot=report_bytes,
     )
@@ -2542,11 +2769,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     summarize.add_argument("--expected-runtime-git-sha", required=True)
     summarize.add_argument("--expected-approval-id", required=True)
     summarize.add_argument(
-        "--candidate-contract",
-        choices=(CANDIDATE_CONTRACT_ID,),
+        "--rolling-24h-comparison-waiver-id",
         default="",
         help=(
-            "Required fixed evidence contract for the Pilot50 v2 candidate run."
+            "Exact non-secret D-041 waiver reference required only for the "
+            "Pilot50 v3 candidate report."
+        ),
+    )
+    summarize.add_argument(
+        "--candidate-contract",
+        choices=(CANDIDATE_CONTRACT_ID, V3_CANDIDATE_CONTRACT_ID),
+        default="",
+        help=(
+            "Required fixed evidence contract for a versioned Pilot50 candidate run."
         ),
     )
     show_safe = subparsers.add_parser("show-safe")

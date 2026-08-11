@@ -121,6 +121,7 @@ _TEMPORAL_TEXT_MARKERS = (
 _SELECTION_BINDING_MARKERS = (
     "результат",
     "статус заяв",
+    "статусы заяв",
     "итог",
     "прошел отбор",
     "прошёл отбор",
@@ -253,6 +254,7 @@ _PROFILE_MARKERS: dict[ResponseProfileName, tuple[str, ...]] = {
         "условия участия",
         "требования к участник",
         "подхожу ли",
+        "юридическое лицо",
     ),
     ResponseProfileName.DOCUMENTS: (
         "документ",
@@ -266,6 +268,7 @@ _PROFILE_MARKERS: dict[ResponseProfileName, tuple[str, ...]] = {
     ),
     ResponseProfileName.SELECTION_STATUS: (
         "статус заяв",
+        "статусы заяв",
         "результат",
         "на рассмотрении",
         "рассмотрение заяв",
@@ -515,6 +518,7 @@ def _has_selection_status_intent(text: str) -> bool:
             "не рассмотрели",
             "до сих пор не приняли",
             "статус заявки",
+            "статусы заявки",
         )
     ):
         return True
@@ -1017,11 +1021,38 @@ def response_has_cross_aspect_drift(
         return False
     for clause in _response_profile_clauses(response):
         detected = detect_response_profiles(clause)
+        if (
+            expected == ResponseProfileName.ELIGIBILITY
+            and ResponseProfileName.APPLICATION in detected
+            and _is_adjectival_eligibility_registration(clause)
+        ):
+            detected.discard(ResponseProfileName.APPLICATION)
         relevant_detected = detected & _STRICT_CROSS_ASPECT_PROFILES
         if not relevant_detected or expected in relevant_detected:
             continue
         return True
     return False
+
+
+def _is_adjectival_eligibility_registration(clause: str) -> bool:
+    normalized = normalize_profile_text(clause)
+    return bool(
+        "юридическое лицо" in normalized
+        and re.search(
+            r"зарегистрированн\w*\s+на\s+территории",
+            normalized,
+        )
+        and not any(
+            marker in normalized
+            for marker in (
+                "заявк",
+                "зарегистрироваться",
+                "пройти регистрацию",
+                "создать кабинет",
+                "личный кабинет",
+            )
+        )
+    )
 
 
 def response_has_cross_aspect_drift_for_profiles(

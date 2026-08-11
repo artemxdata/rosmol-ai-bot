@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -12,12 +13,15 @@ import pytest
 from eval.cost_governance import (
     CostGovernanceError,
     CostLedgerLockedError,
+    PrivateFullComparisonWaiver,
     approval_required,
     reserve_live_eval_cost,
 )
 
 RUNTIME_SHA = "a" * 40
 MANIFEST_SHA = "b" * 64
+SECOND_RUNTIME_SHA = "c" * 40
+SECOND_MANIFEST_SHA = "d" * 64
 NOW = datetime(2026, 8, 3, 9, 30, tzinfo=UTC)
 
 
@@ -30,20 +34,46 @@ def _reserve(
     cases: int = 10,
     private_full: bool = False,
     approval_id: str | None = None,
+    scope: str = "product80-calibration",
+    manifest_sha256: str = MANIFEST_SHA,
+    comparison_waiver: PrivateFullComparisonWaiver | None = None,
     now: datetime = NOW,
 ):
     return reserve_live_eval_cost(
-        scope="product80-calibration",
+        scope=scope,
         run_id=run_id,
         runtime_git_sha=runtime_git_sha,
-        manifest_sha256=MANIFEST_SHA,
+        manifest_sha256=manifest_sha256,
         case_count=cases,
         approved_cap_rub=cap,
         private_full=private_full,
         high_cost_approval_id=approval_id,
+        private_full_comparison_waiver=comparison_waiver,
         ledger_dir=ledger,
         now=now,
     )
+
+
+def _comparison_waiver(
+    **overrides: Any,
+) -> PrivateFullComparisonWaiver:
+    values: dict[str, Any] = {
+        "waiver_id": "owner-waive-v2-to-v3-20260803",
+        "decision_id": "D-041",
+        "provider_risk_ceiling_rub": 500.0,
+        "prior_scope": "pilot50-v2-candidate",
+        "prior_runtime_git_sha": RUNTIME_SHA,
+        "prior_manifest_sha256": MANIFEST_SHA,
+        "prior_case_count": 50,
+        "prior_approved_cap_rub": 30.0,
+        "requested_scope": "pilot50-v3-candidate",
+        "requested_runtime_git_sha": SECOND_RUNTIME_SHA,
+        "requested_manifest_sha256": SECOND_MANIFEST_SHA,
+        "requested_case_count": 50,
+        "requested_approved_cap_rub": 30.0,
+    }
+    values.update(overrides)
+    return PrivateFullComparisonWaiver(**values)
 
 
 @pytest.mark.parametrize(
@@ -268,6 +298,464 @@ def test_private_full_is_once_per_release_candidate_even_after_24h(
             approval_id="OWNER-20260805-FULL-202",
             now=NOW + timedelta(hours=49),
         )
+
+
+def test_exact_comparison_waiver_allows_one_cross_candidate_run_and_is_audited(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    prior = _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        runtime_git_sha=RUNTIME_SHA,
+        manifest_sha256=MANIFEST_SHA,
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    waiver = _comparison_waiver()
+
+    current = _reserve(
+        ledger,
+        run_id="pilot50-v3",
+        runtime_git_sha=SECOND_RUNTIME_SHA,
+        manifest_sha256=SECOND_MANIFEST_SHA,
+        scope="pilot50-v3-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v3-20260803",
+        comparison_waiver=waiver,
+        now=NOW + timedelta(hours=1),
+    )
+
+    prior_binding = hashlib.sha256(
+        json.dumps(
+            dict(prior.record),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert current.record == {
+        "schema_version": "1.1.0",
+        "record_type": "live_eval_cost_reservation",
+        "reserved_at": "2026-08-03T10:30:00Z",
+        "reservation_class": "private_full",
+        "scope": "pilot50-v3-candidate",
+        "run_id": "pilot50-v3",
+        "runtime_git_sha": SECOND_RUNTIME_SHA,
+        "manifest_sha256": SECOND_MANIFEST_SHA,
+        "case_count": 50,
+        "approved_cap_rub": 30.0,
+        "private_full": True,
+        "approval_required": True,
+        "high_cost_approval_id": "owner-pilot50-v3-20260803",
+        "rolling_24h_waiver_id": waiver.waiver_id,
+        "rolling_24h_waiver_decision_id": "D-041",
+        "waived_reservation_sha256": prior_binding,
+        "provider_risk_ceiling_rub": 500.0,
+    }
+    assert json.loads(current.path.read_text(encoding="utf-8")) == current.record
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"prior_scope": "wrong-scope"}, "baseline does not match"),
+        ({"prior_runtime_git_sha": "e" * 40}, "baseline does not match"),
+        ({"prior_manifest_sha256": "f" * 64}, "baseline does not match"),
+        ({"prior_case_count": 49}, "baseline does not match"),
+        ({"prior_approved_cap_rub": 29.0}, "baseline does not match"),
+        ({"requested_scope": "wrong-scope"}, "candidate does not match"),
+        ({"requested_runtime_git_sha": "e" * 40}, "candidate does not match"),
+        ({"requested_manifest_sha256": "f" * 64}, "candidate does not match"),
+        ({"requested_case_count": 49}, "candidate does not match"),
+        ({"requested_approved_cap_rub": 29.0}, "candidate does not match"),
+        ({"provider_risk_ceiling_rub": 500.01}, "risk ceiling is invalid"),
+    ],
+)
+def test_comparison_waiver_rejects_any_baseline_or_candidate_mismatch(
+    tmp_path: Path,
+    override: dict[str, Any],
+    message: str,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+
+    with pytest.raises(CostGovernanceError, match=message):
+        _reserve(
+            ledger,
+            run_id="pilot50-v3",
+            runtime_git_sha=SECOND_RUNTIME_SHA,
+            manifest_sha256=SECOND_MANIFEST_SHA,
+            scope="pilot50-v3-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-v3-20260803",
+            comparison_waiver=_comparison_waiver(**override),
+            now=NOW + timedelta(hours=1),
+        )
+
+    assert len(list(ledger.glob("*.reservation.json"))) == 1
+
+
+def test_comparison_waiver_requires_exactly_one_recent_private_full(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+
+    with pytest.raises(CostGovernanceError, match="exactly one conflicting"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v3",
+            runtime_git_sha=SECOND_RUNTIME_SHA,
+            manifest_sha256=SECOND_MANIFEST_SHA,
+            scope="pilot50-v3-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-v3-20260803",
+            comparison_waiver=_comparison_waiver(),
+        )
+
+    assert list(ledger.glob("*.reservation.json")) == []
+
+
+def test_comparison_waiver_requires_strictly_earlier_baseline_timestamp(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+        now=NOW,
+    )
+
+    with pytest.raises(CostGovernanceError, match="baseline is not earlier"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v3",
+            runtime_git_sha=SECOND_RUNTIME_SHA,
+            manifest_sha256=SECOND_MANIFEST_SHA,
+            scope="pilot50-v3-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-v3-20260803",
+            comparison_waiver=_comparison_waiver(),
+            now=NOW,
+        )
+
+    assert len(list(ledger.glob("*.reservation.json"))) == 1
+
+
+def test_comparison_waiver_cannot_repeat_same_candidate_or_share_approval(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+
+    with pytest.raises(CostGovernanceError, match="distinct candidates"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v2-repeat",
+            scope="pilot50-v2-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-repeat-20260803",
+            comparison_waiver=_comparison_waiver(
+                requested_scope="pilot50-v2-candidate",
+                requested_runtime_git_sha=RUNTIME_SHA,
+                requested_manifest_sha256=MANIFEST_SHA,
+            ),
+            now=NOW + timedelta(hours=1),
+        )
+
+    with pytest.raises(CostGovernanceError, match="must be distinct"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v3",
+            runtime_git_sha=SECOND_RUNTIME_SHA,
+            manifest_sha256=SECOND_MANIFEST_SHA,
+            scope="pilot50-v3-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="shared-owner-reference-20260803",
+            comparison_waiver=_comparison_waiver(
+                waiver_id="shared-owner-reference-20260803"
+            ),
+            now=NOW + timedelta(hours=1),
+        )
+
+
+def test_comparison_waiver_is_globally_one_use(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    waiver = _comparison_waiver()
+    _reserve(
+        ledger,
+        run_id="pilot50-v3",
+        runtime_git_sha=SECOND_RUNTIME_SHA,
+        manifest_sha256=SECOND_MANIFEST_SHA,
+        scope="pilot50-v3-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v3-20260803",
+        comparison_waiver=waiver,
+        now=NOW + timedelta(hours=1),
+    )
+
+    with pytest.raises(CostGovernanceError, match="waiver has already"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v4",
+            runtime_git_sha="e" * 40,
+            manifest_sha256="f" * 64,
+            scope="pilot50-v4-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-v4-20260803",
+            comparison_waiver=_comparison_waiver(
+                requested_scope="pilot50-v4-candidate",
+                requested_runtime_git_sha="e" * 40,
+                requested_manifest_sha256="f" * 64,
+            ),
+            now=NOW + timedelta(hours=25),
+        )
+
+
+def test_concurrent_comparison_waivers_write_exactly_one_candidate_record(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    barrier = Barrier(2)
+
+    def attempt(index: int) -> tuple[str, str]:
+        barrier.wait(timeout=5)
+        try:
+            result = _reserve(
+                ledger,
+                run_id=f"pilot50-v3-{index}",
+                runtime_git_sha=SECOND_RUNTIME_SHA,
+                manifest_sha256=SECOND_MANIFEST_SHA,
+                scope="pilot50-v3-candidate",
+                cap=30,
+                cases=50,
+                private_full=True,
+                approval_id=f"owner-pilot50-v3-20260803-{index}",
+                comparison_waiver=_comparison_waiver(
+                    waiver_id=f"owner-waive-v2-to-v3-20260803-{index}"
+                ),
+                now=NOW + timedelta(hours=1),
+            )
+        except CostGovernanceError as exc:
+            return "error", str(exc)
+        return "ok", str(result.path)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, (1, 2)))
+
+    assert [status for status, _ in outcomes].count("ok") == 1
+    assert [status for status, _ in outcomes].count("error") == 1
+    assert len(list(ledger.glob("*.reservation.json"))) == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("waived_reservation_sha256", "0" * 64, "waiver binding is invalid"),
+        ("provider_risk_ceiling_rub", "500", "risk ceiling type is invalid"),
+        ("provider_risk_ceiling_rub", 500.01, "risk ceiling is invalid"),
+        (
+            "rolling_24h_waiver_id",
+            "owner-pilot50-v3-20260803",
+            "waiver and approval ids must be distinct",
+        ),
+        ("runtime_git_sha", RUNTIME_SHA, "candidates are not distinct"),
+        ("manifest_sha256", MANIFEST_SHA, "candidates are not distinct"),
+    ],
+)
+def test_corrupt_waiver_ledger_record_fails_closed(
+    tmp_path: Path,
+    field: str,
+    value: Any,
+    message: str,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    current = _reserve(
+        ledger,
+        run_id="pilot50-v3",
+        runtime_git_sha=SECOND_RUNTIME_SHA,
+        manifest_sha256=SECOND_MANIFEST_SHA,
+        scope="pilot50-v3-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v3-20260803",
+        comparison_waiver=_comparison_waiver(),
+        now=NOW + timedelta(hours=1),
+    )
+    payload = json.loads(current.path.read_text(encoding="utf-8"))
+    payload[field] = value
+    current.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CostGovernanceError, match=message):
+        _reserve(
+            ledger,
+            run_id="later-routine",
+            now=NOW + timedelta(hours=2),
+        )
+
+    assert len(list(ledger.glob("*.reservation.json"))) == 2
+
+
+def test_valid_v1_and_v1_1_mixed_ledger_remains_readable(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    _reserve(
+        ledger,
+        run_id="pilot50-v3",
+        runtime_git_sha=SECOND_RUNTIME_SHA,
+        manifest_sha256=SECOND_MANIFEST_SHA,
+        scope="pilot50-v3-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v3-20260803",
+        comparison_waiver=_comparison_waiver(),
+        now=NOW + timedelta(hours=1),
+    )
+
+    routine = _reserve(
+        ledger,
+        run_id="later-routine",
+        now=NOW + timedelta(hours=25, seconds=1),
+    )
+
+    assert routine.path.exists()
+    assert len(list(ledger.glob("*.reservation.json"))) == 3
+
+
+def test_waiver_ledger_rejects_a_second_prior_private_full_conflict(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    _reserve(
+        ledger,
+        run_id="pilot50-v3",
+        runtime_git_sha=SECOND_RUNTIME_SHA,
+        manifest_sha256=SECOND_MANIFEST_SHA,
+        scope="pilot50-v3-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v3-20260803",
+        comparison_waiver=_comparison_waiver(),
+        now=NOW + timedelta(hours=1),
+    )
+    injected = _valid_record(
+        reserved_at="2026-08-03T10:00:00Z",
+        reservation_class="private_full",
+        scope="other-private-full",
+        run_id="injected-conflict",
+        runtime_git_sha="e" * 40,
+        manifest_sha256="f" * 64,
+        case_count=50,
+        approved_cap_rub=30.0,
+        private_full=True,
+        approval_required=True,
+        high_cost_approval_id="owner-other-private-full-20260803",
+    )
+    injected_path = ledger / (
+        "20260803T100000000000Z-" + "9" * 32 + ".reservation.json"
+    )
+    injected_path.write_text(json.dumps(injected), encoding="utf-8")
+
+    with pytest.raises(CostGovernanceError, match="waiver binding is invalid"):
+        _reserve(
+            ledger,
+            run_id="later-routine",
+            now=NOW + timedelta(hours=2),
+        )
+
+    assert len(list(ledger.glob("*.reservation.json"))) == 3
 
 
 @pytest.mark.parametrize("contents", ["{bad-json", "[]", "{}"])

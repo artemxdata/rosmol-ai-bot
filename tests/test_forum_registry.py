@@ -27,6 +27,13 @@ def test_detect_forum_from_text_handles_volga_accusative_case() -> None:
     assert detect_forum_from_text("Расскажи про Волгу") == "Волга"
 
 
+def test_detect_forum_from_text_handles_ladoga_prepositional_case() -> None:
+    assert (
+        detect_forum_from_text("По «Ладоге» сразу три вопроса")
+        == "Ладога"
+    )
+
+
 def test_detect_forum_from_text_handles_new_yonote_entities() -> None:
     assert detect_forum_from_text("Как зарегистрироваться на Добро.РФ?") == "Добро.РФ"
     assert (

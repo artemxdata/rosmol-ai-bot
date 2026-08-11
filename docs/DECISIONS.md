@@ -663,7 +663,7 @@ Cleanup failure всегда видим и даёт non-zero exit. Поэтом�
 где проверяется исполнимость candidate-контейнера. Перед следующим preflight старый exact-labeled
 container должен быть подтверждённо `absent` либо удалён old-SHA launcher-ом.
 
-## D-041. Quality STOP v2 закрывает первый candidate и разрешает один диагностический цикл
+## D-041. Quality STOP v2 закрывает первый candidate и разрешает один exact v3 comparison
 
 **Статус:** принято 11 августа 2026; дополняет D-036 и D-040, не разрешая replay.
 
@@ -680,11 +680,33 @@ timestamps, token/cost per case и arbitrary strings. Диагностика з�
 изменения начинаются с regressions и не ослабляют published-Yonote grounding, entity binding,
 safety или output guards.
 
-Владелец разрешил один следующий осмысленный Pilot50 v2 run после исправления серьёзных причин.
-Разрешение условно: новый exact Git SHA, прежний frozen v2 cases SHA, полный Ruff/pytest/KB gate,
-бесплатный isolated preflight `GO`, новый одноразовый approval и runner projected stop-limit не
-выше `30 RUB`. Верхняя граница `500 RUB` не является программным cap или разрешением обходить
-ledger. Если новый candidate попадает в rolling-24h ограничение D-036, время/ledger/classification
-не подменяются: запуск либо ждёт окончания окна, либо требует отдельного exact, auditable,
-candidate-bound исключения. Любой новый execution failure или quality STOP снова завершает
-one-shot без retry. Acceptance и ограничения интерпретации остаются ровно D-040.
+Диагностика дополнительно доказала дефект acceptance-контракта v2: cases 46–48 требуют answer
+без оператора, хотя один является персональным ticket-status, второй не имеет опубликованного
+Yonote source, а третий не содержит достаточно конкретного проверяемого сценария. Sealed v2 не
+переписывается. Versioned `pilot50_balanced_v3` сохраняет прежние 47 query/order/strata и заменяет
+только эти три позиции на конкретные published-Yonote answer cases. Exact v3 manifest/cases
+SHA-256 — `fef1caa227777e2c198bd6acdc77471fbf2551732c85e2334f8cad781025e875` и
+`3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112`; все 15 critical cases
+имеют содержательную проверку и опубликованный qrel, общая qrel coverage — `50/50`.
+
+После явного предупреждения о действующем rolling-24h окне владелец распорядился выполнить ещё
+один осмысленный тест сегодня. Это разрешает ровно одно auditable исключение только из
+межкандидатного spacing D-036: sealed v2 reservation
+`runtime=64cc182d37a3c060439ed7a55f5cc875a27d786d`, `scope=pilot50-v2-candidate`,
+`cases=b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d`, `50 cases`,
+`cap=30 RUB` -> один новый v3
+candidate. Запрещено очищать/редактировать ledger, подменять время, называть запуск routine или
+обходить запрет повтора того же release candidate. Под fixed ledger lock должны одновременно
+сохраниться отдельные exact approval и waiver references, canonical SHA-256 связанной v2
+reservation, decision `D-041`, final v3 runtime/cases и provider residual-risk ceiling `500 RUB`.
+Waiver глобально одноразовый, не может ссылаться на другой waiver и не наследуется v4 или любым
+последующим eval.
+
+`500 RUB` — принятая владельцем внешняя граница остаточного provider-risk только нового
+candidate, не cumulative ledger budget, не цель расхода и не executable cap. Runner projected
+stop-limit остаётся `30 RUB`, concurrency — `1`; one in-flight provider request всё ещё может
+формально выйти за projection. До `/ask` обязательны новый exact Git SHA, полный Ruff/pytest/KB
+gate, бесплатный isolated preflight `GO`, неизменные production/Qdrant и неиспользованные exact
+approval/waiver IDs. Любой execution failure, quality `GO` или quality `STOP` завершает one-shot
+без retry. Billing остаётся `pending_provider_reconciliation`; следующий paid eval снова STOP без
+нового решения. Acceptance и ограничения интерпретации остаются mechanical-only по D-040.

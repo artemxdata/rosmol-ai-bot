@@ -17,6 +17,9 @@ MANIFEST_PATH = pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v1.j
 V2_MANIFEST_PATH = (
     pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v2.json"
 )
+V3_MANIFEST_PATH = (
+    pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v3.json"
+)
 EVAL_RUN_ID = "ask-eval-11111111-1111-1111-1111-111111111111"
 RUNTIME_GIT_SHA = "a" * 40
 APPROVAL_ID = "PILOT50-OWNER-20260810"
@@ -257,6 +260,47 @@ def _candidate_raw_report(
         "integrity_failures": [],
         "selective_reruns_forbidden": True,
     }
+    return report, trace_rows
+
+
+def _v3_candidate_raw_report(
+    cases: list[dict[str, Any]],
+    *,
+    cases_sha256: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    report, trace_rows = _candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha256,
+    )
+    approval_id = pilot50._v3_expected_approval_id(RUNTIME_GIT_SHA)
+    waiver_id = pilot50._v3_expected_waiver_id(RUNTIME_GIT_SHA)
+    cost_control = report["cost_control"]
+    cost_control["high_cost_approval_id"] = approval_id
+    contract = cost_control["candidate_contract"]
+    contract.update(
+        {
+            "contract_id": pilot50.V3_CANDIDATE_CONTRACT_ID,
+            "cost_scope": pilot50.V3_CANDIDATE_COST_SCOPE,
+            "rolling_24h_comparison_waiver_id": waiver_id,
+            "rolling_24h_comparison_waiver_decision_id": "D-041",
+            "provider_residual_risk_ceiling_rub": 500.0,
+        }
+    )
+    reservation = cost_control["reservation"]
+    reservation.update(
+        {
+            "schema_version": "1.1.0",
+            "scope": pilot50.V3_CANDIDATE_COST_SCOPE,
+            "high_cost_approval_id": approval_id,
+            "rolling_24h_waiver_id": waiver_id,
+            "rolling_24h_waiver_decision_id": "D-041",
+            "waived_reservation_sha256": "e" * 64,
+            "provider_risk_ceiling_rub": 500.0,
+        }
+    )
+    report["pilot50_candidate"]["contract_id"] = (
+        pilot50.V3_CANDIDATE_CONTRACT_ID
+    )
     return report, trace_rows
 
 
@@ -627,6 +671,73 @@ def test_safe_result_preserves_v2_dataset_identity(
         expected_runtime_git_sha=RUNTIME_GIT_SHA,
     )
     assert len(review) == 50
+
+
+def test_v3_safe_result_binds_exact_comparison_waiver_and_rejects_tampering(
+    tmp_path: Path,
+) -> None:
+    cases, receipt = pilot50.build_materialized_cases(V3_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v3-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    cases_sha = str(receipt["cases_sha256"])
+    report, trace_rows = _v3_candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha,
+    )
+    report_path = tmp_path / "pilot50-v3-report.json"
+    _write_json(report_path, report)
+    approval_id = pilot50._v3_expected_approval_id(RUNTIME_GIT_SHA)
+    waiver_id = pilot50._v3_expected_waiver_id(RUNTIME_GIT_SHA)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V3_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=approval_id,
+        expected_rolling_24h_comparison_waiver_id=waiver_id,
+        candidate_contract=pilot50.V3_CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["rolling_24h_waiver"] == {
+        "waiver_id": waiver_id,
+        "decision_id": "D-041",
+        "waived_reservation_sha256": "e" * 64,
+        "provider_residual_risk_ceiling_rub": 500,
+        "runner_projected_stop_limit_rub": 30,
+    }
+    assert safe["budget"]["max_rub"] == 30
+    assert pilot50.validate_safe_result(safe) == safe
+
+    for field, value in (
+        ("waiver_id", "owner-wrong-waiver"),
+        ("decision_id", "D-999"),
+        ("waived_reservation_sha256", "0" * 63),
+        ("provider_residual_risk_ceiling_rub", 501),
+        ("runner_projected_stop_limit_rub", 500),
+    ):
+        tampered_safe = copy.deepcopy(safe)
+        tampered_safe["rolling_24h_waiver"][field] = value
+        with pytest.raises(pilot50.Pilot50Error, match="comparison waiver"):
+            pilot50.validate_safe_result(tampered_safe)
+
+    tampered_report = copy.deepcopy(report)
+    tampered_report["cost_control"]["reservation"][
+        "rolling_24h_waiver_decision_id"
+    ] = "D-999"
+    _write_json(report_path, tampered_report)
+    with pytest.raises(pilot50.Pilot50Error, match="comparison waiver"):
+        pilot50.build_safe_result(
+            manifest_path=V3_MANIFEST_PATH,
+            cases_path=cases_path,
+            report_path=report_path,
+            trace_rows=trace_rows,
+            expected_runtime_git_sha=RUNTIME_GIT_SHA,
+            expected_approval_id=approval_id,
+            expected_rolling_24h_comparison_waiver_id=waiver_id,
+            candidate_contract=pilot50.V3_CANDIDATE_CONTRACT_ID,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1053,6 +1164,16 @@ def test_summarize_candidate_contract_cli_is_bounded(tmp_path: Path) -> None:
     ]
     args = pilot50._parse_args([*base, pilot50.CANDIDATE_CONTRACT_ID])
     assert args.candidate_contract == pilot50.CANDIDATE_CONTRACT_ID
+    waiver_id = pilot50._v3_expected_waiver_id(RUNTIME_GIT_SHA)
+    v3_args = pilot50._parse_args(
+        [
+            *base,
+            pilot50.V3_CANDIDATE_CONTRACT_ID,
+            "--rolling-24h-comparison-waiver-id",
+            waiver_id,
+        ]
+    )
+    assert v3_args.rolling_24h_comparison_waiver_id == waiver_id
     with pytest.raises(SystemExit):
         pilot50._parse_args([*base, "mutable-candidate-contract"])
 

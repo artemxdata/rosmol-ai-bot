@@ -7,6 +7,7 @@ that the same daily allowance or owner approval is still available.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -23,10 +24,12 @@ from typing import Any
 LEDGER_ENV_VAR = "EVAL_COST_LEDGER_DIR"
 DEFAULT_LEDGER_DIR = Path("data/private/eval-cost-ledger-v1")
 LEDGER_SCHEMA_VERSION = "1.0.0"
+WAIVER_LEDGER_SCHEMA_VERSION = "1.1.0"
 LEDGER_RECORD_TYPE = "live_eval_cost_reservation"
 ROUTINE_LIVE_EVAL_MAX_CASES = 10
 ROUTINE_LIVE_EVAL_MAX_COST_RUB = 100.0
 ROUTINE_ROLLING_24H_CAP_RUB = 300.0
+COMPARISON_PROVIDER_RISK_CEILING_MAX_RUB = 500.0
 
 _LOCK_FILENAME = ".cost-governance.lock"
 _RECORD_FILENAME_RE = re.compile(
@@ -58,6 +61,14 @@ _RECORD_FIELDS = frozenset(
         "high_cost_approval_id",
     }
 )
+_WAIVER_RECORD_FIELDS = _RECORD_FIELDS | frozenset(
+    {
+        "rolling_24h_waiver_id",
+        "rolling_24h_waiver_decision_id",
+        "waived_reservation_sha256",
+        "provider_risk_ceiling_rub",
+    }
+)
 
 
 class CostGovernanceError(ValueError):
@@ -78,6 +89,33 @@ class LiveEvalCostReservation:
     @property
     def reservation_class(self) -> str:
         return str(self.record["reservation_class"])
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateFullComparisonWaiver:
+    """Exact, one-use owner waiver for one cross-candidate comparison.
+
+    The waiver never permits a repeat of the same release candidate.  It only
+    replaces the rolling-24h spacing check when the one conflicting record and
+    the requested reservation both match the declared immutable tuples.
+    ``provider_risk_ceiling_rub`` is the owner's external residual-risk envelope
+    for the candidate run; the executable runner cap remains the separately
+    validated ``requested_approved_cap_rub``.
+    """
+
+    waiver_id: str
+    decision_id: str
+    provider_risk_ceiling_rub: float
+    prior_scope: str
+    prior_runtime_git_sha: str
+    prior_manifest_sha256: str
+    prior_case_count: int
+    prior_approved_cap_rub: float
+    requested_scope: str
+    requested_runtime_git_sha: str
+    requested_manifest_sha256: str
+    requested_case_count: int
+    requested_approved_cap_rub: float
 
 
 def approval_required(
@@ -109,6 +147,7 @@ def reserve_live_eval_cost(
     approved_cap_rub: float,
     private_full: bool,
     high_cost_approval_id: str | None = None,
+    private_full_comparison_waiver: PrivateFullComparisonWaiver | None = None,
     ledger_dir: str | Path | None = None,
     now: datetime | None = None,
 ) -> LiveEvalCostReservation:
@@ -141,22 +180,37 @@ def reserve_live_eval_cost(
         )
     if not needs_approval:
         approval_id = None
+    waiver = _validated_private_full_comparison_waiver(
+        private_full_comparison_waiver,
+        scope=validated_scope,
+        runtime_git_sha=validated_runtime_sha,
+        manifest_sha256=validated_manifest_sha,
+        case_count=validated_case_count,
+        approved_cap_rub=validated_cap,
+        private_full=private_full,
+        approval_id=approval_id,
+    )
 
     reservation_time = _validated_now(now)
     target_ledger = _validated_ledger_dir(ledger_dir)
     with _fixed_ledger_lock(target_ledger):
         existing_records = _scan_records(target_ledger, now=reservation_time)
         _enforce_approval_once(existing_records, approval_id=approval_id)
-        _enforce_rolling_limits(
+        _enforce_waiver_once(existing_records, waiver=waiver)
+        waived_record = _enforce_rolling_limits(
             existing_records,
             now=reservation_time,
             requested_cap=validated_cap,
             private_full=private_full,
             requested_runtime_git_sha=validated_runtime_sha,
+            comparison_waiver=waiver,
         )
 
         record: dict[str, Any] = {
-            "schema_version": LEDGER_SCHEMA_VERSION,
+            "schema_version": (
+                WAIVER_LEDGER_SCHEMA_VERSION if waiver is not None
+                else LEDGER_SCHEMA_VERSION
+            ),
             "record_type": LEDGER_RECORD_TYPE,
             "reserved_at": _format_utc(reservation_time),
             "reservation_class": "private_full" if private_full else "routine",
@@ -170,6 +224,23 @@ def reserve_live_eval_cost(
             "approval_required": needs_approval,
             "high_cost_approval_id": approval_id,
         }
+        if waiver is not None:
+            if waived_record is None:
+                raise CostGovernanceError(
+                    "private full comparison waiver has no bound reservation"
+                )
+            record.update(
+                {
+                    "rolling_24h_waiver_id": waiver.waiver_id,
+                    "rolling_24h_waiver_decision_id": waiver.decision_id,
+                    "waived_reservation_sha256": _reservation_payload_sha256(
+                        waived_record
+                    ),
+                    "provider_risk_ceiling_rub": (
+                        waiver.provider_risk_ceiling_rub
+                    ),
+                }
+            )
         filename = (
             reservation_time.strftime("%Y%m%dT%H%M%S%fZ")
             + f"-{uuid.uuid4().hex}.reservation.json"
@@ -262,6 +333,7 @@ def _scan_records(ledger_dir: Path, *, now: datetime) -> list[dict[str, Any]]:
             raise CostGovernanceError("cost ledger contains a future timestamp")
         record["_reserved_at_datetime"] = reserved_at
         records.append(record)
+    _validate_ledger_cross_record_invariants(records)
     return records
 
 
@@ -276,10 +348,22 @@ def _load_and_validate_record(path: Path) -> dict[str, Any]:
         raise
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise CostGovernanceError("cost ledger contains an unreadable record") from exc
-    if not isinstance(payload, dict) or set(payload) != _RECORD_FIELDS:
+    if not isinstance(payload, dict):
         raise CostGovernanceError("cost ledger record has an invalid schema")
-    if payload["schema_version"] != LEDGER_SCHEMA_VERSION:
+    schema_version = payload.get("schema_version")
+    expected_fields = (
+        _RECORD_FIELDS
+        if schema_version == LEDGER_SCHEMA_VERSION
+        else (
+            _WAIVER_RECORD_FIELDS
+            if schema_version == WAIVER_LEDGER_SCHEMA_VERSION
+            else None
+        )
+    )
+    if expected_fields is None:
         raise CostGovernanceError("cost ledger record has an unsupported schema version")
+    if set(payload) != expected_fields:
+        raise CostGovernanceError("cost ledger record has an invalid schema")
     if payload["record_type"] != LEDGER_RECORD_TYPE:
         raise CostGovernanceError("cost ledger record type is invalid")
 
@@ -310,7 +394,100 @@ def _load_and_validate_record(path: Path) -> dict[str, Any]:
     approval_id = _validated_approval_id(payload["high_cost_approval_id"])
     if expected_approval and approval_id is None:
         raise CostGovernanceError("cost ledger high-cost approval is missing")
+    if schema_version == WAIVER_LEDGER_SCHEMA_VERSION:
+        if private_full is not True:
+            raise CostGovernanceError(
+                "cost ledger comparison waiver requires a private full reservation"
+            )
+        waiver_id = _validated_approval_id(payload["rolling_24h_waiver_id"])
+        if waiver_id is None:
+            raise CostGovernanceError("cost ledger comparison waiver id is missing")
+        if waiver_id == approval_id:
+            raise CostGovernanceError(
+                "cost ledger comparison waiver and approval ids must be distinct"
+            )
+        _validated_reference(
+            payload["rolling_24h_waiver_decision_id"],
+            label="rolling_24h_waiver_decision_id",
+        )
+        _validated_manifest_sha(payload["waived_reservation_sha256"])
+        raw_risk_ceiling = payload["provider_risk_ceiling_rub"]
+        if isinstance(raw_risk_ceiling, bool) or not isinstance(
+            raw_risk_ceiling,
+            (int, float),
+        ):
+            raise CostGovernanceError(
+                "cost ledger provider risk ceiling type is invalid"
+            )
+        risk_ceiling = _validated_cap(raw_risk_ceiling)
+        if (
+            risk_ceiling < cap
+            or risk_ceiling > COMPARISON_PROVIDER_RISK_CEILING_MAX_RUB
+        ):
+            raise CostGovernanceError(
+                "cost ledger provider risk ceiling is invalid"
+            )
     return payload
+
+
+def _validate_ledger_cross_record_invariants(
+    records: list[dict[str, Any]],
+) -> None:
+    seen_owner_references: set[str] = set()
+    waiver_records = [
+        record
+        for record in records
+        if record.get("schema_version") == WAIVER_LEDGER_SCHEMA_VERSION
+    ]
+    if len(waiver_records) > 1:
+        raise CostGovernanceError(
+            "cost ledger contains more than one comparison waiver"
+        )
+
+    for record in records:
+        references = [record.get("high_cost_approval_id")]
+        if record.get("schema_version") == WAIVER_LEDGER_SCHEMA_VERSION:
+            references.append(record.get("rolling_24h_waiver_id"))
+        for reference in references:
+            if reference is None:
+                continue
+            if reference in seen_owner_references:
+                raise CostGovernanceError(
+                    "cost ledger contains a reused owner reference"
+                )
+            seen_owner_references.add(reference)
+
+    for waiver_record in waiver_records:
+        waiver_time = waiver_record["_reserved_at_datetime"]
+        bound_digest = waiver_record["waived_reservation_sha256"]
+        prior_conflicts = [
+            record
+            for record in records
+            if record is not waiver_record
+            and record.get("private_full") is True
+            and record["_reserved_at_datetime"] <= waiver_time
+            and waiver_time - record["_reserved_at_datetime"] <= timedelta(hours=24)
+        ]
+        if len(prior_conflicts) != 1:
+            raise CostGovernanceError(
+                "cost ledger comparison waiver binding is invalid"
+            )
+        prior = prior_conflicts[0]
+        if (
+            prior.get("schema_version") != LEDGER_SCHEMA_VERSION
+            or prior["_reserved_at_datetime"] >= waiver_time
+            or _reservation_payload_sha256(prior) != bound_digest
+        ):
+            raise CostGovernanceError(
+                "cost ledger comparison waiver binding is invalid"
+            )
+        if (
+            prior.get("runtime_git_sha") == waiver_record.get("runtime_git_sha")
+            or prior.get("manifest_sha256") == waiver_record.get("manifest_sha256")
+        ):
+            raise CostGovernanceError(
+                "cost ledger comparison waiver candidates are not distinct"
+            )
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -329,8 +506,29 @@ def _enforce_approval_once(
 ) -> None:
     if approval_id is None:
         return
-    if any(record["high_cost_approval_id"] == approval_id for record in records):
+    if any(
+        record["high_cost_approval_id"] == approval_id
+        or record.get("rolling_24h_waiver_id") == approval_id
+        for record in records
+    ):
         raise CostGovernanceError("high-cost approval id has already been consumed")
+
+
+def _enforce_waiver_once(
+    records: list[dict[str, Any]],
+    *,
+    waiver: PrivateFullComparisonWaiver | None,
+) -> None:
+    if waiver is None:
+        return
+    if any(record.get("rolling_24h_waiver_id") is not None for record in records):
+        raise CostGovernanceError(
+            "a private full comparison waiver has already been consumed"
+        )
+    if any(record.get("high_cost_approval_id") == waiver.waiver_id for record in records):
+        raise CostGovernanceError(
+            "private full comparison waiver id has already been consumed"
+        )
 
 
 def _enforce_rolling_limits(
@@ -340,7 +538,8 @@ def _enforce_rolling_limits(
     requested_cap: float,
     private_full: bool,
     requested_runtime_git_sha: str,
-) -> None:
+    comparison_waiver: PrivateFullComparisonWaiver | None = None,
+) -> dict[str, Any] | None:
     cutoff = now - timedelta(hours=24)
     recent = [
         record
@@ -356,11 +555,36 @@ def _enforce_rolling_limits(
             raise CostGovernanceError(
                 "a private full evaluation is already reserved for this release candidate"
             )
-        if any(record["private_full"] for record in recent):
+        recent_private_full = [record for record in recent if record["private_full"]]
+        if recent_private_full and comparison_waiver is None:
             raise CostGovernanceError(
                 "another private full evaluation was reserved in the rolling 24h window"
             )
-        return
+        if comparison_waiver is not None:
+            if len(recent_private_full) != 1:
+                raise CostGovernanceError(
+                    "private full comparison waiver requires exactly one conflicting "
+                    "reservation"
+                )
+            prior = recent_private_full[0]
+            if prior["_reserved_at_datetime"] >= now:
+                raise CostGovernanceError(
+                    "private full comparison waiver baseline is not earlier"
+                )
+            if not _record_matches_comparison_waiver(
+                prior,
+                comparison_waiver,
+            ):
+                raise CostGovernanceError(
+                    "private full comparison waiver baseline does not match"
+                )
+            return prior
+        return None
+
+    if comparison_waiver is not None:
+        raise CostGovernanceError(
+            "private full comparison waiver cannot be used for a routine reservation"
+        )
 
     routine_total = sum(
         (
@@ -375,6 +599,41 @@ def _enforce_rolling_limits(
         raise CostGovernanceError(
             "routine live evaluation reservations would exceed the rolling 24h cap"
         )
+    return None
+
+
+def _record_matches_comparison_waiver(
+    record: Mapping[str, Any],
+    waiver: PrivateFullComparisonWaiver,
+) -> bool:
+    return all(
+        (
+            record.get("reservation_class") == "private_full",
+            record.get("private_full") is True,
+            record.get("schema_version") == LEDGER_SCHEMA_VERSION,
+            record.get("scope") == waiver.prior_scope,
+            record.get("runtime_git_sha") == waiver.prior_runtime_git_sha,
+            record.get("manifest_sha256") == waiver.prior_manifest_sha256,
+            record.get("case_count") == waiver.prior_case_count,
+            record.get("approved_cap_rub") == waiver.prior_approved_cap_rub,
+        )
+    )
+
+
+def _reservation_payload_sha256(record: Mapping[str, Any]) -> str:
+    payload = {
+        key: value
+        for key, value in record.items()
+        if not str(key).startswith("_")
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _write_record_exclusive(path: Path, record: Mapping[str, Any]) -> None:
@@ -493,3 +752,95 @@ def _validated_approval_id(value: Any) -> str | None:
     if "YYYYMMDD" in text.upper() or _PLACEHOLDER_RC_TOKEN_RE.search(text):
         raise CostGovernanceError("high-cost approval id contains a placeholder token")
     return text
+
+
+def _validated_private_full_comparison_waiver(
+    value: PrivateFullComparisonWaiver | None,
+    *,
+    scope: str,
+    runtime_git_sha: str,
+    manifest_sha256: str,
+    case_count: int,
+    approved_cap_rub: float,
+    private_full: bool,
+    approval_id: str | None,
+) -> PrivateFullComparisonWaiver | None:
+    if value is None:
+        return None
+    if not isinstance(value, PrivateFullComparisonWaiver):
+        raise CostGovernanceError(
+            "private full comparison waiver has an invalid contract"
+        )
+    if private_full is not True:
+        raise CostGovernanceError(
+            "private full comparison waiver requires a private full reservation"
+        )
+
+    waiver_id = _validated_approval_id(value.waiver_id)
+    if waiver_id is None:
+        raise CostGovernanceError("private full comparison waiver id is missing")
+    decision_id = _validated_reference(value.decision_id, label="waiver decision id")
+    if approval_id is None or waiver_id == approval_id:
+        raise CostGovernanceError(
+            "private full comparison waiver and approval ids must be distinct"
+        )
+
+    risk_ceiling = _validated_cap(value.provider_risk_ceiling_rub)
+    if (
+        risk_ceiling < approved_cap_rub
+        or risk_ceiling > COMPARISON_PROVIDER_RISK_CEILING_MAX_RUB
+    ):
+        raise CostGovernanceError(
+            "private full comparison provider risk ceiling is invalid"
+        )
+
+    prior_scope = _validated_reference(value.prior_scope, label="prior scope")
+    prior_runtime = _validated_runtime_sha(value.prior_runtime_git_sha)
+    prior_manifest = _validated_manifest_sha(value.prior_manifest_sha256)
+    prior_cases = _validated_case_count(value.prior_case_count)
+    prior_cap = _validated_cap(value.prior_approved_cap_rub)
+    requested_scope = _validated_reference(
+        value.requested_scope,
+        label="requested scope",
+    )
+    requested_runtime = _validated_runtime_sha(
+        value.requested_runtime_git_sha
+    )
+    requested_manifest = _validated_manifest_sha(
+        value.requested_manifest_sha256
+    )
+    requested_cases = _validated_case_count(value.requested_case_count)
+    requested_cap = _validated_cap(value.requested_approved_cap_rub)
+
+    if any(
+        (
+            requested_scope != scope,
+            requested_runtime != runtime_git_sha,
+            requested_manifest != manifest_sha256,
+            requested_cases != case_count,
+            requested_cap != approved_cap_rub,
+        )
+    ):
+        raise CostGovernanceError(
+            "private full comparison waiver candidate does not match"
+        )
+    if prior_runtime == requested_runtime or prior_manifest == requested_manifest:
+        raise CostGovernanceError(
+            "private full comparison waiver requires distinct candidates"
+        )
+
+    return PrivateFullComparisonWaiver(
+        waiver_id=waiver_id,
+        decision_id=decision_id,
+        provider_risk_ceiling_rub=risk_ceiling,
+        prior_scope=prior_scope,
+        prior_runtime_git_sha=prior_runtime,
+        prior_manifest_sha256=prior_manifest,
+        prior_case_count=prior_cases,
+        prior_approved_cap_rub=prior_cap,
+        requested_scope=requested_scope,
+        requested_runtime_git_sha=requested_runtime,
+        requested_manifest_sha256=requested_manifest,
+        requested_case_count=requested_cases,
+        requested_approved_cap_rub=requested_cap,
+    )

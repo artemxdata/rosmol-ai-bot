@@ -35,6 +35,9 @@
   approval IDs once, limits routine reservations to 300 RUB per rolling 24 hours and permits at
   most one full run per rolling 24 hours and release candidate. Missing/corrupt/unwritable ledger
   means STOP; it does not provide provider-billing data.
+  Единственное исключение — exact D-041 v2 -> v3 comparison: оно не отключает ledger, а
+  записывает отдельный globally-one-use waiver и canonical binding prior reservation под тем же
+  fixed lock. Никакой следующий run это исключение не наследует.
 - Run KB validation before indexing:
   `python scripts/index_kb.py --validate-only`.
 - For production indexing, require a passed quality gate:
@@ -63,11 +66,11 @@ Git или workstation. Phase A остаётся отдельным `pending/evi
 billing — `unreconciled`; это не меняет quality baseline и не разрешает replay.
 
 Post-run аудит v1 выявил: `11` atypical qrels требуют legacy XLSX/DOCX и несовместимы с
-published-Yonote-only runtime. Поэтому v1 не повторяется. Candidate использует versioned
+published-Yonote-only runtime. Поэтому v1 не повторяется. Первый candidate использовал versioned
 `pilot50_balanced_v2` с теми же `39` совместимыми кейсами и `11` published-Yonote replacements;
 его atypical slice нельзя сравнивать с v1 как процентный рост.
 
-Следующий запуск регулируется D-040 и выполняется только новым
+Candidate-запуски регулируются D-040/D-041 и выполняются только
 `scripts/run_pilot50_candidate_server_local.sh`. После local Ruff/full pytest/KB validation и
 exact GitHub push владелец сначала запускает бесплатный `preflight <40-SHA>`. Он не делает
 `/ask`, не включает HDE/VK и не меняет production. Preflight строит image только из frozen Git
@@ -75,9 +78,9 @@ snapshot, запускает candidate с production-safe limits, проверя
 его и повторно сверяет production identity и Qdrant fingerprint; любая ошибка либо недостаток
 memory/swap/disk дают STOP до cost reservation. Только `GO` с
 `runtime_smoke_status=OK` разрешает отдельный one-shot `run <40-SHA>` с новым approval.
-Критерии: `>=30/50`, typical `>=11/25`, atypical
+Критерии v3: `>=30/50`, typical `>=11/25`, atypical
 `>=7/25` как абсолютные floors, output-contract эскалации `<=6`, ноль source-binding failures на
-`38/50` кейсах с qrels, ноль провалов `15/50` critical regression-кейсов, полные trace и
+`50/50` кейсах с published-Yonote qrels, ноль провалов `15/50` critical regression-кейсов, полные trace и
 `cache_hit=0`; runner projected stop-limit — `30 RUB`, а не `500 RUB`. Это механический gate с
 `human_product_verdict=false`, а не ручной semantic verdict по каждому ответу.
 
@@ -93,14 +96,26 @@ source-binding failures `5/38`, critical failures `7/15`. Report
 `4e5b0ebb4e04b9d449e7ed54db9a1167c19cce02ef27839073fba280e435b61d` являются sealed
 evidence. Режимы `preflight`/`run` для этого SHA больше не запускать.
 
-Следующий операционный шаг — только новый tracked
-`scripts/diagnose_pilot50_candidate_server_local.sh <tooling-40-SHA>` после exact detached
-checkout диагностического commit. Скрипт не выполняет `/ask`, не использует сеть, HDE/VK,
-production API или cost ledger; он read-only проверяет sealed evidence и печатает bounded safe
-failure matrix. Не использовать `cat`, `jq` или копирование raw report. Новый paid candidate
-допускается только после адресных regression-first исправлений, полного local gate, отдельного
-commit/push и нового бесплатного candidate preflight `GO`. Один новый запуск разрешён владельцем,
-но обычные one-shot/approval/rolling-ledger controls сохраняются.
+Tracked offline diagnostics commit `fc530f177b1b094810a81d408760cc1387bfafef` уже успешно
+проверил sealed v2 evidence и не выполнял `/ask`. Он доказал, что cases 46–48 имеют ошибочный
+answer-only contract. V2 не редактируется. `pilot50_balanced_v3` сохраняет остальные 47 cases и
+заменяет только эти три позиции published-Yonote cases; exact manifest/cases SHA-256 —
+`fef1caa227777e2c198bd6acdc77471fbf2551732c85e2334f8cad781025e875` и
+`3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112`.
+
+Владелец явно разрешил один v3 test до окончания rolling-24h окна. Это не blanket bypass:
+launcher требует отдельные exact approval и `PILOT50_ROLLING_24H_WAIVER_ID`, детерминированно
+связанные с final 40-SHA. Под fixed ledger lock waiver может связать только одну исходную v2
+private-full reservation (`64cc182d37a3c060439ed7a55f5cc875a27d786d`, cases
+`b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d`, 50, cap30) с одним новым v3
+candidate; schema `1.1.0` сохраняет decision `D-041`, canonical prior-record digest и residual
+provider-risk ceiling `500 RUB`. Любой второй waiver, другой baseline, reuse reference, same
+runtime/cases, лишняя recent private-full запись или malformed ledger дают STOP до `run.started`
+и `/ask`. Ledger/время/classification не редактировать. Исполняемый stop-limit остаётся `30 RUB`;
+`500 RUB` не передаётся runner как cap. После нового commit/push сначала выполнить только
+бесплатный v3 `preflight <40-SHA>`; отдельный `run` разрешён лишь при его `GO` и
+`runtime_smoke_status=OK`. Любой execution result или quality `GO|STOP` завершает one-shot без
+retry.
 
 ### Real-RAG Phase 0: server-local one-shot
 

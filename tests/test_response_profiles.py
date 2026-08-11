@@ -184,6 +184,36 @@ def test_profile_detector_does_not_find_food_inside_winner_word() -> None:
     assert ResponseProfileName.SELECTION_STATUS in detected
 
 
+def test_plural_application_statuses_route_to_selection_status() -> None:
+    text = "Что означают статусы заявки во ФГАИС?"
+
+    assert (
+        infer_response_profile(QueryAnalysis(category="платформа_фгаис"), text)
+        == ResponseProfileName.SELECTION_STATUS
+    )
+    assert ResponseProfileName.SELECTION_STATUS in detect_response_profiles(text)
+
+
+def test_eligibility_condition_may_name_legal_entity_registration() -> None:
+    eligibility = (
+        "Юридическое лицо, зарегистрированное на территории Российской Федерации, "
+        "может участвовать; возраст представителя — от 18 до 55 лет."
+    )
+
+    assert not response_has_cross_aspect_drift(
+        ResponseProfileName.ELIGIBILITY,
+        eligibility,
+    )
+    assert response_has_cross_aspect_drift(
+        ResponseProfileName.ELIGIBILITY,
+        "Зарегистрироваться можно через личный кабинет.",
+    )
+    assert response_has_cross_aspect_drift(
+        ResponseProfileName.ELIGIBILITY,
+        "Юридическое лицо может участвовать и подать заявку до 1 июня.",
+    )
+
+
 @pytest.mark.parametrize(
     ("expected", "response"),
     [

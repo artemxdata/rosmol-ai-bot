@@ -29,6 +29,7 @@ from eval.cost_governance import (
     ROUTINE_LIVE_EVAL_MAX_COST_RUB,
     CostGovernanceError,
     LiveEvalCostReservation,
+    PrivateFullComparisonWaiver,
     reserve_live_eval_cost,
 )
 from eval.cost_governance import (
@@ -100,6 +101,22 @@ PILOT50_CANDIDATE_TARGET = "http://pilot50-candidate-ml:8000/ask"
 PILOT50_CANDIDATE_CASES_TOTAL = 50
 PILOT50_CANDIDATE_COST_CAP_RUB = 30.0
 PILOT50_CANDIDATE_COST_SCOPE = "pilot50-v2-candidate"
+PILOT50_V3_CANDIDATE_CONTRACT_ID = "pilot50-v3-candidate-v1"
+PILOT50_V3_CANDIDATE_CASES_SHA256 = (
+    "3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112"
+)
+PILOT50_V3_CANDIDATE_COST_SCOPE = "pilot50-v3-candidate"
+PILOT50_V3_COMPARISON_WAIVER_DECISION_ID = "D-041"
+PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500.0
+PILOT50_V3_PRIOR_SCOPE = "pilot50-v2-candidate"
+PILOT50_V3_PRIOR_RUNTIME_SHA = "64cc182d37a3c060439ed7a55f5cc875a27d786d"
+PILOT50_V3_PRIOR_CASES_SHA256 = (
+    "b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
+)
+PILOT50_CANDIDATE_CONTRACT_IDS = (
+    PILOT50_CANDIDATE_CONTRACT_ID,
+    PILOT50_V3_CANDIDATE_CONTRACT_ID,
+)
 PHASE0_RUNNER_CASE_FIELDS = frozenset(
     {
         "id",
@@ -729,6 +746,7 @@ async def run_eval(
     cost_reservation: LiveEvalCostReservation | None = None,
     llm_cost_repricing_contract: str | None = None,
     pilot50_candidate_contract: str | None = None,
+    rolling_24h_comparison_waiver_id: str | None = None,
     require_complete_traces: bool = False,
     allow_source_observed_diagnostic: bool = False,
     phase0_manifest_path: Path | None = None,
@@ -1185,10 +1203,17 @@ async def run_eval(
         expected_runtime_git_sha=expected_runtime_git_sha,
         require_budget_for_large_runs=require_budget_for_large_runs,
         require_complete_traces=require_complete_traces,
+        rolling_24h_comparison_waiver_id=(
+            rolling_24h_comparison_waiver_id
+        ),
     )
     candidate_contract_run = validated_candidate_contract is not None
     if validated_candidate_contract is not None:
         evaluation_runtime_git_sha = validated_candidate_contract["runtime_git_sha"]
+    validated_comparison_waiver = _pilot50_candidate_comparison_waiver(
+        validated_candidate_contract,
+        rolling_24h_comparison_waiver_id=rolling_24h_comparison_waiver_id,
+    )
     original_cases_total = len(cases)
     if max_cases is not None:
         if holdout_contract is not None:
@@ -1493,17 +1518,22 @@ async def run_eval(
                     try:
                         if validated_cost_reservation is None:
                             validated_cost_reservation = reserve_live_eval_cost(
-                                scope=PILOT50_CANDIDATE_COST_SCOPE,
+                                scope=validated_candidate_contract["cost_scope"],
                                 run_id=eval_run_id,
                                 runtime_git_sha=validated_candidate_contract[
                                     "runtime_git_sha"
                                 ],
-                                manifest_sha256=PILOT50_CANDIDATE_CASES_SHA256,
+                                manifest_sha256=validated_candidate_contract[
+                                    "cases_file_sha256"
+                                ],
                                 case_count=PILOT50_CANDIDATE_CASES_TOTAL,
                                 approved_cap_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
                                 private_full=True,
                                 high_cost_approval_id=(
                                     validated_high_cost_approval_id
+                                ),
+                                private_full_comparison_waiver=(
+                                    validated_comparison_waiver
                                 ),
                                 ledger_dir=cost_ledger_dir,
                             )
@@ -1905,7 +1935,7 @@ async def run_eval(
             (
                 reservation_report.get("valid") is not True,
                 reservation_report.get("scope")
-                != PILOT50_CANDIDATE_COST_SCOPE,
+                != validated_candidate_contract["cost_scope"],
                 reservation_report.get("case_count")
                 != PILOT50_CANDIDATE_CASES_TOTAL,
                 reservation_report.get("approved_cap_rub")
@@ -1914,6 +1944,10 @@ async def run_eval(
                 reservation_report.get("reservation_class") != "private_full",
                 reservation_report.get("high_cost_approval_id")
                 != validated_high_cost_approval_id,
+                not _pilot50_candidate_waiver_report_matches(
+                    reservation_report,
+                    contract=validated_candidate_contract,
+                ),
             )
         ):
             candidate_failures.append("cost_reservation_invalid")
@@ -1926,10 +1960,12 @@ async def run_eval(
                 "completed" if not candidate_failures else "integrity_rejected"
             ),
             "completed": not candidate_failures,
-            "contract_id": PILOT50_CANDIDATE_CONTRACT_ID,
+            "contract_id": validated_candidate_contract["contract_id"],
             "expected_cases_total": PILOT50_CANDIDATE_CASES_TOTAL,
             "executed_cases_total": len(results),
-            "cases_file_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+            "cases_file_sha256": validated_candidate_contract[
+                "cases_file_sha256"
+            ],
             "runtime_git_sha": validated_candidate_contract["runtime_git_sha"],
             "integrity_failures": candidate_failures,
             "selective_reruns_forbidden": True,
@@ -2402,6 +2438,114 @@ def _validated_pilot50_repricing_contract(
     }
 
 
+def _pilot50_candidate_contract_config(contract_id: str) -> dict[str, Any] | None:
+    if contract_id == PILOT50_CANDIDATE_CONTRACT_ID:
+        return {
+            "contract_id": PILOT50_CANDIDATE_CONTRACT_ID,
+            "cases_file_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+            "cost_scope": PILOT50_CANDIDATE_COST_SCOPE,
+            "comparison_waiver_required": False,
+        }
+    if contract_id == PILOT50_V3_CANDIDATE_CONTRACT_ID:
+        return {
+            "contract_id": PILOT50_V3_CANDIDATE_CONTRACT_ID,
+            "cases_file_sha256": PILOT50_V3_CANDIDATE_CASES_SHA256,
+            "cost_scope": PILOT50_V3_CANDIDATE_COST_SCOPE,
+            "comparison_waiver_required": True,
+        }
+    return None
+
+
+def _pilot50_v3_expected_approval_id(runtime_git_sha: str) -> str:
+    return f"owner-chat-20260811-pilot50-v3-{runtime_git_sha}-cap30"
+
+
+def _pilot50_v3_expected_waiver_id(runtime_git_sha: str) -> str:
+    return (
+        "owner-chat-20260811-waive-rolling24h-v2-to-v3-"
+        f"{runtime_git_sha}-cap30"
+    )
+
+
+def _pilot50_candidate_comparison_waiver(
+    contract: Mapping[str, Any] | None,
+    *,
+    rolling_24h_comparison_waiver_id: str | None,
+) -> PrivateFullComparisonWaiver | None:
+    waiver_id = str(rolling_24h_comparison_waiver_id or "").strip()
+    if contract is None:
+        if waiver_id:
+            raise ValueError(
+                "--rolling-24h-comparison-waiver-id requires the Pilot50 v3 "
+                "candidate contract"
+            )
+        return None
+    if contract.get("contract_id") != PILOT50_V3_CANDIDATE_CONTRACT_ID:
+        if waiver_id:
+            raise ValueError(
+                "Pilot50 v2 rejects --rolling-24h-comparison-waiver-id"
+            )
+        return None
+
+    runtime_git_sha = str(contract.get("runtime_git_sha") or "")
+    expected_waiver_id = _pilot50_v3_expected_waiver_id(runtime_git_sha)
+    if waiver_id != expected_waiver_id:
+        raise ValueError("Pilot50 v3 comparison waiver id is invalid")
+    return PrivateFullComparisonWaiver(
+        waiver_id=waiver_id,
+        decision_id=PILOT50_V3_COMPARISON_WAIVER_DECISION_ID,
+        provider_risk_ceiling_rub=(
+            PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        ),
+        prior_scope=PILOT50_V3_PRIOR_SCOPE,
+        prior_runtime_git_sha=PILOT50_V3_PRIOR_RUNTIME_SHA,
+        prior_manifest_sha256=PILOT50_V3_PRIOR_CASES_SHA256,
+        prior_case_count=PILOT50_CANDIDATE_CASES_TOTAL,
+        prior_approved_cap_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
+        requested_scope=PILOT50_V3_CANDIDATE_COST_SCOPE,
+        requested_runtime_git_sha=runtime_git_sha,
+        requested_manifest_sha256=PILOT50_V3_CANDIDATE_CASES_SHA256,
+        requested_case_count=PILOT50_CANDIDATE_CASES_TOTAL,
+        requested_approved_cap_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
+    )
+
+
+def _pilot50_candidate_waiver_report_matches(
+    reservation_report: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+) -> bool:
+    waiver_fields = {
+        "schema_version",
+        "rolling_24h_waiver_id",
+        "rolling_24h_waiver_decision_id",
+        "waived_reservation_sha256",
+        "provider_risk_ceiling_rub",
+    }
+    if contract.get("contract_id") != PILOT50_V3_CANDIDATE_CONTRACT_ID:
+        return waiver_fields.isdisjoint(reservation_report)
+    runtime_git_sha = str(contract.get("runtime_git_sha") or "")
+    return all(
+        (
+            reservation_report.get("schema_version") == "1.1.0",
+            reservation_report.get("rolling_24h_waiver_id")
+            == _pilot50_v3_expected_waiver_id(runtime_git_sha),
+            reservation_report.get("rolling_24h_waiver_decision_id")
+            == PILOT50_V3_COMPARISON_WAIVER_DECISION_ID,
+            isinstance(
+                reservation_report.get("waived_reservation_sha256"),
+                str,
+            ),
+            SHA256_RE.fullmatch(
+                str(reservation_report.get("waived_reservation_sha256") or "")
+            )
+            is not None,
+            reservation_report.get("provider_risk_ceiling_rub")
+            == PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB,
+        )
+    )
+
+
 def _validated_pilot50_candidate_contract(
     value: str | None,
     *,
@@ -2423,14 +2567,17 @@ def _validated_pilot50_candidate_contract(
     expected_runtime_git_sha: str | None,
     require_budget_for_large_runs: bool,
     require_complete_traces: bool,
+    rolling_24h_comparison_waiver_id: str | None = None,
 ) -> dict[str, Any] | None:
     contract_id = str(value or "").strip()
     if not contract_id:
         return None
     runtime_sha = str(os.getenv("RELEASE_GIT_SHA") or "").strip()
     approval_id = str(high_cost_approval_id or "").strip()
+    waiver_id = str(rolling_24h_comparison_waiver_id or "").strip()
     failures: list[str] = []
-    if contract_id != PILOT50_CANDIDATE_CONTRACT_ID:
+    candidate_config = _pilot50_candidate_contract_config(contract_id)
+    if candidate_config is None:
         failures.append("contract_id")
     if (
         FULL_GIT_SHA_RE.fullmatch(runtime_sha) is None
@@ -2438,7 +2585,10 @@ def _validated_pilot50_candidate_contract(
         or expected_runtime_git_sha != runtime_sha
     ):
         failures.append("runtime_sha")
-    if cases_file_sha256 != PILOT50_CANDIDATE_CASES_SHA256:
+    if (
+        candidate_config is None
+        or cases_file_sha256 != candidate_config["cases_file_sha256"]
+    ):
         failures.append("cases_sha")
     if len(cases) != PILOT50_CANDIDATE_CASES_TOTAL:
         failures.append("case_count")
@@ -2462,17 +2612,25 @@ def _validated_pilot50_candidate_contract(
         failures.append("run_class")
     if not strict_live:
         failures.append("strict_live")
-    if SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
-        failures.append("approval")
+    if candidate_config is not None and candidate_config["comparison_waiver_required"]:
+        if approval_id != _pilot50_v3_expected_approval_id(runtime_sha):
+            failures.append("approval")
+        if waiver_id != _pilot50_v3_expected_waiver_id(runtime_sha):
+            failures.append("rolling_24h_comparison_waiver")
+    else:
+        if SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
+            failures.append("approval")
+        if waiver_id:
+            failures.append("rolling_24h_comparison_waiver")
     if failures:
         raise ValueError(
             "Pilot50 candidate contract rejected: " + ", ".join(failures)
         )
-    return {
+    contract = {
         "schema_version": "pilot50-candidate-eval-v1",
-        "contract_id": PILOT50_CANDIDATE_CONTRACT_ID,
+        "contract_id": candidate_config["contract_id"],
         "runtime_git_sha": runtime_sha,
-        "cases_file_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+        "cases_file_sha256": candidate_config["cases_file_sha256"],
         "cases_total": PILOT50_CANDIDATE_CASES_TOTAL,
         "target": PILOT50_CANDIDATE_TARGET,
         "concurrency": 1,
@@ -2480,13 +2638,22 @@ def _validated_pilot50_candidate_contract(
         "runtime_ready_checks": "signed_pre_and_post",
         "complete_traces_required": True,
         "max_llm_cost_rub": PILOT50_CANDIDATE_COST_CAP_RUB,
-        "cost_scope": PILOT50_CANDIDATE_COST_SCOPE,
+        "cost_scope": candidate_config["cost_scope"],
         "reservation_private_full": True,
         "pricing_source": "target_reported",
         "pricing_rate_card_sha256": PILOT50_REPRICING_RATE_CARD_SHA256,
         "target_telemetry_pricing_complete": True,
         "repricing_applied": False,
     }
+    if candidate_config["comparison_waiver_required"]:
+        contract["rolling_24h_comparison_waiver_id"] = waiver_id
+        contract["rolling_24h_comparison_waiver_decision_id"] = (
+            PILOT50_V3_COMPARISON_WAIVER_DECISION_ID
+        )
+        contract["provider_residual_risk_ceiling_rub"] = (
+            PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        )
+    return contract
 
 
 def _pilot50_reprice_result(
@@ -3256,6 +3423,71 @@ def _safe_cost_reservation_report(
         ),
         "high_cost_approval_id": approval_id if approval_valid else None,
     }
+    waiver_field_names = (
+        "rolling_24h_waiver_id",
+        "rolling_24h_waiver_decision_id",
+        "waived_reservation_sha256",
+        "provider_risk_ceiling_rub",
+    )
+    waiver_shape_present = record.get("schema_version") == "1.1.0" or any(
+        field in record for field in waiver_field_names
+    )
+    if waiver_shape_present:
+        waiver_id = str(record.get("rolling_24h_waiver_id") or "")
+        waiver_decision_id = str(
+            record.get("rolling_24h_waiver_decision_id") or ""
+        )
+        waived_reservation_sha256 = str(
+            record.get("waived_reservation_sha256") or ""
+        )
+        raw_provider_risk = record.get("provider_risk_ceiling_rub")
+        provider_risk_valid = (
+            not isinstance(raw_provider_risk, bool)
+            and isinstance(raw_provider_risk, (int, float))
+            and math.isfinite(float(raw_provider_risk))
+            and float(raw_provider_risk)
+            == PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        )
+        waiver_valid = all(
+            (
+                record.get("schema_version") == "1.1.0",
+                SAFE_COST_APPROVAL_ID_RE.fullmatch(waiver_id) is not None,
+                SAFE_COST_APPROVAL_ID_RE.fullmatch(waiver_decision_id)
+                is not None,
+                SHA256_RE.fullmatch(waived_reservation_sha256) is not None,
+                provider_risk_valid,
+                waiver_id != approval_id,
+            )
+        )
+        report.update(
+            {
+                "schema_version": (
+                    "1.1.0"
+                    if record.get("schema_version") == "1.1.0"
+                    else None
+                ),
+                "rolling_24h_waiver_id": (
+                    waiver_id
+                    if SAFE_COST_APPROVAL_ID_RE.fullmatch(waiver_id) is not None
+                    else None
+                ),
+                "rolling_24h_waiver_decision_id": (
+                    waiver_decision_id
+                    if SAFE_COST_APPROVAL_ID_RE.fullmatch(waiver_decision_id)
+                    is not None
+                    else None
+                ),
+                "waived_reservation_sha256": (
+                    waived_reservation_sha256
+                    if SHA256_RE.fullmatch(waived_reservation_sha256) is not None
+                    else None
+                ),
+                "provider_risk_ceiling_rub": (
+                    float(raw_provider_risk) if provider_risk_valid else None
+                ),
+            }
+        )
+        report["valid"] = report["valid"] is True and waiver_valid
     if (
         include_private_full
         and private_full is True
@@ -3323,10 +3555,10 @@ def _validate_pilot50_candidate_cost_reservation(
     record = reservation.record
     expected = {
         "reservation_class": "private_full",
-        "scope": PILOT50_CANDIDATE_COST_SCOPE,
+        "scope": contract["cost_scope"],
         "run_id": eval_run_id,
         "runtime_git_sha": contract["runtime_git_sha"],
-        "manifest_sha256": PILOT50_CANDIDATE_CASES_SHA256,
+        "manifest_sha256": contract["cases_file_sha256"],
         "case_count": PILOT50_CANDIDATE_CASES_TOTAL,
         "approved_cap_rub": PILOT50_CANDIDATE_COST_CAP_RUB,
         "private_full": True,
@@ -3336,6 +3568,22 @@ def _validate_pilot50_candidate_cost_reservation(
     if any(record.get(field) != value for field, value in expected.items()):
         raise CostGovernanceError(
             "Pilot50 candidate cost reservation differs from the fixed execution tuple"
+        )
+    waiver_report = _safe_cost_reservation_report(
+        reservation,
+        cases_file_sha256=str(contract["cases_file_sha256"]),
+        include_private_full=True,
+    )
+    if (
+        not isinstance(waiver_report, Mapping)
+        or waiver_report.get("valid") is not True
+        or not _pilot50_candidate_waiver_report_matches(
+            waiver_report,
+            contract=contract,
+        )
+    ):
+        raise CostGovernanceError(
+            "Pilot50 candidate comparison waiver reservation is invalid"
         )
 
 
@@ -6430,12 +6678,21 @@ def main() -> None:
     )
     parser.add_argument(
         "--pilot50-candidate-contract",
-        choices=(PILOT50_CANDIDATE_CONTRACT_ID,),
+        choices=PILOT50_CANDIDATE_CONTRACT_IDS,
         default="",
         help=(
-            "Exact fail-closed Pilot50 v2 candidate contract. It fixes the "
+            "Exact fail-closed versioned Pilot50 candidate contract. It fixes the "
             "target, 50-case payload, signed cache bypass, trace coverage, "
             "runtime identity, target-reported pricing, and 30 RUB cap."
+        ),
+    )
+    parser.add_argument(
+        "--rolling-24h-comparison-waiver-id",
+        default="",
+        help=(
+            "Exact non-secret one-time D-041 waiver reference. It is accepted "
+            "only by the Pilot50 v3 candidate contract and never changes the "
+            "30 RUB executable stop limit."
         ),
     )
     parser.add_argument(
@@ -6596,6 +6853,9 @@ def main() -> None:
             ),
             pilot50_candidate_contract=(
                 args.pilot50_candidate_contract or None
+            ),
+            rolling_24h_comparison_waiver_id=(
+                args.rolling_24h_comparison_waiver_id or None
             ),
             require_complete_traces=args.require_complete_traces,
             require_budget_for_large_runs=not args.allow_unbounded_llm_cost,

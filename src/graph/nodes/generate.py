@@ -494,6 +494,35 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                 reason="source_response_contract_failed",
             )
         if result.get("partial_source_missing_coverage"):
+            cited_ids = list(result.get("cited_sources") or [])
+            chunks_by_id = {
+                chunk.chunk_id: chunk
+                for chunk in state.get("reranked_chunks", [])
+                if str((chunk.metadata or {}).get("source_type") or "")
+                .strip()
+                .casefold()
+                == FACTUAL_SOURCE_TYPE
+            }
+            selected_chunks = [
+                chunks_by_id[chunk_id]
+                for chunk_id in cited_ids
+                if chunk_id in chunks_by_id
+            ]
+            bounded_source_result = _bounded_published_source_result(
+                analysis=analysis,
+                questions=questions,
+                source_chunks=selected_chunks,
+                response_limit=response_limit,
+            )
+            if bounded_source_result is not None:
+                if tracer := state.get("trace"):
+                    tracer.add(
+                        "generate",
+                        0,
+                        mode="bounded_published_source_chunk",
+                        chunks=len(selected_chunks),
+                    )
+                return bounded_source_result
             if (
                 _visible_response_length(sanitized) > response_limit
                 or _response_url_count(sanitized) > 1
@@ -575,6 +604,24 @@ async def _generate_with_llm_or_source_fallback(
     response_limit: int | None = None,
 ) -> dict:
     tracer = state.get("trace")
+    bounded_source_result = _bounded_published_source_result(
+        analysis=analysis,
+        questions=questions,
+        source_chunks=source_chunks,
+        response_limit=(
+            response_limit or _response_char_limit(analysis, questions)
+        ),
+    )
+    if bounded_source_result is not None:
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                mode="bounded_published_source_chunk",
+                chunks=len(source_chunks),
+            )
+        return bounded_source_result
+
     last_result: dict = {}
     retry_reason: str | None = None
     rejected_draft: str | None = None
@@ -1451,10 +1498,10 @@ def _date_signatures(text: str) -> set[str]:
         normalized_year = str(year or inherited_year or "")
         if normalized_year and len(normalized_year) == 2:
             normalized_year = f"20{normalized_year}"
-        signatures.add(
-            f"{int(day):02d}.{int(month):02d}"
-            + (f".{normalized_year}" if normalized_year else "")
-        )
+        base_signature = f"{int(day):02d}.{int(month):02d}"
+        signatures.add(base_signature)
+        if normalized_year:
+            signatures.add(f"{base_signature}.{normalized_year}")
 
     for day, month, year in FACT_DATE_RE.findall(text):
         add(day, month, year)
@@ -2521,6 +2568,511 @@ def build_deterministic_source_response(chunks: list[ScoredChunk] | ScoredChunk)
     if not parts:
         return None
     return "\n\n".join(parts)
+
+
+def _bounded_published_source_result(
+    *,
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+    response_limit: int,
+) -> dict | None:
+    """Build a strict, bounded answer from selected published Yonote clauses.
+
+    This fast path is deliberately narrow: it only handles known structured
+    source topics where the requested fact can be copied from a stable clause.
+    The resulting draft still has to satisfy the same length, URL, profile,
+    citation, fact-binding and question-coverage checks as an LLM draft.
+    """
+
+    contract_questions = _published_contract_questions(
+        list(analysis.questions or []),
+        questions,
+    )
+    if not contract_questions or not source_chunks:
+        return None
+    if len(source_chunks) > 1 and any(
+        not str(question.topic or "").strip()
+        for question in contract_questions
+    ):
+        return None
+    if any(not _is_published_yonote_release_chunk(chunk) for chunk in source_chunks):
+        return None
+
+    claims: list[str] = []
+    cited_sources: list[str] = []
+    covered_question_ids: set[int] = set()
+    for chunk in source_chunks:
+        matching_questions = _questions_matching_published_source(
+            analysis,
+            contract_questions,
+            chunk,
+        )
+        if not matching_questions:
+            return None
+        covered_question_ids.update(id(question) for question in matching_questions)
+        excerpts = _published_source_excerpts(chunk, matching_questions)
+        if not excerpts:
+            return None
+        cited_sources.append(chunk.chunk_id)
+        claims.extend(
+            f"{excerpt} [src:{chunk.chunk_id}]"
+            for excerpt in excerpts
+            if excerpt.strip()
+        )
+
+    if any(
+        id(question) not in covered_question_ids
+        for question in contract_questions
+    ):
+        return None
+
+    response = _strip_dynamic_emoji("\n\n".join(claims).strip())
+    if not response or _visible_response_length(response) > response_limit:
+        return None
+    if _response_url_count(response) > 1:
+        return None
+    if _has_unknown_source_refs(response, source_chunks):
+        return None
+    if _known_source_refs(response, source_chunks) != cited_sources:
+        return None
+    if _violates_response_profile(response, analysis, contract_questions):
+        return None
+    if not _bounded_claims_have_bound_source_facts(
+        response,
+        source_chunks,
+        analysis,
+        contract_questions,
+    ):
+        return None
+
+    result = {
+        "generated_response": response,
+        "generator_model": "source_chunk",
+        "cited_sources": cited_sources,
+    }
+    return result
+
+
+def _is_published_yonote_release_chunk(chunk: ScoredChunk) -> bool:
+    metadata = chunk.metadata or {}
+    return (
+        str(metadata.get("source_type") or "").strip().casefold()
+        == FACTUAL_SOURCE_TYPE
+        and str(metadata.get("source") or "").strip().casefold() == "yonote_api"
+        and str(metadata.get("version") or "").strip() == "yonote-api-v1"
+        and str(metadata.get("status") or "").strip().casefold() == "published"
+    )
+
+
+def _published_contract_questions(
+    explicit_questions: list[Question],
+    effective_questions: list[Question],
+) -> list[Question]:
+    merged: list[Question] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for question in [*explicit_questions, *effective_questions]:
+        key = (
+            _normalize(str(question.text or "")).strip(),
+            str(question.topic or "").strip().casefold(),
+            str(question.category or "").strip().casefold(),
+            _normalize(str(question.forum_normalized or "")).strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(question)
+    return merged
+
+
+def _questions_matching_published_source(
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    chunk: ScoredChunk,
+) -> list[Question]:
+    chunk_topic = str((chunk.metadata or {}).get("topic") or "").strip()
+    matching: list[Question] = []
+    for question in questions:
+        if not _published_source_matches_question_scope(analysis, question, chunk):
+            continue
+        explicit_topic = str(question.topic or "").strip().casefold()
+        if explicit_topic:
+            if _published_topic_matches_question(
+                chunk_topic,
+                explicit_topic,
+                question.text,
+            ):
+                matching.append(question)
+            continue
+        if _source_chunk_covers_question(question, chunk):
+            matching.append(question)
+            continue
+        if _metadata_matches_specific_question(analysis, question, chunk):
+            matching.append(question)
+    return matching
+
+
+def _published_source_matches_question_scope(
+    analysis: QueryAnalysis,
+    question: Question,
+    chunk: ScoredChunk,
+) -> bool:
+    metadata = chunk.metadata or {}
+    expected_forum = str(
+        question.forum_normalized or analysis.forum_normalized or ""
+    ).strip()
+    source_forum = str(metadata.get("forum_normalized") or "").strip()
+    if expected_forum and (
+        not source_forum or _normalize(source_forum) != _normalize(expected_forum)
+    ):
+        return False
+
+    expected_category = str(question.category or analysis.category or "").strip()
+    source_category = str(metadata.get("category") or "").strip()
+    return not expected_category or (
+        bool(source_category) and source_category == expected_category
+    )
+
+
+def _published_topic_matches_question(
+    chunk_topic: str,
+    question_topic: str,
+    question_text: str,
+) -> bool:
+    chunk_topic = chunk_topic.strip().casefold()
+    question_topic = question_topic.strip().casefold()
+    if not chunk_topic or not question_topic:
+        return False
+    shift_match = re.fullmatch(r"(\d+)_smena_\d+_\d+_avgusta", chunk_topic)
+    if shift_match:
+        requested_ordinals = _question_shift_ordinals(question_text, question_topic)
+        return bool(
+            requested_ordinals
+            and int(shift_match.group(1)) in requested_ordinals
+            and (
+                question_topic == chunk_topic
+                or question_topic == "daty_nachala_meropriyatiya"
+            )
+        )
+    if chunk_topic == question_topic:
+        return True
+    if chunk_topic in {"rezultaty", "rezultaty_rm", "rezultaty_otbora_i_spiski"}:
+        return question_topic in {
+            "rezultaty",
+            "rezultaty_rm",
+            "rezultaty_otbora_i_spiski",
+        }
+    return False
+
+
+def _question_shift_ordinals(question_text: str, question_topic: str) -> set[int]:
+    normalized = _normalize(question_text)
+    ordinals: set[int] = set()
+    if re.search(r"\bперв\w*\s+смен", normalized):
+        ordinals.add(1)
+    if re.search(r"\bвтор\w*\s+смен", normalized):
+        ordinals.add(2)
+    ordinals.update(
+        int(value)
+        for value in re.findall(
+            r"\b(\d+)\s*(?:[-–]\s*)?(?:я|й|ая|ой)?\s+смен",
+            normalized,
+        )
+    )
+    if not ordinals and (topic_match := re.match(r"^(\d+)_smena_", question_topic)):
+        ordinals.add(int(topic_match.group(1)))
+    return ordinals
+
+
+def _bounded_claims_have_bound_source_facts(
+    response: str,
+    source_chunks: list[ScoredChunk],
+    analysis: QueryAnalysis,
+    questions: list[Question],
+) -> bool:
+    """Apply fact binding with exact published-topic question attribution.
+
+    Generic coverage matching intentionally tolerates broad category/topic
+    aliases for retrieval. This fast path uses a stricter published-topic map,
+    so a copied claim may only bind to the exact source selected for that
+    question while retaining the existing numeric, date and conditional checks.
+    """
+
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in source_chunks}
+    previous_end = 0
+    found_claim = False
+    for marker_group in SOURCE_GROUP_RE.finditer(response):
+        claim = response[previous_end : marker_group.start()]
+        previous_end = marker_group.end()
+        if not SOURCE_RE.sub("", claim).strip():
+            return False
+        found_claim = True
+        cited_ids = list(dict.fromkeys(SOURCE_RE.findall(marker_group.group(0))))
+        if len(cited_ids) != 1:
+            return False
+        cited_chunk = chunks_by_id.get(cited_ids[0])
+        if cited_chunk is None:
+            return False
+        relevant_questions = _questions_matching_published_source(
+            analysis,
+            questions,
+            cited_chunk,
+        )
+        if not relevant_questions or not _chunk_supports_claim_facts(
+            cited_chunk,
+            claim,
+            relevant_questions,
+        ):
+            return False
+
+    trailing_claim = response[previous_end:]
+    if re.sub(r"[\s.!?…,:;—–-]+", "", SOURCE_RE.sub("", trailing_claim)):
+        return False
+    return found_claim
+
+
+def _published_source_excerpts(
+    chunk: ScoredChunk,
+    questions: list[Question],
+) -> list[str]:
+    topic = str((chunk.metadata or {}).get("topic") or "").strip().casefold()
+    question_text = _normalize(" ".join(question.text for question in questions))
+    lines = [line.strip() for line in chunk.text.splitlines() if line.strip()]
+    sentences = _published_source_sentences(lines[1:] if len(lines) > 1 else lines)
+
+    if topic == "registraciya" and "заяв" in question_text and any(
+        marker in question_text
+        for marker in ("до какого", "крайн", "срок", "дедлайн")
+    ):
+        return [
+            line
+            for line in lines
+            if "заяв" in _normalize(line) and _date_signatures(line)
+        ][:1]
+
+    if topic == "uchastniki" and any(
+        marker in question_text
+        for marker in ("кто", "участв", "возраст", "подход")
+    ):
+        return [
+            _compact_published_eligibility_line(line.rstrip(","))
+            for line in lines
+            if (
+                "гражданин российской федерации" in _normalize(line)
+                or "юридическое лицо" in _normalize(line)
+            )
+            and "возраст" in _normalize(line)
+        ]
+
+    if topic == "poshagovyy_algoritm" and _asks_grant_application(question_text):
+        selected = [
+            sentence
+            for sentence in sentences
+            if any(
+                marker in _normalize(sentence)
+                for marker in (
+                    "необходимо верифицировать",
+                    "ознакомиться с объявлением",
+                    "оформить идею проекта",
+                    "подать заявку на фгаис",
+                )
+            )
+        ]
+        return _keep_one_application_link(selected)
+
+    if (
+        topic == "registraciya_s_pomoschyu_sozdaniya_kabineta"
+        and _asks_account_creation(question_text)
+    ):
+        return [
+            line
+            for line in lines[1:]
+            if any(
+                marker in _normalize(line)
+                for marker in (
+                    "необходимо заполнить",
+                    "придет письмо",
+                    "подтверждени",
+                    "аккаунт будет создан",
+                )
+            )
+        ]
+
+    if topic == "volonterskaya_pomosch" and _asks_volunteer_application(question_text):
+        return [
+            line
+            for line in lines[1:]
+            if any(
+                marker in _normalize(line)
+                for marker in (
+                    "настройка фильтров поиска",
+                    "для подачи заявки нужно кликнуть",
+                    "разные следующие шаги",
+                )
+            )
+        ]
+
+    if topic == "obedinenie_akkauntov" and (
+        "почт" in question_text
+        and any(marker in question_text for marker in ("потер", "доступ"))
+        and any(marker in question_text for marker in ("данн", "профил", "аккаунт"))
+    ):
+        return [
+            line
+            for line in lines[1:]
+            if (
+                "создать аккаунт" in _normalize(line)
+                and "специалисты перенесут" in _normalize(line)
+            )
+            or (
+                "объединить аккаунты невозможно" in _normalize(line)
+                and "активная заявка" in _normalize(line)
+            )
+        ]
+
+    if topic == "statusy_zayavok" and "статус" in question_text:
+        return _published_requested_status_lines(lines[1:], question_text)
+
+    if topic in {
+        "proverka_proekta_grantovogo_soglasheniya",
+        "proverka_otcheta",
+    } and any(marker in question_text for marker in ("сколько", "срок", "провер")):
+        return [
+            sentence
+            for sentence in sentences
+            if re.search(r"\bдо\s+\d+\s+(?:рабочих\s+)?дн", _normalize(sentence))
+        ][:1]
+
+    if topic in {"rezultaty", "rezultaty_rm", "rezultaty_otbora_i_spiski"} and (
+        _asks_selection_results(question_text)
+    ):
+        return [
+            sentence
+            for sentence in sentences
+            if "результат" in _normalize(sentence)
+            and re.search(
+                r"\bза\s+\d+\s+(?:календарн\w+\s+)?дн",
+                _normalize(sentence),
+            )
+        ][:1]
+
+    if topic in {"programma_foruma", "programma_i_artisty", "programma_artisty"} and (
+        _asks_event_program(question_text)
+    ):
+        return [
+            sentence
+            for sentence in sentences
+            if "программ" in _normalize(sentence)
+            and any(
+                marker in _normalize(sentence)
+                for marker in ("за сутки", "не позднее", "будет доступна")
+            )
+        ][:1]
+
+    if re.fullmatch(r"\d+_smena_\d+_\d+_avgusta", topic) and any(
+        marker in question_text
+        for marker in ("дат", "период", "когда", "разъезд", "отъезд")
+    ):
+        dated_lines = [line for line in lines[1:] if _date_signatures(line)]
+        if not dated_lines:
+            return []
+        boundary_lines = [dated_lines[0]]
+        closing_line = next(
+            (
+                line
+                for line in reversed(dated_lines)
+                if any(marker in _normalize(line) for marker in ("разъезд", "отъезд"))
+            ),
+            None,
+        )
+        if closing_line and closing_line != boundary_lines[0]:
+            boundary_lines.append(closing_line)
+        return boundary_lines
+
+    return []
+
+
+def _compact_published_eligibility_line(line: str) -> str:
+    if len(line) <= 220:
+        return line
+    normalized = _normalize(line)
+    if "юридическое лицо" not in normalized:
+        return line
+    subject = re.match(
+        r"(.+?зарегистрированн\w*\s+на\s+территории\s+"
+        r"(?:Российской Федерации|иностранного государства))",
+        line,
+        flags=re.IGNORECASE,
+    )
+    age = re.search(
+        r"\(представитель\s+юр\.лица\s+в\s+возрасте\s+от\s+18\s+до\s+55\s+лет\)",
+        line,
+        flags=re.IGNORECASE,
+    )
+    project_condition = re.search(
+        r"(успешно\s+реализовавш\w*\s+или\s+реализующ\w*\s+"
+        r"социально\s+значимые\s+проекты\s+и/или\s+инициативы)",
+        line,
+        flags=re.IGNORECASE,
+    )
+    if not subject or not age or not project_condition:
+        return line
+    return (
+        f"{subject.group(1)}, {project_condition.group(1)} — "
+        f"{age.group(0).strip('()')}."
+    )
+
+
+def _published_source_sentences(lines: list[str]) -> list[str]:
+    return [
+        sentence.strip()
+        for line in lines
+        for sentence in re.split(r"(?<=[.!?])\s+", line)
+        if sentence.strip()
+    ]
+
+
+def _published_requested_status_lines(
+    lines: list[str],
+    question_normalized: str,
+) -> list[str]:
+    """Return only status definitions whose published label the user named."""
+
+    selected: list[str] = []
+    for line in lines:
+        match = re.match(r"^\s*\d+[.)]?\s*([^.]+)\.", line)
+        if not match:
+            continue
+        label = _normalize(match.group(1)).strip()
+        if label and label in question_normalized:
+            selected.append(line)
+    return selected
+
+
+def _keep_one_application_link(sentences: list[str]) -> list[str]:
+    linked = [sentence for sentence in sentences if URL_RE.search(sentence)]
+    preferred = next(
+        (
+            sentence
+            for sentence in linked
+            if "подать заявку" in _normalize(sentence)
+        ),
+        linked[-1] if linked else None,
+    )
+    result: list[str] = []
+    for sentence in sentences:
+        if sentence != preferred:
+            sentence = re.sub(
+                r"\s+по\s+ссылке\s+https?://\S+",
+                "",
+                sentence,
+                flags=re.IGNORECASE,
+            )
+            sentence = URL_RE.sub("", sentence)
+            sentence = re.sub(r"\s+([.,])", r"\1", sentence).strip()
+        if sentence:
+            result.append(sentence)
+    return result
 
 
 def _compact_source_chunk_text(

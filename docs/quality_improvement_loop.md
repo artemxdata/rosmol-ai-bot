@@ -33,10 +33,13 @@ entity/intent binding retrieval. KB, Yonote, safety rules, thresholds как о�
 production runtime не меняются без нового evidence.
 
 V1 содержит измерительный дефект: `11` atypical multi-aspect qrels ссылаются на legacy XLSX/DOCX,
-которые published-Yonote-only runtime обязан отбрасывать. V1 сохраняется как historical evidence;
-candidate оценивается на v2, где те же `39` совместимых кейсов дополнены `11` replacement-кейсами
-с проверенными published-Yonote qrels. Поэтому atypical v1/v2 не является apples-to-apples
-сравнением, а slice thresholds v2 — только абсолютные floors.
+которые published-Yonote-only runtime обязан отбрасывать. V1 сохраняется как historical evidence.
+Первый candidate v2 заменил их опубликованными qrels, но post-run diagnostics нашёл ещё три
+ошибочных answer-only cases: персональный ticket-status, unanswerable «Амур» без Yonote и
+неконкретный FGAIS support. Поэтому sealed v2 тоже не переписывается. V3 сохраняет остальные
+`47` query/order/strata и заменяет только эти три позиции конкретными published-Yonote cases.
+Межверсионные overall/atypical проценты не объявляются apples-to-apples; отдельно сравнимы только
+общие кейсы и неизменный typical slice.
 
 Порядок цикла:
 
@@ -46,11 +49,11 @@ candidate оценивается на v2, где те же `39` совмести
 3. Исправить существующие generation/retrieval/rerank пути минимально, не ослабляя guard и
    grounding.
 4. Выполнить focused tests, полный `pytest`, Ruff и `scripts/index_kb.py --validate-only`.
-5. Только после зелёного локального gate сформировать immutable v2 candidate и выполнить
+5. Только после зелёного локального gate сформировать immutable v3 candidate и выполнить
    бесплатный isolated-capacity preflight; production не останавливать и не менять.
-6. При preflight GO выполнить один server-local v2 run без HDE/VK/rollout. Принять цикл только
+6. При preflight GO выполнить один server-local v3 run без HDE/VK/rollout. Принять цикл только
    при `>=30/50`, typical `>=11/25`, atypical `>=7/25`, output-contract эскалациях `<=6`, нуле
-   source-binding failures на `38/50` qrel-кейсах и нуле провалов `15/50` critical
+   source-binding failures на `50/50` published-Yonote qrel-кейсах и нуле провалов `15/50` critical
    regression-кейсов. Это mechanical gate с `human_product_verdict=false`; human-semantic
    качество всех 50 ответов он не заявляет. Иначе STOP, разбор evidence и новая гипотеза до
    следующего платного запуска.
@@ -66,7 +69,7 @@ projected stop-limit `30 RUB`; разрешённые владельцем `500 
 25 кейсах — полезный calibration-сигнал; overall/atypical v1/v2 не являются независимым или
 apples-to-apples измерением из-за 11 replacement-кейсов.
 
-Цикл продолжается без немедленного paid rerun:
+Цикл продолжается одним новым v3 candidate:
 
 1. Получить из sealed report payload-free offline failure matrix без вопросов, ответов и ID.
 2. Сгруппировать провалы по boolean check, allowlisted escalation/retry path и latency bucket;
@@ -76,8 +79,11 @@ apples-to-apples измерением из-за 11 replacement-кейсов.
    `14235 -> 40015 ms` по model/retry path; следующий candidate не должен улучшать closure ценой
    необъяснённого трёхкратного хвоста latency.
 4. Пройти полный local gate и бесплатный isolated preflight нового immutable candidate.
-5. Выполнить ровно один разрешённый владельцем v2 run с projected stop-limit `30 RUB`; quality
-   GO/STOP снова считается завершённым one-shot без выборочного retry.
+5. Выполнить ровно один разрешённый владельцем v3 run с projected stop-limit `30 RUB`; quality
+   GO/STOP снова считается завершённым one-shot без выборочного retry. Если запуск попадает в
+   rolling-24h окно v2, D-041 допускает только один атомарный exact-bound v2 -> v3 waiver с
+   отдельной owner reference и external residual provider-risk ceiling `500 RUB`. Ledger, время
+   и run classification не меняются; второй waiver и любой следующий paid retry запрещены.
 
 ## Источники данных
 

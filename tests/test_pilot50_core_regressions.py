@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from src.graph.nodes.rerank import _priority_source_candidate, rerank
-from src.graph.nodes.retrieve import retrieve
+from src.graph.nodes.retrieve import _has_multi_aspect_message, retrieve
 from src.graph.query_normalization import (
     ACCOUNT_DATA_RECOVERY,
     FORUM_DISCOVERY,
@@ -15,7 +17,7 @@ from src.graph.query_normalization import (
     PLATFORM_EVENT_NAVIGATION,
     bounded_query_intent,
 )
-from src.models import Chunk, QueryAnalysis
+from src.models import Chunk, QueryAnalysis, Question
 
 
 class _NeverReranker:
@@ -36,6 +38,41 @@ class _RecordingRetriever:
     async def retrieve(self, query: str, filters: dict, top_k: int):
         self.calls.append((query, filters, top_k))
         return []
+
+
+class _ScopedRecallRetriever:
+    def __init__(
+        self,
+        *,
+        metadata_chunks: list[Chunk],
+        semantic_chunks: list[Chunk],
+    ) -> None:
+        self.metadata_chunks = metadata_chunks
+        self.semantic_chunks = semantic_chunks
+        self.metadata_calls: list[tuple[dict, int]] = []
+        self.calls: list[tuple[str, dict, int]] = []
+
+    async def retrieve_by_metadata(self, filters: dict, top_k: int):
+        self.metadata_calls.append((filters, top_k))
+        return self.metadata_chunks
+
+    async def retrieve(self, query: str, filters: dict, top_k: int):
+        self.calls.append((query, filters, top_k))
+        return self.semantic_chunks
+
+
+@pytest.fixture(scope="module")
+def published_yonote_seed() -> dict[str, dict]:
+    rows = json.loads(
+        (Path(__file__).resolve().parents[1] / "data" / "knowledge_base_seed.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return {
+        str(row["chunk_id"]): row
+        for row in rows
+        if row.get("status") == "published" and row.get("source_type") == "yonote"
+    }
 
 
 def _yonote_chunk(
@@ -60,6 +97,19 @@ def _yonote_chunk(
             "intent_name": intent_name or topic,
         },
         score=score,
+    )
+
+
+def _published_seed_chunk(
+    seed: dict[str, dict],
+    chunk_id: str,
+) -> Chunk:
+    row = seed[chunk_id]
+    return Chunk(
+        chunk_id=chunk_id,
+        text=str(row["text_clean"]),
+        metadata=dict(row),
+        score=1.0,
     )
 
 
@@ -168,6 +218,59 @@ def test_generic_grant_product_scopes_keep_bounded_intents() -> None:
         )
         == PHYSICAL_GRANTS_OVERVIEW
     )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        (
+            "Без канцелярита: где зарегистрироваться во ФГАИС и как потом "
+            "найти мероприятие по региону?"
+        ),
+        (
+            "Почта от старого профиля ФГАИС потеряна: как перенести данные и "
+            "заодно что значит статус «Одобрена»?"
+        ),
+        (
+            "По «Ладоге» сразу три вещи: до какого числа заявка, кто платит "
+            "за проживание с едой и могут ли компенсировать дорогу?"
+        ),
+        "Премия «Патриот»: кто вообще может участвовать и когда крайний срок подачи?",
+        "В двух словах, что за «Территория смыслов», когда она идёт и какие там смены?",
+        (
+            "По опубликованной инструкции первого сезона: что такое номинация, "
+            "сколько их стандартно и какие основные шаги подачи?"
+        ),
+        (
+            "Не смешивай этапы: сколько проверяют проект грантового соглашения "
+            "и сколько — уже итоговый отчёт?"
+        ),
+        (
+            "На Добро.РФ хочу с нуля: как создать кабинет, а потом отфильтровать "
+            "мероприятие и подать заявку волонтёром?"
+        ),
+        "По «Машуку» без догадок: когда объявят результаты отбора и когда дадут программу?",
+        "Сверь календарь «Машука»: какие даты у первой и второй смен и когда разъезд каждой?",
+        (
+            "У «Территории смыслов» назови общий период форума и отдельно даты "
+            "смены «Правда» — не перепутай."
+        ),
+    ],
+)
+def test_pilot50_v2_compound_queries_require_shared_scoped_recall(query: str) -> None:
+    assert _has_multi_aspect_message(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Когда будут результаты отбора?",
+        "Как зарегистрироваться во ФГАИС?",
+        "Какие смены будут на форуме?",
+    ],
+)
+def test_single_aspect_queries_do_not_trigger_compound_shared_recall(query: str) -> None:
+    assert _has_multi_aspect_message(query) is False
 
 
 @pytest.fixture
@@ -350,6 +453,347 @@ async def test_retrieve_overrides_misclassified_generic_fgais_scope(
     assert all("forum_normalized" not in filters for _query, filters, _top_k in retriever.calls)
     assert result["metadata_filter"]["category"] == "платформа_фгаис"
     assert result["metadata_filter"]["forum_normalized"] is None
+
+
+@pytest.mark.asyncio
+async def test_bounded_fgais_intent_keeps_scoped_semantic_recall_after_metadata_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.retrieve.get_settings",
+        lambda: SimpleNamespace(retrieval_strict_forum_stop_min_chunks=2),
+    )
+    expected = _yonote_chunk(
+        "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+        "Регистрация проходит по ссылке https://myrosmol.ru/auth/register",
+        category="платформа_фгаис",
+        topic="registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+    )
+    metadata_neighbor = _yonote_chunk(
+        "metadata_registration_neighbor",
+        "Регистрация на отдельное мероприятие.",
+        category="платформа_фгаис",
+        topic="kak_zaregistrirovatsya_na_fgais",
+    )
+    retriever = _ScopedRecallRetriever(
+        metadata_chunks=[metadata_neighbor],
+        semantic_chunks=[expected],
+    )
+
+    result = await retrieve(
+        {
+            "message_masked": "Как зарегистрироваться во ФГАИС «Молодёжь России»?",
+            "analysis": QueryAnalysis(
+                category="платформа_фгаис",
+                questions=[
+                    Question(
+                        text="Как зарегистрироваться во ФГАИС?",
+                        topic="kak_zaregistrirovatsya_na_fgais",
+                        category="платформа_фгаис",
+                    )
+                ],
+            ),
+            "retriever": retriever,
+        }
+    )
+
+    assert retriever.metadata_calls
+    assert retriever.calls == [
+        (
+            "Как зарегистрироваться во ФГАИС «Молодёжь России»?",
+            {"category": "платформа_фгаис", "source_type": "yonote"},
+            30,
+        )
+    ]
+    assert {chunk.chunk_id for chunk in result["retrieved_chunks"]} == {
+        metadata_neighbor.chunk_id,
+        expected.chunk_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_multi_aspect_topic_hits_still_get_one_shared_scoped_semantic_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.retrieve.get_settings",
+        lambda: SimpleNamespace(retrieval_strict_forum_stop_min_chunks=2),
+    )
+    overview = _yonote_chunk(
+        "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+        "Форум проходит с 20 июля по 6 августа.",
+        category="форумы",
+        topic="o_meropriyatii",
+        forum="Территория смыслов",
+    )
+    shifts = _yonote_chunk(
+        "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma",
+        "Смены: Единство, Правда и Родина.",
+        category="форумы",
+        topic="tematicheskie_smeny_foruma",
+        forum="Территория смыслов",
+    )
+    metadata_neighbor = _yonote_chunk(
+        "metadata_topic_neighbor",
+        "Соседний опубликованный раздел форума.",
+        category="форумы",
+        topic="sut_foruma_i_napravleniya",
+        forum="Территория смыслов",
+    )
+    retriever = _ScopedRecallRetriever(
+        metadata_chunks=[metadata_neighbor],
+        semantic_chunks=[overview, shifts],
+    )
+    query = "Что за «Территория смыслов», когда она идёт и какие там смены?"
+
+    result = await retrieve(
+        {
+            "message_masked": query,
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Территория смыслов",
+                questions=[
+                    Question(
+                        text="Что это за форум и когда он проходит?",
+                        topic="o_meropriyatii",
+                        category="форумы",
+                        forum_normalized="Территория смыслов",
+                    ),
+                    Question(
+                        text="Какие тематические смены будут?",
+                        topic="tematicheskie_smeny_foruma",
+                        category="форумы",
+                        forum_normalized="Территория смыслов",
+                    ),
+                ],
+            ),
+            "retriever": retriever,
+        }
+    )
+
+    assert len(retriever.metadata_calls) == 2
+    assert retriever.calls == [
+        (
+            query,
+            {
+                "forum_normalized": "Территория смыслов",
+                "category": "форумы",
+                "source_type": "yonote",
+            },
+            30,
+        )
+    ]
+    assert {overview.chunk_id, shifts.chunk_id}.issubset(
+        {chunk.chunk_id for chunk in result["retrieved_chunks"]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "analysis", "expected_ids", "expected_scope"),
+    [
+        (
+            (
+                "Без канцелярита: где зарегистрироваться во ФГАИС и как потом "
+                "найти мероприятие по региону?"
+            ),
+            QueryAnalysis(
+                category="платформа_фгаис",
+                questions=[
+                    Question(
+                        text="Где зарегистрироваться во ФГАИС?",
+                        topic="kak_zaregistrirovatsya_na_fgais",
+                        category="платформа_фгаис",
+                    ),
+                    Question(
+                        text="Как найти мероприятие по региону?",
+                        topic="poisk_i_navigaciya_po_meropriyatiyam",
+                        category="платформа_фгаис",
+                    ),
+                ],
+            ),
+            (
+                "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+                "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam",
+            ),
+            {"category": "платформа_фгаис", "source_type": "yonote"},
+        ),
+        (
+            (
+                "По «Ладоге» сразу три вещи: до какого числа заявка, кто платит "
+                "за проживание с едой и могут ли компенсировать дорогу?"
+            ),
+            QueryAnalysis(
+                category="форумы",
+                forum_normalized="Ладога",
+                questions=[
+                    Question(
+                        text="До какого числа подать заявку?",
+                        topic="podacha_zayavki_na_proekt",
+                        category="форумы",
+                        forum_normalized="Ладога",
+                    ),
+                    Question(
+                        text="Кто платит за проживание и питание?",
+                        topic="usloviya_prozhivaniya",
+                        category="форумы",
+                        forum_normalized="Ладога",
+                    ),
+                    Question(
+                        text="Компенсируют ли дорогу?",
+                        topic="oplata_proezda",
+                        category="форумы",
+                        forum_normalized="Ладога",
+                    ),
+                ],
+            ),
+            (
+                "yonote_api_irwwd4t2v8_s0006_forum",
+                "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie",
+                "yonote_api_irwwd4t2v8_s0012_kompensaciya",
+            ),
+            {
+                "forum_normalized": "Ладога",
+                "category": "форумы",
+                "source_type": "yonote",
+            },
+        ),
+        (
+            "В двух словах, что за «Территория смыслов», когда она идёт и какие там смены?",
+            QueryAnalysis(
+                category="форумы",
+                forum_normalized="Территория смыслов",
+                questions=[
+                    Question(
+                        text="Что это за форум и когда он проходит?",
+                        topic="o_meropriyatii",
+                        category="форумы",
+                        forum_normalized="Территория смыслов",
+                    ),
+                    Question(
+                        text="Какие тематические смены будут?",
+                        topic="tematicheskie_smeny_foruma",
+                        category="форумы",
+                        forum_normalized="Территория смыслов",
+                    ),
+                ],
+            ),
+            (
+                "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+                "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma",
+            ),
+            {
+                "forum_normalized": "Территория смыслов",
+                "category": "форумы",
+                "source_type": "yonote",
+            },
+        ),
+        (
+            (
+                "На Добро.РФ хочу с нуля: как создать кабинет, а потом отфильтровать "
+                "мероприятие и подать заявку волонтёром?"
+            ),
+            QueryAnalysis(
+                category="форумы",
+                forum_normalized="Добро.РФ",
+                questions=[
+                    Question(
+                        text="Как создать кабинет?",
+                        topic="registraciya_s_pomoschyu_sozdaniya_kabineta",
+                        category="форумы",
+                        forum_normalized="Добро.РФ",
+                    ),
+                    Question(
+                        text="Как найти мероприятие и подать заявку волонтёром?",
+                        topic="volonterskaya_pomosch",
+                        category="форумы",
+                        forum_normalized="Добро.РФ",
+                    ),
+                ],
+            ),
+            (
+                "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta",
+                "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch",
+            ),
+            {
+                "forum_normalized": "Добро.РФ",
+                "category": "форумы",
+                "source_type": "yonote",
+            },
+        ),
+        (
+            (
+                "У «Территории смыслов» назови общий период форума и отдельно даты "
+                "смены «Правда» — не перепутай."
+            ),
+            QueryAnalysis(
+                category="форумы",
+                forum_normalized="Территория смыслов",
+                questions=[
+                    Question(
+                        text="Какой общий период форума?",
+                        topic="o_meropriyatii",
+                        category="форумы",
+                        forum_normalized="Территория смыслов",
+                    ),
+                    Question(
+                        text="Какие даты у смены Правда?",
+                        topic="daty_26_30_iyulya_2026_goda",
+                        category="форумы",
+                        forum_normalized="Территория смыслов",
+                    ),
+                ],
+            ),
+            (
+                "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+                "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda",
+            ),
+            {
+                "forum_normalized": "Территория смыслов",
+                "category": "форумы",
+                "source_type": "yonote",
+            },
+        ),
+    ],
+)
+async def test_source_binding_cases_recall_every_exact_published_yonote_qrel(
+    monkeypatch: pytest.MonkeyPatch,
+    published_yonote_seed: dict[str, dict],
+    query: str,
+    analysis: QueryAnalysis,
+    expected_ids: tuple[str, ...],
+    expected_scope: dict[str, str],
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.retrieve.get_settings",
+        lambda: SimpleNamespace(retrieval_strict_forum_stop_min_chunks=2),
+    )
+    expected_chunks = [
+        _published_seed_chunk(published_yonote_seed, chunk_id)
+        for chunk_id in expected_ids
+    ]
+    retriever = _ScopedRecallRetriever(
+        metadata_chunks=[expected_chunks[0]],
+        semantic_chunks=expected_chunks,
+    )
+
+    result = await retrieve(
+        {
+            "message_masked": query,
+            "analysis": analysis,
+            "retriever": retriever,
+        }
+    )
+
+    assert retriever.calls == [(query, expected_scope, 30)]
+    assert set(expected_ids).issubset(
+        {chunk.chunk_id for chunk in result["retrieved_chunks"]}
+    )
+    assert all(
+        published_yonote_seed[chunk_id]["status"] == "published"
+        and published_yonote_seed[chunk_id]["source_type"] == "yonote"
+        for chunk_id in expected_ids
+    )
 
 
 @pytest.mark.asyncio

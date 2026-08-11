@@ -14,7 +14,7 @@ services:
     container_name: rosmol-pilot50-candidate-ml
     labels:
       com.rosmol.purpose: pilot50-candidate
-      com.rosmol.dataset: pilot50_balanced_v2
+      com.rosmol.dataset: pilot50_balanced_v3
       com.rosmol.candidate-git-sha: ${PILOT50_CANDIDATE_GIT_SHA:?PILOT50_CANDIDATE_GIT_SHA is required}
     restart: "no"
     user: app
@@ -68,7 +68,7 @@ services:
       CLOUD_RU_MODEL_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION: ${PILOT50_COMPLEX_OUTPUT_PRICE_RUB_PER_MILLION:?complex output price is required}
       CLOUD_RU_REQUEST_TIMEOUT_SECONDS: "45"
       CLOUD_RU_MAX_RETRIES: "2"
-      PROMPT_VERSION: pilot50-quality-v2
+      PROMPT_VERSION: pilot50-quality-v3
       ML_PREWARM_ON_STARTUP: "true"
       ML_UNLOAD_AFTER_USE: "true"
       ML_UNLOAD_EMBEDDER_AFTER_USE: "true"

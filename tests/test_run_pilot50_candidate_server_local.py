@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/run_pilot50_candidate_server_local.sh"
 COMPOSE = ROOT / "docker-compose.pilot50-candidate.yml"
 EXACT_SHA = "a" * 40
+EXACT_APPROVAL_ID = f"owner-chat-20260811-pilot50-v3-{EXACT_SHA}-cap30"
+EXACT_WAIVER_ID = (
+    f"owner-chat-20260811-waive-rolling24h-v2-to-v3-{EXACT_SHA}-cap30"
+)
+WAIVED_RESERVATION_SHA256 = "e" * 64
 
 
 def _text() -> str:
@@ -127,7 +132,7 @@ def _runtime_inspect_payload() -> list[dict[str, object]]:
             "Config": {
                 "Labels": {
                     "com.rosmol.purpose": "pilot50-candidate",
-                    "com.rosmol.dataset": "pilot50_balanced_v2",
+                    "com.rosmol.dataset": "pilot50_balanced_v3",
                     "com.rosmol.candidate-git-sha": EXACT_SHA,
                 },
                 "Env": [f"{key}={value}" for key, value in environment.items()],
@@ -184,7 +189,7 @@ def _quality_gate(
             source_binding,
             "maximum",
             0,
-            {"applicable_qrel_cases": 38, "total_cases": 50},
+            {"applicable_qrel_cases": 50, "total_cases": 50},
         ),
         "critical_case_failures": (
             critical_cases,
@@ -206,7 +211,7 @@ def _quality_gate(
         if not passed:
             failed.append(name)
     return {
-        "schema_version": "pilot50-v2-quality-gate-v1",
+        "schema_version": "pilot50-v3-quality-gate-v1",
         "status": "STOP" if failed else "GO",
         "criteria": criteria,
         "failed_criteria": failed,
@@ -284,10 +289,10 @@ def _safe_payload(
 
     return {
         "schema_version": "pilot50-safe-result-v1",
-        "dataset_id": "pilot50_balanced_v2",
+        "dataset_id": "pilot50_balanced_v3",
         "eval_run_id": "ask-eval-12345678-1234-1234-1234-123456789abc",
         "runtime_git_sha": EXACT_SHA,
-        "approval_id": "approval-1",
+        "approval_id": EXACT_APPROVAL_ID,
         "run_window_utc": {
             "started_at": "2026-08-11T00:00:00+00:00",
             "completed_at": "2026-08-11T00:01:00+00:00",
@@ -307,7 +312,7 @@ def _safe_payload(
             "complete": True,
             "stopped": False,
             "source": "target_reported",
-            "contract_id": "pilot50-v2-candidate-v1",
+            "contract_id": "pilot50-v3-candidate-v1",
             "rate_card_sha256": rate_card_sha,
             "target_telemetry_preserved": True,
             "target_telemetry_pricing_complete": True,
@@ -329,6 +334,13 @@ def _safe_payload(
             source_binding=source_binding,
             critical_cases=critical_cases,
         ),
+        "rolling_24h_waiver": {
+            "waiver_id": EXACT_WAIVER_ID,
+            "decision_id": "D-041",
+            "waived_reservation_sha256": WAIVED_RESERVATION_SHA256,
+            "provider_residual_risk_ceiling_rub": 500,
+            "runner_projected_stop_limit_rub": 30,
+        },
     }
 
 
@@ -341,7 +353,9 @@ def _run_safe_validator(payload: dict[str, object]) -> subprocess.CompletedProce
             "c" * 64,
             "d" * 64,
             EXACT_SHA,
-            "approval-1",
+            EXACT_APPROVAL_ID,
+            EXACT_WAIVER_ID,
+            WAIVED_RESERVATION_SHA256,
             "30",
         ],
         input=json.dumps(payload, ensure_ascii=False),
@@ -392,7 +406,7 @@ def test_candidate_environment_is_staging_ml_with_only_required_secrets() -> Non
 
     assert environment["APP_ENV"] == "staging"
     assert environment["RUNTIME_ROLE"] == "ml"
-    assert environment["PROMPT_VERSION"] == "pilot50-quality-v2"
+    assert environment["PROMPT_VERSION"] == "pilot50-quality-v3"
     assert environment["ML_PREWARM_ON_STARTUP"] == "true"
     assert environment["ML_UNLOAD_AFTER_USE"] == "true"
     assert environment["ML_UNLOAD_EMBEDDER_AFTER_USE"] == "true"
@@ -658,12 +672,13 @@ def test_preflight_is_free_but_proves_runtime_before_go() -> None:
     text = _text()
     preflight = _function(text, "preflight_mode")
 
-    assert "eval.run_ask" not in preflight
+    assert "-m eval.run_ask" not in preflight
     assert "run.started" not in preflight
     assert "reserve_live_eval_cost" not in preflight
     assert "cost_governance_preflight" not in preflight
     assert "runner_command" not in preflight
     assert "HIGH_COST_APPROVAL_ID" not in preflight
+    assert "PILOT50_ROLLING_24H_WAIVER_ID" not in preflight
     assert "qdrant_snapshot" in preflight
     assert "production_snapshot" in preflight
     assert "capacity_snapshot" in preflight
@@ -764,7 +779,7 @@ def test_effective_compose_and_started_container_are_both_fail_closed() -> None:
         assert "2" in validator
         assert "256" in validator
         assert "pilot50-candidate" in validator
-        assert "pilot50_balanced_v2" in validator
+        assert "pilot50_balanced_v3" in validator
         assert "APP_ENV" in validator
         assert "RUNTIME_ROLE" in validator
         assert "HDE_TRANSPORT_ENABLED" in validator
@@ -822,6 +837,7 @@ def test_run_uses_exact_bounded_candidate_contract_without_repricing() -> None:
     assert '--pilot50-candidate-contract "$CANDIDATE_CONTRACT_ID"' in run
     assert '--expected-runtime-git-sha "$EXPECTED_SHA"' in run
     assert '--high-cost-approval-id "$approval_id"' in run
+    assert '--rolling-24h-comparison-waiver-id "$waiver_id"' in run
     assert "--bypass-cache" in run
     assert "--require-complete-traces" in run
     assert '--candidate-contract "$CANDIDATE_CONTRACT_ID"' in run
@@ -830,6 +846,8 @@ def test_run_uses_exact_bounded_candidate_contract_without_repricing() -> None:
     assert "llm-cost-repricing" not in run
     assert "--user-prefix" not in run
     assert "--max-cases" not in run
+    assert '--max-llm-cost-rub "500"' not in run
+    assert '--max-llm-cost-rub "$COMPARISON_PROVIDER_RISK_CEILING_RUB"' not in run
     assert run.index("wait_candidate_ready") < run.index("eval.run_ask")
     marker = "schema_version=pilot50-candidate-run-started-v1"
     assert run.index("build --pull=false") < run.index(marker)
@@ -866,17 +884,52 @@ def test_cost_governance_eligibility_is_free_read_only_and_before_one_shot() -> 
     assert "_validated_approval_id" in preflight
     assert "_scan_records" in preflight
     assert "_enforce_approval_once" in preflight
+    assert "_pilot50_candidate_comparison_waiver" in preflight
+    assert "_enforce_waiver_once" in preflight
+    assert "_validated_private_full_comparison_waiver" in preflight
+    assert "_reservation_payload_sha256" in preflight
     assert "_enforce_rolling_limits" in preflight
-    assert "requested_cap=30.0" in preflight
+    assert "requested_cap=cost_cap" in preflight
     assert "private_full=True" in preflight
     assert "requested_runtime_git_sha=runtime_sha" in preflight
     assert "reserve_live_eval_cost" not in preflight
-    assert "eval.run_ask" not in preflight
-    assert ">/dev/null 2>&1" in preflight
+    assert "-m eval.run_ask" not in preflight
+    assert "print(_reservation_payload_sha256(prior))" in preflight
     marker = "schema_version=pilot50-candidate-run-started-v1"
     assert run.index("cost_governance_preflight") < run.index(marker)
     assert run.index(marker) < run.index("eval.run_ask")
     assert "cost_governance_preflight_failed" in run
+
+
+def test_v3_waiver_is_exact_and_bound_to_started_completed_review_receipts() -> None:
+    text = _text()
+    run = _function(text, "run_mode")
+    review = _function(text, "review_mode")
+
+    assert (
+        'expected_approval_id="owner-chat-20260811-pilot50-v3-'
+        '${EXPECTED_SHA}-cap30"'
+    ) in run
+    assert (
+        'expected_waiver_id="owner-chat-20260811-waive-rolling24h-v2-to-v3-'
+        '${EXPECTED_SHA}-cap30"'
+    ) in run
+    assert 'waiver_id="${PILOT50_ROLLING_24H_WAIVER_ID:-}"' in run
+    started_marker = "schema_version=pilot50-candidate-run-started-v1"
+    assert run.index("cost_governance_preflight") < run.index(started_marker)
+    assert run.index(started_marker) < run.index("eval.run_ask")
+    for binding in (
+        "approval_id=%s",
+        "rolling_24h_waiver_id=%s",
+        "rolling_24h_waiver_decision_id=%s",
+        "waived_reservation_sha256=%s",
+        "provider_residual_risk_ceiling_rub=%s",
+        "runner_projected_stop_limit_rub=%s",
+    ):
+        assert run.count(binding) >= 2
+        assert binding.split("=%s", 1)[0] in review
+    assert "candidate_started_marker_invalid" in review
+    assert "candidate_completion_marker_invalid" in review
 
 
 @pytest.mark.parametrize(
@@ -959,9 +1012,34 @@ def test_safe_validator_rejects_quality_gate_schema_drift(mutation: str) -> None
     elif mutation == "wrong_source_coverage":
         criteria = gate["criteria"]
         assert isinstance(criteria, dict)
-        criteria["source_binding_failures"]["applicable_qrel_cases"] = 50
+        criteria["source_binding_failures"]["applicable_qrel_cases"] = 49
     else:
         gate["critical_case_definition"] = "weaker_definition"
+
+    result = _run_safe_validator(payload)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("waiver_id", "owner-wrong-waiver"),
+        ("decision_id", "D-999"),
+        ("waived_reservation_sha256", "0" * 63),
+        ("provider_residual_risk_ceiling_rub", 501),
+        ("runner_projected_stop_limit_rub", 500),
+    ],
+)
+def test_safe_validator_rejects_comparison_waiver_tampering(
+    field: str,
+    value: object,
+) -> None:
+    payload = _safe_payload()
+    waiver = payload["rolling_24h_waiver"]
+    assert isinstance(waiver, dict)
+    waiver[field] = value
 
     result = _run_safe_validator(payload)
 
@@ -1081,11 +1159,11 @@ def test_stdout_is_allowlisted_and_ephemeral_secrets_are_never_printed() -> None
         safe_validator
     )
     assert "assert forbidden not in payload" in safe_validator
-    assert 'payload.get("dataset_id") == "pilot50_balanced_v2"' in safe_validator
+    assert 'payload.get("dataset_id") == "pilot50_balanced_v3"' in safe_validator
     assert '"source": "target_reported"' in safe_validator
     assert '"quality_gate"' in safe_validator
     assert '"source_binding_failures"' in safe_validator
-    assert '"applicable_qrel_cases": 38' in safe_validator
+    assert '"applicable_qrel_cases": 50' in safe_validator
     assert '"critical_case_failures"' in safe_validator
     assert '"applicable_critical_cases": 15' in safe_validator
     assert (
@@ -1099,9 +1177,10 @@ def test_missing_candidate_cli_contract_is_an_explicit_free_stop() -> None:
     contract = _function(_text(), "verify_runner_contract_support")
 
     assert "--pilot50-candidate-contract" in contract
+    assert "--rolling-24h-comparison-waiver-id" in contract
     assert "--expected-runtime-git-sha" in contract
     assert "--candidate-contract" in contract
-    assert "pilot50-v2-candidate-v1" in _text()
+    assert "pilot50-v3-candidate-v1" in _text()
     assert "target_reported" in contract
     assert "candidate_runner_contract_unavailable" in contract
     assert "candidate_summary_contract_unavailable" in contract
@@ -1127,9 +1206,11 @@ def test_bounded_candidate_cli_contract_is_callable() -> None:
 
     assert runner.returncode == 0, runner.stderr
     assert "--pilot50-candidate-contract" in runner.stdout
-    assert "pilot50-v2-candidate-v1" in runner.stdout
+    assert "--rolling-24h-comparison-waiver-id" in runner.stdout
+    assert "pilot50-v3-candidate-v1" in runner.stdout
     assert summary.returncode == 0, summary.stderr
     assert "--candidate-contract" in summary.stdout
-    assert "pilot50-v2-candidate-v1" in summary.stdout
+    assert "--rolling-24h-comparison-waiver-id" in summary.stdout
+    assert "pilot50-v3-candidate-v1" in summary.stdout
     assert "--expected-target" not in summary.stdout
     assert "--pricing-mode" not in summary.stdout

@@ -26,15 +26,32 @@ product conversion, independent holdout или human verdict. Quality STOP сч�
 one-shot evidence; повтор candidate `64cc182...` запрещён.
 
 Safe aggregate сохранён в tracked
-`reports/pilot50_balanced_v2_candidate_20260811.json`. Следующий этап не делает новых `/ask`:
-отдельный offline `diagnose` читает sealed private report на сервере и выдаёт только bounded
-50-row failure matrix с ordinal/group, boolean checks, allowlisted escalation/retry/model-path и
-latency bucket — без query/response, IDs, chunks, timestamps и per-case cost. После этой карты
-исправляются только подтверждённые корневые дефекты с regression-тестами; затем обязательны
-полный local gate, новый GitHub SHA и бесплатный isolated preflight. Владелец разрешил ровно один
-следующий осмысленный paid run; runner projected stop-limit остаётся `30 RUB`, а ранее названные
-`500 RUB` — только верхняя остаточная provider-risk граница, не цель расхода и не blanket bypass
-cost ledger.
+`reports/pilot50_balanced_v2_candidate_20260811.json`. Offline diagnostics commit
+`fc530f177b1b094810a81d408760cc1387bfafef` успешно проверил sealed report на сервере и вернул
+exact bounded `50/50` failure matrix без query/response, IDs, chunks, timestamps и per-case cost.
+Карта локализовала пять source-binding misses (`26, 28, 30, 33, 36`), общий metadata-hit/
+semantic-recall дефект, plural routing «статусы заявки», fact/profile retry cluster и четыре
+провала с latency `>=30s` (`20, 31, 32, 40`). Исправления выполнены regression-first без
+ослабления published-Yonote grounding, confidence, entity, safety или output guards; отдельные
+negative regressions блокируют wrong-forum, wrong-category, wrong-shift и неполный multi-aspect
+fast-path.
+
+Cases `46–48` оказались дефектом самого v2 acceptance: персональный ticket-status должен
+эскалироваться, «Амур» не имеет published-Yonote qrel, а общий «не грузится ФГАИС» не задаёт
+проверяемый answer contract. V2 остаётся immutable evidence. Новый `pilot50_balanced_v3`
+сохраняет остальные `47` query/order/strata и заменяет только эти три позиции конкретными
+published-Yonote cases. Manifest/cases SHA-256 —
+`fef1caa227777e2c198bd6acdc77471fbf2551732c85e2334f8cad781025e875` и
+`3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112`; qrel coverage —
+`50/50`, critical coverage — `15/50`. Все qrels ссылаются только на frozen published Yonote;
+исторические v1/v2 не изменены.
+
+Владелец разрешил ещё один осмысленный paid run сегодня, не ожидая окончания rolling-24h окна.
+D-041 разрешает только одно exact v2 -> v3 comparison waiver: оно атомарно связывает исходную
+v2 reservation, новый final runtime/cases, отдельные approval/waiver references и decision в
+ledger. Повтор того же SHA, цепочка waiver, очистка ledger, подмена времени/classification и
+retry запрещены. Runner projected stop-limit остаётся `30 RUB`; `500 RUB` — только внешняя
+остаточная provider-risk граница нового candidate, не executable cap и не цель расхода.
 
 11 августа exact continuation успешно завершил `50/50` server-local `/ask` без HDE/VK,
 production restart или rollout. Safe result SHA-256 —
@@ -319,18 +336,19 @@ payload, а отказ произошёл уже в локальном validator
 остаётся отдельным `pending/evidence-at-risk` аудитом и не блокирует Pilot50; новый Pilot50 не
 заменяет старые evidence и не разрешает replay Phase 0.
 
-Локальный candidate gate завершён: focused quality/core/eval набор — `788 passed`; все `131`
-test-файла (`2756 passed, 1 skipped`) прошли изолированными Windows-шардами
-после зависания монолитного pytest-harness без test failure; полный Ruff — pass, Git Bash
-`bash -n` — pass, KB validation — `2186 valid / 2152 published`. Независимый финальный review
-не нашёл оставшихся P0/P1.
+Локальный v3 candidate gate завершён: монолитный полный pytest — `2926 passed, 1 skipped`;
+полный Ruff — pass, Git Bash `bash -n` — pass, KB validation —
+`2186 valid / 2152 published`, diff-check — pass. Focused generation/retrieval и
+waiver/eval/launcher наборы также прошли независимо. Финальные read-only reviews не нашли
+оставшихся P0/P1.
 
-**Точный следующий шаг:** зафиксировать candidate commit в GitHub и передать владельцу один
-server-local блок только для бесплатного v2 `preflight`.
-Лишь его `GO` разрешает отдельный one-shot `run`; capacity `STOP` не обходится остановкой
-production. Старый v1 launcher и D-039 continuation не повторяются; deployment/restart, HDE/VK,
-повтор Phase 0 и удаление evidence/ledger markers запрещены. В чат возвращаются только safe
-aggregate/status/SHA; owner-only review rows остаются на server terminal.
+**Точный следующий шаг:** зафиксировать проверенный v3 candidate commit в GitHub и передать
+владельцу один server-local блок только для бесплатного v3 `preflight`. Лишь его `GO` разрешает
+отдельный D-041 one-shot `run` с exact
+approval/waiver references. Capacity/isolation/production/Qdrant/ledger `STOP` не обходится;
+deployment/restart, HDE/VK, повтор Phase 0 и удаление evidence/ledger markers запрещены. В чат
+возвращаются только safe aggregate/status/SHA; любой execution result или quality `GO|STOP`
+завершает разрешённый run без retry.
 
 ## Real-RAG Phase 0: live-прогон завершён, fail-closed STOP
 
