@@ -63,6 +63,110 @@ def _safe_validator_python() -> str:
     return function[start:end]
 
 
+def _runtime_validator_python() -> str:
+    function = _function(_text(), "validate_candidate_runtime")
+    marker = "3<<'PY' 2>/dev/null\n"
+    start = function.index(marker) + len(marker)
+    end = function.index("\nPY", start)
+    return function[start:end]
+
+
+def _runtime_inspect_payload() -> list[dict[str, object]]:
+    blank_secrets = (
+        "WEBHOOK_AUTH_TOKEN",
+        "ADMIN_AUTH_TOKEN",
+        "HDE_TRIGGER_PREFIX",
+        "HDE_BASE_URL",
+        "HDE_API_EMAIL",
+        "HDE_API_KEY",
+        "HDE_BOT_USER_ID",
+        "HDE_TRANSPORT_EVENT_KEY_SECRET",
+        "HDE_TRANSPORT_ENCRYPTION_KEY",
+        "YONOTE_API_TOKEN",
+        "VK_API_TOKEN",
+        "VK_GROUP_TOKEN",
+        "VK_CONFIRMATION_CODE",
+        "VK_SECRET",
+        "VK_CALLBACK_SECRET",
+    )
+    environment = {
+        "APP_ENV": "staging",
+        "RUNTIME_ROLE": "ml",
+        "RELEASE_GIT_SHA": EXACT_SHA,
+        "ML_PREWARM_ON_STARTUP": "true",
+        "ML_UNLOAD_AFTER_USE": "true",
+        "ML_UNLOAD_EMBEDDER_AFTER_USE": "true",
+        "ML_UNLOAD_RERANKER_AFTER_USE": "true",
+        "HDE_TRANSPORT_ENABLED": "false",
+        "YONOTE_SYNC_ENABLED": "false",
+        "ADMIN_READ_ONLY": "true",
+        "ADMIN_MUTATIONS_ENABLED": "false",
+        "API_AUTH_TOKEN": "api-auth-token-placeholder",
+        "USER_HASH_SECRET": "user-hash-secret-placeholder",
+        **dict.fromkeys(blank_secrets, ""),
+    }
+    mount_targets = (
+        "/app/data/knowledge_base_seed.json",
+        "/app/data/private/admin-kb",
+        "/home/app/.cache/huggingface",
+        "/home/app/.cache/torch",
+        "/opt/models",
+    )
+    return [
+        {
+            "HostConfig": {
+                "ReadonlyRootfs": True,
+                "Memory": 6 * 1024**3,
+                "NanoCpus": 2_000_000_000,
+                "PidsLimit": 256,
+                "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},
+                "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges=true"],
+                "PortBindings": {},
+            },
+            "Config": {
+                "Labels": {
+                    "com.rosmol.purpose": "pilot50-candidate",
+                    "com.rosmol.dataset": "pilot50_balanced_v2",
+                    "com.rosmol.candidate-git-sha": EXACT_SHA,
+                },
+                "Env": [f"{key}={value}" for key, value in environment.items()],
+            },
+            "State": {"Running": True, "OOMKilled": False},
+            "NetworkSettings": {
+                "Ports": {"8000/tcp": None},
+                "Networks": {
+                    "candidate-data": {"Aliases": ["pilot50-candidate-ml"]},
+                    "candidate-egress": {"Aliases": []},
+                },
+            },
+            "Mounts": [
+                {"Destination": target, "RW": False} for target in mount_targets
+            ],
+        }
+    ]
+
+
+def _run_runtime_validator(
+    payload: object,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _runtime_validator_python(),
+            EXACT_SHA,
+            "candidate-data",
+            "candidate-egress",
+        ],
+        input=json.dumps(payload),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+
 def _quality_gate(
     *,
     typical: int,
@@ -261,7 +365,7 @@ def test_candidate_compose_is_a_single_isolated_one_off_service() -> None:
     assert service["read_only"] is True
     assert service.get("ports") in (None, [])
     assert service["cap_drop"] == ["ALL"]
-    assert service["security_opt"] == ["no-new-privileges:true"]
+    assert service["security_opt"] == ["no-new-privileges=true"]
     assert service["mem_limit"] == "6g"
     assert service["cpus"] == 2.0
     assert service["pids_limit"] == 256
@@ -397,8 +501,125 @@ def test_candidate_compose_effective_config_keeps_isolation() -> None:
     assert int(service["mem_limit"]) == 6 * 1024**3
     assert float(service["cpus"]) == 2
     assert int(service["pids_limit"]) == 256
+    assert service["security_opt"] == ["no-new-privileges=true"]
     assert service["build"]["context"] == str(ROOT)
     assert set(rendered["services"]) == {"pilot50-candidate-ml"}
+
+
+@pytest.mark.parametrize(
+    "security_opt",
+    [
+        ["no-new-privileges"],
+        ["no-new-privileges=true"],
+        ["no-new-privileges:true"],
+    ],
+)
+def test_runtime_accepts_only_portable_enabled_no_new_privileges_forms(
+    security_opt: list[str],
+) -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["HostConfig"]["SecurityOpt"] = security_opt
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "security_opt",
+    [
+        None,
+        [],
+        ["no-new-privileges=false"],
+        ["no-new-privileges:false"],
+        ["no-new-privileges=true", "seccomp=unconfined"],
+        ["prefix-no-new-privileges=true"],
+        "no-new-privileges=true",
+    ],
+)
+def test_runtime_rejects_missing_false_extra_or_spoofed_no_new_privileges(
+    security_opt: object,
+) -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["HostConfig"]["SecurityOpt"] = security_opt
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 1
+    assert result.stdout == "no_new_privileges\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("name", ["", "no"])
+def test_runtime_accepts_portable_disabled_restart_policy_names(name: str) -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["HostConfig"]["RestartPolicy"] = {
+        "Name": name,
+        "MaximumRetryCount": 0,
+    }
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "restart",
+    [
+        {"Name": "always", "MaximumRetryCount": 0},
+        {"Name": "on-failure", "MaximumRetryCount": 0},
+        {"Name": "no", "MaximumRetryCount": 1},
+        {"Name": "", "MaximumRetryCount": 1},
+        None,
+    ],
+)
+def test_runtime_rejects_enabled_or_retrying_restart_policy(restart: object) -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["HostConfig"]["RestartPolicy"] = restart
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 1
+    assert result.stdout == "restart\n"
+    assert result.stderr == ""
+
+
+def test_runtime_failure_is_one_payload_free_allowlisted_stage_code() -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["HostConfig"]["Memory"] = 1
+    serialized = json.dumps(payload)
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 1
+    assert result.stdout == "memory\n"
+    assert result.stderr == ""
+    assert serialized not in result.stdout
+    assert "api-auth-token-placeholder" not in result.stdout
+
+
+def test_runtime_rejects_unexpected_mount_even_when_required_mounts_remain() -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["Mounts"].append({"Destination": "/host-extra", "RW": True})
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 1
+    assert result.stdout == "mounts\n"
+    assert result.stderr == ""
+
+
+def test_runtime_requires_candidate_alias_on_data_network() -> None:
+    payload = _runtime_inspect_payload()
+    payload[0]["NetworkSettings"]["Networks"]["candidate-data"]["Aliases"] = []
+
+    result = _run_runtime_validator(payload)
+
+    assert result.returncode == 1
+    assert result.stdout == "networks\n"
+    assert result.stderr == ""
 
 
 def test_modes_are_explicit_and_review_rejects_non_tty_before_private_reads() -> None:
@@ -433,14 +654,15 @@ def test_invalid_invocation_is_safe_and_does_not_touch_external_state() -> None:
     assert result.stderr == ""
 
 
-def test_preflight_is_free_and_capacity_stop_precedes_persistent_mutation() -> None:
+def test_preflight_is_free_but_proves_runtime_before_go() -> None:
     text = _text()
     preflight = _function(text, "preflight_mode")
 
     assert "eval.run_ask" not in preflight
-    assert "candidate-ml" not in preflight
-    assert " build " not in preflight
-    assert "run --" not in preflight
+    assert "run.started" not in preflight
+    assert "reserve_live_eval_cost" not in preflight
+    assert "cost_governance_preflight" not in preflight
+    assert "runner_command" not in preflight
     assert "HIGH_COST_APPROVAL_ID" not in preflight
     assert "qdrant_snapshot" in preflight
     assert "production_snapshot" in preflight
@@ -451,6 +673,25 @@ def test_preflight_is_free_and_capacity_stop_precedes_persistent_mutation() -> N
     assert "manifest_sha256=%s" in preflight
     assert "cases_sha256=%s" in preflight
     assert "qdrant_fingerprint_sha256=%s" in preflight
+    assert "build --pull=false pilot50-candidate-ml" in preflight
+    assert "run -d --no-deps --use-aliases" in preflight
+    assert preflight.count("require_candidate_runtime") == 2
+    assert "wait_candidate_ready" in preflight
+    assert "remove_owned_candidate" in preflight
+    assert "production_changed_during_preflight" in preflight
+    assert "qdrant_changed_during_preflight" in preflight
+    assert "runtime_smoke_status=OK" in preflight
+    build = preflight.index("build --pull=false pilot50-candidate-ml")
+    start = preflight.index("run -d --no-deps --use-aliases")
+    first_runtime = preflight.index("require_candidate_runtime")
+    ready = preflight.index("wait_candidate_ready")
+    second_runtime = preflight.index("require_candidate_runtime", first_runtime + 1)
+    cleanup = preflight.index("remove_owned_candidate")
+    post_prod = preflight.index('post_prod="$(production_snapshot)"')
+    post_qdrant = preflight.index('post_qdrant="$(qdrant_snapshot)"')
+    go = preflight.index("pilot50_candidate_preflight=GO")
+    assert build < start < first_runtime < ready < second_runtime < cleanup
+    assert cleanup < post_prod < post_qdrant < go
     assert "pilot50_candidate_preflight=GO" in preflight
 
 
@@ -492,6 +733,14 @@ def test_source_and_image_are_bound_to_clean_exact_detached_commit() -> None:
     assert "-type f ! -perm 0444" in verify
     assert "-type l" in verify
     assert "source_snapshot_invalid" in preflight
+    assert "build --pull=false pilot50-candidate-ml" in preflight
+    assert "source_snapshot_changed_during_build" in preflight
+    assert preflight.index("verify_source_snapshot") < preflight.index(
+        "build --pull=false pilot50-candidate-ml"
+    )
+    assert preflight.index("build --pull=false pilot50-candidate-ml") < preflight.index(
+        "source_snapshot_changed_during_build"
+    )
     assert "build --pull=false pilot50-candidate-ml" in run
     assert "source_snapshot_changed_during_build" in run
     assert "org.opencontainers.image.revision" in run
@@ -499,6 +748,9 @@ def test_source_and_image_are_bound_to_clean_exact_detached_commit() -> None:
     ephemeral = _function(text, "create_ephemeral_env")
     assert 'build_source="$SOURCE_DIR"' in ephemeral
     assert "PILOT50_CANDIDATE_SOURCE_DIR=%s" in ephemeral
+    compose_command = _function(text, "build_compose_command")
+    assert 'compose_root="$SOURCE_DIR"' in compose_command
+    assert '-f "$compose_root/$COMPOSE_REL"' in compose_command
 
 
 def test_effective_compose_and_started_container_are_both_fail_closed() -> None:
@@ -522,8 +774,41 @@ def test_effective_compose_and_started_container_are_both_fail_closed() -> None:
     assert "NetworkSettings" in runtime_validator
     assert "ReadonlyRootfs" in runtime_validator
     assert "OOMKilled" in runtime_validator
-    assert run.index("validate_candidate_runtime") < run.index("eval.run_ask")
+    assert "no-new-privileges=true" in compose_validator
+    assert "no_new_privileges_enabled" in runtime_validator
+    assert run.index("require_candidate_runtime") < run.index("eval.run_ask")
     assert run.count("wait_candidate_ready") >= 2
+
+
+def test_runtime_isolation_errors_are_payload_free_allowlisted_stage_reasons() -> None:
+    text = _text()
+    required = _function(text, "require_candidate_runtime")
+
+    for stage in (
+        "identity",
+        "inspect",
+        "state",
+        "rootfs",
+        "memory",
+        "cpu",
+        "pids",
+        "restart",
+        "cap_drop",
+        "no_new_privileges",
+        "ports",
+        "networks",
+        "labels",
+        "runtime_env",
+        "ml_lifecycle",
+        "transports",
+        "secrets",
+        "mounts",
+    ):
+        assert stage in required
+    assert 'fail "candidate_isolation_$stage"' in required
+    assert 'fail "candidate_isolation_inspect"' in required
+    assert "candidate_isolation_invalid" not in text
+    assert "candidate_isolation_changed" not in text
 
 
 def test_run_uses_exact_bounded_candidate_contract_without_repricing() -> None:
@@ -725,12 +1010,36 @@ def test_cleanup_can_only_stop_and_remove_the_exact_labeled_candidate() -> None:
     assert "com.rosmol.dataset" in identity
     assert "com.rosmol.candidate-git-sha" in identity
     assert "org.opencontainers.image.revision" in identity
+    assert '[[ -z "$CANDIDATE_ID" || "$CANDIDATE_ID" == "$candidate_id" ]]' in identity
+    assert identity.index('[[ -z "$CANDIDATE_ID"') < identity.index(
+        'CANDIDATE_ID="$candidate_id"'
+    )
     assert "docker stop --time 45 \"$CANDIDATE_ID\"" in remove
     assert "docker rm \"$CANDIDATE_ID\"" in remove
     assert "docker rm -f" not in text
     assert "candidate_owned" in cleanup
     for forbidden in ("EVIDENCE_DIR", "COST_LEDGER_DIR", "network", "volume", "image rm"):
         assert forbidden not in cleanup
+
+
+def test_exit_cleanup_failure_is_safe_visible_and_forces_nonzero() -> None:
+    text = _text()
+    cleanup_temp = _function(text, "cleanup_temp")
+    cleanup_exit = _function(text, "cleanup_on_exit")
+    run = _function(text, "run_mode")
+
+    assert "|| true" not in cleanup_temp
+    assert "remove_owned_candidate" in cleanup_exit
+    assert "cleanup_temp || temp_cleanup_failed=1" in cleanup_exit
+    assert "pilot50_candidate_exit_cleanup=FAIL reason=candidate_cleanup_failed" in (
+        cleanup_exit
+    )
+    assert "pilot50_candidate_exit_cleanup=FAIL reason=temp_cleanup_failed" in cleanup_exit
+    assert "exit 1" in cleanup_exit
+    assert 'cleanup_temp || fail "run_temp_cleanup_failed"' in run
+    assert run.index('cleanup_temp || fail "run_temp_cleanup_failed"') < run.index(
+        "pilot50_candidate_server_local=OK"
+    )
 
 
 def test_no_workstation_transport_or_production_lifecycle_mutation() -> None:

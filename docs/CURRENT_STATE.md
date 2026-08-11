@@ -87,6 +87,35 @@ container ID, health/restart/OOM state и Qdrant fingerprint проверяют�
 не останавливается. Paid `run` возможен только после GO, exact SHA/hashes, нового одноразового
 approval и runner projected stop-limit `30 RUB`.
 
+Первый owner-run candidate preflight на commit
+`8b5ef9b25ac26953833d1076d47bf9508d471289` прошёл без `/ask`: подтвердил runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, manifest
+`6995b96b4658f53e40a0bb982145465cbc347d9df041fc4dd66a9d15687b822b`, materialized cases
+`b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d`, Qdrant `2152`
+published records и достаточные memory/swap/load/disk gates. Последующий `run` остановился на
+`candidate_isolation_invalid` сразу после создания one-off container и до `/ready`, cost-governance
+reservation, `run.started` и `eval.run_ask`; по exact control flow это означает `0 /ask`, нулевой
+runner-estimated cost и неиспользованный approval reference. EXIT trap попытался удалить только
+exact labeled candidate, но прежний payload-free вывод не доказывал успешность cleanup.
+
+Root cause — fail-closed false negative самого launcher: effective Compose включает
+`no-new-privileges`, но runtime validator требовал только bare-строку, тогда как Docker inspect
+сохраняет эквивалентную включённую форму `no-new-privileges=true` либо
+`no-new-privileges:true`. Security boundary не снималась. Исправление канонизирует только эти
+три true-формы и оставляет `false`, missing, spoofed и дополнительные options запрещёнными;
+runtime rejection получает только allowlisted payload-free stage code. Бесплатный preflight
+теперь обязан сам построить frozen image, запустить candidate, проверить isolation и `/ready`,
+повторно проверить неизменность production/Qdrant и удалить candidate до публикации `GO`.
+Перед новым checkout old-SHA `cleanup` должен явно вернуть `state=absent|removed`. Новый paid
+`run` разрешён только после local gate, нового commit/push и нового free preflight `GO`; слепой
+повтор commit `8b5ef9b...` запрещён.
+
+Локальный gate исправления: focused launcher suite — `54 passed`; все `131` test-файла прошли
+изолированно — `2778 passed, 1 skipped, 0 failed`; полный Ruff и Git Bash `bash -n` — pass;
+KB validation — `2186 valid / 2152 published`. Монолитный Windows pytest был остановлен после
+воспроизводимого event-loop deadlock без test failure, поэтому итоговым считается полный
+пофайловый gate.
+
 Сегодняшняя метрика называется **mechanical first-turn closure на balanced Pilot50**:
 `closed` требует одновременно полного pass всех зафиксированных для кейса content/retrieval/
 citation/profile checks, ответа в первом ходе и отсутствия эскалации. Safe result показывает

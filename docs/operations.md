@@ -70,13 +70,21 @@ published-Yonote-only runtime. Поэтому v1 не повторяется. Ca
 Следующий запуск регулируется D-040 и выполняется только новым
 `scripts/run_pilot50_candidate_server_local.sh`. После local Ruff/full pytest/KB validation и
 exact GitHub push владелец сначала запускает бесплатный `preflight <40-SHA>`. Он не делает
-`/ask`, не включает HDE/VK и не меняет production; при недостатке памяти/swap/disk, изменении
-production identity или Qdrant fingerprint возвращается STOP. Только `GO` разрешает отдельный
-one-shot `run <40-SHA>` с новым approval. Критерии: `>=30/50`, typical `>=11/25`, atypical
+`/ask`, не включает HDE/VK и не меняет production. Preflight строит image только из frozen Git
+snapshot, запускает candidate с production-safe limits, проверяет isolation и `/ready`, удаляет
+его и повторно сверяет production identity и Qdrant fingerprint; любая ошибка либо недостаток
+memory/swap/disk дают STOP до cost reservation. Только `GO` с
+`runtime_smoke_status=OK` разрешает отдельный one-shot `run <40-SHA>` с новым approval.
+Критерии: `>=30/50`, typical `>=11/25`, atypical
 `>=7/25` как абсолютные floors, output-contract эскалации `<=6`, ноль source-binding failures на
 `38/50` кейсах с qrels, ноль провалов `15/50` critical regression-кейсов, полные trace и
 `cache_hit=0`; runner projected stop-limit — `30 RUB`, а не `500 RUB`. Это механический gate с
 `human_product_verdict=false`, а не ручной semantic verdict по каждому ответу.
+
+Попытка на `8b5ef9b25ac26953833d1076d47bf9508d471289` остановилась до платной границы из-за
+false-negative строкового сравнения `no-new-privileges`; её approval не израсходован и `/ask`
+не выполнялся. Этот SHA не повторять. Перед checkout исправленного SHA сначала выполнить
+`cleanup` старым launcher и требовать только `state=absent|removed`; при cleanup failure — STOP.
 
 ### Real-RAG Phase 0: server-local one-shot
 

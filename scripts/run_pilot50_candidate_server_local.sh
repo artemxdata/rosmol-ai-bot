@@ -62,18 +62,32 @@ stop_capacity() {
 }
 
 cleanup_temp() {
-  if [[ -n "$EPHEMERAL_ENV_FILE" && \
-    "$EPHEMERAL_ENV_FILE" == /run/pilot50-candidate-env.* ]]; then
-    sudo rm -f -- "$EPHEMERAL_ENV_FILE" >/dev/null 2>&1 || true
+  local cleanup_failed=0
+  if [[ -n "$EPHEMERAL_ENV_FILE" ]]; then
+    if [[ "$EPHEMERAL_ENV_FILE" == /run/pilot50-candidate-env.* ]] && \
+      sudo rm -f -- "$EPHEMERAL_ENV_FILE" >/dev/null 2>&1; then
+      EPHEMERAL_ENV_FILE=""
+    else
+      cleanup_failed=1
+    fi
   fi
-  if [[ -n "$RUNNER_ENV_FILE" && \
-    "$RUNNER_ENV_FILE" == /run/pilot50-candidate-runner-env.* ]]; then
-    sudo rm -f -- "$RUNNER_ENV_FILE" >/dev/null 2>&1 || true
+  if [[ -n "$RUNNER_ENV_FILE" ]]; then
+    if [[ "$RUNNER_ENV_FILE" == /run/pilot50-candidate-runner-env.* ]] && \
+      sudo rm -f -- "$RUNNER_ENV_FILE" >/dev/null 2>&1; then
+      RUNNER_ENV_FILE=""
+    else
+      cleanup_failed=1
+    fi
   fi
-  if [[ -n "$STAGING_DIR" && \
-    "$STAGING_DIR" == "$BASE_DIR/runs/.staging-$EXPECTED_SHA-"* ]]; then
-    sudo rm -rf --one-file-system -- "$STAGING_DIR" >/dev/null 2>&1 || true
+  if [[ -n "$STAGING_DIR" ]]; then
+    if [[ "$STAGING_DIR" == "$BASE_DIR/runs/.staging-$EXPECTED_SHA-"* ]] && \
+      sudo rm -rf --one-file-system -- "$STAGING_DIR" >/dev/null 2>&1; then
+      STAGING_DIR=""
+    else
+      cleanup_failed=1
+    fi
   fi
+  return "$cleanup_failed"
 }
 
 candidate_owned() {
@@ -100,6 +114,7 @@ candidate_owned() {
   [[ "$(sudo docker image inspect \
     -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
     "$image_id" 2>/dev/null)" == "$EXPECTED_SHA" ]] || return 1
+  [[ -z "$CANDIDATE_ID" || "$CANDIDATE_ID" == "$candidate_id" ]] || return 1
   CANDIDATE_ID="$candidate_id"
 }
 
@@ -114,16 +129,21 @@ remove_owned_candidate() {
 }
 
 cleanup_on_exit() {
-  local exit_code="$?"
+  local candidate_cleanup_failed=0 exit_code="$?" temp_cleanup_failed=0
   trap - EXIT
-  if [[ -n "$CANDIDATE_ID" ]] && candidate_owned; then
-    if [[ "$(sudo docker inspect -f '{{.State.Running}}' "$CANDIDATE_ID" 2>/dev/null)" == \
-      "true" ]]; then
-      sudo docker stop --time 45 "$CANDIDATE_ID" >/dev/null 2>&1 || true
-    fi
-    sudo docker rm "$CANDIDATE_ID" >/dev/null 2>&1 || true
+  if [[ -n "$CANDIDATE_ID" ]] && ! remove_owned_candidate; then
+    candidate_cleanup_failed=1
   fi
-  cleanup_temp
+  cleanup_temp || temp_cleanup_failed=1
+  if [[ "$candidate_cleanup_failed" -ne 0 ]]; then
+    printf 'pilot50_candidate_exit_cleanup=FAIL reason=candidate_cleanup_failed\n'
+  fi
+  if [[ "$temp_cleanup_failed" -ne 0 ]]; then
+    printf 'pilot50_candidate_exit_cleanup=FAIL reason=temp_cleanup_failed\n'
+  fi
+  if [[ "$candidate_cleanup_failed" -ne 0 || "$temp_cleanup_failed" -ne 0 ]]; then
+    exit 1
+  fi
   exit "$exit_code"
 }
 
@@ -534,13 +554,17 @@ create_ephemeral_env() {
 }
 
 build_compose_command() {
+  local compose_root="$TOOLING_ROOT"
+  if [[ -n "$SOURCE_DIR" && -f "$SOURCE_DIR/$COMPOSE_REL" ]]; then
+    compose_root="$SOURCE_DIR"
+  fi
   compose=(
     sudo docker compose
     --env-file "$SERVER_ENV_FILE"
     --env-file "$EPHEMERAL_ENV_FILE"
     --project-name rosmol-pilot50-candidate
-    --project-directory "$TOOLING_ROOT"
-    -f "$TOOLING_ROOT/$COMPOSE_REL"
+    --project-directory "$compose_root"
+    -f "$compose_root/$COMPOSE_REL"
   )
 }
 
@@ -584,7 +608,7 @@ assert service.get("command") == [
     "python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"
 ]
 assert set(service.get("cap_drop") or []) == {"ALL"}
-assert "no-new-privileges:true" in (service.get("security_opt") or [])
+assert service.get("security_opt") == ["no-new-privileges=true"]
 assert int(service.get("mem_limit")) == 6 * 1024**3
 assert float(service.get("cpus")) == 2.0
 assert int(service.get("pids_limit")) == 256
@@ -674,7 +698,7 @@ prepare_cases() {
   local prepare_stdout
   if ! prepare_stdout="$(sudo docker run --rm --pull never --network none \
     --user app --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-    --cap-drop ALL --security-opt no-new-privileges:true \
+    --cap-drop ALL --security-opt no-new-privileges=true \
     -v "$STAGING_DIR/source:/workspace:ro" \
     -v "$STAGING_DIR/evidence:/evidence" \
     -w /workspace --entrypoint python "$PROD_IMAGE" \
@@ -718,6 +742,7 @@ validate_receipt() {
   [[ "$(receipt_value atypical "$receipt")" == "$ATYPICAL_TOTAL" ]] || return 1
   [[ "$(receipt_value cost_cap_rub "$receipt")" == "$COST_CAP_RUB" ]] || return 1
   [[ "$(receipt_value capacity_status "$receipt")" == "GO" ]] || return 1
+  [[ "$(receipt_value runtime_smoke_status "$receipt")" == "OK" ]] || return 1
   [[ "$(receipt_value production_snapshot_sha256 "$receipt")" =~ ^[0-9a-f]{64}$ ]] \
     || return 1
   [[ "$(receipt_value qdrant_fingerprint_sha256 "$receipt")" =~ ^[0-9a-f]{64}$ ]] \
@@ -728,7 +753,8 @@ validate_receipt() {
 
 preflight_mode() {
   local capacity cases_sha manifest_sha owner_gid owner_uid
-  local prod_snapshot prod_snapshot_sha qdrant qdrant_count qdrant_rest
+  local post_prod post_qdrant prod_snapshot prod_snapshot_sha
+  local qdrant qdrant_count qdrant_rest
   local qdrant_seed_sha qdrant_sha
   local source_seed_sha source_sha staging_evidence
 
@@ -799,7 +825,6 @@ preflight_mode() {
     | cut -d ' ' -f 1)" || fail "source_seed_sha_unavailable"
   [[ "$source_seed_sha" == "$qdrant_seed_sha" ]] \
     || fail "candidate_seed_differs_from_runtime"
-  SOURCE_DIR="$RUN_DIR/source"
   prepare_cases
   staging_evidence="$STAGING_DIR/evidence"
   sudo test -f "$staging_evidence/pilot50-cases.json" \
@@ -815,6 +840,38 @@ preflight_mode() {
   source_sha="$(source_paths_sha)" || fail "source_paths_sha_unavailable"
   [[ "$manifest_sha" =~ ^[0-9a-f]{64}$ && "$cases_sha" =~ ^[0-9a-f]{64}$ && \
     "$source_sha" =~ ^[0-9a-f]{64}$ ]] || fail "preflight_hash_invalid"
+
+  if [[ "$EPHEMERAL_ENV_FILE" != /run/pilot50-candidate-env.* ]] || \
+    ! sudo rm -f -- "$EPHEMERAL_ENV_FILE" >/dev/null 2>&1; then
+    fail "ephemeral_env_cleanup_failed"
+  fi
+  EPHEMERAL_ENV_FILE=""
+  create_ephemeral_env
+  build_compose_command
+  "${compose[@]}" config --quiet >/dev/null 2>&1 || fail "compose_config_failed"
+  validate_effective_compose || fail "compose_isolation_invalid"
+  "${compose[@]}" build --pull=false pilot50-candidate-ml \
+    >/dev/null 2>&1 || fail "candidate_image_build_failed"
+  verify_source_snapshot || fail "source_snapshot_changed_during_build"
+  [[ "$(sudo docker image inspect \
+    -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "rosmol-ai-bot-pilot50-candidate:$EXPECTED_SHA" 2>/dev/null)" == \
+    "$EXPECTED_SHA" ]] || fail "candidate_image_sha_mismatch"
+  CANDIDATE_ID="$("${compose[@]}" run -d --no-deps --use-aliases \
+    --name "$CANDIDATE_CONTAINER" pilot50-candidate-ml 2>/dev/null)" \
+    || fail "candidate_start_failed"
+  [[ "$CANDIDATE_ID" =~ ^[0-9a-f]{64}$ ]] || fail "candidate_start_failed"
+  candidate_owned || fail "candidate_identity_invalid"
+  require_candidate_runtime
+  wait_candidate_ready || fail "candidate_not_ready"
+  require_candidate_runtime
+  remove_owned_candidate || fail "candidate_cleanup_failed"
+  post_prod="$(production_snapshot)" || fail "production_snapshot_failed"
+  [[ "$post_prod" == "$prod_snapshot" ]] \
+    || fail "production_changed_during_preflight"
+  post_qdrant="$(qdrant_snapshot)" || fail "qdrant_snapshot_failed"
+  [[ "$post_qdrant" == "$qdrant" ]] || fail "qdrant_changed_during_preflight"
+
   {
     printf 'schema_version=pilot50-candidate-preflight-v1\n'
     printf 'dataset_id=%s\n' "$DATASET_ID"
@@ -830,6 +887,7 @@ preflight_mode() {
     printf 'cases_total=%s\ntypical=%s\natypical=%s\n' \
       "$CASES_TOTAL" "$TYPICAL_TOTAL" "$ATYPICAL_TOTAL"
     printf 'target=%s\ncost_cap_rub=%s\n' "$TARGET" "$COST_CAP_RUB"
+    printf 'runtime_smoke_status=OK\n'
     printf '%s\n' "$capacity"
   } >"$STAGING_DIR/preflight.receipt" || fail "preflight_receipt_create_failed"
   chmod 0600 "$STAGING_DIR/preflight.receipt" || fail "preflight_receipt_mode_failed"
@@ -837,8 +895,11 @@ preflight_mode() {
     || fail "preflight_receipt_invalid"
   sudo mv -T -- "$STAGING_DIR" "$RUN_DIR" || fail "preflight_publish_failed"
   STAGING_DIR=""
+  SOURCE_DIR="$RUN_DIR/source"
+  cleanup_temp || fail "preflight_temp_cleanup_failed"
 
   printf 'pilot50_candidate_preflight=GO\n'
+  printf 'runtime_smoke_status=OK\n'
   printf 'candidate_sha=%s\n' "$EXPECTED_SHA"
   printf 'production_runtime_sha=%s\n' "$PROD_RUNTIME_SHA"
   printf 'production_snapshot_sha256=%s\n' "$prod_snapshot_sha"
@@ -909,63 +970,174 @@ PY
 }
 
 validate_candidate_runtime() {
-  candidate_owned || return 1
+  candidate_owned || {
+    printf 'identity'
+    return 1
+  }
   sudo docker inspect "$CANDIDATE_ID" 2>/dev/null \
     | python3 /dev/fd/3 "$EXPECTED_SHA" "$DATA_NETWORK" \
       "$RUNTIME_EGRESS_NETWORK" 3<<'PY' 2>/dev/null
 import json
 import sys
 
-sha, data_network, egress_network = sys.argv[1:]
-value = json.load(sys.stdin)[0]
-host = value["HostConfig"]
-config = value["Config"]
-state = value["State"]
-assert state["Running"] is True and state["OOMKilled"] is False
-assert host["ReadonlyRootfs"] is True
-assert host["Memory"] == 6 * 1024**3
-assert host["NanoCpus"] == 2_000_000_000
-assert host["PidsLimit"] == 256
-assert host["RestartPolicy"]["Name"] == "no"
-assert set(host.get("CapDrop") or []) == {"ALL"}
-assert "no-new-privileges" in (host.get("SecurityOpt") or [])
-assert not (host.get("PortBindings") or {})
-assert all(
-    bindings is None
-    for bindings in (value.get("NetworkSettings", {}).get("Ports") or {}).values()
-)
-assert set(value["NetworkSettings"]["Networks"]) == {data_network, egress_network}
-labels = config["Labels"]
-assert labels["com.rosmol.purpose"] == "pilot50-candidate"
-assert labels["com.rosmol.dataset"] == "pilot50_balanced_v2"
-assert labels["com.rosmol.candidate-git-sha"] == sha
-env = dict(item.split("=", 1) for item in config["Env"] if "=" in item)
-assert env["APP_ENV"] == "staging" and env["RUNTIME_ROLE"] == "ml"
-assert env["RELEASE_GIT_SHA"] == sha
-assert env["ML_PREWARM_ON_STARTUP"] == "true"
-assert env["ML_UNLOAD_AFTER_USE"] == "true"
-assert env["ML_UNLOAD_EMBEDDER_AFTER_USE"] == "true"
-assert env["ML_UNLOAD_RERANKER_AFTER_USE"] == "true"
-assert env["HDE_TRANSPORT_ENABLED"] == "false"
-assert env["YONOTE_SYNC_ENABLED"] == "false"
-assert env["ADMIN_READ_ONLY"] == "true"
-assert env["ADMIN_MUTATIONS_ENABLED"] == "false"
-for key in (
-    "WEBHOOK_AUTH_TOKEN", "ADMIN_AUTH_TOKEN", "HDE_TRIGGER_PREFIX", "HDE_BASE_URL",
-    "HDE_API_EMAIL", "HDE_API_KEY", "HDE_BOT_USER_ID",
-    "HDE_TRANSPORT_EVENT_KEY_SECRET", "HDE_TRANSPORT_ENCRYPTION_KEY",
-    "YONOTE_API_TOKEN", "VK_API_TOKEN", "VK_GROUP_TOKEN", "VK_CONFIRMATION_CODE",
-    "VK_SECRET", "VK_CALLBACK_SECRET",
-):
-    assert env[key] == ""
-assert env["API_AUTH_TOKEN"] and env["USER_HASH_SECRET"]
-mounts = {item["Destination"]: item for item in value["Mounts"]}
-for target in (
-    "/app/data/knowledge_base_seed.json", "/app/data/private/admin-kb",
-    "/home/app/.cache/huggingface", "/home/app/.cache/torch", "/opt/models",
-):
-    assert mounts[target]["RW"] is False
+class RuntimeCheckError(Exception):
+    pass
+
+
+def require(code, condition):
+    if condition is not True:
+        raise RuntimeCheckError(code)
+
+
+def no_new_privileges_enabled(values):
+    return values in (
+        ["no-new-privileges"],
+        ["no-new-privileges=true"],
+        ["no-new-privileges:true"],
+    )
+
+
+try:
+    sha, data_network, egress_network = sys.argv[1:]
+    payload = json.load(sys.stdin)
+    require("inspect", isinstance(payload, list) and len(payload) == 1)
+    value = payload[0]
+    require("inspect", isinstance(value, dict))
+    host = value.get("HostConfig")
+    config = value.get("Config")
+    state = value.get("State")
+    networks = value.get("NetworkSettings")
+    require(
+        "inspect",
+        all(isinstance(item, dict) for item in (host, config, state, networks)),
+    )
+    require("state", state.get("Running") is True and state.get("OOMKilled") is False)
+    require("rootfs", host.get("ReadonlyRootfs") is True)
+    require("memory", host.get("Memory") == 6 * 1024**3)
+    require("cpu", host.get("NanoCpus") == 2_000_000_000)
+    require("pids", host.get("PidsLimit") == 256)
+    restart = host.get("RestartPolicy")
+    require(
+        "restart",
+        isinstance(restart, dict)
+        and restart.get("Name") in {"", "no"}
+        and restart.get("MaximumRetryCount") == 0,
+    )
+    require("cap_drop", host.get("CapDrop") == ["ALL"])
+    require("no_new_privileges", no_new_privileges_enabled(host.get("SecurityOpt")))
+    exposed_ports = networks.get("Ports") or {}
+    require(
+        "ports",
+        not (host.get("PortBindings") or {})
+        and isinstance(exposed_ports, dict)
+        and all(bindings is None for bindings in exposed_ports.values()),
+    )
+    attached_networks = networks.get("Networks")
+    data_endpoint = (
+        attached_networks.get(data_network)
+        if isinstance(attached_networks, dict)
+        else None
+    )
+    require(
+        "networks",
+        isinstance(attached_networks, dict)
+        and set(attached_networks) == {data_network, egress_network}
+        and isinstance(data_endpoint, dict)
+        and "pilot50-candidate-ml" in (data_endpoint.get("Aliases") or []),
+    )
+    labels = config.get("Labels")
+    require(
+        "labels",
+        isinstance(labels, dict)
+        and labels.get("com.rosmol.purpose") == "pilot50-candidate"
+        and labels.get("com.rosmol.dataset") == "pilot50_balanced_v2"
+        and labels.get("com.rosmol.candidate-git-sha") == sha,
+    )
+    raw_env = config.get("Env")
+    require(
+        "inspect",
+        isinstance(raw_env, list)
+        and all(isinstance(item, str) and "=" in item for item in raw_env),
+    )
+    env = dict(item.split("=", 1) for item in raw_env)
+    require(
+        "runtime_env",
+        env.get("APP_ENV") == "staging"
+        and env.get("RUNTIME_ROLE") == "ml"
+        and env.get("RELEASE_GIT_SHA") == sha,
+    )
+    require(
+        "ml_lifecycle",
+        all(
+            env.get(key) == "true"
+            for key in (
+                "ML_PREWARM_ON_STARTUP",
+                "ML_UNLOAD_AFTER_USE",
+                "ML_UNLOAD_EMBEDDER_AFTER_USE",
+                "ML_UNLOAD_RERANKER_AFTER_USE",
+            )
+        ),
+    )
+    require(
+        "transports",
+        env.get("HDE_TRANSPORT_ENABLED") == "false"
+        and env.get("YONOTE_SYNC_ENABLED") == "false"
+        and env.get("ADMIN_READ_ONLY") == "true"
+        and env.get("ADMIN_MUTATIONS_ENABLED") == "false",
+    )
+    blank_secrets = (
+        "WEBHOOK_AUTH_TOKEN", "ADMIN_AUTH_TOKEN", "HDE_TRIGGER_PREFIX",
+        "HDE_BASE_URL", "HDE_API_EMAIL", "HDE_API_KEY", "HDE_BOT_USER_ID",
+        "HDE_TRANSPORT_EVENT_KEY_SECRET", "HDE_TRANSPORT_ENCRYPTION_KEY",
+        "YONOTE_API_TOKEN", "VK_API_TOKEN", "VK_GROUP_TOKEN",
+        "VK_CONFIRMATION_CODE", "VK_SECRET", "VK_CALLBACK_SECRET",
+    )
+    require(
+        "secrets",
+        all(env.get(key) == "" for key in blank_secrets)
+        and bool(env.get("API_AUTH_TOKEN"))
+        and bool(env.get("USER_HASH_SECRET")),
+    )
+    raw_mounts = value.get("Mounts")
+    require("inspect", isinstance(raw_mounts, list))
+    mounts = {
+        item.get("Destination"): item
+        for item in raw_mounts
+        if isinstance(item, dict) and isinstance(item.get("Destination"), str)
+    }
+    required_mounts = (
+        "/app/data/knowledge_base_seed.json", "/app/data/private/admin-kb",
+        "/home/app/.cache/huggingface", "/home/app/.cache/torch", "/opt/models",
+    )
+    require(
+        "mounts",
+        len(raw_mounts) == len(required_mounts)
+        and set(mounts) == set(required_mounts)
+        and all(mounts[target].get("RW") is False for target in required_mounts),
+    )
+except RuntimeCheckError as exc:
+    print(str(exc))
+    raise SystemExit(1) from None
+except Exception:
+    print("inspect")
+    raise SystemExit(1) from None
 PY
+}
+
+require_candidate_runtime() {
+  local stage
+  if stage="$(validate_candidate_runtime)"; then
+    [[ -z "$stage" ]] || fail "candidate_isolation_output_invalid"
+    return 0
+  fi
+  case "$stage" in
+    identity | inspect | state | rootfs | memory | cpu | pids | restart | \
+      cap_drop | no_new_privileges | ports | networks | labels | runtime_env | \
+      ml_lifecycle | transports | secrets | mounts)
+      fail "candidate_isolation_$stage"
+      ;;
+    *) fail "candidate_isolation_inspect" ;;
+  esac
 }
 
 wait_candidate_ready() {
@@ -1004,7 +1176,7 @@ runner_command() {
     --read-only
     --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m
     --cap-drop ALL
-    --security-opt no-new-privileges:true
+    --security-opt no-new-privileges=true
     --pids-limit 256
     --memory 2g
     --cpus 2
@@ -1022,7 +1194,7 @@ cost_governance_preflight() {
   local approval_id="$1"
   sudo docker run --rm --pull never --network none \
     --user app --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-    --cap-drop ALL --security-opt no-new-privileges:true \
+    --cap-drop ALL --security-opt no-new-privileges=true \
     -v "$SOURCE_DIR:/workspace:ro" -v "$COST_LEDGER_DIR:/cost-ledger:ro" \
     -w /workspace --entrypoint python \
     "rosmol-ai-bot-pilot50-candidate:$EXPECTED_SHA" \
@@ -1307,9 +1479,9 @@ run_mode() {
     || fail "candidate_start_failed"
   [[ "$CANDIDATE_ID" =~ ^[0-9a-f]{64}$ ]] || fail "candidate_start_failed"
   candidate_owned || fail "candidate_identity_invalid"
-  validate_candidate_runtime || fail "candidate_isolation_invalid"
+  require_candidate_runtime
   wait_candidate_ready || fail "candidate_not_ready"
-  validate_candidate_runtime || fail "candidate_isolation_invalid"
+  require_candidate_runtime
 
   runner_command
   cost_governance_preflight "$approval_id" \
@@ -1377,7 +1549,7 @@ run_mode() {
     || fail "candidate_quality_status_invalid"
 
   wait_candidate_ready || fail "candidate_not_ready_after_run"
-  validate_candidate_runtime || fail "candidate_isolation_changed"
+  require_candidate_runtime
   post_prod="$(production_snapshot)" || fail "production_snapshot_failed"
   post_prod_sha="$(printf '%s' "$post_prod" | sha256sum | cut -d ' ' -f 1)"
   [[ "$post_prod_sha" == "$pre_prod_sha" ]] || fail "production_changed_during_run"
@@ -1401,6 +1573,7 @@ run_mode() {
     printf 'qdrant_seed_sha256=%s\n' "$pre_qdrant_seed_sha"
   } >"$completed") 2>/dev/null || fail "candidate_completion_marker_failed"
   chmod 0600 "$completed" || fail "candidate_completion_marker_mode_failed"
+  cleanup_temp || fail "run_temp_cleanup_failed"
 
   printf 'pilot50_candidate_server_local=OK\n'
   printf 'pilot50_candidate_quality=%s\n' "$quality_status"
@@ -1443,7 +1616,7 @@ review_mode() {
     "$safe_sha" ]] || fail "candidate_safe_result_changed"
   if ! safe_stdout="$(sudo docker run --rm --pull never --network none \
     --user app --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-    --cap-drop ALL --security-opt no-new-privileges:true \
+    --cap-drop ALL --security-opt no-new-privileges=true \
     -v "$SOURCE_DIR:/workspace:ro" -v "$EVIDENCE_DIR:/evidence:ro" \
     -w /workspace --entrypoint python \
     "rosmol-ai-bot-pilot50-candidate:$EXPECTED_SHA" \

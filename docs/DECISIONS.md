@@ -648,3 +648,17 @@ machine-checkable frozen cases; полный локальный pre-run gate о�
 v1 не заявляется. Проверка идёт только в отдельном candidate container после capacity GO;
 production не останавливается и не изменяется. Неполные trace, cache hit, pricing STOP,
 membership mismatch или провал любого quality criterion означает STOP без выборочного повтора.
+
+Первый candidate preflight на `8b5ef9b25ac26953833d1076d47bf9508d471289` подтвердил dataset,
+capacity, production и Qdrant, но последующий `run` остановился до `run.started`, reservation и
+`/ask`: runtime-validator неверно требовал одну строковую форму включённого
+`no-new-privileges`. Эта попытка не является paid run, не расходует approval и не разрешает
+повтор того же SHA. Исправление обязано принимать только семантически эквивалентные true-формы,
+отклонять missing/false/extra values и возвращать payload-free stage code.
+
+Отныне бесплатный candidate `preflight` публикует `GO` только после фактического frozen-image
+build, one-off start, exact isolation check, `/ready`, повторного isolation check, удаления
+candidate и проверки, что production snapshot и полный Qdrant fingerprint не изменились.
+Cleanup failure всегда видим и даёт non-zero exit. Поэтому paid `run` не может быть первым местом,
+где проверяется исполнимость candidate-контейнера. Перед следующим preflight старый exact-labeled
+container должен быть подтверждённо `absent` либо удалён old-SHA launcher-ом.

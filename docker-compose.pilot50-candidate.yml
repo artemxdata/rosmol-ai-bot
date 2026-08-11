@@ -114,7 +114,7 @@ services:
       - /tmp:rw,nosuid,nodev,noexec,size=1g,mode=1777
     init: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    security_opt: [no-new-privileges=true]
     networks:
       data:
         aliases: [pilot50-candidate-ml]
