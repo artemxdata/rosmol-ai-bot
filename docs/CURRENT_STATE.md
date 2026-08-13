@@ -1,8 +1,42 @@
 # Текущее состояние проекта
 
-**Обновлено:** 11 августа 2026
+**Обновлено:** 13 августа 2026
 
 **Ветка:** `codex/real-rag`
+
+## Pilot50 v4: core-патч завершён локально, внешний запуск ещё не разрешён
+
+13 августа закончен regression-first change set ядра RAG без Yonote Apply, переиндексации,
+`/ask`, HDE/VK, deployment или платных внешних вызовов. Retrieval, rerank и generation теперь
+используют один query-proven план тем и аспектов; deterministic fast paths требуют точной
+привязки к опубликованному Yonote (`source=yonote_api`, `version=yonote-api-v1`,
+`status=published`) и fail closed при неполном multi-aspect запросе, metadata drift или
+несовпадении forum/category/ordinal. Добавлены bounded ответы для доказанных Pilot50-классов,
+но общие confidence, safety, entity и source-binding guards не ослаблены.
+
+Temporal слой теперь разбирает русские и числовые даты, дедлайны, время и диапазоны с защитой
+scope; guard может исправить только изолированное устаревшее утверждение о регистрации из
+фактически процитированного опубликованного источника. Offline scorer переведён на типизированные
+атомарные date/range/time/number/text claims с защитой от negation, correction, hearsay и history;
+legacy-оценивание не изменено. Дополнительно исправлены forum aliases, bounded intent неактивной
+кнопки ФГАИС, ложное совпадение профиля «положение» с «местоположение», разговорный технический
+запрос и продолжение диалога после уточнения мероприятия.
+
+Архитектурный и security review не выявил нового network/deploy/secret пути: Qdrant retrieval
+по-прежнему ограничен `status=published`, draft/archived и metadata drift блокируются тестами,
+а список temporal sources обязан точно совпадать с citations. `git diff --check` прошёл; Ruff
+прошёл; seed validation: `2186` records, `2152` published. Полный локальный pytest gate покрывает
+`3201` tests: `3200 passed`, `1 skipped`, `0 failed`. На Windows монолитный процесс после
+нескольких тысяч async fixtures исчерпывает создание локального event loop; поэтому тот же exact
+набор доказан независимыми file-shards, каждый из которых завершился, включая `77/77`
+`test_process_message`, `334/334` scorer, `266/266` graph и `60/60` v4 retrieval regressions.
+
+Текущий следующий шаг — выборочно закоммитить и push-нуть только core change set и этот handoff,
+не добавляя четыре пользовательских untracked-документа. После push нужно на новом exact SHA
+подготовить immutable v4 contract и privacy-safe offline rescore сохранённых v3 результатов;
+только затем допустим одноразовый D-042 governance/preflight. Новый paid/server-local `/ask` run,
+Yonote Apply/indexing, HDE/VK и rollout до отдельного явного решения и успешного preflight
+запрещены. D-041 и rejected v3 повторно не используются.
 
 ## Pilot50: v3 выполнил 50/50, но evidence integrity-rejected из-за одного timeout
 

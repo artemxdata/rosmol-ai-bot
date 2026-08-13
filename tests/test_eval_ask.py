@@ -1994,6 +1994,1002 @@ def test_score_case_normalizes_spacing_inside_numeric_dates() -> None:
 
     assert result["answer_contains_match"] is True
     assert result["passed"] is True
+    assert "answer_fact_group_matches" not in result
+
+
+def _score_typed_answer(
+    groups: list[dict[str, object]],
+    response: str,
+) -> dict[str, object]:
+    normalized_groups: list[dict[str, object]] = []
+    for group in groups:
+        normalized_group = dict(group)
+        if (
+            normalized_group.get("kind") != "text_any"
+            and "context_any" in normalized_group
+            and "context_position" not in normalized_group
+        ):
+            normalized_group["context_position"] = "before"
+        normalized_groups.append(normalized_group)
+    case = _normalize_case(
+        {
+            "id": "typed-answer",
+            "query": "Какой подтверждённый ответ?",
+            "expected_answer_fact_groups": normalized_groups,
+        }
+    )
+    return score_case(
+        case,
+        {"http_status": 200, "response": response},
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Приём заявок завершится 6 июля 2026 года.",
+        "Приём заявок завершится 06.07.2026.",
+    ],
+)
+def test_typed_answer_date_matches_numeric_and_russian_renderings(
+    response: str,
+) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["приём заявок"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [True]
+    assert result["answer_contains_match"] is True
+    assert result["passed"] is True
+
+
+def test_typed_answer_time_requires_declared_timezone_token() -> None:
+    groups = [
+        {
+            "kind": "time",
+            "value": "23:59",
+            "timezone": "мск",
+            "context_any": ["подать заявку"],
+        }
+    ]
+
+    matching = _score_typed_answer(groups, "Подать заявку можно до 23:59 (мск).")
+    missing_timezone = _score_typed_answer(groups, "Подать заявку можно до 23:59.")
+
+    assert matching["answer_fact_group_matches"] == [True]
+    assert missing_timezone["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "response"),
+    [
+        ("2026-07-26", "2026-07-30", "Смена пройдёт 26–30 июля 2026 года."),
+        ("2026-08-08", "2026-08-15", "Смена пройдёт с 8 по 15 августа 2026."),
+        (
+            "2026-08-08",
+            "2026-08-15",
+            "Смена пройдёт 8 августа — 15 августа 2026 года.",
+        ),
+        (
+            "2026-07-26",
+            "2026-07-30",
+            "Смена пройдёт 26.07.2026–30.07.2026.",
+        ),
+    ],
+)
+def test_typed_answer_date_range_matches_complete_ranges(
+    start: str,
+    end: str,
+    response: str,
+) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date_range",
+                "start": start,
+                "end": end,
+                "context_any": ["смена"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [True]
+    assert result["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Приём заявок завершится 6 июля.",
+        "Приём заявок завершится в июле 2026 года.",
+        "Приём заявок завершится 7 июля 2026 года.",
+        "Приём заявок завершится 06.07.2025.",
+    ],
+)
+def test_typed_answer_date_rejects_partial_or_wrong_dates(response: str) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["приём заявок"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+    assert result["answer_contains_match"] is False
+    assert "answer_contains_mismatch" in result["failure_reasons"]
+
+
+def test_typed_answer_requires_every_group_and_any_text_alternative() -> None:
+    groups = [
+        {
+            "kind": "date",
+            "value": "2026-07-06",
+            "context_any": ["срок"],
+        },
+        {
+            "kind": "text_any",
+            "alternatives": ["граждане России", "граждане РФ"],
+        },
+        {
+            "kind": "number",
+            "value": 18,
+            "context_any": ["направлениям"],
+            "context_position": "after",
+        },
+    ]
+
+    matching = _score_typed_answer(
+        groups,
+        "Срок — 6 июля 2026 года: участвовать могут граждане РФ по 18 направлениям.",
+    )
+    missing_number = _score_typed_answer(
+        groups,
+        "Срок — 6 июля 2026 года: участвовать могут граждане РФ по 17 направлениям.",
+    )
+
+    assert matching["answer_fact_group_matches"] == [True, True, True]
+    assert matching["passed"] is True
+    assert missing_number["answer_fact_group_matches"] == [True, True, False]
+    assert missing_number["passed"] is False
+
+
+def test_typed_date_range_rejects_a_single_endpoint() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date_range",
+                "start": "2026-07-26",
+                "end": "2026-07-30",
+                "context_any": ["заезд"],
+            }
+        ],
+        "Заезд состоится 26 июля 2026 года.",
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+    assert result["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("group", "prefix", "citation"),
+    [
+        (
+            {"kind": "number", "value": 18, "context_any": ["номинаций"]},
+            "Число номинаций указано в источнике",
+            "[src:grant-18]",
+        ),
+        (
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок"],
+            },
+            "Срок указан в источнике",
+            "[src:06.07.2026]",
+        ),
+        (
+            {"kind": "text_any", "alternatives": ["только граждане РФ"]},
+            "Подробнее в источнике",
+            "[src:только граждане РФ]",
+        ),
+    ],
+)
+def test_typed_answer_facts_cannot_be_satisfied_by_citation_ids(
+    group: dict[str, object],
+    prefix: str,
+    citation: str,
+) -> None:
+    result = _score_typed_answer(
+        [group],
+        f"{prefix} {citation}.",
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+    assert result["passed"] is False
+
+
+def test_typed_text_and_number_use_bounded_literal_tokens_without_regex() -> None:
+    groups = [
+        {"kind": "text_any", "alternatives": ["26", r"\d+"]},
+        {"kind": "number", "value": 26, "context_any": ["направлений"]},
+    ]
+
+    result = _score_typed_answer(
+        groups,
+        "Ответ опубликован в 2026 году, направлений пока не указано.",
+    )
+
+    assert result["answer_fact_group_matches"] == [False, False]
+    assert result["passed"] is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "18 июля 2026 года, номинаций только 17.",
+        "Номинаций принято 18% от плана.",
+        "Номинаций принято 18,5% от плана.",
+        "18 июля список номинаций будет опубликован.",
+    ],
+)
+def test_typed_number_rejects_date_percent_and_competing_value(
+    response: str,
+) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "number",
+                "value": 18,
+                "context_any": ["номинаций"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Форум пройдёт 6 июля 2026 года, но срок подачи — 7 июля 2026 года.",
+        "Срок подачи не 6 июля 2026 года.",
+        "Срок подачи был 6 июля 2026 года, но исправлен на 7 июля 2026 года.",
+        "Срок подачи — 6 июля 2026 года, дата исправлена.",
+        "Срок подачи указан отдельно. Форум пройдёт 6 июля 2026 года.",
+    ],
+)
+def test_typed_date_rejects_wrong_negated_corrected_or_cross_sentence_claim(
+    response: str,
+) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_typed_date_allows_explicit_non_later_than_claim() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            }
+        ],
+        "Срок подачи — не позднее 6 июля 2026 года.",
+    )
+
+    assert result["answer_fact_group_matches"] == [True]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Смена пройдёт 30–26 июля 2026 года.",
+        "Смена: заезд 26.07.2026, выезд 30.07.2026.",
+        "Смена пройдёт не 26–30 июля 2026 года.",
+    ],
+)
+def test_typed_range_rejects_reversed_unconnected_or_negated_interval(
+    response: str,
+) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date_range",
+                "start": "2026-07-26",
+                "end": "2026-07-30",
+                "context_any": ["смена"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Срок подачи: https://example.test/archive/06.07.2026",
+        "Срок подачи смотри [здесь](https://example.test/06.07.2026).",
+    ],
+)
+def test_typed_fact_cannot_be_satisfied_by_url_destination(response: str) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_typed_time_rejects_timezone_suffix_and_competing_time() -> None:
+    groups = [
+        {
+            "kind": "time",
+            "value": "23:59",
+            "timezone": "мск",
+            "context_any": ["приём заявок"],
+        }
+    ]
+
+    suffix = _score_typed_answer(groups, "Приём заявок — до 23:59 мск+5.")
+    competing = _score_typed_answer(
+        groups,
+        "Приём заявок указан до 23:59 (мск), а затем до 22:00 (мск).",
+    )
+    competing_timezone = _score_typed_answer(
+        groups,
+        "Приём заявок указан до 23:59 (мск), а затем до 23:59 (utc).",
+    )
+
+    assert suffix["answer_fact_group_matches"] == [False]
+    assert competing["answer_fact_group_matches"] == [False]
+    assert competing_timezone["answer_fact_group_matches"] == [False]
+
+
+def test_typed_time_accepts_exact_timezone_with_numeric_suffix() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "time",
+                "value": "23:59",
+                "timezone": "мск+5",
+                "context_any": ["приём заявок"],
+            }
+        ],
+        "Приём заявок — до 23:59 (мск+5).",
+    )
+
+    assert result["answer_fact_group_matches"] == [True]
+
+
+@pytest.mark.parametrize(
+    ("group", "response"),
+    [
+        (
+            {"kind": "number", "value": 18, "context_any": ["число номинаций"]},
+            "На форуме 18 экспертов, число номинаций пока не указано.",
+        ),
+        (
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            },
+            "Форум пройдет 6 июля 2026 года, а срок подачи пока не указан.",
+        ),
+        (
+            {"kind": "number", "value": 18, "context_any": ["номинаций"]},
+            "Номинаций нет, зато выступят 18 экспертов.",
+        ),
+        (
+            {
+                "kind": "time",
+                "value": "23:59",
+                "timezone": "мск",
+                "context_any": ["приём заявок"],
+            },
+            "Трансляция начнется в 23:59 мск, а приём заявок уже завершён.",
+        ),
+    ],
+)
+def test_typed_fact_requires_same_atomic_claim(
+    group: dict[str, object],
+    response: str,
+) -> None:
+    result = _score_typed_answer([group], response)
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    ("group", "response"),
+    [
+        (
+            {"kind": "text_any", "alternatives": ["граждане РФ"]},
+            "Граждане РФ не могут участвовать.",
+        ),
+        (
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            },
+            "Срок подачи — 6 июля 2026 года, но это устаревшая дата.",
+        ),
+        (
+            {
+                "kind": "date_range",
+                "start": "2026-07-26",
+                "end": "2026-07-30",
+                "context_any": ["смена"],
+            },
+            "Смена 26–30 июля 2026 года, но на самом деле не пройдет.",
+        ),
+        (
+            {"kind": "number", "value": 18, "context_any": ["номинаций"]},
+            "Номинаций не более 18.",
+        ),
+        (
+            {"kind": "number", "value": 18, "context_any": ["номинаций"]},
+            "Номинаций не менее 18.",
+        ),
+        (
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["форум"],
+            },
+            "Форум пройдет не позднее 6 июля 2026 года.",
+        ),
+    ],
+)
+def test_typed_fact_rejects_negative_corrected_or_non_exact_claim(
+    group: dict[str, object],
+    response: str,
+) -> None:
+    result = _score_typed_answer([group], response)
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_typed_text_allows_explicit_inclusion_claim() -> None:
+    result = _score_typed_answer(
+        [{"kind": "text_any", "alternatives": ["граждане РФ"]}],
+        "Участвовать могут не только граждане РФ.",
+    )
+
+    assert result["answer_fact_group_matches"] == [True]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Номинаций — 18 процентов от плана.",
+        "18-го июля список номинаций будет опубликован.",
+    ],
+)
+def test_typed_number_rejects_word_percent_and_ordinal_date(response: str) -> None:
+    result = _score_typed_answer(
+        [{"kind": "number", "value": 18, "context_any": ["номинаций"]}],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_typed_time_rejects_spaced_timezone_offset_suffix() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "time",
+                "value": "23:59",
+                "timezone": "мск",
+                "context_any": ["приём заявок"],
+            }
+        ],
+        "Приём заявок — до 23:59 мск (+5).",
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_typed_date_allows_positive_stated_context() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            }
+        ],
+        "Срок подачи указан: 6 июля 2026 года.",
+    )
+
+    assert result["answer_fact_group_matches"] == [True]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Номинаций до 18.",
+        "Номинаций около 18.",
+        "Номинаций минимум 18.",
+        "Номинаций 18+.",
+    ],
+)
+def test_typed_number_rejects_bounds_and_approximations(response: str) -> None:
+    result = _score_typed_answer(
+        [{"kind": "number", "value": 18, "context_any": ["номинаций"]}],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Гражданам РФ участвовать нельзя.",
+        "Граждане РФ исключены из числа участников.",
+    ],
+)
+def test_typed_text_rejects_lexical_negative_claim(response: str) -> None:
+    result = _score_typed_answer(
+        [{"kind": "text_any", "alternatives": ["граждане РФ", "гражданам РФ"]}],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_typed_fact_rejects_correction_in_following_sentence() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            }
+        ],
+        "Срок подачи — 6 июля 2026 года. Это устаревшая дата.",
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    ("context_position", "response", "expected"),
+    [
+        ("before", "Номинаций — 18.", True),
+        ("before", "18 номинаций.", False),
+        ("after", "18 номинаций.", True),
+        ("after", "Номинаций — 18.", False),
+    ],
+)
+def test_typed_fact_requires_declared_context_position(
+    context_position: str,
+    response: str,
+    expected: bool,
+) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "number",
+                "value": 18,
+                "context_any": ["номинаций"],
+                "context_position": context_position,
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [expected]
+
+
+def test_typed_fact_does_not_bind_across_discourse_dash() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "number",
+                "value": 18,
+                "context_any": ["номинаций"],
+                "context_position": "after",
+            }
+        ],
+        "18 экспертов — при этом список номинаций опубликован.",
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Срок подачи — 6 июля 2026 года. Важно: эта дата устарела.",
+        (
+            "Срок подачи — 6 июля 2026 года. "
+            "По новым данным срок перенесён на 7 июля 2026 года."
+        ),
+        "Срок подачи — 6 июля 2026 года. Важно: этот срок пока не уточнён.",
+    ],
+)
+def test_typed_fact_rejects_later_anaphoric_correction(response: str) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+                "context_position": "before",
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    ("group", "response"),
+    [
+        (
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            },
+            "Срок подачи якобы 6 июля 2026 года.",
+        ),
+        (
+            {"kind": "number", "value": 18, "context_any": ["номинаций"]},
+            "По слухам, номинаций 18.",
+        ),
+        (
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            },
+            "Срок подачи — 6 июля 2026 года. Теперь срок подачи — 7 июля 2026 года.",
+        ),
+        (
+            {"kind": "number", "value": 18, "context_any": ["номинаций"]},
+            "Номинаций — 18. Сейчас номинаций — 17.",
+        ),
+    ],
+)
+def test_typed_fact_rejects_hearsay_and_later_current_value(
+    group: dict[str, object],
+    response: str,
+) -> None:
+    result = _score_typed_answer([group], response)
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Неверно, что срок подачи — 6 июля 2026 года.",
+        "Это неправда: срок подачи — 6 июля 2026 года.",
+        "По старым данным, срок подачи — 6 июля 2026 года.",
+        "Раньше срок подачи был 6 июля 2026 года.",
+        "Не подтверждено, что срок подачи — 6 июля 2026 года.",
+        "Срок подачи — 6 июля 2026 года, если верить слухам.",
+    ],
+)
+def test_typed_fact_rejects_refuted_or_historical_claim(response: str) -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "date",
+                "value": "2026-07-06",
+                "context_any": ["срок подачи"],
+            }
+        ],
+        response,
+    )
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+@pytest.mark.parametrize(
+    ("group", "response"),
+    [
+        (
+            {
+                "kind": "number",
+                "value": 18,
+                "context_any": ["номинаций"],
+                "context_position": "before",
+            },
+            "Номинаций — 18 процентных пунктов.",
+        ),
+        (
+            {
+                "kind": "time",
+                "value": "23:59",
+                "timezone": "мск",
+                "context_any": ["приём заявок"],
+                "context_position": "before",
+            },
+            "Приём заявок — до 23:59 мск по UTC+5.",
+        ),
+        (
+            {"kind": "text_any", "alternatives": ["граждане РФ"]},
+            "Граждане РФ без права участия.",
+        ),
+        (
+            {"kind": "text_any", "alternatives": ["граждане РФ"]},
+            "Участвовать могут все, кроме граждан РФ.",
+        ),
+        (
+            {"kind": "text_any", "alternatives": ["граждане РФ"]},
+            "Граждане РФ могут участвовать? Неизвестно.",
+        ),
+    ],
+)
+def test_typed_fact_rejects_non_assertive_relation_variants(
+    group: dict[str, object],
+    response: str,
+) -> None:
+    result = _score_typed_answer([group], response)
+
+    assert result["answer_fact_group_matches"] == [False]
+
+
+def test_legacy_answer_contains_behavior_and_result_shape_are_unchanged() -> None:
+    case = _normalize_case(
+        {
+            "id": "legacy-substring",
+            "query": "Какое число?",
+            "expected_answer_contains": ["26"],
+        }
+    )
+
+    result = score_case(
+        case,
+        {"http_status": 200, "response": "Ответ опубликован в 2026 году."},
+        None,
+    )
+
+    assert "expected_answer_fact_groups" not in case
+    assert "expected_answer_fact_groups" not in result
+    assert "answer_fact_group_matches" not in result
+    assert result["answer_contains_match"] is True
+    assert result["passed"] is True
+
+
+@pytest.mark.parametrize(
+    ("groups", "error"),
+    [
+        ("not-a-list", "must be a list"),
+        ([], "must contain 1"),
+        ([{"kind": "unknown", "value": "x"}], "unsupported kind"),
+        (
+            [
+                {
+                    "kind": "date",
+                    "value": "07-06",
+                    "context_any": ["срок"],
+                    "context_position": "before",
+                }
+            ],
+            "ISO date",
+        ),
+        (
+            [
+                {
+                    "kind": "date",
+                    "value": "2026-02-30",
+                    "context_any": ["срок"],
+                    "context_position": "before",
+                }
+            ],
+            "ISO date",
+        ),
+        (
+            [
+                {
+                    "kind": "date_range",
+                    "start": "2026-07-30",
+                    "end": "2026-07-26",
+                    "context_any": ["смена"],
+                    "context_position": "before",
+                }
+            ],
+            "start must precede end",
+        ),
+        (
+            [
+                {
+                    "kind": "time",
+                    "value": "24:00",
+                    "context_any": ["заявка"],
+                    "context_position": "before",
+                }
+            ],
+            "HH:MM",
+        ),
+        (
+            [
+                {
+                    "kind": "time",
+                    "value": "23:59",
+                    "timezone": None,
+                    "context_any": ["заявка"],
+                    "context_position": "before",
+                }
+            ],
+            "timezone",
+        ),
+        (
+            [
+                {
+                    "kind": "time",
+                    "value": "23:59",
+                    "timezone": "мск|utc",
+                    "context_any": ["заявка"],
+                    "context_position": "before",
+                }
+            ],
+            "timezone",
+        ),
+        (
+            [
+                {
+                    "kind": "number",
+                    "value": True,
+                    "context_any": ["номинаций"],
+                    "context_position": "before",
+                }
+            ],
+            "integer",
+        ),
+        (
+            [
+                {
+                    "kind": "number",
+                    "value": "18",
+                    "context_any": ["номинаций"],
+                    "context_position": "before",
+                }
+            ],
+            "integer",
+        ),
+        ([{"kind": "date", "value": "2026-07-06"}], "context_any"),
+        (
+            [{"kind": "text_any", "alternatives": ["мск", "МСК"]}],
+            "duplicate normalized alternatives",
+        ),
+        (
+            [
+                {
+                    "kind": "date",
+                    "value": "2026-07-06",
+                    "context_any": ["срок"],
+                    "context_position": "before",
+                },
+                {
+                    "kind": "date",
+                    "value": "2026-07-06",
+                    "context_any": ["срок"],
+                    "context_position": "before",
+                },
+            ],
+            "duplicate normalized groups",
+        ),
+        (
+            [
+                {
+                    "kind": "number",
+                    "value": 18,
+                    "context_any": ["номинаций"],
+                    "context_position": "before",
+                    "regex": ".*",
+                }
+            ],
+            "fields must match schema exactly",
+        ),
+    ],
+)
+def test_normalize_case_strictly_validates_typed_fact_groups(
+    groups: object,
+    error: str,
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        _normalize_case(
+            {
+                "id": "invalid-typed-contract",
+                "query": "Когда?",
+                "expected_answer_fact_groups": groups,
+            }
+        )
+
+
+def test_normalize_case_bounds_and_separates_typed_fact_groups() -> None:
+    invalid_contracts = [
+        (
+            [
+                {
+                    "kind": "number",
+                    "value": value,
+                    "context_any": ["номинаций"],
+                    "context_position": "before",
+                }
+                for value in range(33)
+            ],
+            "at most 32",
+        ),
+        (
+            [
+                {
+                    "kind": "text_any",
+                    "alternatives": [str(value) for value in range(17)],
+                }
+            ],
+            "at most 16",
+        ),
+        (
+            [{"kind": "text_any", "alternatives": ["я" * 161]}],
+            "at most 160",
+        ),
+    ]
+    for groups, error in invalid_contracts:
+        with pytest.raises(ValueError, match=error):
+            _normalize_case(
+                {
+                    "query": "Какое условие?",
+                    "expected_answer_fact_groups": groups,
+                }
+            )
+
+    with pytest.raises(ValueError, match="cannot be used together"):
+        _normalize_case(
+            {
+                "query": "Когда?",
+                "expected_answer_contains": ["6 июля"],
+                "expected_answer_fact_groups": [
+                    {
+                        "kind": "date",
+                        "value": "2026-07-06",
+                        "context_any": ["срок"],
+                        "context_position": "before",
+                    },
+                ],
+            }
+        )
 
 
 @pytest.mark.parametrize("separator", ["–", "—", "−"])
@@ -3009,6 +4005,28 @@ def test_summarize_results_counts_core_metrics() -> None:
     assert metrics["llm_estimated_cost_rub"] == 0.01
     assert metrics["failure_reason_counts"] == {"unexpected_escalation": 1}
     assert metrics["likely_infrastructure_failure"] is False
+
+
+def test_summarize_results_counts_typed_answer_contracts() -> None:
+    metrics = summarize_results(
+        [
+            {
+                "expected_answer_contains": [],
+                "expected_answer_fact_groups": [
+                    {
+                        "kind": "date",
+                        "value": "2026-07-06",
+                        "context_any": ["срок"],
+                    },
+                ],
+                "answer_contains_match": False,
+            }
+        ],
+        target="http://127.0.0.1:8001/ask",
+        cases_path=Path("cases.json"),
+    )
+
+    assert metrics["answer_contains_rate"] == 0.0
 
 
 def test_summarize_results_preserves_not_run_generator_model() -> None:

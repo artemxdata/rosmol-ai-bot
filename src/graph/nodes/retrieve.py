@@ -20,13 +20,18 @@ from src.graph.query_normalization import (
     FORUM_DISCOVERY,
     GENERIC_PLATFORM_REGISTRATION,
     GRANT_DIRECTIONS,
+    INACTIVE_PLATFORM_APPLICATION_BUTTON,
     PHYSICAL_GRANTS_OVERVIEW,
     PLATFORM_EVENT_NAVIGATION,
     bounded_query_intent,
     bounded_query_intent_hint,
     expand_query_aliases,
 )
-from src.graph.question_utils import build_effective_questions
+from src.graph.question_utils import (
+    QueryProvenSourceAspect,
+    build_effective_questions,
+    build_query_proven_topic_plan,
+)
 from src.graph.state import BotState
 from src.models import Question
 from src.rag.errors import MLDependencyError
@@ -37,6 +42,8 @@ BROAD_RETRIEVAL_TOP_K = 30
 KEYWORD_RECALL_TOP_K = 6
 KEYWORD_RECALL_SCAN_LIMIT = 2048
 FACTUAL_SOURCE_TYPE = get_response_contract().fact_policy.source_type
+GRANT_DIRECTIONS_TOPIC = "nominacii_grantovyh_konkursov"
+INACTIVE_APPLICATION_BUTTON_TOPIC = "registraciya_na_municipalnoe_meropriyatie"
 DIRECTIONAL_TOPIC_LOOKUP_ALIASES: dict[str, tuple[str, ...]] = {
     "poluchenie_i_naznachenie_bileta": (
         "bilet_ne_prishel_povtornoe_poluchenie",
@@ -187,15 +194,27 @@ async def retrieve(state: BotState) -> dict:
         "category": analysis.category,
         "source_type": FACTUAL_SOURCE_TYPE,
     }
+    current_message = state.get("message_masked") or state.get("message") or ""
     message = (
         state.get("contextual_message")
-        or state.get("message_masked")
-        or state.get("message")
+        or current_message
     )
-    query_scope_override = _query_scope_override(message, analysis)
+    current_plan = build_query_proven_topic_plan(analysis, current_message)
+    current_questions = list(current_plan.questions) or build_effective_questions(
+        analysis,
+        current_message,
+    )
+    query_scope_override = _query_scope_override(
+        current_message,
+        analysis,
+        effective_questions=current_questions,
+    )
     if query_scope_override:
         filters.update(query_scope_override)
-    base_questions = build_effective_questions(analysis, message)
+    base_questions = list(current_plan.questions) or build_effective_questions(
+        analysis,
+        message,
+    )
     allow_strict_forum_stop = len(base_questions) <= 1 and not _has_multi_aspect_message(
         message
     )
@@ -203,6 +222,12 @@ async def retrieve(state: BotState) -> dict:
         analysis,
         base_questions,
         message,
+    )
+    planned_aspects = (
+        current_plan.source_aspects
+        if current_plan.questions
+        and len(current_plan.source_aspects) == len(current_plan.questions)
+        else ()
     )
 
     chunks = []
@@ -226,6 +251,11 @@ async def retrieve(state: BotState) -> dict:
     metadata_lookup_result_count = 0
     hybrid_candidates_present = False
     for question_index, question in enumerate(questions):
+        source_aspect = (
+            planned_aspects[question_index]
+            if question_index < len(planned_aspects)
+            else None
+        )
         provenance = {
             "schema_version": PROVENANCE_SCHEMA_VERSION,
             "question_id": question_id(question_index),
@@ -250,7 +280,7 @@ async def retrieve(state: BotState) -> dict:
             found = []
             retrieval_query = _retrieval_query_for_intent(
                 question.text,
-                message,
+                current_message,
                 analysis,
             )
             requires_exact_topic = _requires_exact_topic_coverage(question_filters)
@@ -269,6 +299,8 @@ async def retrieve(state: BotState) -> dict:
                     retrieval_query,
                     candidate_filters,
                     top_k=top_k,
+                    current_message=current_message,
+                    source_aspect=source_aspect,
                 )
                 attempt_method = "metadata" if used_metadata_lookup else "hybrid"
                 retrieval_methods.add(attempt_method)
@@ -583,17 +615,44 @@ async def _retrieve_attempt(
     filters: dict,
     *,
     top_k: int,
+    current_message: str | None,
+    source_aspect: QueryProvenSourceAspect | None = None,
 ) -> tuple[list, bool]:
     retrieve_by_metadata = getattr(retriever, "retrieve_by_metadata", None)
     if filters.get("topic") and callable(retrieve_by_metadata):
         topic = str(filters.get("topic") or "").strip()
-        topic_values = list(dict.fromkeys([topic, *_topic_lookup_aliases(topic)]))
+        directional_topic = _directional_topic_lookup(
+            topic,
+            current_message,
+            filters,
+        )
+        if directional_topic:
+            topic_values = [directional_topic]
+        elif source_aspect is not None and source_aspect.source_topics:
+            topic_values = list(dict.fromkeys(source_aspect.source_topics))
+        else:
+            topic_values = list(dict.fromkeys([topic, *_topic_lookup_aliases(topic)]))
         lookup_filters = {
             **filters,
-            "topic": topic_values if len(topic_values) > 1 else topic,
+            "topic": topic_values if len(topic_values) > 1 else topic_values[0],
         }
         return await retrieve_by_metadata(lookup_filters, top_k=top_k), True
     return await retriever.retrieve(query, filters, top_k=top_k), False
+
+
+def _directional_topic_lookup(
+    topic: str,
+    current_message: str | None,
+    filters: dict,
+) -> str | None:
+    if topic != "podacha_zayavki_na_proekt":
+        return None
+    if filters.get("category") != "платформа_фгаис" or filters.get("forum_normalized"):
+        return None
+    intent = bounded_query_intent(str(current_message or ""), forum_normalized=None)
+    if intent != INACTIVE_PLATFORM_APPLICATION_BUTTON:
+        return None
+    return INACTIVE_APPLICATION_BUTTON_TOPIC
 
 
 def _topic_lookup_aliases(topic: str) -> list[str]:
@@ -736,6 +795,8 @@ def _normalize_question_text(text: str) -> str:
 def _query_scope_override(
     message: str | None,
     analysis: object | None = None,
+    *,
+    effective_questions: list[Question] | None = None,
 ) -> dict[str, str | None]:
     """Keep generic platform/grant intents out of event-specific retrieval scopes."""
     forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
@@ -749,9 +810,21 @@ def _query_scope_override(
         GENERIC_PLATFORM_REGISTRATION,
         PLATFORM_EVENT_NAVIGATION,
         ACCOUNT_DATA_RECOVERY,
+        INACTIVE_PLATFORM_APPLICATION_BUTTON,
     }:
         return {"category": "платформа_фгаис", "forum_normalized": None}
-    if intent in {GRANT_DIRECTIONS, PHYSICAL_GRANTS_OVERVIEW}:
+    if intent == GRANT_DIRECTIONS:
+        scope = {
+            "category": "гранты",
+            "forum_normalized": None,
+        }
+        if (
+            len(effective_questions or []) == 1
+            and not _has_multi_aspect_message(message)
+        ):
+            scope["topic"] = GRANT_DIRECTIONS_TOPIC
+        return scope
+    if intent == PHYSICAL_GRANTS_OVERVIEW:
         return {"category": "гранты", "forum_normalized": None}
     if intent == FORUM_DISCOVERY:
         return {"category": "общее", "forum_normalized": None}
@@ -760,13 +833,13 @@ def _query_scope_override(
 
 def _retrieval_query_for_intent(
     question: str,
-    message: str | None,
+    current_message: str | None,
     analysis: object | None = None,
 ) -> str:
     query = expand_query_aliases(question)
     forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
     hint = bounded_query_intent_hint(
-        f"{message or ''} {question}",
+        str(current_message or ""),
         forum_normalized=forum,
     )
     return " ".join((query, hint)).strip()

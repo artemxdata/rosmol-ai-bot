@@ -194,6 +194,34 @@ def test_plural_application_statuses_route_to_selection_status() -> None:
     assert ResponseProfileName.SELECTION_STATUS in detect_response_profiles(text)
 
 
+def test_location_filter_is_not_misclassified_as_documents() -> None:
+    application_excerpt = (
+        "Настройка фильтров поиска (местоположение, даты и тематика). "
+        "После изучения информации для подачи заявки нужно кликнуть на кнопку."
+    )
+
+    detected = detect_response_profiles(application_excerpt)
+
+    assert ResponseProfileName.APPLICATION in detected
+    assert ResponseProfileName.DOCUMENTS not in detected
+    assert not response_has_cross_aspect_drift(
+        ResponseProfileName.APPLICATION,
+        application_excerpt,
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Положение форума опубликовано.",
+        "Условия указаны в положении о форуме.",
+        "Архив положений о форумах доступен на сайте.",
+    ),
+)
+def test_standalone_event_regulation_remains_a_documents_marker(text: str) -> None:
+    assert ResponseProfileName.DOCUMENTS in detect_response_profiles(text)
+
+
 def test_eligibility_condition_may_name_legal_entity_registration() -> None:
     eligibility = (
         "Юридическое лицо, зарегистрированное на территории Российской Федерации, "

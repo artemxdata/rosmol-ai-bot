@@ -10,11 +10,11 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -171,6 +171,54 @@ SAFE_COST_APPROVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}")
 SAFE_GOLD_TICKET_HASH_RE = re.compile(r"[0-9a-f]{12,64}")
 SAFE_GOLD_STEP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}")
 HOLDOUT_MARKER_RE = re.compile(r"(?:^|[:_./-])holdout(?:$|[:_./-])")
+ANSWER_FACT_GROUP_KINDS = frozenset(
+    {"text_any", "date", "date_range", "time", "number"}
+)
+ANSWER_CONTEXT_POSITIONS = frozenset({"before", "after"})
+ANSWER_FACT_GROUPS_MAX = 32
+ANSWER_TEXT_ALTERNATIVES_MAX = 16
+ANSWER_TEXT_ALTERNATIVE_MAX_CHARS = 160
+ANSWER_NUMBER_MAX = 1_000_000_000
+ANSWER_TIMEZONE_MAX_CHARS = 16
+ANSWER_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+ANSWER_TIMEZONE_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё_.+-]+")
+SOURCE_CITATION_TOKEN_RE = re.compile(
+    r"\[\s*src\s*:[^\]\r\n]*\]",
+    flags=re.IGNORECASE,
+)
+MARKDOWN_LINK_DESTINATION_RE = re.compile(r"(?<=\])\([^\)\r\n]*\)")
+BARE_URL_RE = re.compile(
+    r"\b(?:https?://|www\.)[^\s<>\[\]]+",
+    flags=re.IGNORECASE,
+)
+ANSWER_FACT_CLAUSE_BOUNDARY_RE = re.compile(r"\.(?!\d)|[!?;\r\n]+")
+ANSWER_FACT_ATOMIC_BOUNDARY_RE = re.compile(
+    r"\s*(?:(?<!\d),|,(?!\d))\s*|"
+    r"\s+-\s+(?=(?:при этом|в то же время|между тем|вместе с тем)\b)|"
+    r"\s+(?=(?:а|но|зато|однако|при этом|в то же время|между тем|"
+    r"вместе с тем)\s+)"
+)
+ANSWER_FACT_CLAUSE_MAX_CHARS = 400
+ANSWER_FACT_RELATION_MAX_CHARS = 240
+RUSSIAN_MONTHS_GENITIVE = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
+
+class _AnswerFactClaim(NamedTuple):
+    text: str
+    is_question: bool
 
 FALSE_INSUFFICIENT_SOURCE_RE = re.compile(
     r"(ответ[а]?[^.!?]{0,120}\s+в\s+источник(?:е|ах)\s+нет|"
@@ -199,6 +247,7 @@ SOURCE_DIAGNOSTIC_EXPECTATION_FIELDS = frozenset(
         "equivalent_chunk_ids",
         "equivalent_chunks",
         "expected_answer_contains",
+        "expected_answer_fact_groups",
         "expected_behavior",
         "expected_chunk_ids",
         "expected_chunks",
@@ -453,6 +502,18 @@ def _normalize_case(
     expected_answer_contains = _string_list(
         raw.get("expected_answer_contains") or raw.get("answer_contains") or []
     )
+    expected_answer_fact_groups = (
+        _normalize_expected_answer_fact_groups(
+            raw.get("expected_answer_fact_groups")
+        )
+        if "expected_answer_fact_groups" in raw
+        else []
+    )
+    if expected_answer_contains and expected_answer_fact_groups:
+        raise ValueError(
+            "expected_answer_contains and expected_answer_fact_groups "
+            "cannot be used together"
+        )
     expected_message_masked_contains = _string_list(
         raw.get("expected_message_masked_contains") or []
     )
@@ -524,6 +585,8 @@ def _normalize_case(
         "expected_generator_model": raw.get("expected_generator_model"),
         "tags": tags,
     }
+    if expected_answer_fact_groups:
+        normalized["expected_answer_fact_groups"] = expected_answer_fact_groups
     if label_status:
         normalized["label_status"] = label_status
     if split:
@@ -2192,7 +2255,12 @@ def summarize_results(
     ]
     chunk_scored = [item for item in results if item.get("expected_chunk_ids")]
     cited_scored = [item for item in results if item.get("expected_cited_chunk_ids")]
-    answer_scored = [item for item in results if item.get("expected_answer_contains")]
+    answer_scored = [
+        item
+        for item in results
+        if item.get("expected_answer_contains")
+        or item.get("expected_answer_fact_groups")
+    ]
     behavior_scored = [item for item in results if item.get("expected_behavior")]
     escalation_reason_scored = [
         item
@@ -4779,6 +4847,12 @@ def score_case(
     expected_cited_chunk_ids = case.get("expected_cited_chunk_ids") or []
     equivalent_chunk_ids = case.get("equivalent_chunk_ids") or {}
     expected_answer_contains = case.get("expected_answer_contains") or []
+    expected_answer_fact_groups = case.get("expected_answer_fact_groups") or []
+    if expected_answer_contains and expected_answer_fact_groups:
+        raise ValueError(
+            "expected_answer_contains and expected_answer_fact_groups "
+            "cannot be used together"
+        )
     expected_message_masked_contains = case.get("expected_message_masked_contains") or []
     forbidden_message_masked_contains = case.get("forbidden_message_masked_contains") or []
     expected_behavior = case.get("expected_behavior")
@@ -4799,6 +4873,7 @@ def score_case(
 
     checks: dict[str, bool | None] = {}
     required_checks: dict[str, bool | None] = {}
+    answer_fact_group_matches: list[bool] | None = None
     missing_expected_chunk_ids: list[str] = []
     missing_expected_or_equivalent_chunk_ids: list[str] = []
     if expected_chunk_ids:
@@ -4855,6 +4930,15 @@ def score_case(
             _normalize_answer_contains_text(expected) in normalized_response
             for expected in expected_answer_contains
         )
+        checks["answer_contains_match"] = answer_contains_match
+        required_checks["answer_contains_match"] = answer_contains_match
+    elif expected_answer_fact_groups:
+        answer_fact_clauses = _answer_fact_clauses(response_text)
+        answer_fact_group_matches = [
+            _answer_fact_group_matches(group, answer_fact_clauses)
+            for group in expected_answer_fact_groups
+        ]
+        answer_contains_match = all(answer_fact_group_matches)
         checks["answer_contains_match"] = answer_contains_match
         required_checks["answer_contains_match"] = answer_contains_match
     if expected_message_masked_contains:
@@ -4993,6 +5077,14 @@ def score_case(
         "unexpected_cited_source_types": unexpected_cited_source_types,
         "cited_source_types_allowed": checks.get("cited_source_types_allowed"),
         "expected_answer_contains": expected_answer_contains,
+        **(
+            {
+                "expected_answer_fact_groups": expected_answer_fact_groups,
+                "answer_fact_group_matches": answer_fact_group_matches,
+            }
+            if expected_answer_fact_groups
+            else {}
+        ),
         "answer_contains_match": checks.get("answer_contains_match"),
         "message_masked": trace.get("message_masked"),
         "expected_message_masked_contains": expected_message_masked_contains,
@@ -6180,6 +6272,348 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _normalize_expected_answer_fact_groups(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("expected_answer_fact_groups must be a list")
+    if not 1 <= len(value) <= ANSWER_FACT_GROUPS_MAX:
+        raise ValueError(
+            "expected_answer_fact_groups must contain 1 to at most "
+            f"{ANSWER_FACT_GROUPS_MAX} groups"
+        )
+
+    normalized_groups: list[dict[str, Any]] = []
+    group_keys: set[tuple[Any, ...]] = set()
+    for ordinal, raw_group in enumerate(value, start=1):
+        if not isinstance(raw_group, dict):
+            raise ValueError(
+                f"expected_answer_fact_groups[{ordinal}] must be an object"
+            )
+        kind = raw_group.get("kind")
+        if not isinstance(kind, str) or kind not in ANSWER_FACT_GROUP_KINDS:
+            raise ValueError(
+                f"expected_answer_fact_groups[{ordinal}] has unsupported kind"
+            )
+
+        if kind == "text_any":
+            _require_answer_fact_group_fields(
+                raw_group,
+                {"kind", "alternatives"},
+                ordinal=ordinal,
+            )
+            raw_alternatives = raw_group["alternatives"]
+            if not isinstance(raw_alternatives, list):
+                raise ValueError(
+                    f"expected_answer_fact_groups[{ordinal}] alternatives "
+                    "must be a list"
+                )
+            if not 1 <= len(raw_alternatives) <= ANSWER_TEXT_ALTERNATIVES_MAX:
+                raise ValueError(
+                    f"expected_answer_fact_groups[{ordinal}] alternatives "
+                    f"must contain 1 to at most {ANSWER_TEXT_ALTERNATIVES_MAX} values"
+                )
+            alternatives: list[str] = []
+            normalized_alternatives: list[str] = []
+            for alternative in raw_alternatives:
+                if not isinstance(alternative, str):
+                    raise ValueError(
+                        f"expected_answer_fact_groups[{ordinal}] alternatives "
+                        "must be strings"
+                    )
+                if alternative != alternative.strip() or not alternative:
+                    raise ValueError(
+                        f"expected_answer_fact_groups[{ordinal}] alternatives "
+                        "must be non-empty and stripped"
+                    )
+                if len(alternative) > ANSWER_TEXT_ALTERNATIVE_MAX_CHARS:
+                    raise ValueError(
+                        f"expected_answer_fact_groups[{ordinal}] alternatives "
+                        f"must be at most {ANSWER_TEXT_ALTERNATIVE_MAX_CHARS} "
+                        "characters"
+                    )
+                has_control = any(
+                    ord(character) < 32 or ord(character) == 127
+                    for character in alternative
+                )
+                if has_control:
+                    raise ValueError(
+                        f"expected_answer_fact_groups[{ordinal}] alternatives "
+                        "cannot contain control characters"
+                    )
+                normalized_alternative = _normalize_answer_contains_text(alternative)
+                if not normalized_alternative:
+                    raise ValueError(
+                        f"expected_answer_fact_groups[{ordinal}] alternatives "
+                        "must contain visible text"
+                    )
+                alternatives.append(alternative)
+                normalized_alternatives.append(normalized_alternative)
+            if len(set(normalized_alternatives)) != len(normalized_alternatives):
+                raise ValueError(
+                    f"expected_answer_fact_groups[{ordinal}] contains duplicate "
+                    "normalized alternatives"
+                )
+            normalized_group = {"kind": kind, "alternatives": alternatives}
+            group_key: tuple[Any, ...] = (
+                kind,
+                *sorted(normalized_alternatives),
+            )
+        elif kind == "date":
+            _require_answer_fact_group_fields(
+                raw_group,
+                {"kind", "value", "context_any", "context_position"},
+                ordinal=ordinal,
+            )
+            context_position = _normalize_answer_context_position(
+                raw_group["context_position"],
+                ordinal=ordinal,
+            )
+            context_any, context_key = _normalize_answer_context_any(
+                raw_group["context_any"],
+                ordinal=ordinal,
+            )
+            parsed_date = _parse_answer_fact_iso_date(
+                raw_group["value"],
+                label=f"expected_answer_fact_groups[{ordinal}] value",
+            )
+            normalized_group = {
+                "kind": kind,
+                "value": parsed_date.isoformat(),
+                "context_any": context_any,
+                "context_position": context_position,
+            }
+            group_key = (
+                kind,
+                parsed_date.isoformat(),
+                context_position,
+                *context_key,
+            )
+        elif kind == "date_range":
+            _require_answer_fact_group_fields(
+                raw_group,
+                {
+                    "kind",
+                    "start",
+                    "end",
+                    "context_any",
+                    "context_position",
+                },
+                ordinal=ordinal,
+            )
+            context_position = _normalize_answer_context_position(
+                raw_group["context_position"],
+                ordinal=ordinal,
+            )
+            context_any, context_key = _normalize_answer_context_any(
+                raw_group["context_any"],
+                ordinal=ordinal,
+            )
+            start = _parse_answer_fact_iso_date(
+                raw_group["start"],
+                label=f"expected_answer_fact_groups[{ordinal}] start",
+            )
+            end = _parse_answer_fact_iso_date(
+                raw_group["end"],
+                label=f"expected_answer_fact_groups[{ordinal}] end",
+            )
+            if start >= end:
+                raise ValueError(
+                    f"expected_answer_fact_groups[{ordinal}] start must precede end"
+                )
+            normalized_group = {
+                "kind": kind,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "context_any": context_any,
+                "context_position": context_position,
+            }
+            group_key = (
+                kind,
+                start.isoformat(),
+                end.isoformat(),
+                context_position,
+                *context_key,
+            )
+        elif kind == "time":
+            allowed_fields = {
+                "kind",
+                "value",
+                "context_any",
+                "context_position",
+            }
+            if "timezone" in raw_group:
+                allowed_fields.add("timezone")
+            _require_answer_fact_group_fields(
+                raw_group,
+                allowed_fields,
+                ordinal=ordinal,
+            )
+            context_position = _normalize_answer_context_position(
+                raw_group["context_position"],
+                ordinal=ordinal,
+            )
+            context_any, context_key = _normalize_answer_context_any(
+                raw_group["context_any"],
+                ordinal=ordinal,
+            )
+            time_value = raw_group["value"]
+            if (
+                not isinstance(time_value, str)
+                or ANSWER_TIME_RE.fullmatch(time_value) is None
+            ):
+                raise ValueError(
+                    f"expected_answer_fact_groups[{ordinal}] value must be HH:MM"
+                )
+            normalized_group = {
+                "kind": kind,
+                "value": time_value,
+                "context_any": context_any,
+                "context_position": context_position,
+            }
+            timezone = raw_group.get("timezone")
+            normalized_timezone: str | None = None
+            if "timezone" in raw_group:
+                timezone_valid = (
+                    isinstance(timezone, str)
+                    and timezone == timezone.strip()
+                    and 1 <= len(timezone) <= ANSWER_TIMEZONE_MAX_CHARS
+                    and ANSWER_TIMEZONE_RE.fullmatch(timezone) is not None
+                )
+                if not timezone_valid:
+                    raise ValueError(
+                        f"expected_answer_fact_groups[{ordinal}] timezone must be "
+                        f"a 1-{ANSWER_TIMEZONE_MAX_CHARS} character token"
+                    )
+                normalized_timezone = _normalize_answer_contains_text(timezone)
+                normalized_group["timezone"] = normalized_timezone
+            group_key = (
+                kind,
+                time_value,
+                normalized_timezone,
+                context_position,
+                *context_key,
+            )
+        else:
+            _require_answer_fact_group_fields(
+                raw_group,
+                {"kind", "value", "context_any", "context_position"},
+                ordinal=ordinal,
+            )
+            context_position = _normalize_answer_context_position(
+                raw_group["context_position"],
+                ordinal=ordinal,
+            )
+            context_any, context_key = _normalize_answer_context_any(
+                raw_group["context_any"],
+                ordinal=ordinal,
+            )
+            number = raw_group["value"]
+            number_valid = (
+                isinstance(number, int)
+                and not isinstance(number, bool)
+                and -ANSWER_NUMBER_MAX <= number <= ANSWER_NUMBER_MAX
+            )
+            if not number_valid:
+                raise ValueError(
+                    f"expected_answer_fact_groups[{ordinal}] value must be an "
+                    f"integer between {-ANSWER_NUMBER_MAX} and {ANSWER_NUMBER_MAX}"
+                )
+            normalized_group = {
+                "kind": kind,
+                "value": number,
+                "context_any": context_any,
+                "context_position": context_position,
+            }
+            group_key = (kind, number, context_position, *context_key)
+
+        if group_key in group_keys:
+            raise ValueError(
+                "expected_answer_fact_groups contains duplicate normalized groups"
+            )
+        group_keys.add(group_key)
+        normalized_groups.append(normalized_group)
+    return normalized_groups
+
+
+def _normalize_answer_context_any(
+    value: Any,
+    *,
+    ordinal: int,
+) -> tuple[list[str], tuple[str, ...]]:
+    label = f"expected_answer_fact_groups[{ordinal}] context_any"
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+    if not 1 <= len(value) <= ANSWER_TEXT_ALTERNATIVES_MAX:
+        raise ValueError(
+            f"{label} must contain 1 to at most "
+            f"{ANSWER_TEXT_ALTERNATIVES_MAX} values"
+        )
+
+    contexts: list[str] = []
+    normalized_contexts: list[str] = []
+    for context in value:
+        context_valid = (
+            isinstance(context, str)
+            and context == context.strip()
+            and bool(context)
+            and len(context) <= ANSWER_TEXT_ALTERNATIVE_MAX_CHARS
+            and any(character.isalpha() for character in context)
+            and not any(character.isdigit() for character in context)
+            and not any(
+                ord(character) < 32 or ord(character) == 127
+                for character in context
+            )
+        )
+        if not context_valid:
+            raise ValueError(
+                f"{label} values must be stripped 1-"
+                f"{ANSWER_TEXT_ALTERNATIVE_MAX_CHARS} character literal phrases "
+                "containing letters but no digits or controls"
+            )
+        normalized_context = _normalize_answer_contains_text(context)
+        contexts.append(context)
+        normalized_contexts.append(normalized_context)
+    if len(set(normalized_contexts)) != len(normalized_contexts):
+        raise ValueError(f"{label} contains duplicate normalized alternatives")
+    return contexts, tuple(sorted(normalized_contexts))
+
+
+def _normalize_answer_context_position(value: Any, *, ordinal: int) -> str:
+    if not isinstance(value, str) or value not in ANSWER_CONTEXT_POSITIONS:
+        raise ValueError(
+            f"expected_answer_fact_groups[{ordinal}] context_position must be "
+            "'before' or 'after'"
+        )
+    return value
+
+
+def _require_answer_fact_group_fields(
+    group: Mapping[str, Any],
+    expected_fields: set[str],
+    *,
+    ordinal: int,
+) -> None:
+    if set(group) != expected_fields:
+        missing = sorted(expected_fields - set(group), key=str)
+        unexpected = sorted(set(group) - expected_fields, key=str)
+        raise ValueError(
+            f"expected_answer_fact_groups[{ordinal}] fields must match schema "
+            f"exactly: missing={missing}, unexpected={unexpected}"
+        )
+
+
+def _parse_answer_fact_iso_date(value: Any, *, label: str) -> date:
+    valid_shape = (
+        isinstance(value, str)
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is not None
+    )
+    if not valid_shape:
+        raise ValueError(f"{label} must be a valid ISO date (YYYY-MM-DD)")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid ISO date (YYYY-MM-DD)") from exc
+
+
 def _has_holdout_marker(value: Any) -> bool:
     return HOLDOUT_MARKER_RE.search(str(value or "").strip().casefold()) is not None
 
@@ -6219,6 +6653,673 @@ def _normalize_answer_contains_text(value: Any) -> str:
     )
     normalized = DATE_SEPARATOR_SPACING_RE.sub(r"\1", normalized)
     return " ".join(normalized.split())
+
+
+def _answer_fact_group_matches(
+    group: Mapping[str, Any],
+    claims: list[_AnswerFactClaim],
+) -> bool:
+    kind = group["kind"]
+    if kind == "text_any":
+        for claim_index, claim in enumerate(claims):
+            if claim.is_question:
+                continue
+            for alternative in group["alternatives"]:
+                if any(
+                    not _answer_text_span_is_disallowed(claim.text, start, end)
+                    for start, end in _bounded_answer_literal_spans(
+                        alternative,
+                        claim.text,
+                    )
+                ) and not _answer_later_claims_invalidate(
+                    group,
+                    claims[claim_index + 1 :],
+                ):
+                    return True
+        return False
+
+    for claim_index, claim in enumerate(claims):
+        if claim.is_question:
+            continue
+        context_spans = _answer_context_spans(group, claim.text)
+        fact_spans = _answer_kind_fact_spans(group, claim.text)
+        if not any(
+            _answer_fact_relation_matches(group, context_span, fact_span)
+            for context_span in context_spans
+            for fact_span in fact_spans
+        ):
+            continue
+        if not _answer_later_claims_invalidate(
+            group,
+            claims[claim_index + 1 :],
+        ):
+            return True
+    return False
+
+
+def _answer_fact_relation_matches(
+    group: Mapping[str, Any],
+    context_span: tuple[int, int],
+    fact_span: tuple[int, int],
+) -> bool:
+    context_start, context_end = context_span
+    fact_start, fact_end = fact_span
+    if group["context_position"] == "before":
+        ordered = context_end <= fact_start
+        distance = fact_start - context_end
+    else:
+        ordered = fact_end <= context_start
+        distance = context_start - fact_end
+    return ordered and distance <= ANSWER_FACT_RELATION_MAX_CHARS
+
+
+def _answer_kind_fact_spans(
+    group: Mapping[str, Any],
+    clause: str,
+) -> list[tuple[int, int]]:
+    kind = group["kind"]
+    if kind == "date":
+        return _answer_date_claim_spans(group, clause)
+    if kind == "date_range":
+        return _answer_range_claim_spans(group, clause)
+    if kind == "time":
+        return _answer_time_claim_spans(group, clause)
+    return _answer_number_claim_spans(group, clause)
+
+
+def _bounded_answer_literal_matches(literal: str, normalized_response: str) -> bool:
+    return bool(_bounded_answer_literal_spans(literal, normalized_response))
+
+
+def _bounded_answer_literal_spans(
+    literal: str,
+    normalized_response: str,
+) -> list[tuple[int, int]]:
+    normalized_literal = _normalize_answer_contains_text(literal)
+    prefix = r"(?<!\w)" if normalized_literal[0].isalnum() else ""
+    suffix = r"(?!\w)" if normalized_literal[-1].isalnum() else ""
+    return [
+        match.span()
+        for match in re.finditer(
+            prefix + re.escape(normalized_literal) + suffix,
+            normalized_response,
+        )
+    ]
+
+
+def _answer_date_patterns(expected: date) -> tuple[str, ...]:
+    day = _answer_numeric_component_pattern(expected.day)
+    month = _answer_numeric_component_pattern(expected.month)
+    year = str(expected.year)
+    month_name = re.escape(RUSSIAN_MONTHS_GENITIVE[expected.month - 1])
+    year_suffix = r"(?:\s+(?:года|г\.?))?"
+    return (
+        rf"(?<!\d){day}[./-]{month}[./-]{year}(?!\d)",
+        rf"(?<!\d){year}-{expected.month:02d}-{expected.day:02d}(?!\d)",
+        rf"(?<!\d){day}\s+{month_name}\s+{year}{year_suffix}(?!\d)",
+    )
+
+
+def _answer_date_spans(
+    expected: date,
+    clause: str,
+) -> list[tuple[int, int]]:
+    spans = {
+        match.span()
+        for pattern in _answer_date_patterns(expected)
+        for match in re.finditer(pattern, clause)
+    }
+    return sorted(spans)
+
+
+def _extract_answer_dates(clause: str) -> list[tuple[date, int, int]]:
+    parsed: dict[tuple[date, int, int], tuple[date, int, int]] = {}
+    patterns = (
+        re.compile(
+            r"(?<!\d)(?P<year>\d{4})-(?P<month>\d{2})-"
+            r"(?P<day>\d{2})(?!\d)"
+        ),
+        re.compile(
+            r"(?<!\d)(?P<day>\d{1,2})[./-](?P<month>\d{1,2})"
+            r"[./-](?P<year>\d{4})(?!\d)"
+        ),
+    )
+    for pattern in patterns:
+        for match in pattern.finditer(clause):
+            try:
+                parsed_date = date(
+                    int(match.group("year")),
+                    int(match.group("month")),
+                    int(match.group("day")),
+                )
+            except ValueError:
+                continue
+            item = (parsed_date, match.start(), match.end())
+            parsed[item] = item
+
+    month_pattern = "|".join(map(re.escape, RUSSIAN_MONTHS_GENITIVE))
+    russian_pattern = re.compile(
+        rf"(?<!\d)(?P<day>\d{{1,2}})\s+"
+        rf"(?P<month>{month_pattern})\s+(?P<year>\d{{4}})"
+        r"(?:\s+(?:года|г\.?))?(?!\d)"
+    )
+    month_numbers = {
+        month_name: month_number
+        for month_number, month_name in enumerate(
+            RUSSIAN_MONTHS_GENITIVE,
+            start=1,
+        )
+    }
+    for match in russian_pattern.finditer(clause):
+        try:
+            parsed_date = date(
+                int(match.group("year")),
+                month_numbers[match.group("month")],
+                int(match.group("day")),
+            )
+        except ValueError:
+            continue
+        item = (parsed_date, match.start(), match.end())
+        parsed[item] = item
+    return sorted(parsed.values(), key=lambda item: (item[1], item[2]))
+
+
+def _answer_date_claim_spans(
+    group: Mapping[str, Any],
+    clause: str,
+) -> list[tuple[int, int]]:
+    expected = date.fromisoformat(group["value"])
+    observed_dates = _extract_answer_dates(clause)
+    if any(observed != expected for observed, _start, _end in observed_dates):
+        return []
+    return [
+        (start, end)
+        for start, end in _answer_date_spans(expected, clause)
+        if not _answer_span_is_disallowed_claim(
+            clause,
+            start,
+            end,
+            allow_deadline_limit=_answer_group_allows_deadline_limit(group),
+        )
+    ]
+
+
+def _answer_range_patterns(start: date, end: date) -> tuple[str, ...]:
+    start_day = _answer_numeric_component_pattern(start.day)
+    end_day = _answer_numeric_component_pattern(end.day)
+    start_month_name = re.escape(RUSSIAN_MONTHS_GENITIVE[start.month - 1])
+    end_month_name = re.escape(RUSSIAN_MONTHS_GENITIVE[end.month - 1])
+    start_year = str(start.year)
+    end_year = str(end.year)
+    year_suffix = r"(?:\s+(?:года|г\.?))?"
+    connector = r"\s*(?:-|по|до)\s*"
+    start_dmy = (
+        rf"{start_day}[./-]{_answer_numeric_component_pattern(start.month)}"
+        rf"[./-]{start_year}"
+    )
+    end_dmy = (
+        rf"{end_day}[./-]{_answer_numeric_component_pattern(end.month)}"
+        rf"[./-]{end_year}"
+    )
+    start_iso = re.escape(start.isoformat())
+    end_iso = re.escape(end.isoformat())
+    patterns = [
+        rf"(?<!\d)(?:с\s+)?{start_dmy}{connector}{end_dmy}(?!\d)",
+        rf"(?<!\d)(?:с\s+)?{start_iso}{connector}{end_iso}(?!\d)",
+        rf"(?<!\d)(?:с\s+)?{start_day}\s+{start_month_name}\s+"
+        rf"{start_year}{year_suffix}{connector}{end_day}\s+"
+        rf"{end_month_name}\s+{end_year}{year_suffix}(?!\d)",
+    ]
+    if start.year == end.year:
+        patterns.append(
+            rf"(?<!\d)(?:с\s+)?{start_day}\s+{start_month_name}"
+            rf"{connector}{end_day}\s+{end_month_name}\s+"
+            rf"{end_year}{year_suffix}(?!\d)"
+        )
+    if start.year == end.year and start.month == end.month:
+        shared_month = _answer_numeric_component_pattern(start.month)
+        patterns.extend(
+            (
+                rf"(?<!\d)(?:{start_day}\s*-\s*{end_day}|"
+                rf"(?:с\s+)?{start_day}\s+по\s+{end_day})\s+"
+                rf"{start_month_name}\s+{start_year}{year_suffix}(?!\d)",
+                rf"(?<!\d){start_day}\s*-\s*{end_day}[./-]"
+                rf"{shared_month}[./-]{start_year}(?!\d)",
+            )
+        )
+    return tuple(patterns)
+
+
+def _answer_range_claim_spans(
+    group: Mapping[str, Any],
+    clause: str,
+) -> list[tuple[int, int]]:
+    start = date.fromisoformat(group["start"])
+    end = date.fromisoformat(group["end"])
+    allowed_dates = {start, end}
+    if any(
+        observed not in allowed_dates
+        for observed, _date_start, _date_end in _extract_answer_dates(clause)
+    ):
+        return []
+    spans = {
+        match.span()
+        for pattern in _answer_range_patterns(start, end)
+        for match in re.finditer(pattern, clause)
+    }
+    return [
+        (span_start, span_end)
+        for span_start, span_end in sorted(spans)
+        if not _answer_span_is_disallowed_claim(clause, span_start, span_end)
+    ]
+
+
+def _answer_numeric_component_pattern(value: int) -> str:
+    return rf"0?{value}" if value < 10 else str(value)
+
+
+def _extract_answer_times(clause: str) -> list[tuple[str, int, int]]:
+    return [
+        (match.group(0), match.start(), match.end())
+        for match in re.finditer(r"(?<!\d)(?:[01]\d|2[0-3]):[0-5]\d(?!\d)", clause)
+    ]
+
+
+def _answer_time_claim_spans(
+    group: Mapping[str, Any],
+    clause: str,
+) -> list[tuple[int, int]]:
+    time_pattern = rf"(?<!\d){re.escape(group['value'])}(?!\d)"
+    time_occurrences = _extract_answer_times(clause)
+    if any(
+        observed != group["value"]
+        for observed, _start, _end in time_occurrences
+    ):
+        return []
+    timezone = group.get("timezone")
+    expected_pattern = time_pattern
+    if timezone:
+        timezone_pattern = re.escape(str(timezone))
+        timezone_boundary = (
+            r"(?!(?:[\w+.-]|\s*(?:\(|[+-]\s*\d)|"
+            r"\s+(?:по\s+)?(?:utc|gmt)\b))"
+        )
+        expected_pattern = (
+            rf"{time_pattern}(?:\s+{timezone_pattern}{timezone_boundary}|"
+            rf"\s*\(\s*{timezone_pattern}\s*\){timezone_boundary})"
+        )
+    expected_matches = list(re.finditer(expected_pattern, clause))
+    if timezone and any(
+        not any(
+            match.start() <= start and end <= match.end()
+            for match in expected_matches
+        )
+        for observed, start, end in time_occurrences
+        if observed == group["value"]
+    ):
+        return []
+    return [
+        match.span()
+        for match in expected_matches
+        if not _answer_span_is_disallowed_claim(
+            clause,
+            match.start(),
+            match.end(),
+            allow_deadline_limit=_answer_group_allows_deadline_limit(group),
+        )
+    ]
+
+
+def _extract_answer_numbers(clause: str) -> list[tuple[int, int, int]]:
+    date_spans = [
+        (start, end)
+        for _value, start, end in _extract_answer_dates(clause)
+    ]
+    time_spans = [
+        (start, end)
+        for _value, start, end in _extract_answer_times(clause)
+    ]
+    month_pattern = "|".join(map(re.escape, RUSSIAN_MONTHS_GENITIVE))
+    numbers: list[tuple[int, int, int]] = []
+    for match in re.finditer(r"(?<!\w)[+-]?\d+(?!\w)", clause):
+        start, end = match.span()
+        if any(
+            container_start <= start and end <= container_end
+            for container_start, container_end in (*date_spans, *time_spans)
+        ):
+            continue
+        tail = clause[end : end + 40]
+        if re.match(
+            rf"\s*(?:%|процент\w*\b|{month_pattern}\b|года?\b|г\.|"
+            rf"числа?\b|день\b|дня\b|дней\b|"
+            rf"-\s*(?:го|й|я|е|ое|ая|ый|ий)\b|"
+            rf"-\s*\d{{1,2}}\s+(?:{month_pattern})\b)",
+            tail,
+        ):
+            continue
+        before = clause[start - 1] if start else ""
+        before_previous = clause[start - 2] if start > 1 else ""
+        after = clause[end] if end < len(clause) else ""
+        after_next = clause[end + 1] if end + 1 < len(clause) else ""
+        if (
+            before in "./:," and before_previous.isdigit()
+        ) or (after in "./:," and after_next.isdigit()):
+            continue
+        numbers.append((int(match.group(0)), start, end))
+    return numbers
+
+
+def _answer_number_claim_spans(
+    group: Mapping[str, Any],
+    clause: str,
+) -> list[tuple[int, int]]:
+    expected = group["value"]
+    observed_numbers = _extract_answer_numbers(clause)
+    if any(observed != expected for observed, _start, _end in observed_numbers):
+        return []
+    return [
+        (start, end)
+        for observed, start, end in observed_numbers
+        if observed == expected
+        and not _answer_span_is_disallowed_claim(clause, start, end)
+        and not _answer_number_span_is_non_exact(clause, start, end)
+    ]
+
+
+def _answer_number_span_is_non_exact(clause: str, start: int, end: int) -> bool:
+    prefix = clause[max(0, start - 48) : start]
+    if re.search(
+        r"\b(?:до|от|около|примерно|порядка|более|менее|свыше|"
+        r"минимум|максимум)\s*$",
+        prefix,
+    ):
+        return True
+    tail = clause[end : end + 32]
+    return (
+        re.match(
+            r"^\s*(?:\+|(?:и|или)\s+(?:более|менее|больше|меньше))",
+            tail,
+        )
+        is not None
+    )
+
+
+def _answer_clause_has_context(group: Mapping[str, Any], clause: str) -> bool:
+    return bool(_answer_context_spans(group, clause))
+
+
+def _answer_context_spans(
+    group: Mapping[str, Any],
+    clause: str,
+) -> list[tuple[int, int]]:
+    allow_deadline_limit = _answer_group_allows_deadline_limit(group)
+    return [
+        (start, end)
+        for context in group["context_any"]
+        for start, end in _bounded_answer_literal_spans(context, clause)
+        if not _answer_context_span_is_disallowed(
+            clause,
+            start,
+            end,
+            allow_deadline_limit=allow_deadline_limit,
+        )
+    ]
+
+
+def _answer_group_allows_deadline_limit(group: Mapping[str, Any]) -> bool:
+    if group["kind"] not in {"date", "time"}:
+        return False
+    return any(
+        re.search(
+            r"\b(?:срок(?:\s+(?:подач\w*|прием\w*|регистрац\w*))?|дедлайн|"
+            r"прием\s+заяв\w*|подач\w*\s+заяв\w*|подать\s+заяв\w*)\b",
+            _normalize_answer_contains_text(context),
+        )
+        for context in group["context_any"]
+    )
+
+
+def _answer_claim_has_disallowed_polarity(
+    clause: str,
+    *,
+    allow_deadline_limit: bool,
+) -> bool:
+    without_allowed_inclusion = re.sub(r"\bне\s+только\b", " ", clause)
+    if allow_deadline_limit:
+        without_allowed_inclusion = re.sub(
+            r"\bне\s+(?:позднее|позже|ранее|раньше)\b",
+            " ",
+            without_allowed_inclusion,
+        )
+    if re.search(r"\bне\b|\bнет\b", without_allowed_inclusion):
+        return True
+    if re.search(
+        r"\b(?:якобы|предположительно|вероятно|возможно|кажется)\b|"
+        r"\bпо\s+(?:слухам|неподтвержденным\s+данным|старым\s+данным|"
+        r"прежним\s+данным)\b|"
+        r"\b(?:раньше|прежде|неверно|неправд\w*|опровергнут\w*)\b|"
+        r"\bесли\s+верить\s+слухам\b",
+        without_allowed_inclusion,
+    ):
+        return True
+    return (
+        re.search(
+            r"\b(?:неизвест\w*|неуказан\w*|отсутств\w*|устаревш\w*|"
+            r"ошибочн\w*|неверн\w*|исправ\w*|замен\w*|перенес\w*|"
+            r"отмен\w*|аннулир\w*|неактуальн\w*|нельзя|запрещ\w*|"
+            r"недопуст\w*|исключен\w*)\b",
+            clause,
+        )
+        is not None
+    )
+
+
+def _answer_text_span_is_disallowed(
+    clause: str,
+    start: int,
+    end: int,
+) -> bool:
+    if _answer_span_is_disallowed_claim(clause, start, end):
+        return True
+    prefix = clause[max(0, start - 48) : start]
+    tail = clause[end : end + 80]
+    return bool(
+        re.search(r"\b(?:кроме|за\s+исключением)\s*$", prefix)
+        or re.match(
+            r"^[\s,:-]*(?:без\s+права|не\s+(?:может|могут|допуска\w*)|"
+            r"исключен\w*|недопущен\w*)",
+            tail,
+        )
+    )
+
+
+def _answer_context_span_is_disallowed(
+    clause: str,
+    start: int,
+    end: int,
+    *,
+    allow_deadline_limit: bool,
+) -> bool:
+    if _answer_span_is_disallowed_claim(
+        clause,
+        start,
+        end,
+        allow_deadline_limit=allow_deadline_limit,
+    ):
+        return True
+    tail = clause[end : end + 64]
+    return (
+        re.search(
+            r"^[\s,:-]*(?:(?:пока|еще|ещё)\s+(?:не\s+)?"
+            r"(?:указан\w*|извест\w*|опубликован\w*|определен\w*|"
+            r"сообщен\w*|уточнен\w*|доступен\w*)|(?:будет\s+)?"
+            r"(?:указан\w*|опубликован\w*|определен\w*|сообщен\w*|"
+            r"уточнен\w*)\s+позже|уточня\w*|нет\b|отсутств\w*)",
+            tail,
+        )
+        is not None
+    )
+
+
+def _answer_span_is_disallowed_claim(
+    clause: str,
+    start: int,
+    end: int,
+    *,
+    allow_deadline_limit: bool = False,
+) -> bool:
+    if _answer_claim_has_disallowed_polarity(
+        clause,
+        allow_deadline_limit=allow_deadline_limit,
+    ):
+        return True
+    prefix = clause[max(0, start - 64) : start]
+    if re.search(
+        r"\b(?:вместо|ошибочн\w*|неверн\w*|устаревш\w*)"
+        r"[^,;:.!?]{0,24}$",
+        prefix,
+    ):
+        return True
+    tail = clause[end : end + 64]
+    return (
+        re.search(
+            r"^[\s,:-]*(?:но\s+|однако\s+)?(?:дата\s+|срок\s+|"
+            r"значение\s+)?(?:был[ао]?\s+)?(?:исправлен\w*|заменен\w*|"
+            r"перенесен\w*|отменен\w*|ошибочен\w*|неверен\w*)",
+            tail,
+        )
+        is not None
+    )
+
+
+def _answer_following_claim_invalidates_previous(claim: str) -> bool:
+    if re.match(r"^(?:но|однако)\b", claim):
+        return True
+    if re.match(r"^а\s+затем\b", claim):
+        return True
+    if re.search(
+        r"\b(?:устарел\w*|устаревш\w*|ошибочн\w*|неверн\w*|исправлен\w*|заменен\w*|"
+        r"перенес[её]н\w*|отменен\w*|не\s+уточн[её]н\w*)\b",
+        claim,
+    ):
+        return True
+    if re.search(
+        r"\b(?:если\s+верить\s+слухам|по\s+старым\s+данным|"
+        r"по\s+прежним\s+данным|не\s+подтвержден\w*)\b",
+        claim,
+    ):
+        return True
+    return (
+        re.search(
+            r"^(?:(?:важно|по\s+новым\s+данным)\s*:\s*)?"
+            r"(?:(?:а|зато)\s+)?(?:это(?:т|та)?\s+)?(?:дата\s+|срок\s+|"
+            r"значение\s+)?(?:был[ао]?\s+)?(?:устаревш\w*|ошибочн\w*|"
+            r"неверн\w*|исправлен\w*|заменен\w*|перенесен\w*|"
+            r"отменен\w*|не\s+уточнен\w*)",
+            claim,
+        )
+        is not None
+    )
+
+
+def _answer_later_claims_invalidate(
+    group: Mapping[str, Any],
+    later_claims: list[_AnswerFactClaim],
+) -> bool:
+    for claim in later_claims:
+        if claim.is_question:
+            continue
+        if _answer_following_claim_invalidates_previous(claim.text):
+            return True
+        if group["kind"] != "text_any" and _answer_clause_has_context(
+            group,
+            claim.text,
+        ):
+            if _answer_claim_has_disallowed_polarity(
+                claim.text,
+                allow_deadline_limit=_answer_group_allows_deadline_limit(group),
+            ):
+                return True
+            if _answer_later_claim_competes(group, claim.text):
+                return True
+    return False
+
+
+def _answer_later_claim_competes(
+    group: Mapping[str, Any],
+    claim: str,
+) -> bool:
+    """Reject a later same-subject value that supersedes the matched claim."""
+
+    if re.search(r"\b(?:теперь|сейчас|актуальн\w*)\b", claim) is None:
+        return False
+    kind = group["kind"]
+    if kind == "date":
+        expected = date.fromisoformat(group["value"])
+        return any(value != expected for value, _start, _end in _extract_answer_dates(claim))
+    if kind == "date_range":
+        allowed = {date.fromisoformat(group["start"]), date.fromisoformat(group["end"])}
+        return any(value not in allowed for value, _start, _end in _extract_answer_dates(claim))
+    if kind == "time":
+        return any(
+            value != group["value"]
+            for value, _start, _end in _extract_answer_times(claim)
+        )
+    if kind == "number":
+        return any(
+            value != group["value"]
+            for value, _start, _end in _extract_answer_numbers(claim)
+        )
+    return False
+
+
+def _answer_fact_clauses(value: Any) -> list[_AnswerFactClaim]:
+    stripped = SOURCE_CITATION_TOKEN_RE.sub(" ", str(value or ""))
+    stripped = MARKDOWN_LINK_DESTINATION_RE.sub(" ", stripped)
+    stripped = BARE_URL_RE.sub(" ", stripped)
+    atomic_claims: list[_AnswerFactClaim] = []
+    parts = re.split(r"(\.(?!\d)|[!?;\r\n]+)", stripped)
+    for index in range(0, len(parts), 2):
+        raw_clause = parts[index]
+        boundary = parts[index + 1] if index + 1 < len(parts) else ""
+        sentence = _normalize_answer_contains_text(raw_clause)
+        if not sentence or len(sentence) > ANSWER_FACT_CLAUSE_MAX_CHARS:
+            continue
+        sentence_claims = [
+            claim
+            for claim in ANSWER_FACT_ATOMIC_BOUNDARY_RE.split(sentence)
+            if claim
+        ]
+        sentence_claims = _attach_nonassertive_answer_prefixes(sentence_claims)
+        atomic_claims.extend(
+            _AnswerFactClaim(
+                text=claim,
+                is_question="?" in boundary,
+            )
+            for claim in sentence_claims
+        )
+    return atomic_claims
+
+
+def _attach_nonassertive_answer_prefixes(claims: list[str]) -> list[str]:
+    attached: list[str] = []
+    pending: list[str] = []
+    for claim in claims:
+        if re.fullmatch(
+            r"(?:по\s+(?:слухам|неподтвержденным\s+данным)|"
+            r"по\s+(?:старым|прежним)\s+данным|"
+            r"предположительно|вероятно|возможно|якобы|неверно|"
+            r"не\s+подтвержден\w*)",
+            claim,
+        ):
+            pending.append(claim)
+            continue
+        if pending:
+            claim = ", ".join([*pending, claim])
+            pending.clear()
+        attached.append(claim)
+    attached.extend(pending)
+    return attached
 
 
 def _missing_expected_or_equivalent_ids(

@@ -14,12 +14,19 @@ from src.graph.query_normalization import (
     FORUM_DISCOVERY,
     GENERIC_PLATFORM_REGISTRATION,
     GRANT_DIRECTIONS,
+    INACTIVE_PLATFORM_APPLICATION_BUTTON,
     PHYSICAL_GRANTS_OVERVIEW,
     PLATFORM_EVENT_NAVIGATION,
     bounded_query_intent,
     expand_query_aliases,
 )
-from src.graph.question_utils import FALLBACK_QUESTION_MARKERS, build_effective_questions
+from src.graph.question_utils import (
+    FALLBACK_QUESTION_MARKERS,
+    QueryProvenSourceAspect,
+    build_effective_questions,
+    build_query_proven_topic_plan,
+    source_aspect_matches_topic,
+)
 from src.graph.response_profiles import (
     asks_event_dates as asks_profile_event_dates,
 )
@@ -332,8 +339,30 @@ def _rerank_for_state(
     chunks: list[Chunk],
     execution: dict[str, Any] | None = None,
 ) -> list[ScoredChunk]:
-    query = expand_query_aliases(query)
+    current_request_text = _current_request_text(state)
     analysis = state.get("analysis")
+    query_proven_plan = build_query_proven_topic_plan(
+        analysis,
+        current_request_text,
+    )
+    query_proven_candidates = _query_proven_aspect_candidates(
+        (
+            query_proven_plan.source_aspects
+            if query_proven_plan.questions
+            else ()
+        ),
+        chunks,
+    )
+    if query_proven_candidates:
+        return _boost_source_only_confidence(
+            [_source_candidate(chunk) for chunk in query_proven_candidates]
+        )
+    query_proven_resolution_failed = bool(query_proven_plan.questions)
+    query_proven_fast_path_blocked = (
+        query_proven_plan.incomplete or query_proven_resolution_failed
+    )
+    partial_request_fast_path_blocked = bool(query_proven_plan.unmapped_clauses)
+    query = expand_query_aliases(query)
     scoped_chunks = _scoped_chunks_for_analysis(analysis, chunks, query)
     forum_normalized = str(getattr(analysis, "forum_normalized", None) or "")
     original_priority_candidate = _priority_source_candidate(
@@ -342,19 +371,25 @@ def _rerank_for_state(
         forum_normalized=forum_normalized,
     )
     questions = (
-        [
+        []
+        if query_proven_fast_path_blocked
+        else list(query_proven_plan.questions)
+    )
+    if not questions and analysis:
+        questions = [
             question
             for question in build_effective_questions(analysis, query)
             if question.text.strip()
         ]
-        if analysis
-        else []
-    )
-    exact_topic_candidates = _exact_topic_fast_path_candidates(
-        state,
-        analysis,
-        questions,
-        scoped_chunks,
+    exact_topic_candidates = (
+        []
+        if query_proven_fast_path_blocked
+        else _exact_topic_fast_path_candidates(
+            state,
+            analysis,
+            questions,
+            scoped_chunks,
+        )
     )
     if exact_topic_candidates:
         return _boost_source_only_confidence(
@@ -364,30 +399,44 @@ def _rerank_for_state(
     if len(questions) <= 1:
         question = questions[0] if questions else None
         rerank_query = question.text.strip() if question else query
-        priority_candidate = _priority_source_candidate(
-            query,
-            scoped_chunks,
-            forum_normalized=forum_normalized,
-        ) or original_priority_candidate or _priority_source_candidate(
-            rerank_query,
-            scoped_chunks,
-            forum_normalized=forum_normalized,
+        priority_candidate = (
+            _priority_source_candidate(
+                query,
+                scoped_chunks,
+                forum_normalized=forum_normalized,
+            )
+            or original_priority_candidate
+            or _priority_source_candidate(
+                rerank_query,
+                scoped_chunks,
+                forum_normalized=forum_normalized,
+            )
         )
         candidates = _candidate_chunks_for_question(
             rerank_query,
             scoped_chunks,
             min(MAX_RERANKED_CHUNKS, max(4, len(scoped_chunks))),
         )
-        candidates = _prepend_topic_candidate(analysis, question, scoped_chunks, candidates)
+        candidates = _prepend_topic_candidate(
+            analysis,
+            question,
+            scoped_chunks,
+            candidates,
+            request_text=current_request_text,
+        )
         if priority_candidate and priority_candidate.chunk_id not in {
             chunk.chunk_id for chunk in candidates
         }:
             candidates = [priority_candidate, *candidates]
-        if priority_candidate and _is_promotable_priority_candidate(
+        if (
+            not partial_request_fast_path_blocked
+            and priority_candidate
+            and _is_promotable_priority_candidate(
             query,
             rerank_query,
             priority_candidate,
             forum_normalized=forum_normalized,
+            )
         ):
             selected: list[ScoredChunk] = [_priority_scored_candidate(priority_candidate)]
             seen = {priority_candidate.chunk_id}
@@ -399,7 +448,10 @@ def _rerank_for_state(
                 if len(selected) >= 4:
                     break
             return selected
-        if _source_only_fast_path_allowed(analysis, questions, scoped_chunks):
+        if (
+            not partial_request_fast_path_blocked
+            and _source_only_fast_path_allowed(analysis, questions, scoped_chunks)
+        ):
             return _source_only_ranked_candidates(candidates, priority_candidate, 4)
         ranked = _call_reranker(
             reranker,
@@ -408,11 +460,15 @@ def _rerank_for_state(
             4,
             execution,
         )
-        if priority_candidate and _is_promotable_priority_candidate(
+        if (
+            not partial_request_fast_path_blocked
+            and priority_candidate
+            and _is_promotable_priority_candidate(
             query,
             rerank_query,
             priority_candidate,
             forum_normalized=forum_normalized,
+            )
         ):
             return _prepend_priority_candidate(ranked, priority_candidate)[:4]
         if priority_candidate and priority_candidate.chunk_id not in {
@@ -423,11 +479,15 @@ def _rerank_for_state(
 
     selected: list[ScoredChunk] = []
     seen: set[str] = set()
-    if original_priority_candidate and _is_promotable_priority_candidate(
+    if (
+        not partial_request_fast_path_blocked
+        and original_priority_candidate
+        and _is_promotable_priority_candidate(
         query,
         query,
         original_priority_candidate,
         forum_normalized=forum_normalized,
+        )
     ):
         _append_chunk(selected, seen, _priority_scored_candidate(original_priority_candidate))
     per_question_limit = 2 if len(questions) <= 5 else 1
@@ -440,7 +500,13 @@ def _rerank_for_state(
             scoped_chunks,
             QUESTION_CANDIDATE_LIMIT,
         )
-        candidates = _prepend_topic_candidate(analysis, question, scoped_chunks, candidates)
+        candidates = _prepend_topic_candidate(
+            analysis,
+            question,
+            scoped_chunks,
+            candidates,
+            request_text=current_request_text,
+        )
         if candidates:
             _append_chunk(selected, seen, _source_candidate(candidates[0]))
         group_specs.append((question_text, candidates, per_question_limit))
@@ -451,7 +517,10 @@ def _rerank_for_state(
         chunk.chunk_id for chunk in query_candidates
     }:
         query_candidates = [original_priority_candidate, *query_candidates]
-    if _source_only_fast_path_allowed(analysis, questions, scoped_chunks):
+    if (
+        not partial_request_fast_path_blocked
+        and _source_only_fast_path_allowed(analysis, questions, scoped_chunks)
+    ):
         for candidate in query_candidates:
             _append_chunk(selected, seen, _source_candidate(candidate))
             if len(selected) >= target_size:
@@ -476,6 +545,59 @@ def _rerank_for_state(
             break
 
     return selected[:MAX_RERANKED_CHUNKS]
+
+
+def _query_proven_aspect_candidates(
+    aspects: tuple[QueryProvenSourceAspect, ...],
+    chunks: list[Chunk],
+) -> list[Chunk]:
+    if not aspects:
+        return []
+
+    selected: list[Chunk] = []
+    for aspect in aspects:
+        matches = [
+            chunk
+            for chunk in chunks
+            if _query_proven_topic_chunk_matches(
+                chunk,
+                aspect,
+            )
+        ]
+        if len(matches) != 1:
+            return []
+        selected.append(matches[0])
+    return selected
+
+
+def _query_proven_topic_chunk_matches(
+    chunk: Chunk,
+    aspect: QueryProvenSourceAspect,
+) -> bool:
+    metadata = chunk.metadata or {}
+    question = aspect.question
+    category = str(question.category or "")
+    forum = str(question.forum_normalized or "")
+    if _source_type(chunk) != FACTUAL_SOURCE_TYPE:
+        return False
+    if aspect.structured_source and (
+        str(metadata.get("source") or "").strip().casefold() != "yonote_api"
+        or str(metadata.get("version") or "").strip() != "yonote-api-v1"
+        or str(metadata.get("status") or "").strip().casefold() != "published"
+    ):
+        return False
+    if not source_aspect_matches_topic(aspect, metadata.get("topic")):
+        return False
+    if metadata.get("category") != category:
+        return False
+    chunk_forum = str(metadata.get("forum_normalized") or "").strip()
+    if category == "платформа_фгаис":
+        return not chunk_forum
+    if category == "форумы":
+        return bool(forum) and chunk_forum == forum
+    if source_aspect_matches_topic(aspect, "obschaya_informaciya"):
+        return _is_physical_grants_chunk(chunk)
+    return category == "гранты"
 
 
 def _scoped_chunks_for_analysis(
@@ -839,6 +961,7 @@ def _exact_topic_fast_path_candidates(
             analysis,
             question,
             scoped_topic_chunks,
+            request_text=_current_request_text(state),
         )
         if candidate is None:
             return []
@@ -853,6 +976,10 @@ def _has_trusted_topic_analysis(state: BotState) -> bool:
     return state.get("analyzer_mode") == "deterministic" or bool(
         state.get("analyzer_fallback")
     )
+
+
+def _current_request_text(state: BotState) -> str:
+    return str(state.get("message_masked") or state.get("message") or "")
 
 
 def _chunk_matches_trusted_topic_scope(
@@ -943,8 +1070,15 @@ def _prepend_topic_candidate(
     question: Question | None,
     chunks: list[Chunk],
     candidates: list[Chunk],
+    *,
+    request_text: str = "",
 ) -> list[Chunk]:
-    topic_candidate = _topic_candidate_for_question(analysis, question, chunks)
+    topic_candidate = _topic_candidate_for_question(
+        analysis,
+        question,
+        chunks,
+        request_text=request_text,
+    )
     if topic_candidate is None:
         return candidates
     return [
@@ -957,6 +1091,8 @@ def _topic_candidate_for_question(
     analysis: Any,
     question: Question | None,
     chunks: list[Chunk],
+    *,
+    request_text: str = "",
 ) -> Chunk | None:
     if question is None or not chunks:
         return None
@@ -964,7 +1100,7 @@ def _topic_candidate_for_question(
     if not question_topic_group:
         return None
 
-    matches: list[tuple[int, int, int, float, int, float, int, Chunk]] = []
+    matches: list[tuple[int, int, int, int, float, int, float, int, Chunk]] = []
     for index, chunk in enumerate(chunks):
         topic_rank = _topic_match_rank(question, chunk)
         if topic_rank > 1 or not _chunk_matches_question_scope(analysis, question, chunk):
@@ -975,6 +1111,11 @@ def _topic_candidate_for_question(
                 _topic_source_preference_rank(question, chunk, topic_rank),
                 _source_freshness_rank(chunk),
                 _source_type_rank(chunk),
+                _registration_subflow_scope_rank(
+                    question,
+                    chunk,
+                    request_text=request_text,
+                ),
                 -field_score,
                 1 if _is_generic_chunk(chunk) else 0,
                 -float(chunk.score or 0.0),
@@ -985,6 +1126,33 @@ def _topic_candidate_for_question(
     if not matches:
         return None
     return min(matches)[-1]
+
+
+def _registration_subflow_scope_rank(
+    question: Question,
+    chunk: Chunk,
+    *,
+    request_text: str = "",
+) -> int:
+    if _question_topic_group(question) != _equivalent_topic_group(
+        "podacha_zayavki_na_proekt"
+    ):
+        return 0
+    normalized_question = _normalize(request_text)
+    normalized_source = _normalize(
+        " ".join(
+            (
+                str((chunk.metadata or {}).get("intent_name") or ""),
+                str((chunk.metadata or {}).get("topic") or ""),
+                chunk.text[:800],
+            )
+        )
+    )
+    return sum(
+        1
+        for marker in ("волонт", "зрител")
+        if (marker in normalized_source) != (marker in normalized_question)
+    )
 
 
 def _topic_match_rank(question: Question, chunk: Chunk) -> int:
@@ -1760,6 +1928,7 @@ def _query_entity_scoped_chunks(
         GENERIC_PLATFORM_REGISTRATION,
         PLATFORM_EVENT_NAVIGATION,
         ACCOUNT_DATA_RECOVERY,
+        INACTIVE_PLATFORM_APPLICATION_BUTTON,
     }:
         return [
             chunk
@@ -1834,6 +2003,12 @@ def _bounded_metadata_intent_match(
             metadata.get("category") == "платформа_фгаис"
             and not str(metadata.get("forum_normalized") or "").strip()
             and "obedinenie_akkauntov" in metadata_haystack
+        )
+    if intent == INACTIVE_PLATFORM_APPLICATION_BUTTON:
+        return (
+            metadata.get("category") == "платформа_фгаис"
+            and not str(metadata.get("forum_normalized") or "").strip()
+            and metadata.get("topic") == "registraciya_na_municipalnoe_meropriyatie"
         )
     if intent == GRANT_DIRECTIONS:
         return _is_generic_rosmol_grants_chunk(chunk) and "nominac" in metadata_haystack

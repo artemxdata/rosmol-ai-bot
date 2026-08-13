@@ -2523,19 +2523,18 @@ async def test_retrieve_uses_masked_message_when_analysis_has_no_questions() -> 
     assert result["retrieved_chunks"] == []
     assert retriever.calls == [
         (
-            "Как подать заявку или зарегистрироваться?",
-            {"category": "гранты", "source_type": "yonote"},
+            "Гранты для физических лиц Подать заявку на участие",
+            {
+                "category": "гранты",
+                "source_type": "yonote",
+                "topic": "obschaya_informaciya",
+            },
             10,
-        ),
-        (
-            "Как подать заявку или зарегистрироваться?",
-            {"source_type": "yonote"},
-            30,
         ),
         (
             "Гранты для физических лиц Подать заявку на участие",
             {"category": "гранты", "source_type": "yonote"},
-            10,
+            30,
         ),
         (
             "Гранты для физических лиц Подать заявку на участие",

@@ -14,10 +14,49 @@ MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
 
 _DATE = r"(?P<date>\d{1,2}[./-]\d{1,2}[./-]\d{4})"
 _TIME = r"(?:\s*(?:г(?:ода)?\.?\s*)?(?:в\s*)?(?P<time>\d{1,2}:\d{2}))?"
+_RUSSIAN_MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+_WORD_DATE = (
+    r"(?P<day>\d{1,2})\s+"
+    rf"(?P<month>{'|'.join(_RUSSIAN_MONTHS)})\s+"
+    r"(?P<year>\d{4})"
+)
+_WORD_DATE_TIME = (
+    r"(?:\s*г(?:ода)?\.?)?"
+    r"(?:\s*\(?\s*(?:включительно\s*,?\s*)?"
+    r"(?:(?:до|в)\s*)?(?P<time>\d{1,2}:\d{2})\s*(?:мск)?\s*\)?)?"
+)
 _REGISTRATION_DEADLINE_PATTERNS = (
     re.compile(
         rf"(?:регистрац\w*|при[её]м\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
-        rf"подать\s+заяв\w*).{{0,600}}?\bдо\s+{_DATE}{_TIME}",
+        rf"подать\s+заяв\w*).{{0,600}}?\bс\s+\d{{1,2}}[./-]\d{{1,2}}"
+        rf"(?:[./-]\d{{4}})?\s+по\s+"
+        rf"(?P<time>\d{{1,2}}:\d{{2}})\s*(?:мск)?\s+{_DATE}",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?:регистрац\w*|при[её]м\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
+        rf"подать\s+заяв\w*).{{0,600}}?\bс\s+\d{{1,2}}\s+"
+        rf"(?:{'|'.join(_RUSSIAN_MONTHS)})\s+по\s+"
+        rf"(?P<time>\d{{1,2}}:\d{{2}})\s*(?:мск)?\s+{_WORD_DATE}"
+        r"(?:\s*г(?:ода)?\.?)?",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?:регистрац\w*|при[её]м\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
+        rf"подать\s+заяв\w*).{{0,600}}?\b(?:до|по)\s+{_DATE}{_TIME}",
         flags=re.IGNORECASE,
     ),
     re.compile(
@@ -25,11 +64,39 @@ _REGISTRATION_DEADLINE_PATTERNS = (
         rf"[^\d]{{0,80}}{_DATE}{_TIME}",
         flags=re.IGNORECASE,
     ),
+    re.compile(
+        rf"(?:регистрац\w*|при[её]м\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
+        rf"подать\s+заяв\w*).{{0,600}}?\b(?:до|по)\s+{_WORD_DATE}{_WORD_DATE_TIME}",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        rf"окончани\w*\s+(?:(?:при[её]ма|подачи)\s+заяв\w*|регистрац\w*)"
+        rf"[^\d]{{0,80}}{_WORD_DATE}{_WORD_DATE_TIME}",
+        flags=re.IGNORECASE,
+    ),
+)
+_REGISTRATION_DEADLINE_BRIDGE_RE = re.compile(
+    r"\b(?:регистрац\w*|при[её]м\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
+    r"подать\s+заяв\w*|заявк\w*|фгаис|myrosmol|ссылк\w*|форм\w*|"
+    r"срок\w*|дедлайн\w*|она|е[её])\b",
+    flags=re.IGNORECASE,
+)
+_NON_REGISTRATION_DEADLINE_CLAUSE_RE = re.compile(
+    r"\b(?:результат\w*|итог\w*|списк\w*|отбор\w*|"
+    r"дат\w*\s+проведен\w*|заверш\w*\s+(?:форум\w*|мероприят\w*))\b",
+    flags=re.IGNORECASE,
 )
 _REGISTRATION_QUERY_RE = re.compile(
     r"\b(?:регистрац\w*|зарегистрир\w*|подат\w*\s+заяв\w*|подач\w*\s+заяв\w*|"
     r"записа(?:ться|ться)|вписа(?:ться|ться)|как\s+(?:мне\s+)?попасть|"
     r"хоч\w*\s+попасть|стать\s+участник\w*|как\s+участвова\w*)\b",
+    flags=re.IGNORECASE,
+)
+_REGISTRATION_DEADLINE_QUERY_RE = re.compile(
+    r"(?:\b(?:до\s+какого(?:\s+числа)?|крайн\w*\s+срок|дедлайн)\b"
+    r"[^.!?]{0,80}\b(?:заяв\w*|регистрац\w*)\b|"
+    r"\b(?:заяв\w*|регистрац\w*)\b[^.!?]{0,80}"
+    r"\b(?:до\s+какого(?:\s+числа)?|крайн\w*\s+срок|дедлайн)\b)",
     flags=re.IGNORECASE,
 )
 _NON_REGISTRATION_QUERY_RE = re.compile(
@@ -68,10 +135,21 @@ def extract_registration_deadline(text: str) -> RegistrationDeadline | None:
     candidates: list[RegistrationDeadline] = []
     for pattern in _REGISTRATION_DEADLINE_PATTERNS:
         for match in pattern.finditer(normalized):
-            parsed_date = _parse_date(match.group("date"))
+            if not _registration_deadline_match_is_scoped(match.group(0)):
+                continue
+            groups = match.groupdict()
+            parsed_date = (
+                _parse_date(groups["date"])
+                if groups.get("date")
+                else _parse_word_date(
+                    groups.get("day"),
+                    groups.get("month"),
+                    groups.get("year"),
+                )
+            )
             if parsed_date is None:
                 continue
-            parsed_time = _parse_time(match.groupdict().get("time"))
+            parsed_time = _parse_time(groups.get("time"))
             explicit_time = parsed_time is not None
             closes_at = datetime.combine(
                 parsed_date,
@@ -83,7 +161,25 @@ def extract_registration_deadline(text: str) -> RegistrationDeadline | None:
             )
     if not candidates:
         return None
-    return max(candidates, key=lambda item: item.closes_at)
+    return _latest_deadline(candidates)
+
+
+def _registration_deadline_match_is_scoped(matched_text: str) -> bool:
+    """Do not bind a later event/result date to an earlier registration mention."""
+
+    if _NON_REGISTRATION_DEADLINE_CLAUSE_RE.search(matched_text) is not None:
+        return False
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"(?<=[.!?;])\s+", matched_text)
+        if clause.strip()
+    ]
+    if len(clauses) <= 1:
+        return True
+    final_clause = clauses[-1]
+    return (
+        _REGISTRATION_DEADLINE_BRIDGE_RE.search(final_clause) is not None
+    )
 
 
 def registration_deadline_iso(text: str) -> str | None:
@@ -112,9 +208,12 @@ def is_published_active_record(
 
 
 def is_registration_query(text: str, topics: Iterable[str] = ()) -> bool:
-    if _REGISTRATION_QUERY_RE.search(str(text or "")):
+    query = str(text or "")
+    if _REGISTRATION_QUERY_RE.search(query) or _REGISTRATION_DEADLINE_QUERY_RE.search(
+        query
+    ):
         return True
-    if _NON_REGISTRATION_QUERY_RE.search(str(text or "")):
+    if _NON_REGISTRATION_QUERY_RE.search(query):
         return False
     normalized_topics = " ".join(str(topic).casefold() for topic in topics if topic)
     return any(marker in normalized_topics for marker in _REGISTRATION_TOPIC_MARKERS)
@@ -348,6 +447,22 @@ def _parse_date(value: str) -> date | None:
     normalized = value.replace("/", ".").replace("-", ".")
     try:
         return datetime.strptime(normalized, "%d.%m.%Y").date()
+    except ValueError:
+        return None
+
+
+def _parse_word_date(
+    day: str | None,
+    month: str | None,
+    year: str | None,
+) -> date | None:
+    if not day or not month or not year:
+        return None
+    month_number = _RUSSIAN_MONTHS.get(month.casefold())
+    if month_number is None:
+        return None
+    try:
+        return date(int(year), month_number, int(day))
     except ValueError:
         return None
 

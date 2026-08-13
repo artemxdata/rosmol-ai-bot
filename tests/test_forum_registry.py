@@ -34,6 +34,10 @@ def test_detect_forum_from_text_handles_ladoga_prepositional_case() -> None:
     )
 
 
+def test_detect_forum_from_text_handles_mashuk_genitive_case() -> None:
+    assert detect_forum_from_text("Сверь даты смен Машука") == "Машук"
+
+
 def test_detect_forum_from_text_handles_new_yonote_entities() -> None:
     assert detect_forum_from_text("Как зарегистрироваться на Добро.РФ?") == "Добро.РФ"
     assert (

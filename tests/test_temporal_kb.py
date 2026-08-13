@@ -49,6 +49,67 @@ def test_extract_registration_deadline_with_moscow_time() -> None:
     assert deadline.explicit_time is True
 
 
+def test_extract_registration_deadline_accepts_russian_word_date_and_time() -> None:
+    deadline = extract_registration_deadline(
+        "Подать заявку можно до 30 июня 2026 года "
+        "(включительно, до 23:59 мск)."
+    )
+
+    assert deadline is not None
+    assert deadline.closes_at == datetime(2026, 6, 30, 23, 59, tzinfo=MOSCOW_TZ)
+    assert deadline.explicit_time is True
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "explicit_time"),
+    [
+        (
+            "Приём заявок открыт по 07.08.2026 23:59 мск.",
+            datetime(2026, 8, 7, 23, 59, tzinfo=MOSCOW_TZ),
+            True,
+        ),
+        (
+            "Приём заявок проходит с 1 июля по 23:59 мск "
+            "31 июля 2026 года.",
+            datetime(2026, 7, 31, 23, 59, tzinfo=MOSCOW_TZ),
+            True,
+        ),
+        (
+            "Приём заявок проходит с 01.07.2026 по 23:59 мск 31.07.2026.",
+            datetime(2026, 7, 31, 23, 59, tzinfo=MOSCOW_TZ),
+            True,
+        ),
+        (
+            "Подать заявку можно до 30 июня 2026 года 18:00 мск.",
+            datetime(2026, 6, 30, 18, 0, tzinfo=MOSCOW_TZ),
+            True,
+        ),
+        (
+            "Подать заявку можно до 30 июня 2026 года, а заезд в 10:00.",
+            datetime(2026, 6, 30, 23, 59, 59, tzinfo=MOSCOW_TZ),
+            False,
+        ),
+    ],
+    ids=(
+        "inclusive-numeric",
+        "word-date-range",
+        "numeric-date-range",
+        "word-date-direct-time",
+        "unrelated-later-time",
+    ),
+)
+def test_extract_registration_deadline_uses_deadline_grammar(
+    text: str,
+    expected: datetime,
+    explicit_time: bool,
+) -> None:
+    deadline = extract_registration_deadline(text)
+
+    assert deadline is not None
+    assert deadline.closes_at == expected
+    assert deadline.explicit_time is explicit_time
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
@@ -86,6 +147,32 @@ def test_extract_registration_deadline_does_not_treat_event_date_as_deadline() -
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Регистрация проходит через ФГАИС. Форум завершится до 10 сентября 2026 года.",
+        "Регистрация уже открыта. Результаты отбора опубликуют до 10 сентября 2026 года.",
+        "Регистрация уже открыта. Результаты регистрации опубликуют до 10 сентября 2026 года.",
+        "Регистрация уже открыта, результаты отбора опубликуют до 10 сентября 2026 года.",
+    ],
+)
+def test_extract_registration_deadline_does_not_cross_into_unrelated_claim(
+    text: str,
+) -> None:
+    assert extract_registration_deadline(text) is None
+
+
+def test_extract_registration_deadline_prefers_explicit_time_on_same_date() -> None:
+    deadline = extract_registration_deadline(
+        "Регистрация открыта до 30 июня 2026 года. "
+        "Срок регистрации уточнён: до 30 июня 2026 года в 18:00 мск."
+    )
+
+    assert deadline is not None
+    assert deadline.closes_at == datetime(2026, 6, 30, 18, 0, tzinfo=MOSCOW_TZ)
+    assert deadline.explicit_time is True
 
 
 @pytest.mark.parametrize(
@@ -295,6 +382,193 @@ async def test_response_guards_preserve_multi_aspect_single_forum_answer() -> No
             "reranked_chunks": [place_chunk, registration_chunk],
             "generated_response": "Полный ответ по месту, датам и регистрации.",
             "cited_sources": [place_chunk.chunk_id, registration_chunk.chunk_id],
+        }
+    )
+
+    assert guarded == {}
+
+
+@pytest.mark.asyncio
+async def test_registration_guard_replaces_only_expired_claim_in_sourced_multi_answer() -> None:
+    analysis = QueryAnalysis(
+        forum="Тестовый форум",
+        forum_normalized="Тестовый форум",
+        category="форумы",
+        questions=[
+            Question(
+                text="До какого числа можно подать заявку?",
+                topic="podacha_zayavki_na_proekt",
+                category="форумы",
+                forum_normalized="Тестовый форум",
+            ),
+            Question(
+                text="Кто оплачивает проезд?",
+                topic="oplata_proezda",
+                category="форумы",
+                forum_normalized="Тестовый форум",
+            ),
+        ],
+    )
+    registration_chunk = ScoredChunk(
+        chunk_id="test_forum_registration",
+        text=(
+            "Подать заявку можно до 6 июля 2020 года "
+            "(включительно, до 23:59 мск). Паспорт обязателен."
+        ),
+        metadata={
+            "forum_normalized": "Тестовый форум",
+            "topic": "podacha_zayavki_na_proekt",
+            "source_type": "yonote",
+        },
+        score=1.0,
+        reranker_score=0.9,
+    )
+    travel_chunk = ScoredChunk(
+        chunk_id="rostov_travel",
+        text="Проезд оплачивает участник.",
+        metadata={"forum_normalized": "Тестовый форум", "source_type": "yonote"},
+        score=1.0,
+        reranker_score=0.9,
+    )
+    stale_registration = (
+        "Подать заявку можно до 6 июля 2020 года. "
+        "Паспорт обязателен. "
+        f"[src:{registration_chunk.chunk_id}]"
+    )
+    travel_fact = f"Проезд оплачивает участник. [src:{travel_chunk.chunk_id}]"
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": (
+                "До какого числа заявка на Тестовый форум и кто оплачивает проезд?"
+            ),
+            "analysis": analysis,
+            "reranked_chunks": [registration_chunk, travel_chunk],
+            "generated_response": f"{stale_registration}\n\n{travel_fact}",
+            "cited_sources": [registration_chunk.chunk_id, travel_chunk.chunk_id],
+        }
+    )
+
+    assert guarded["response_guard"] == "registration_closed_multi_aspect"
+    assert "Регистрация на форум «Тестовый форум» закрыта" in (
+        guarded["generated_response"]
+    )
+    assert "Новую заявку сейчас подать нельзя" in guarded["generated_response"]
+    assert "Подать заявку можно" not in guarded["generated_response"]
+    assert "Паспорт обязателен." in guarded["generated_response"]
+    assert travel_fact in guarded["generated_response"]
+    assert guarded["cited_sources"] == [
+        registration_chunk.chunk_id,
+        travel_chunk.chunk_id,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_registration_guard_does_not_rewrite_ambiguous_colocated_claim() -> None:
+    analysis = QueryAnalysis(
+        forum="Тестовый форум",
+        forum_normalized="Тестовый форум",
+        category="форумы",
+        questions=[
+            Question(
+                text="До какого числа можно подать заявку?",
+                topic="podacha_zayavki_na_proekt",
+                category="форумы",
+                forum_normalized="Тестовый форум",
+            ),
+            Question(
+                text="Нужен ли паспорт?",
+                topic="documents",
+                category="форумы",
+                forum_normalized="Тестовый форум",
+            ),
+        ],
+    )
+    registration_chunk = ScoredChunk(
+        chunk_id="test_forum_registration",
+        text="Подать заявку можно до 6 июля 2020 года.",
+        metadata={
+            "forum_normalized": "Тестовый форум",
+            "topic": "podacha_zayavki_na_proekt",
+            "source_type": "yonote",
+        },
+        score=1.0,
+        reranker_score=0.9,
+    )
+    generated_response = (
+        "Подать заявку можно до 6 июля 2020 года, а паспорт обязателен. "
+        f"[src:{registration_chunk.chunk_id}]"
+    )
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": (
+                "До какого числа заявка на Тестовый форум и нужен ли паспорт?"
+            ),
+            "analysis": analysis,
+            "reranked_chunks": [registration_chunk],
+            "generated_response": generated_response,
+            "cited_sources": [registration_chunk.chunk_id],
+        }
+    )
+
+    assert guarded == {}
+
+
+@pytest.mark.asyncio
+async def test_registration_guard_rejects_citation_list_drift() -> None:
+    analysis = QueryAnalysis(
+        forum="Тестовый форум",
+        forum_normalized="Тестовый форум",
+        category="форумы",
+        questions=[
+            Question(
+                text="До какого числа можно подать заявку?",
+                topic="podacha_zayavki_na_proekt",
+                category="форумы",
+                forum_normalized="Тестовый форум",
+            ),
+            Question(
+                text="Кто оплачивает проезд?",
+                topic="oplata_proezda",
+                category="форумы",
+                forum_normalized="Тестовый форум",
+            ),
+        ],
+    )
+    registration_chunk = ScoredChunk(
+        chunk_id="test_forum_registration",
+        text="Подать заявку можно до 6 июля 2020 года.",
+        metadata={
+            "forum_normalized": "Тестовый форум",
+            "topic": "podacha_zayavki_na_proekt",
+            "source_type": "yonote",
+        },
+        score=1.0,
+        reranker_score=0.9,
+    )
+    travel_chunk = ScoredChunk(
+        chunk_id="test_forum_travel",
+        text="Проезд оплачивает участник.",
+        metadata={"forum_normalized": "Тестовый форум", "source_type": "yonote"},
+        score=1.0,
+        reranker_score=0.9,
+    )
+    generated_response = (
+        "Подать заявку можно до 6 июля 2020 года. "
+        f"[src:{registration_chunk.chunk_id}]\n\n"
+        f"Проезд оплачивает участник. [src:{travel_chunk.chunk_id}]"
+    )
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": (
+                "До какого числа заявка на Тестовый форум и кто оплачивает проезд?"
+            ),
+            "analysis": analysis,
+            "reranked_chunks": [registration_chunk, travel_chunk],
+            "generated_response": generated_response,
+            "cited_sources": [registration_chunk.chunk_id, "stale_source_id"],
         }
     )
 

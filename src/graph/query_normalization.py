@@ -10,6 +10,7 @@ PERSONAL_CABINET_SHORT_RE = re.compile(
 GENERIC_PLATFORM_REGISTRATION = "generic_platform_registration"
 PLATFORM_EVENT_NAVIGATION = "platform_event_navigation"
 ACCOUNT_DATA_RECOVERY = "account_data_recovery"
+INACTIVE_PLATFORM_APPLICATION_BUTTON = "inactive_platform_application_button"
 GRANT_DIRECTIONS = "grant_directions"
 PHYSICAL_GRANTS_OVERVIEW = "physical_grants_overview"
 FORUM_DISCOVERY = "forum_discovery"
@@ -20,6 +21,9 @@ BOUNDED_QUERY_INTENT_HINTS = {
         "поиск и навигация по мероприятиям фильтры в личном кабинете"
     ),
     ACCOUNT_DATA_RECOVERY: "объединение аккаунтов перенос данных старая почта",
+    INACTIVE_PLATFORM_APPLICATION_BUTTON: (
+        "ФГАИС неактивная кнопка подать заявку недостающие данные период подачи"
+    ),
     GRANT_DIRECTIONS: "номинации тематики проектов грантовых конкурсов",
     PHYSICAL_GRANTS_OVERVIEW: "гранты для физических лиц общая информация",
     FORUM_DISCOVERY: "официальный каталог форумов и мероприятий Форумной дирекции",
@@ -74,6 +78,10 @@ def bounded_query_intent(
             (GENERIC_PLATFORM_REGISTRATION, _asks_generic_platform_registration),
             (PLATFORM_EVENT_NAVIGATION, _asks_platform_event_navigation),
             (ACCOUNT_DATA_RECOVERY, _asks_account_data_recovery),
+            (
+                INACTIVE_PLATFORM_APPLICATION_BUTTON,
+                _asks_inactive_platform_application_button,
+            ),
             (GRANT_DIRECTIONS, _asks_grant_directions),
             (PHYSICAL_GRANTS_OVERVIEW, _asks_physical_grants_overview),
             (FORUM_DISCOVERY, _asks_forum_discovery),
@@ -91,6 +99,7 @@ def bounded_query_intent(
         GENERIC_PLATFORM_REGISTRATION,
         PLATFORM_EVENT_NAVIGATION,
         ACCOUNT_DATA_RECOVERY,
+        INACTIVE_PLATFORM_APPLICATION_BUTTON,
         FORUM_DISCOVERY,
     }:
         return None if has_named_event_scope else intent
@@ -172,10 +181,32 @@ def _asks_account_data_recovery(normalized: str) -> bool:
     )
 
 
+def _asks_inactive_platform_application_button(normalized: str) -> bool:
+    return (
+        any(marker in normalized for marker in ("фгаис", "myrosmol", "молодежь россии"))
+        and "кнопк" in normalized
+        and any(marker in normalized for marker in ("неактив", "не актив", "не работает"))
+        and "заявк" in normalized
+        and any(marker in normalized for marker in ("подать", "подач"))
+    )
+
+
 def _asks_grant_directions(normalized: str) -> bool:
-    return "грант" in normalized and any(
+    asks_directions = "грант" in normalized and any(
         marker in normalized for marker in ("направлен", "номинац", "тематик")
     )
+    asks_application_details = "заявк" in normalized and any(
+        marker in normalized
+        for marker in (
+            "заполн",
+            "оформ",
+            "подат",
+            "подач",
+            "шаблон",
+            "скач",
+        )
+    )
+    return asks_directions and not asks_application_details
 
 
 def _asks_physical_grants_overview(normalized: str) -> bool:

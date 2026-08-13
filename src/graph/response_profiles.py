@@ -1126,6 +1126,16 @@ def _has_profile_markers(text: str, profile: ResponseProfileName) -> bool:
 
 
 def _contains_profile_marker(text: str, marker: str) -> bool:
+    if marker == "положение":
+        # ``положение`` is a document, while ``местоположение`` is only a
+        # search/filter field. A raw substring match makes a grounded
+        # application answer look like an unrelated documents answer.
+        return bool(
+            re.search(
+                r"(?<!\w)положени(?:е|я|ю|ем|и|й|ям|ями|ях)(?!\w)",
+                text,
+            )
+        )
     if marker in _EXACT_WORD_PROFILE_MARKERS:
         return bool(re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text))
     return marker in text
