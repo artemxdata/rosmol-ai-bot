@@ -4,7 +4,7 @@
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50 v4: server-local preflight дал GO, разрешён один D-042 run
+## Pilot50 v4 завершён с валидным safe verdict `STOP`
 
 Core RAG change set закончен, закоммичен и push-нут в GitHub отдельным commit
 `384bad99a733e4711dc765a8389a049a6cfa2a12`. Retrieval, rerank и generation используют один
@@ -66,6 +66,26 @@ seed/fingerprint, offline rescore и лимит `30 RUB`. Production snapshot SH
 SHA-256 — `9855aede41e40b31eb15d27cab7d242416752b82768306ba85d91bd137fb4e16`.
 Preflight не выполнял `/ask`, не создавал cost reservation и не менял production/Qdrant.
 
+После preflight владелец ровно один раз выполнил разрешённый D-042 candidate run. Launcher
+завершился штатно: `pilot50_candidate_server_local=OK`, evidence status `OK`, итог quality gate —
+`STOP`. Exact report SHA-256 —
+`2defcace63de2a2184b162fcae5fa8f4d50ed8317042ae64aabbb49181076a8d`, safe result SHA-256 —
+`23025924ca6073071f6ffdb379aa9eb8cc6feb8548b91d7139d80dfffd8decb8`, eval run ID —
+`ask-eval-f46e4947-8e17-48cf-86d3-ca784e4d8666`. Получены ровно `50/50` полных trace,
+cache hits `0`, pricing complete, runner budget не превышен и не остановлен; target-reported LLM
+cost — `19.259396 RUB` при cap `30 RUB`. Provider billing пока имеет статус
+`pending_provider_reconciliation`. Run window: `2026-08-13T19:15:36.583111+00:00` —
+`2026-08-13T19:23:30.609025+00:00`; latency p50/p95 — `4977 / 36938 ms`.
+
+Mechanical first-turn closure и policy pass совпали: overall `8/50 = 16%`, typical
+`7/25 = 28%`, atypical `1/25 = 4%`. Провалены все шесть заранее зафиксированных критериев:
+overall closed `8 < 30`, typical `7 < 11`, atypical `1 < 7`, output-contract escalations
+`10 > 6`, source-binding failures `3 > 0`, critical-case failures `14/15 > 0`. Это tracked
+regression calibration, а не independent holdout, human product verdict, ticket-level или
+production conversion. D-042 approval/waiver и run этого exact SHA использованы; повтор,
+selective retry или второй запуск запрещены. Поскольку launcher вернул final `OK`, его встроенные
+post-run проверки production/Qdrant и cleanup прошли до публикации safe result.
+
 Архитектурный и security review не выявил нового production network/deploy/secret пути,
 eval/case facts в production-логике, ослабления published/source/category/forum guards, обхода
 safety/escalation или автоматического Yonote/indexing. `git diff --check` и Ruff прошли; seed
@@ -79,13 +99,13 @@ Pilot50 и `7/7` нового v4 launcher. Единственный skip — Pos
 Финальный v4/D-042 change set закоммичен как
 `d5cf413492a079c396c56017f51acaa3ebbacb3c` и успешно push-нут в GitHub в ветку
 `codex/real-rag`; его parent — core commit `384bad99a733e4711dc765a8389a049a6cfa2a12`.
-Четыре пользовательских untracked-документа не добавлялись и не изменялись. Текущий следующий
-шаг — владелец вручную выполняет после `ssh rosmol` один переданный Bash-блок `run` на том же
-exact detached candidate `d5cf413492a079c396c56017f51acaa3ebbacb3c`. Разрешены ровно
-`50` последовательных candidate `/ask` с D-042 reservation и cap `30 RUB`; Yonote
-Apply/indexing, HDE/VK, rollout и production restart не разрешены. На момент этой записи paid v4
-run ещё не начинался. При любом STOP, integrity rejection или незавершённом результате
-автоматический и ручной повтор запрещены; сначала требуется разбор сохранённого evidence.
+Четыре пользовательских untracked-документа не добавлялись и не изменялись. Финальный verdict
+этого плана — честный quality `STOP`: candidate не готов к pilot/release/rollout. Yonote
+Apply/indexing, HDE/VK, production restart и повторный paid run не разрешены. Точный следующий
+шаг — сначала сверить UTC window этого единственного запуска с фактическим provider billing,
+затем отдельным regression-first циклом безопасно классифицировать приватный report по слоям
+retrieval/source binding, critical guards и output contract. Новый change set или eval требует
+новой гипотезы, нового exact SHA, полного локального gate и отдельного governance-решения.
 
 ## Pilot50: v3 выполнил 50/50, но evidence integrity-rejected из-за одного timeout
 
