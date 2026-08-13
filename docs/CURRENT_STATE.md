@@ -65,13 +65,16 @@ Pilot50 и `7/7` нового v4 launcher. Единственный skip — Pos
 отдельного runtime. Windows monolithic `test_graph.py` зависает после выполнения async fixtures;
 тот же exact `266/266` набор доказан четырьмя независимыми слоями `117 + 20 + 52 + 77`.
 
-Текущий следующий шаг — выборочно закоммитить и push-нуть финальный v4/D-042 change set и этот
-handoff, не добавляя четыре пользовательских untracked-документа. После успешного push владельцу
-нужно передать exact 40-character SHA и один Bash-блок только для бесплатного server-local
-preflight. На 14 августа server preflight, фактический offline rescore sealed v3, D-042
-reservation, новый paid `/ask`, Yonote Apply/indexing, HDE/VK и rollout не выполнялись. Paid v4
-run разрешается только после явного сообщения владельца `preflight=GO`; при STOP или integrity
-rejection автоматический повтор запрещён.
+Финальный v4/D-042 change set закоммичен как
+`d5cf413492a079c396c56017f51acaa3ebbacb3c` и успешно push-нут в GitHub в ветку
+`codex/real-rag`; его parent — core commit `384bad99a733e4711dc765a8389a049a6cfa2a12`.
+Четыре пользовательских untracked-документа не добавлялись и не изменялись. Текущий следующий
+шаг — владелец вручную выполняет после `ssh rosmol` один переданный Bash-блок: fetch из GitHub,
+проверка и detached checkout exact `d5cf413492a079c396c56017f51acaa3ebbacb3c`, затем только
+бесплатный server-local preflight. На 14 августа server preflight, фактический offline rescore
+sealed v3, D-042 reservation, новый paid `/ask`, Yonote Apply/indexing, HDE/VK и rollout не
+выполнялись. Paid v4 run разрешается только после явного сообщения владельца `preflight=GO`;
+при STOP или integrity rejection автоматический повтор запрещён.
 
 ## Pilot50: v3 выполнил 50/50, но evidence integrity-rejected из-за одного timeout
 
