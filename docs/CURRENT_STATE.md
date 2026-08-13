@@ -4,7 +4,7 @@
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50 v4: локальный контракт и D-042 готовы, server-local preflight ещё не выполнялся
+## Pilot50 v4: server-local preflight дал GO, разрешён один D-042 run
 
 Core RAG change set закончен, закоммичен и push-нут в GitHub отдельным commit
 `384bad99a733e4711dc765a8389a049a6cfa2a12`. Retrieval, rerank и generation используют один
@@ -33,9 +33,10 @@ negation, correction, hearsay и history; legacy result shape не изменё�
 `offline-rescore-v4` сначала полностью валидирует sealed integrity-rejected v3 evidence и затем
 переоценивает только `41` неизменившийся query; `9` contract-changed кейсов исключаются. Вывод
 содержит только агрегаты и hashes, явно имеет `official_v4_result=false`, `/ask=0`, network=0 и
-cost `0 RUB`. Tooling и tamper/PII regressions локально проверены, но фактический rescore
-приватного sealed v3 report ещё не выполнялся: он разрешён только server-local, `--network none`,
-в составе бесплатного preflight.
+cost `0 RUB`. Tooling и tamper/PII regressions локально проверены. Фактический server-local
+rescore приватного sealed v3 report выполнен внутри бесплатного preflight с `--network none`:
+status `OK`, safe artifact SHA-256
+`42e2d3b16c626013215f515343478d295d9c382eb778e8d9eb1a8d8505c18554`.
 
 D-042 реализован как новая одноразовая chained waiver-модель ledger schema `1.2.0`, совместимая
 с историческими `1.0.0/1.1.0`. Она требует ровно одну предыдущую D-041 reservation, exact
@@ -55,6 +56,16 @@ GO/STOP после trace/integrity/quality checks. Candidate read-only, без p
 `YONOTE_SYNC_ENABLED=false`, `HDE_TRANSPORT_ENABLED=false`, пустыми HDE/VK/Yonote credentials;
 production и Qdrant обязаны совпасть до и после run.
 
+14 августа владелец выполнил бесплатный server-local preflight на exact detached candidate
+`d5cf413492a079c396c56017f51acaa3ebbacb3c`; результат —
+`pilot50_candidate_preflight=GO`, runtime smoke `OK`, governance precheck `GO` по D-042 с exact
+prior waiver D-041 и capacity `GO`. Проверены production runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, immutable manifest/cases hashes, Qdrant `2152`,
+seed/fingerprint, offline rescore и лимит `30 RUB`. Production snapshot SHA-256 —
+`150e8661257b7c7bd0495aec92476654d2aec156d090bc34a0373c551a20ad1a`, governance precheck
+SHA-256 — `9855aede41e40b31eb15d27cab7d242416752b82768306ba85d91bd137fb4e16`.
+Preflight не выполнял `/ask`, не создавал cost reservation и не менял production/Qdrant.
+
 Архитектурный и security review не выявил нового production network/deploy/secret пути,
 eval/case facts в production-логике, ослабления published/source/category/forum guards, обхода
 safety/escalation или автоматического Yonote/indexing. `git diff --check` и Ruff прошли; seed
@@ -69,12 +80,12 @@ Pilot50 и `7/7` нового v4 launcher. Единственный skip — Pos
 `d5cf413492a079c396c56017f51acaa3ebbacb3c` и успешно push-нут в GitHub в ветку
 `codex/real-rag`; его parent — core commit `384bad99a733e4711dc765a8389a049a6cfa2a12`.
 Четыре пользовательских untracked-документа не добавлялись и не изменялись. Текущий следующий
-шаг — владелец вручную выполняет после `ssh rosmol` один переданный Bash-блок: fetch из GitHub,
-проверка и detached checkout exact `d5cf413492a079c396c56017f51acaa3ebbacb3c`, затем только
-бесплатный server-local preflight. На 14 августа server preflight, фактический offline rescore
-sealed v3, D-042 reservation, новый paid `/ask`, Yonote Apply/indexing, HDE/VK и rollout не
-выполнялись. Paid v4 run разрешается только после явного сообщения владельца `preflight=GO`;
-при STOP или integrity rejection автоматический повтор запрещён.
+шаг — владелец вручную выполняет после `ssh rosmol` один переданный Bash-блок `run` на том же
+exact detached candidate `d5cf413492a079c396c56017f51acaa3ebbacb3c`. Разрешены ровно
+`50` последовательных candidate `/ask` с D-042 reservation и cap `30 RUB`; Yonote
+Apply/indexing, HDE/VK, rollout и production restart не разрешены. На момент этой записи paid v4
+run ещё не начинался. При любом STOP, integrity rejection или незавершённом результате
+автоматический и ручной повтор запрещены; сначала требуется разбор сохранённого evidence.
 
 ## Pilot50: v3 выполнил 50/50, но evidence integrity-rejected из-за одного timeout
 
