@@ -1,0 +1,1530 @@
+[
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация проходит по ссылке",
+          "перейти по ссылке для регистрации"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "регион проведения",
+          "фильтр по региону проведения"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "регион участников",
+          "фильтр по региону участников"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis",
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_fgais_registration_navigation",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Без канцелярита: где зарегистрироваться во ФГАИС и как потом найти мероприятие по региону?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "fgais"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-26"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "создать новый аккаунт",
+          "создать аккаунт через Госуслуги"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "войти через Госуслуги",
+          "аккаунт с помощью Госуслуг"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "прислать ID этого аккаунта",
+          "отправить ID аккаунта"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "по адресу support@myrosmol.ru",
+          "на почту support@myrosmol.ru"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "организаторы одобрили участие",
+          "статус «Одобрена»"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov",
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov",
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_fgais_lost_email_statuses",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Почта от старого профиля ФГАИС потеряна: как перенести данные и заодно что значит статус «Одобрена»?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "fgais"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-27"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "подать заявку",
+          "приём заявок"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-06-30"
+      },
+      {
+        "alternatives": [
+          "3-разовое питание",
+          "трёхразовое питание"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "за счёт организаторов форума"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "затраты на проезд могут быть компенсированы"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum",
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie",
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum",
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie",
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_ladoga_deadline_food_travel",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "По «Ладоге» сразу три вещи: до какого числа заявка, кто платит за проживание с едой и могут ли компенсировать дорогу?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Ладога"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-28"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "регистрация",
+          "подать заявку"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-09-12"
+      },
+      {
+        "alternatives": [
+          "гражданин Российской Федерации"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "физические лица",
+          "гражданин"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 18
+      },
+      {
+        "context_any": [
+          "физические лица",
+          "гражданин"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 35
+      },
+      {
+        "alternatives": [
+          "юридическое лицо"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "иностранного государства"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "юридические лица",
+          "представители"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 18
+      },
+      {
+        "context_any": [
+          "юридические лица",
+          "представители"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 55
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya",
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya",
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_patriot_deadline_participants",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Премия «Патриот»: кто вообще может участвовать и когда крайний срок подачи?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "event:Патриот"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-29"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "главная общественно-политическая площадка"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "форум",
+          "мероприятие"
+        ],
+        "context_position": "before",
+        "end": "2026-08-06",
+        "kind": "date_range",
+        "start": "2026-07-20"
+      },
+      {
+        "alternatives": [
+          "смена «Единство»",
+          "смена Единство"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "смена «Правда»",
+          "смена Правда"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "смена «Родина»",
+          "смена Родина"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_territory_overview_shifts",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "В двух словах, что за «Территория смыслов», когда она идёт и какие там смены?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Территория смыслов"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-30"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "equivalent_chunk_ids": {
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm": [
+        "yonote_api_jdq60oodtx_s0006_poshagovyy_algoritm"
+      ]
+    },
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "номинация — это тематика проекта"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "стандартных номинаций"
+        ],
+        "context_position": "after",
+        "kind": "number",
+        "value": 18
+      },
+      {
+        "alternatives": [
+          "верифицировать профиль"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "Оформить идею проекта"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "Подать заявку на ФГАИС"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov",
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov",
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_grant_directions_application",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "По опубликованной инструкции первого сезона: что такое номинация, сколько их стандартно и какие основные шаги подачи?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "grants"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-31"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "проверка соглашения",
+          "проверка проекта"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 30
+      },
+      {
+        "context_any": [
+          "проверка отчёта"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 30
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya",
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya",
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_grant_review_timelines",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Не смешивай этапы: сколько проверяют проект грантового соглашения и сколько — уже итоговый отчёт?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "grants"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-32"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "письмо на указанный email",
+          "письмо на электронную почту"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "подтверждение аккаунта",
+          "подтвердить аккаунт"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "аккаунт будет создан"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "фильтров поиска"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "подать заявку",
+          "подача заявки"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta",
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta",
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_dobro_registration_volunteering",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "На Добро.РФ хочу с нуля: как создать кабинет, а потом отфильтровать мероприятие и подать заявку волонтёром?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "dobro"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-33"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "результаты отбора",
+          "списки участников"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 14
+      },
+      {
+        "alternatives": [
+          "за сутки до начала"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty",
+      "yonote_api_pmbmqm6lug_s0013_programma_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty",
+      "yonote_api_pmbmqm6lug_s0013_programma_foruma"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_mashuk_results_program",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "По «Машуку» без догадок: когда объявят результаты отбора и когда дадут программу?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Машук"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-34"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "первая смена"
+        ],
+        "context_position": "before",
+        "end": "2026-08-15",
+        "kind": "date_range",
+        "start": "2026-08-08"
+      },
+      {
+        "context_any": [
+          "вторая смена"
+        ],
+        "context_position": "before",
+        "end": "2026-08-22",
+        "kind": "date_range",
+        "start": "2026-08-15"
+      },
+      {
+        "alternatives": [
+          "разъезд участников",
+          "день разъезда"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "отъезд участников",
+          "день отъезда"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta",
+      "yonote_api_pmbmqm6lug_s0003_2_smena_15_22_avgusta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta",
+      "yonote_api_pmbmqm6lug_s0003_2_smena_15_22_avgusta"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_mashuk_shift_dates",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Сверь календарь «Машука»: какие даты у первой и второй смен и когда разъезд каждой?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Машук",
+      "dates"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-35"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_multi_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "форум",
+          "мероприятие"
+        ],
+        "context_position": "before",
+        "end": "2026-08-06",
+        "kind": "date_range",
+        "start": "2026-07-20"
+      },
+      {
+        "context_any": [
+          "смена Правда",
+          "Правда"
+        ],
+        "context_position": "before",
+        "end": "2026-07-30",
+        "kind": "date_range",
+        "start": "2026-07-26"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii",
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v2_territory_forum_pravda_dates",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "У «Территории смыслов» назови общий период форума и отдельно даты смены «Правда» — не перепутай.",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "multi_aspect",
+      "noisy",
+      "yonote",
+      "forum:Территория смыслов",
+      "dates"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-36"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация во ФГАИС",
+          "заявка во ФГАИС"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-07-06"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "time",
+        "timezone": "мск",
+        "value": "23:59"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_escalated": false,
+    "expected_temporal_polarity": "closed",
+    "id": "adv_insult_actionable",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Ты идиот, как мне подать заявку на форум Ростов? По состоянию на 14 августа 2026 года приём уже закрыт?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "profanity",
+      "yonote",
+      "forum:Ростов",
+      "action"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-37"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация во ФГАИС",
+          "заявка во ФГАИС"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-07-06"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "time",
+        "timezone": "мск",
+        "value": "23:59"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_escalated": false,
+    "expected_temporal_polarity": "closed",
+    "id": "adv_answer_rostov_application",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Хочу попасть на форум Ростов, расскажи, что нужно мне сделать По состоянию на 14 августа 2026 года приём уже закрыт?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "yonote",
+      "forum:Ростов",
+      "action"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-38"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация во ФГАИС",
+          "заявка во ФГАИС"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-07-06"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "time",
+        "timezone": "мск",
+        "value": "23:59"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_escalated": false,
+    "expected_temporal_polarity": "closed",
+    "id": "adv_answer_rostov_slang",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Как вписаться в Ростов и куда подать заявку? По состоянию на 14 августа 2026 года приём уже закрыт?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "slang",
+      "yonote",
+      "forum:Ростов"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-39"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "верификацию учетной записи"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "Мои проекты"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "Мои мероприятия"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    ],
+    "expected_escalated": false,
+    "id": "adv_answer_grant_application",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Хочу поучаствовать в гранте: как подать заявку?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "yonote",
+      "grants",
+      "action"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-40"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация проходит по ссылке",
+          "перейти по ссылке для регистрации"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "с помощью Госуслуг",
+          "через Госуслуги"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "кнопку «Зарегистрироваться»",
+          "нажать «Зарегистрироваться»"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
+    ],
+    "expected_escalated": false,
+    "id": "adv_answer_fgais_registration",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Как зарегистрироваться в ФГАИС «Молодёжь России»?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "yonote",
+      "fgais"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-41"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "информация о форумах",
+          "перечень форумов"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "Всероссийские и окружные форумы"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_rtasiv0nlg_s0009_ssylka_https_events_myrosmol_ru"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rtasiv0nlg_s0009_ssylka_https_events_myrosmol_ru"
+    ],
+    "expected_escalated": false,
+    "id": "adv_answer_forum_list",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Чё по форумам вообще сейчас есть?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "slang",
+      "yonote",
+      "forums"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-42"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация на ФГАИС",
+          "зарегистрироваться на ФГАИС"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "ссылка для граждан России",
+          "ссылка для граждан РФ"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zhjxnhwbyi_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zhjxnhwbyi_s0002_registraciya"
+    ],
+    "expected_escalated": false,
+    "id": "adv_answer_shum_entry",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Хочу попасть на форум ШУМ — что нужно сделать?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "yonote",
+      "forum:ШУМ",
+      "action"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-43"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "Зарегистрироваться на сайте Таврида.Арт"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "заполнить заявку"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "творческое задание и видеовизитка",
+          "выполнить видеовизитку"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "результатов отбора"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_cljqo2rlvk_s0003_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_cljqo2rlvk_s0003_registraciya"
+    ],
+    "expected_escalated": false,
+    "id": "adv_answer_tavrida_entry",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Как попасть на Тавриду.Арт и подать заявку?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "yonote",
+      "forum:Таврида",
+      "action"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-44"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация во ФГАИС",
+          "заявка во ФГАИС"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-07-06"
+      },
+      {
+        "context_any": [
+          "регистрация",
+          "заявка"
+        ],
+        "context_position": "before",
+        "kind": "time",
+        "timezone": "мск",
+        "value": "23:59"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7qiupiaax_s0002_registraciya"
+    ],
+    "expected_escalated": false,
+    "expected_temporal_polarity": "closed",
+    "id": "adv_answer_profanity_with_request",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Как, блять, подать заявку на форум Ростов? По состоянию на 14 августа 2026 года приём уже закрыт?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "profanity",
+      "yonote",
+      "forum:Ростов",
+      "action"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-45"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "недостающие данные"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "даты регистрации"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0012_registraciya_na_municipalnoe_meropriyatie"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0012_registraciya_na_municipalnoe_meropriyatie"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v3_inactive_fgais_button",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Какого хрена кнопка “Подать заявку” во ФГАИС неактивна?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "profanity",
+      "yonote",
+      "fgais"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-46"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "код билета",
+          "билетный код"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "код в диалоге",
+          "пришлёт код в диалоге"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "письмо на указанную почту",
+          "направит на почту"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_nwr3m74g03_s0003_sposob_1_cherez_chat_bot_v_mah_https_max_ru_youthday_bot"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_nwr3m74g03_s0003_sposob_1_cherez_chat_bot_v_mah_https_max_ru_youthday_bot"
+    ],
+    "expected_escalated": false,
+    "id": "pilot50_v3_youth_day_ticket_after_max_registration",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Блин, как получить билет на День молодёжи после регистрации через МАХ?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "noisy",
+      "yonote",
+      "forum:День молодёжи"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-47"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_critical_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "подать заявку",
+          "приём заявок"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-06-30"
+      },
+      {
+        "context_any": [
+          "подать заявку",
+          "приём заявок"
+        ],
+        "context_position": "before",
+        "kind": "time",
+        "timezone": "мск",
+        "value": "23:59"
+      },
+      {
+        "alternatives": [
+          "платформа «Росмолодёжь.Форумы»",
+          "платформе Росмолодёжь.Форумы"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum"
+    ],
+    "expected_escalated": false,
+    "expected_temporal_polarity": "closed",
+    "id": "pilot50_v3_ladoga_application_deadline",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "До какого срока принимали заявки на «Ладогу» и был ли приём уже закрыт по состоянию на 14 августа 2026 года?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "adversarial",
+      "critical",
+      "noisy",
+      "yonote",
+      "forum:Ладога"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-48"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "смена Правда",
+          "Правда"
+        ],
+        "context_position": "before",
+        "end": "2026-07-30",
+        "kind": "date_range",
+        "start": "2026-07-26"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0009_daty_26_30_iyulya_2026_goda"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "dates",
+    "expected_temporal_polarity": "completed",
+    "id": "synthetic_pravda_shift_dates_only",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Когда проходила смена «Правда» форума «Территория смыслов» и завершилась ли она к 14 августа 2026 года?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "dates",
+      "yonote",
+      "off_aspect_guard"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-49"
+  },
+  {
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_aspect_regression",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "первая смена"
+        ],
+        "context_position": "before",
+        "end": "2026-08-15",
+        "kind": "date_range",
+        "start": "2026-08-08"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "dates",
+    "expected_temporal_polarity": "in_progress",
+    "id": "synthetic_mashuk_first_shift_dates_only",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Когда проходит первая смена «Машука» и продолжалась ли она по состоянию на 14 августа 2026 года?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "regression",
+      "dates",
+      "yonote",
+      "off_aspect_guard"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-50"
+  }
+]

@@ -1410,6 +1410,22 @@ def _pilot50_v3_candidate_contract_kwargs(
     }
 
 
+def _pilot50_v4_candidate_contract_kwargs(
+    runtime_sha: str = "d" * 40,
+) -> dict[str, object]:
+    return {
+        **_pilot50_candidate_contract_kwargs(),
+        "cases_file_sha256": run_ask_module.PILOT50_V4_CANDIDATE_CASES_SHA256,
+        "high_cost_approval_id": (
+            run_ask_module._pilot50_v4_expected_approval_id(runtime_sha)
+        ),
+        "expected_runtime_git_sha": runtime_sha,
+        "rolling_24h_comparison_waiver_id": (
+            run_ask_module._pilot50_v4_expected_waiver_id(runtime_sha)
+        ),
+    }
+
+
 def test_pilot50_v3_candidate_constructs_exact_bounded_comparison_waiver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1451,6 +1467,71 @@ def test_pilot50_v3_candidate_constructs_exact_bounded_comparison_waiver(
     assert contract["provider_residual_risk_ceiling_rub"] == 500.0
 
 
+def test_pilot50_v4_candidate_constructs_exact_chained_d042_waiver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_sha = "d" * 40
+    monkeypatch.setenv("RELEASE_GIT_SHA", runtime_sha)
+    contract = run_ask_module._validated_pilot50_candidate_contract(
+        run_ask_module.PILOT50_V4_CANDIDATE_CONTRACT_ID,
+        **_pilot50_v4_candidate_contract_kwargs(runtime_sha),
+    )
+    waiver = run_ask_module._pilot50_candidate_comparison_waiver(
+        contract,
+        rolling_24h_comparison_waiver_id=(
+            run_ask_module._pilot50_v4_expected_waiver_id(runtime_sha)
+        ),
+    )
+
+    assert waiver is not None
+    assert waiver.waiver_id == run_ask_module._pilot50_v4_expected_waiver_id(
+        runtime_sha
+    )
+    assert waiver.decision_id == "D-042"
+    assert waiver.prior_waiver_decision_id == "D-041"
+    assert waiver.prior_scope == "pilot50-v3-candidate"
+    assert waiver.prior_runtime_git_sha == (
+        "a5c5539ce2e8487418ed78ba64ae8ed9eab54863"
+    )
+    assert waiver.prior_manifest_sha256 == (
+        run_ask_module.PILOT50_V3_CANDIDATE_CASES_SHA256
+    )
+    assert waiver.requested_scope == "pilot50-v4-candidate"
+    assert waiver.requested_runtime_git_sha == runtime_sha
+    assert waiver.requested_manifest_sha256 == (
+        run_ask_module.PILOT50_V4_CANDIDATE_CASES_SHA256
+    )
+    assert contract is not None
+    assert contract["rolling_24h_comparison_waiver_decision_id"] == "D-042"
+    assert contract["prior_waiver_decision_id"] == "D-041"
+    assert contract["provider_residual_risk_ceiling_rub"] == 500.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("high_cost_approval_id", "owner-wrong-v4-approval"),
+        ("rolling_24h_comparison_waiver_id", None),
+        ("rolling_24h_comparison_waiver_id", "owner-wrong-v4-waiver"),
+    ],
+)
+def test_pilot50_v4_candidate_rejects_missing_or_wrong_owner_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    runtime_sha = "d" * 40
+    monkeypatch.setenv("RELEASE_GIT_SHA", runtime_sha)
+    kwargs = _pilot50_v4_candidate_contract_kwargs(runtime_sha)
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match="candidate contract rejected"):
+        run_ask_module._validated_pilot50_candidate_contract(
+            run_ask_module.PILOT50_V4_CANDIDATE_CONTRACT_ID,
+            **kwargs,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -1487,7 +1568,7 @@ def test_pilot50_v2_and_generic_runs_reject_comparison_waiver_argument(
             run_ask_module.PILOT50_CANDIDATE_CONTRACT_ID,
             **kwargs,
         )
-    with pytest.raises(ValueError, match="requires the Pilot50 v3"):
+    with pytest.raises(ValueError, match="requires a comparison candidate"):
         run_ask_module._pilot50_candidate_comparison_waiver(
             None,
             rolling_24h_comparison_waiver_id="owner-generic-waiver-forbidden",
@@ -1548,6 +1629,68 @@ def test_pilot50_v3_safe_reservation_report_preserves_exact_schema_1_1() -> None
         include_private_full=True,
     )
     assert tampered is not None and tampered["valid"] is False
+
+
+def test_pilot50_v4_safe_reservation_report_preserves_exact_schema_1_2() -> None:
+    runtime_sha = "d" * 40
+    waiver_id = run_ask_module._pilot50_v4_expected_waiver_id(runtime_sha)
+    record = {
+        "schema_version": "1.2.0",
+        "reservation_class": "private_full",
+        "scope": "pilot50-v4-candidate",
+        "run_id": "ask-eval-11111111-1111-1111-1111-111111111111",
+        "runtime_git_sha": runtime_sha,
+        "manifest_sha256": run_ask_module.PILOT50_V4_CANDIDATE_CASES_SHA256,
+        "case_count": 50,
+        "approved_cap_rub": 30.0,
+        "private_full": True,
+        "approval_required": True,
+        "high_cost_approval_id": (
+            run_ask_module._pilot50_v4_expected_approval_id(runtime_sha)
+        ),
+        "rolling_24h_waiver_id": waiver_id,
+        "rolling_24h_waiver_decision_id": "D-042",
+        "prior_waiver_decision_id": "D-041",
+        "waived_reservation_sha256": "e" * 64,
+        "provider_risk_ceiling_rub": 500.0,
+    }
+    reservation = run_ask_module.LiveEvalCostReservation(
+        path=Path("unused"),
+        record=record,
+    )
+
+    report = run_ask_module._safe_cost_reservation_report(
+        reservation,
+        cases_file_sha256=run_ask_module.PILOT50_V4_CANDIDATE_CASES_SHA256,
+        include_private_full=True,
+    )
+
+    assert report is not None and report["valid"] is True
+    assert report["schema_version"] == "1.2.0"
+    assert report["rolling_24h_waiver_decision_id"] == "D-042"
+    assert report["prior_waiver_decision_id"] == "D-041"
+    assert run_ask_module._pilot50_candidate_waiver_report_matches(
+        report,
+        contract={
+            "contract_id": run_ask_module.PILOT50_V4_CANDIDATE_CONTRACT_ID,
+            "runtime_git_sha": runtime_sha,
+        },
+    )
+
+    record["prior_waiver_decision_id"] = "D-040"
+    tampered = run_ask_module._safe_cost_reservation_report(
+        reservation,
+        cases_file_sha256=run_ask_module.PILOT50_V4_CANDIDATE_CASES_SHA256,
+        include_private_full=True,
+    )
+    assert tampered is not None
+    assert run_ask_module._pilot50_candidate_waiver_report_matches(
+        tampered,
+        contract={
+            "contract_id": run_ask_module.PILOT50_V4_CANDIDATE_CONTRACT_ID,
+            "runtime_git_sha": runtime_sha,
+        },
+    ) is False
 
 
 def test_pilot50_candidate_contract_fixes_runtime_target_and_cost_controls(
@@ -2023,6 +2166,93 @@ def _score_typed_answer(
         {"http_status": 200, "response": response},
         None,
     )
+
+
+@pytest.mark.parametrize(
+    ("polarity", "response"),
+    [
+        ("closed", "По состоянию на 14 августа регистрация закрыта."),
+        (
+            "closed",
+            "Регистрация на форум «Ладога» закрыта: приём заявок завершился "
+            "6 июля. Новую заявку сейчас подать нельзя.",
+        ),
+        ("completed", "К этой дате смена уже завершилась."),
+        ("in_progress", "14 августа смена продолжается."),
+        (
+            "in_progress",
+            "На 14 августа 2026 года смена продолжалась: она проходит "
+            "с 8 августа 2026 года по 15 августа 2026 года.",
+        ),
+    ],
+)
+def test_temporal_polarity_contract_matches_asserted_state(
+    polarity: str,
+    response: str,
+) -> None:
+    case = _normalize_case(
+        {
+            "id": "temporal-polarity",
+            "query": "Каково состояние на дату?",
+            "temporal_as_of_date": "2026-08-14",
+            "expected_temporal_polarity": polarity,
+        }
+    )
+
+    result = score_case(case, {"http_status": 200, "response": response}, None)
+
+    assert result["temporal_polarity_match"] is True
+    assert result["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "Регистрация ещё открыта и заявку можно подать.",
+        "Регистрация не закрыта.",
+        "Закрыта ли регистрация?",
+        "Смена не завершилась.",
+    ],
+)
+def test_temporal_polarity_contract_rejects_wrong_negated_or_question_state(
+    response: str,
+) -> None:
+    case = _normalize_case(
+        {
+            "id": "temporal-polarity",
+            "query": "Каково состояние на дату?",
+            "temporal_as_of_date": "2026-08-14",
+            "expected_temporal_polarity": "closed",
+        }
+    )
+
+    result = score_case(case, {"http_status": 200, "response": response}, None)
+
+    assert result["temporal_polarity_match"] is False
+    assert result["passed"] is False
+    assert "temporal_polarity_mismatch" in result["failure_reasons"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"temporal_as_of_date": "2026-08-14"},
+        {"expected_temporal_polarity": "closed"},
+        {
+            "temporal_as_of_date": "2026-08-14",
+            "expected_temporal_polarity": "open",
+        },
+    ],
+)
+def test_temporal_polarity_contract_is_strict(raw: dict[str, str]) -> None:
+    with pytest.raises(ValueError, match="temporal"):
+        _normalize_case(
+            {
+                "id": "temporal-polarity",
+                "query": "Каково состояние на дату?",
+                **raw,
+            }
+        )
 
 
 @pytest.mark.parametrize(

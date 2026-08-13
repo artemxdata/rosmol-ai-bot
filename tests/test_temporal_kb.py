@@ -8,6 +8,7 @@ from src.graph.nodes.respond import respond
 from src.graph.nodes.verify import verify
 from src.kb.temporal import (
     MOSCOW_TZ,
+    as_of_event_fact,
     expired_registration_response,
     extract_registration_deadline,
     is_registration_query,
@@ -47,6 +48,174 @@ def test_extract_registration_deadline_with_moscow_time() -> None:
     assert deadline is not None
     assert deadline.closes_at == datetime(2026, 7, 6, 23, 59, tzinfo=MOSCOW_TZ)
     assert deadline.explicit_time is True
+
+
+def _published_event_chunk(
+    *,
+    chunk_id: str,
+    forum: str,
+    text: str,
+    heading: str,
+) -> ScoredChunk:
+    return ScoredChunk(
+        chunk_id=chunk_id,
+        text=text,
+        metadata={
+            "forum_normalized": forum,
+            "source_heading_path": ["Всероссийские форумы 2026", heading],
+            "source_type": "yonote",
+            "source": "yonote_api",
+            "version": "yonote-api-v1",
+            "status": "published",
+        },
+        score=1.0,
+        reranker_score=0.9,
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "text", "expected"),
+    [
+        (
+            "Когда проходила смена «Правда» и завершилась ли она к 14 августа 2026 года?",
+            "Даты: 26–30 июля 2026 года",
+            "Смена завершилась к 14 августа 2026 года",
+        ),
+        (
+            "Когда проходит первая смена и продолжалась ли она по состоянию на "
+            "14 августа 2026 года?",
+            "1 смена 8-15 августа",
+            "На 14 августа 2026 года смена продолжалась",
+        ),
+    ],
+)
+def test_as_of_event_fact_derives_state_from_exact_published_range(
+    message: str,
+    text: str,
+    expected: str,
+) -> None:
+    forum = "Тестовый форум"
+    chunk = _published_event_chunk(
+        chunk_id="event-range",
+        forum=forum,
+        text=text,
+        heading=text,
+    )
+    analysis = QueryAnalysis(
+        forum=forum,
+        forum_normalized=forum,
+        category="форумы",
+        complexity=Complexity.SIMPLE,
+    )
+
+    fact = as_of_event_fact(message=message, analysis=analysis, chunks=[chunk])
+
+    assert fact is not None
+    assert fact[0].startswith(expected)
+    assert fact[1] is chunk
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"status": "draft"},
+        {"source_type": "xlsx"},
+        {"source": "yonote_export"},
+        {"version": "legacy"},
+        {"forum_normalized": "Другой форум"},
+    ],
+)
+def test_as_of_event_fact_rejects_untrusted_or_wrong_forum_source(
+    mutation: dict[str, str],
+) -> None:
+    forum = "Тестовый форум"
+    chunk = _published_event_chunk(
+        chunk_id="event-range",
+        forum=forum,
+        text="Даты: 26–30 июля 2026 года",
+        heading="Даты 2026",
+    )
+    chunk.metadata.update(mutation)
+    analysis = QueryAnalysis(
+        forum=forum,
+        forum_normalized=forum,
+        category="форумы",
+        complexity=Complexity.SIMPLE,
+    )
+
+    assert (
+        as_of_event_fact(
+            message="Завершилась ли смена к 14 августа 2026 года?",
+            analysis=analysis,
+            chunks=[chunk],
+        )
+        is None
+    )
+
+
+def test_as_of_event_fact_fails_closed_for_ambiguous_ranges() -> None:
+    forum = "Тестовый форум"
+    chunks = [
+        _published_event_chunk(
+            chunk_id=f"event-range-{index}",
+            forum=forum,
+            text=text,
+            heading="Даты 2026",
+        )
+        for index, text in enumerate(
+            ("Даты: 26–30 июля 2026 года", "Даты: 1–5 августа 2026 года"),
+            start=1,
+        )
+    ]
+    analysis = QueryAnalysis(
+        forum=forum,
+        forum_normalized=forum,
+        category="форумы",
+        complexity=Complexity.SIMPLE,
+    )
+
+    assert (
+        as_of_event_fact(
+            message="Завершилась ли смена к 14 августа 2026 года?",
+            analysis=analysis,
+            chunks=chunks,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_guard_prefers_explicit_as_of_state_with_source() -> None:
+    forum = "Машук"
+    chunk = _published_event_chunk(
+        chunk_id="mashuk-first-shift",
+        forum=forum,
+        text="1 смена 8-15 августа",
+        heading="Машук 2026",
+    )
+    analysis = QueryAnalysis(
+        forum=forum,
+        forum_normalized=forum,
+        category="форумы",
+        complexity=Complexity.SIMPLE,
+    )
+
+    guarded = await apply_response_guards(
+        {
+            "message_masked": (
+                "Когда проходит первая смена «Машука» и продолжалась ли она "
+                "по состоянию на 14 августа 2026 года?"
+            ),
+            "analysis": analysis,
+            "reranked_chunks": [chunk],
+        }
+    )
+
+    assert guarded["response_guard"] == "event_state_as_of"
+    assert guarded["generated_response"].startswith(
+        "На 14 августа 2026 года смена продолжалась"
+    )
+    assert guarded["generated_response"].endswith("[src:mashuk-first-shift]")
 
 
 def test_extract_registration_deadline_accepts_russian_word_date_and_time() -> None:

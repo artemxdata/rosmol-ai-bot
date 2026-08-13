@@ -29,6 +29,7 @@ SAFE_SCHEMA_VERSION = "pilot50-safe-result-v1"
 DATASET_ID = "pilot50_balanced_v1"
 V2_DATASET_ID = "pilot50_balanced_v2"
 V3_DATASET_ID = "pilot50_balanced_v3"
+V4_DATASET_ID = "pilot50_balanced_v4"
 CLASSIFICATION = "calibration_only"
 PILOT50_TARGET = "http://app-ml:8000/ask"
 PILOT50_CANDIDATE_TARGET = "http://pilot50-candidate-ml:8000/ask"
@@ -40,6 +41,9 @@ V2_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
 )
 V3_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
     "0d99fd8afe40f61957edce93af5719d05d004bb9649348a1143877d7270249ba"
+)
+V4_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
+    "bfd14ae638da0d65b2c07ff299f8f366a2d8fb8be772223a931e601691125ede"
 )
 DISCLAIMER = (
     "Tracked regression calibration only. This is a mechanical first-turn "
@@ -79,9 +83,21 @@ V3_CANDIDATE_COST_SCOPE = "pilot50-v3-candidate"
 V3_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION = "pilot50-v3-quality-gate-v1"
 V3_CANDIDATE_EXPECTED_QREL_CASES = 50
 V3_CANDIDATE_EXPECTED_CRITICAL_CASES = 15
+V4_CANDIDATE_CONTRACT_ID = "pilot50-v4-candidate-v1"
+V4_CANDIDATE_CASES_SHA256 = (
+    "c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8"
+)
+V4_CANDIDATE_COST_SCOPE = "pilot50-v4-candidate"
+V4_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION = "pilot50-v4-quality-gate-v1"
+V4_CANDIDATE_EXPECTED_QREL_CASES = 50
+V4_CANDIDATE_EXPECTED_CRITICAL_CASES = 15
+V4_COMPARISON_WAIVER_DECISION_ID = "D-042"
+V4_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500
 V3_COMPARISON_WAIVER_DECISION_ID = "D-041"
 V3_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500
-CANDIDATE_DATASET_IDS = frozenset({V2_DATASET_ID, V3_DATASET_ID})
+CANDIDATE_DATASET_IDS = frozenset(
+    {V2_DATASET_ID, V3_DATASET_ID, V4_DATASET_ID}
+)
 CANDIDATE_CRITICAL_CASE_TAGS = frozenset({"adversarial", "off_aspect_guard"})
 CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS = frozenset(
     {
@@ -277,6 +293,22 @@ REJECTED_V3_FAILURE_STAGES = frozenset(
 REJECTED_V3_EXECUTION_ISSUES = frozenset(
     {"none", "request_timeout", "trace_error_present"}
 )
+V4_OFFLINE_RESCORE_SCHEMA_VERSION = "pilot50-v4-offline-rescore-v1"
+V4_OFFLINE_RESCORE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "classification",
+        "official_v4_result",
+        "human_product_verdict",
+        "network_calls",
+        "ask_requests",
+        "incremental_llm_cost_rub",
+        "bindings",
+        "integrity",
+        "coverage",
+        "directional_rescore",
+    }
+)
 DIAGNOSTIC_BOOLEAN_CHECK_FIELDS = frozenset(
     {
         "answer_contains_match",
@@ -397,6 +429,12 @@ V3_ALLOWED_SOURCE_PATHS = frozenset(
         "eval/cases/pilot50_critical_yonote_v3.json",
     }
 )
+V4_ALLOWED_SOURCE_PATHS = frozenset(
+    {
+        "eval/cases/pilot50_typical_v4.json",
+        "eval/cases/pilot50_atypical_v4.json",
+    }
+)
 DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
     DATASET_ID: {
         "manifest_canonical_sha256": EXPECTED_MANIFEST_CANONICAL_SHA256,
@@ -420,6 +458,15 @@ DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
         "user_prefix": "pilot50-v3",
         "version_label": "v3",
         "requires_published_yonote_qrels": True,
+    },
+    V4_DATASET_ID: {
+        "manifest_canonical_sha256": V4_EXPECTED_MANIFEST_CANONICAL_SHA256,
+        "source_paths": V4_ALLOWED_SOURCE_PATHS,
+        "tag": "pilot50:v4",
+        "user_prefix": "pilot50-v4",
+        "version_label": "v4",
+        "requires_published_yonote_qrels": True,
+        "requires_exact_equivalent_chunks": True,
     },
 }
 FORBIDDEN_CASE_FIELDS = frozenset(
@@ -490,6 +537,7 @@ SAFE_FIELDS = frozenset(
 )
 CANDIDATE_SAFE_FIELDS = SAFE_FIELDS | {"quality_gate"}
 V3_CANDIDATE_SAFE_FIELDS = CANDIDATE_SAFE_FIELDS | {"rolling_24h_waiver"}
+V4_CANDIDATE_SAFE_FIELDS = CANDIDATE_SAFE_FIELDS | {"rolling_24h_waiver"}
 V3_COMPARISON_WAIVER_FIELDS = frozenset(
     {
         "waiver_id",
@@ -506,8 +554,12 @@ V3_RESERVATION_WAIVER_FIELDS = frozenset(
         "rolling_24h_waiver_decision_id",
         "waived_reservation_sha256",
         "provider_risk_ceiling_rub",
+        "prior_waiver_decision_id",
     }
 )
+V4_COMPARISON_WAIVER_FIELDS = V3_COMPARISON_WAIVER_FIELDS | {
+    "prior_waiver_decision_id"
+}
 
 
 class Pilot50Error(ValueError):
@@ -669,6 +721,15 @@ def _candidate_contract_config(dataset_id: str) -> dict[str, Any]:
             "quality_gate_schema_version": V3_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
             "expected_qrel_cases": V3_CANDIDATE_EXPECTED_QREL_CASES,
             "expected_critical_cases": V3_CANDIDATE_EXPECTED_CRITICAL_CASES,
+        }
+    if dataset_id == V4_DATASET_ID:
+        return {
+            "contract_id": V4_CANDIDATE_CONTRACT_ID,
+            "cases_sha256": V4_CANDIDATE_CASES_SHA256,
+            "cost_scope": V4_CANDIDATE_COST_SCOPE,
+            "quality_gate_schema_version": V4_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
+            "expected_qrel_cases": V4_CANDIDATE_EXPECTED_QREL_CASES,
+            "expected_critical_cases": V4_CANDIDATE_EXPECTED_CRITICAL_CASES,
         }
     raise Pilot50Error("dataset does not define a candidate evidence contract")
 
@@ -889,10 +950,73 @@ def _validate_published_yonote_qrels(cases: Sequence[Mapping[str, Any]]) -> None
                 source is None
                 or source.get("status") != "published"
                 or source.get("source_type") != "yonote"
+                or source.get("source") != "yonote_api"
+                or source.get("version") != "yonote-api-v1"
             ):
                 raise Pilot50Error(
                     "Pilot50 qrel is not a published Yonote source"
                 )
+
+
+def _validate_exact_equivalent_chunks(
+    cases: Sequence[Mapping[str, Any]],
+) -> None:
+    seed_path = _source_path("data/knowledge_base_seed.json")
+    seed_rows = _load_json_bytes(
+        _read_regular_bytes(
+            seed_path,
+            max_bytes=MAX_KB_SEED_BYTES,
+            label="frozen knowledge seed",
+        ),
+        label="frozen knowledge seed",
+    )
+    if not isinstance(seed_rows, list):
+        raise Pilot50Error("frozen knowledge seed must contain an array")
+    seed_by_id = {
+        str(row.get("chunk_id")): row
+        for row in seed_rows
+        if isinstance(row, dict) and row.get("chunk_id")
+    }
+    equivalent_pairs = 0
+    for case in cases:
+        equivalents = case.get("equivalent_chunk_ids")
+        if equivalents is None:
+            continue
+        if not isinstance(equivalents, dict):
+            raise Pilot50Error("Pilot50 v4 equivalent mapping must be an object")
+        expected_ids = set(case.get("expected_chunk_ids") or [])
+        for expected_id, accepted_ids in equivalents.items():
+            if expected_id not in expected_ids or not isinstance(accepted_ids, list):
+                raise Pilot50Error("Pilot50 v4 equivalent mapping is unbound")
+            expected = seed_by_id.get(str(expected_id))
+            for accepted_id in accepted_ids:
+                accepted = seed_by_id.get(str(accepted_id))
+                provenance_fields = {
+                    "source_type": "yonote",
+                    "source": "yonote_api",
+                    "version": "yonote-api-v1",
+                    "status": "published",
+                }
+                if (
+                    accepted_id == expected_id
+                    or expected is None
+                    or accepted is None
+                    or any(
+                        expected.get(field) != value
+                        or accepted.get(field) != value
+                        for field, value in provenance_fields.items()
+                    )
+                    or not isinstance(expected.get("text_clean"), str)
+                    or expected.get("text_clean") != accepted.get("text_clean")
+                ):
+                    raise Pilot50Error(
+                        "Pilot50 v4 equivalent chunks are not exact published duplicates"
+                    )
+                equivalent_pairs += 1
+    if equivalent_pairs != 2:
+        raise Pilot50Error(
+            "Pilot50 v4 must bind exactly the two declared duplicate uses"
+        )
 
 
 def build_materialized_cases(manifest_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -979,6 +1103,8 @@ def build_materialized_cases(manifest_path: Path) -> tuple[list[dict[str, Any]],
         raise Pilot50Error("materialized type counts are invalid")
     if dataset_contract.get("requires_published_yonote_qrels") is True:
         _validate_published_yonote_qrels(materialized)
+    if dataset_contract.get("requires_exact_equivalent_chunks") is True:
+        _validate_exact_equivalent_chunks(materialized)
     cases_bytes = _canonical_json_bytes(materialized)
     receipt = {
         "status": "OK",
@@ -1344,6 +1470,17 @@ def _v3_expected_waiver_id(runtime_git_sha: str) -> str:
     )
 
 
+def _v4_expected_approval_id(runtime_git_sha: str) -> str:
+    return f"owner-chat-20260814-pilot50-v4-{runtime_git_sha}-cap30"
+
+
+def _v4_expected_waiver_id(runtime_git_sha: str) -> str:
+    return (
+        "owner-chat-20260814-waive-v3-to-v4-"
+        f"{runtime_git_sha}-cap30"
+    )
+
+
 def _validated_v3_reservation_waiver(
     reservation: Mapping[str, Any],
     *,
@@ -1389,6 +1526,63 @@ def _validate_v3_safe_waiver(
         or SHA256_RE.fullmatch(value["waived_reservation_sha256"]) is None
         or value.get("provider_residual_risk_ceiling_rub")
         != V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        or value.get("runner_projected_stop_limit_rub")
+        != int(CANDIDATE_MAX_LLM_COST_RUB)
+    ):
+        raise Pilot50Error("safe result comparison waiver is invalid")
+    return dict(value)
+
+
+def _validated_v4_reservation_waiver(
+    reservation: Mapping[str, Any],
+    *,
+    runtime_git_sha: str,
+    expected_waiver_id: str,
+) -> dict[str, Any]:
+    exact_waiver_id = _v4_expected_waiver_id(runtime_git_sha)
+    waived_reservation_sha256 = reservation.get("waived_reservation_sha256")
+    if (
+        expected_waiver_id != exact_waiver_id
+        or reservation.get("schema_version") != "1.2.0"
+        or reservation.get("rolling_24h_waiver_id") != exact_waiver_id
+        or reservation.get("rolling_24h_waiver_decision_id")
+        != V4_COMPARISON_WAIVER_DECISION_ID
+        or reservation.get("prior_waiver_decision_id")
+        != V3_COMPARISON_WAIVER_DECISION_ID
+        or not isinstance(waived_reservation_sha256, str)
+        or SHA256_RE.fullmatch(waived_reservation_sha256) is None
+        or reservation.get("provider_risk_ceiling_rub")
+        != V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
+    ):
+        raise Pilot50Error("candidate comparison waiver evidence is invalid")
+    return {
+        "waiver_id": exact_waiver_id,
+        "decision_id": V4_COMPARISON_WAIVER_DECISION_ID,
+        "prior_waiver_decision_id": V3_COMPARISON_WAIVER_DECISION_ID,
+        "waived_reservation_sha256": waived_reservation_sha256,
+        "provider_residual_risk_ceiling_rub": (
+            V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        ),
+        "runner_projected_stop_limit_rub": int(CANDIDATE_MAX_LLM_COST_RUB),
+    }
+
+
+def _validate_v4_safe_waiver(
+    value: Any,
+    *,
+    runtime_git_sha: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != V4_COMPARISON_WAIVER_FIELDS:
+        raise Pilot50Error("safe result comparison waiver is invalid")
+    if (
+        value.get("waiver_id") != _v4_expected_waiver_id(runtime_git_sha)
+        or value.get("decision_id") != V4_COMPARISON_WAIVER_DECISION_ID
+        or value.get("prior_waiver_decision_id")
+        != V3_COMPARISON_WAIVER_DECISION_ID
+        or not isinstance(value.get("waived_reservation_sha256"), str)
+        or SHA256_RE.fullmatch(value["waived_reservation_sha256"]) is None
+        or value.get("provider_residual_risk_ceiling_rub")
+        != V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
         or value.get("runner_projected_stop_limit_rub")
         != int(CANDIDATE_MAX_LLM_COST_RUB)
     ):
@@ -1747,8 +1941,13 @@ def build_safe_result(
             raise Pilot50Error("Pilot50 v3 approval reference is invalid")
         if expected_waiver_id != _v3_expected_waiver_id(runtime_git_sha):
             raise Pilot50Error("Pilot50 v3 comparison waiver reference is invalid")
+    elif dataset_id == V4_DATASET_ID:
+        if approval_id != _v4_expected_approval_id(runtime_git_sha):
+            raise Pilot50Error("Pilot50 v4 approval reference is invalid")
+        if expected_waiver_id != _v4_expected_waiver_id(runtime_git_sha):
+            raise Pilot50Error("Pilot50 v4 comparison waiver reference is invalid")
     elif expected_waiver_id:
-        raise Pilot50Error("comparison waiver is only valid for Pilot50 v3")
+        raise Pilot50Error("comparison waiver is only valid for Pilot50 v3/v4")
     evidence_contract = _evidence_contract(
         dataset_id,
         candidate_contract=candidate_contract,
@@ -1955,19 +2154,31 @@ def build_safe_result(
             "rolling_24h_comparison_waiver_id",
             "rolling_24h_comparison_waiver_decision_id",
             "provider_residual_risk_ceiling_rub",
+            "prior_waiver_decision_id",
         }
-        if dataset_id == V3_DATASET_ID:
+        if dataset_id in {V3_DATASET_ID, V4_DATASET_ID}:
+            chained = dataset_id == V4_DATASET_ID
             if (
                 candidate_evidence.get("rolling_24h_comparison_waiver_id")
                 != expected_waiver_id
                 or candidate_evidence.get(
                     "rolling_24h_comparison_waiver_decision_id"
                 )
-                != V3_COMPARISON_WAIVER_DECISION_ID
+                != (
+                    V4_COMPARISON_WAIVER_DECISION_ID
+                    if chained
+                    else V3_COMPARISON_WAIVER_DECISION_ID
+                )
                 or candidate_evidence.get(
                     "provider_residual_risk_ceiling_rub"
                 )
-                != V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+                != (
+                    V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
+                    if chained
+                    else V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+                )
+                or candidate_evidence.get("prior_waiver_decision_id")
+                != (V3_COMPARISON_WAIVER_DECISION_ID if chained else None)
             ):
                 raise Pilot50Error(
                     "ask report candidate comparison waiver contract is invalid"
@@ -2013,9 +2224,15 @@ def build_safe_result(
         or reservation.get("reservation_class") != "private_full"
     ):
         raise Pilot50Error("candidate cost reservation is not private-full")
-    v3_waiver: dict[str, Any] | None = None
+    comparison_waiver: dict[str, Any] | None = None
     if dataset_id == V3_DATASET_ID:
-        v3_waiver = _validated_v3_reservation_waiver(
+        comparison_waiver = _validated_v3_reservation_waiver(
+            reservation,
+            runtime_git_sha=runtime_git_sha,
+            expected_waiver_id=expected_waiver_id,
+        )
+    elif dataset_id == V4_DATASET_ID:
+        comparison_waiver = _validated_v4_reservation_waiver(
             reservation,
             runtime_git_sha=runtime_git_sha,
             expected_waiver_id=expected_waiver_id,
@@ -2087,8 +2304,8 @@ def build_safe_result(
             critical_case_failures=critical_case_failures,
             applicable_critical_cases=applicable_critical_cases,
         )
-    if v3_waiver is not None:
-        safe_result["rolling_24h_waiver"] = v3_waiver
+    if comparison_waiver is not None:
+        safe_result["rolling_24h_waiver"] = comparison_waiver
     return safe_result
 
 
@@ -2097,12 +2314,16 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         raise Pilot50Error("safe result fields are invalid")
     dataset_id = value.get("dataset_id")
     expected_fields = (
-        V3_CANDIDATE_SAFE_FIELDS
-        if dataset_id == V3_DATASET_ID
+        V4_CANDIDATE_SAFE_FIELDS
+        if dataset_id == V4_DATASET_ID
         else (
-            CANDIDATE_SAFE_FIELDS
-            if dataset_id == V2_DATASET_ID
-            else SAFE_FIELDS
+            V3_CANDIDATE_SAFE_FIELDS
+            if dataset_id == V3_DATASET_ID
+            else (
+                CANDIDATE_SAFE_FIELDS
+                if dataset_id == V2_DATASET_ID
+                else SAFE_FIELDS
+            )
         )
     )
     if set(value) != expected_fields:
@@ -2119,6 +2340,13 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
         if approval_id != _v3_expected_approval_id(runtime_git_sha):
             raise Pilot50Error("safe result approval reference is invalid")
         _validate_v3_safe_waiver(
+            value.get("rolling_24h_waiver"),
+            runtime_git_sha=runtime_git_sha,
+        )
+    elif dataset_id == V4_DATASET_ID:
+        if approval_id != _v4_expected_approval_id(runtime_git_sha):
+            raise Pilot50Error("safe result approval reference is invalid")
+        _validate_v4_safe_waiver(
             value.get("rolling_24h_waiver"),
             runtime_git_sha=runtime_git_sha,
         )
@@ -3386,6 +3614,244 @@ def build_rejected_v3_diagnostics(
     return diagnostics
 
 
+def _offline_rescore_trace(result: Mapping[str, Any]) -> dict[str, Any]:
+    retrieved_ids = result.get("retrieved_chunk_ids")
+    if not isinstance(retrieved_ids, list):
+        retrieved_ids = result.get("observed_chunk_ids") or []
+    reranked_ids = result.get("reranked_chunk_ids")
+    if not isinstance(reranked_ids, list):
+        reranked_ids = []
+    cited_ids = result.get("cited_source_ids")
+    if not isinstance(cited_ids, list):
+        cited_ids = []
+    observed_profile = result.get("observed_routing_response_profile")
+    query_analysis = (
+        {"response_profile": observed_profile}
+        if isinstance(observed_profile, str) and observed_profile
+        else None
+    )
+    return {
+        "cited_sources": list(cited_ids),
+        "retrieved_chunks": [
+            {"chunk_id": chunk_id} for chunk_id in retrieved_ids
+        ],
+        "reranker_scores": [
+            {"chunk_id": chunk_id} for chunk_id in reranked_ids
+        ],
+        "was_escalated": result.get("was_escalated"),
+        "escalation_reason": result.get("escalation_reason"),
+        "generator_model": result.get("generator_model"),
+        "cache_hit": result.get("cache_hit"),
+        "max_reranker_score": result.get("max_reranker_score"),
+        "total_latency_ms": result.get("trace_total_latency_ms"),
+        "llm_usage": result.get("llm_usage") or [],
+        "llm_prompt_tokens": result.get("llm_prompt_tokens") or 0,
+        "llm_completion_tokens": result.get("llm_completion_tokens") or 0,
+        "llm_total_tokens": result.get("llm_total_tokens") or 0,
+        "llm_estimated_cost_rub": result.get("llm_estimated_cost_rub") or 0.0,
+        "query_analysis": query_analysis,
+        "error": result.get("trace_error"),
+    }
+
+
+def build_v4_offline_rescore(
+    *,
+    v3_manifest_path: Path,
+    v3_cases_path: Path,
+    v3_report_path: Path,
+    v4_manifest_path: Path,
+    v4_cases_path: Path,
+    expected_v3_manifest_sha256: str,
+    expected_v3_cases_sha256: str,
+    expected_v3_report_sha256: str,
+    expected_v3_runtime_git_sha: str,
+    expected_v4_manifest_sha256: str,
+    expected_v4_cases_sha256: str,
+    expected_v4_runtime_git_sha: str,
+) -> dict[str, Any]:
+    """Rescore comparable rejected-v3 responses with v4 rules, fully offline."""
+
+    expected_hashes = {
+        "v3_manifest": _validated_sha256(
+            expected_v3_manifest_sha256,
+            label="expected v3 manifest",
+        ),
+        "v3_cases": _validated_sha256(
+            expected_v3_cases_sha256,
+            label="expected v3 cases",
+        ),
+        "v3_report": _validated_sha256(
+            expected_v3_report_sha256,
+            label="expected v3 report",
+        ),
+        "v4_manifest": _validated_sha256(
+            expected_v4_manifest_sha256,
+            label="expected v4 manifest",
+        ),
+        "v4_cases": _validated_sha256(
+            expected_v4_cases_sha256,
+            label="expected v4 cases",
+        ),
+    }
+    v3_runtime = _validated_runtime_git_sha(expected_v3_runtime_git_sha)
+    v4_runtime = _validated_runtime_git_sha(expected_v4_runtime_git_sha)
+    paths = {
+        "v3_manifest": (v3_manifest_path, MAX_MANIFEST_BYTES),
+        "v3_cases": (v3_cases_path, MAX_CASES_BYTES),
+        "v3_report": (v3_report_path, MAX_REPORT_BYTES),
+        "v4_manifest": (v4_manifest_path, MAX_MANIFEST_BYTES),
+        "v4_cases": (v4_cases_path, MAX_CASES_BYTES),
+    }
+    snapshots: dict[str, bytes] = {}
+    for label, (path, maximum) in paths.items():
+        snapshot = _read_regular_bytes(path, max_bytes=maximum, label=label)
+        if _sha256(snapshot) != expected_hashes[label]:
+            raise Pilot50Error(f"{label} differs from the expected sealed artifact")
+        snapshots[label] = snapshot
+
+    # Reuse the exact fail-closed v3 integrity audit before looking at payloads.
+    build_rejected_v3_diagnostics(
+        manifest_path=v3_manifest_path,
+        cases_path=v3_cases_path,
+        report_path=v3_report_path,
+        expected_manifest_sha256=expected_hashes["v3_manifest"],
+        expected_cases_sha256=expected_hashes["v3_cases"],
+        expected_report_sha256=expected_hashes["v3_report"],
+        expected_runtime_git_sha=v3_runtime,
+    )
+    v3_cases, v3_bytes, v3_sha, v3_receipt = _validate_materialized_cases(
+        v3_manifest_path,
+        v3_cases_path,
+    )
+    v4_cases, v4_bytes, v4_sha, v4_receipt = _validate_materialized_cases(
+        v4_manifest_path,
+        v4_cases_path,
+    )
+    if (
+        v3_receipt.get("dataset_id") != V3_DATASET_ID
+        or v3_bytes != snapshots["v3_cases"]
+        or v3_sha != V3_CANDIDATE_CASES_SHA256
+        or v4_receipt.get("dataset_id") != V4_DATASET_ID
+        or v4_bytes != snapshots["v4_cases"]
+        or v4_sha != V4_CANDIDATE_CASES_SHA256
+    ):
+        raise Pilot50Error("offline rescore dataset binding is invalid")
+
+    report = _load_json_bytes(snapshots["v3_report"], label="rejected ask report")
+    if not isinstance(report, dict) or not isinstance(report.get("results"), list):
+        raise Pilot50Error("offline rescore report is invalid")
+    results = report["results"]
+    if len(results) != EXPECTED_CASES_TOTAL:
+        raise Pilot50Error("offline rescore report coverage is invalid")
+
+    from eval.run_ask import _normalize_case, score_case
+
+    transitions: Counter[str] = Counter()
+    comparable = 0
+    changed = 0
+    for ordinal, (v3_case, v4_case, old_result) in enumerate(
+        zip(v3_cases, v4_cases, results, strict=True),
+        start=1,
+    ):
+        if not isinstance(old_result, Mapping):
+            raise Pilot50Error("offline rescore result row is invalid")
+        same_query = " ".join(str(v3_case["query"]).casefold().split()) == " ".join(
+            str(v4_case["query"]).casefold().split()
+        )
+        if not same_query:
+            changed += 1
+            continue
+        comparable += 1
+        normalized_v4 = _normalize_case(v4_case)
+        rescored = score_case(
+            normalized_v4,
+            {
+                "http_status": old_result.get("http_status"),
+                "response": old_result.get("response") or "",
+                "latency_ms": old_result.get("latency_ms"),
+                "error": old_result.get("error"),
+            },
+            _offline_rescore_trace(old_result),
+        )
+        old_passed = old_result.get("passed")
+        new_passed = rescored.get("passed")
+        if type(old_passed) is not bool or type(new_passed) is not bool:
+            raise Pilot50Error(
+                f"offline rescore verdict is invalid at ordinal {ordinal}"
+            )
+        transitions[
+            (
+                "unchanged_pass"
+                if old_passed and new_passed
+                else "pass_to_fail"
+                if old_passed
+                else "fail_to_pass"
+                if new_passed
+                else "unchanged_fail"
+            )
+        ] += 1
+
+    if comparable + changed != EXPECTED_CASES_TOTAL or comparable != 41 or changed != 9:
+        raise Pilot50Error("offline rescore comparability contract is invalid")
+    directional = {
+        "old_scorer_passed": transitions["unchanged_pass"]
+        + transitions["pass_to_fail"],
+        "v4_scorer_passed": transitions["unchanged_pass"]
+        + transitions["fail_to_pass"],
+        "unchanged_pass": transitions["unchanged_pass"],
+        "pass_to_fail": transitions["pass_to_fail"],
+        "fail_to_pass": transitions["fail_to_pass"],
+        "unchanged_fail": transitions["unchanged_fail"],
+    }
+    output = {
+        "schema_version": V4_OFFLINE_RESCORE_SCHEMA_VERSION,
+        "classification": "directional_calibration_only",
+        "official_v4_result": False,
+        "human_product_verdict": False,
+        "network_calls": 0,
+        "ask_requests": 0,
+        "incremental_llm_cost_rub": 0.0,
+        "bindings": {
+            "v3_manifest_sha256": expected_hashes["v3_manifest"],
+            "v3_cases_sha256": expected_hashes["v3_cases"],
+            "v3_report_sha256": expected_hashes["v3_report"],
+            "v3_runtime_git_sha": v3_runtime,
+            "v4_manifest_sha256": expected_hashes["v4_manifest"],
+            "v4_cases_sha256": expected_hashes["v4_cases"],
+            "v4_scorer_runtime_git_sha": v4_runtime,
+        },
+        "integrity": {
+            "source_status": "integrity_rejected",
+            "official_quality_gate_eligible": False,
+            "selective_reruns_performed": False,
+        },
+        "coverage": {
+            "v3_cases_total": EXPECTED_CASES_TOTAL,
+            "v4_cases_total": EXPECTED_CASES_TOTAL,
+            "comparable_queries": comparable,
+            "contract_changed_queries": changed,
+            "v4_temporal_contract_cases": sum(
+                bool(case.get("temporal_as_of_date")) for case in v4_cases
+            ),
+            "v4_qrel_cases": sum(bool(_qrel_ids_from_case(case)) for case in v4_cases),
+            "v4_critical_cases": sum(
+                _candidate_case_is_critical(case) for case in v4_cases
+            ),
+        },
+        "directional_rescore": directional,
+    }
+    if set(output) != V4_OFFLINE_RESCORE_FIELDS:
+        raise Pilot50Error("offline rescore output fields are invalid")
+    if sum(transitions.values()) != comparable:
+        raise Pilot50Error("offline rescore transition counts are invalid")
+    for label, (path, maximum) in paths.items():
+        if _read_regular_bytes(path, max_bytes=maximum, label=label) != snapshots[label]:
+            raise Pilot50Error("offline rescore artifacts changed during validation")
+    if len((_compact_canonical_json(output) + "\n").encode("utf-8")) > 16_384:
+        raise Pilot50Error("offline rescore output exceeds the safe size limit")
+    return output
+
+
 def _validated_output_parent(path: Path) -> Path:
     if path.exists() or path.is_symlink():
         raise Pilot50Error("output already exists")
@@ -3513,6 +3979,23 @@ def _diagnose_rejected_v3(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _offline_rescore_v4(args: argparse.Namespace) -> dict[str, Any]:
+    return build_v4_offline_rescore(
+        v3_manifest_path=args.v3_manifest,
+        v3_cases_path=args.v3_cases,
+        v3_report_path=args.v3_report,
+        v4_manifest_path=args.v4_manifest,
+        v4_cases_path=args.v4_cases,
+        expected_v3_manifest_sha256=args.expected_v3_manifest_sha256,
+        expected_v3_cases_sha256=args.expected_v3_cases_sha256,
+        expected_v3_report_sha256=args.expected_v3_report_sha256,
+        expected_v3_runtime_git_sha=args.expected_v3_runtime_git_sha,
+        expected_v4_manifest_sha256=args.expected_v4_manifest_sha256,
+        expected_v4_cases_sha256=args.expected_v4_cases_sha256,
+        expected_v4_runtime_git_sha=args.expected_v4_runtime_git_sha,
+    )
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare and summarize Pilot50 evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -3530,13 +4013,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--rolling-24h-comparison-waiver-id",
         default="",
         help=(
-            "Exact non-secret D-041 waiver reference required only for the "
-            "Pilot50 v3 candidate report."
+            "Exact non-secret D-041/D-042 waiver reference required for the "
+            "matching Pilot50 v3/v4 candidate report."
         ),
     )
     summarize.add_argument(
         "--candidate-contract",
-        choices=(CANDIDATE_CONTRACT_ID, V3_CANDIDATE_CONTRACT_ID),
+        choices=(
+            CANDIDATE_CONTRACT_ID,
+            V3_CANDIDATE_CONTRACT_ID,
+            V4_CANDIDATE_CONTRACT_ID,
+        ),
         default="",
         help=(
             "Required fixed evidence contract for a versioned Pilot50 candidate run."
@@ -3568,6 +4055,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     diagnose_rejected_v3.add_argument("--expected-cases-sha256", required=True)
     diagnose_rejected_v3.add_argument("--expected-report-sha256", required=True)
     diagnose_rejected_v3.add_argument("--expected-runtime-git-sha", required=True)
+    offline_rescore_v4 = subparsers.add_parser("offline-rescore-v4")
+    offline_rescore_v4.add_argument("--v3-manifest", type=Path, required=True)
+    offline_rescore_v4.add_argument("--v3-cases", type=Path, required=True)
+    offline_rescore_v4.add_argument("--v3-report", type=Path, required=True)
+    offline_rescore_v4.add_argument("--v4-manifest", type=Path, required=True)
+    offline_rescore_v4.add_argument("--v4-cases", type=Path, required=True)
+    offline_rescore_v4.add_argument("--expected-v3-manifest-sha256", required=True)
+    offline_rescore_v4.add_argument("--expected-v3-cases-sha256", required=True)
+    offline_rescore_v4.add_argument("--expected-v3-report-sha256", required=True)
+    offline_rescore_v4.add_argument("--expected-v3-runtime-git-sha", required=True)
+    offline_rescore_v4.add_argument("--expected-v4-manifest-sha256", required=True)
+    offline_rescore_v4.add_argument("--expected-v4-cases-sha256", required=True)
+    offline_rescore_v4.add_argument("--expected-v4-runtime-git-sha", required=True)
     return parser.parse_args(argv)
 
 
@@ -3584,6 +4084,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _diagnose(args)
         elif args.command == "diagnose-rejected-v3":
             result = _diagnose_rejected_v3(args)
+        elif args.command == "offline-rescore-v4":
+            result = _offline_rescore_v4(args)
         else:
             result = _show_safe(args)
     except (Pilot50Error, OSError) as exc:

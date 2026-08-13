@@ -1,0 +1,1061 @@
+[
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "прислать ID этого аккаунта по адресу support@myrosmol.ru",
+          "отправить ID аккаунта на support@myrosmol.ru"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_fgais_merge_accounts",
+    "privacy_class": "standard",
+    "query": "Я потерял доступ к старой почте ФГАИС. Как перенести данные в новый аккаунт?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-01"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "только сам пользователь"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0007_udalenie_akkaunta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0007_udalenie_akkaunta"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_fgais_delete_account",
+    "privacy_class": "standard",
+    "query": "Может ли техподдержка удалить мой аккаунт ФГАИС за меня?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-02"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "подтвердить участие"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0014_podtverzhdenie_uchastiya_v_forume"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0014_podtverzhdenie_uchastiya_v_forume"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_fgais_confirm_participation",
+    "privacy_class": "standard",
+    "query": "Мне одобрили заявку на форум. Как подтвердить участие?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais",
+      "participation"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-03"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "статус «На рассмотрении»",
+          "статус на рассмотрении"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "статус «Одобрена»",
+          "заявка одобрена"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "статус «Отклонена»",
+          "заявка отклонена"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_fgais_application_statuses",
+    "privacy_class": "standard",
+    "query": "Что означают статусы заявки «На рассмотрении», «Одобрена» и «Отклонена»?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "fgais",
+      "application"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-04"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "федеральное агентство"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_rtasiv0nlg_s0001_chto_takoe_rosmolodezh"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rtasiv0nlg_s0001_chto_takoe_rosmolodezh"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_about_rosmolodezh",
+    "privacy_class": "standard",
+    "query": "Что такое Росмолодёжь и чем она занимается?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "rosmolodezh"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-05"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "письмо на указанный email",
+          "письмо на электронную почту",
+          "письмо на указанную почту"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0005_registraciya_s_pomoschyu_sozdaniya_kabineta"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_dobro_registration",
+    "privacy_class": "standard",
+    "query": "Как зарегистрироваться на Добро.РФ через новый кабинет?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "dobro"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-06"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "зарегистрироваться в качестве волонтёра",
+          "подать заявку как волонтёр",
+          "подать волонтёрскую заявку"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_dobro_volunteer_application",
+    "privacy_class": "standard",
+    "query": "Как найти волонтёрское мероприятие и подать заявку на Добро.РФ?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "dobro",
+      "application"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-07"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "подать заявку",
+          "приём заявок"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-06-30"
+      },
+      {
+        "context_any": [
+          "подать заявку",
+          "приём заявок"
+        ],
+        "context_position": "before",
+        "kind": "time",
+        "timezone": "мск",
+        "value": "23:59"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0006_forum"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "expected_temporal_polarity": "closed",
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_ladoga_registration_closed",
+    "privacy_class": "standard",
+    "query": "Можно ли было подать заявку на форум «Ладога» по состоянию на 14 августа 2026 года и до какой даты принимали заявки?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Ладога",
+      "temporal"
+    ],
+    "temporal_as_of_date": "2026-08-14",
+    "user_id": "synthetic-pilot50-v4-source-08"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "3-разовое"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "за счет организаторов"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_ladoga_food_and_stay",
+    "privacy_class": "standard",
+    "query": "На форуме «Ладога» питание и проживание оплачивают организаторы?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Ладога"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-09"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "затраты на проезд могут быть компенсированы",
+          "обратиться в региональный орган",
+          "орган по делам молодёжи в вашем регионе"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_ladoga_travel_compensation",
+    "privacy_class": "standard",
+    "query": "Компенсируют ли дорогу до форума «Ладога»?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Ладога",
+      "travel"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-10"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "регистрация",
+          "подать заявку"
+        ],
+        "context_position": "before",
+        "kind": "date",
+        "value": "2026-09-12"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0002_registraciya"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_patriot_registration_deadline",
+    "privacy_class": "standard",
+    "query": "До какого числа можно подать заявку на Национальную премию «Патриот»?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "event:Патриот",
+      "temporal"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-11"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "возраст",
+          "участники"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 18
+      },
+      {
+        "context_any": [
+          "возраст",
+          "участники"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 35
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_tnorqqrmvg_s0003_uchastniki"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_patriot_participants",
+    "privacy_class": "standard",
+    "query": "Кто может участвовать в Национальной премии «Патриот»?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "event:Патриот"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-12"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "смена «Единство»",
+          "смена Единство"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "смена «Правда»",
+          "смена Правда"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "смена «Родина»",
+          "смена Родина"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0004_tematicheskie_smeny_foruma"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_territory_shifts",
+    "privacy_class": "standard",
+    "query": "Какие смены будут на форуме «Территория смыслов» в 2026 году?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "forum:Территория смыслов"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-13"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "проверка отчёта"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 30
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0079_proverka_otcheta"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_grant_report_review",
+    "privacy_class": "standard",
+    "query": "Какой срок проверки грантового отчёта?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "grants",
+      "reporting"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-14"
+  },
+  {
+    "channel": "api",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "проект проверяет куратор",
+          "проверяет прикреплённый куратор"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "проверка проекта",
+          "первичная проверка"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 30
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0056_proverka_proekta_grantovogo_soglasheniya"
+    ],
+    "expected_escalated": false,
+    "expected_escalation_reason": null,
+    "expected_generator_model": null,
+    "expected_message_masked_contains": [],
+    "forbidden_message_masked_contains": [],
+    "id": "yonote_grant_agreement_review",
+    "privacy_class": "standard",
+    "query": "Кто и сколько времени проверяет проект грантового соглашения?",
+    "tags": [
+      "pre_pilot",
+      "yonote",
+      "grants",
+      "agreement"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-15"
+  },
+  {
+    "aggregate_aspect": "grants",
+    "aggregate_entity_class": "grant:generic",
+    "aggregate_intent": "гранты.прочее",
+    "aggregate_rank": 3,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "номинация — это тематика проекта"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "context_any": [
+          "стандартных номинаций"
+        ],
+        "context_position": "after",
+        "kind": "number",
+        "value": 18
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_rbibn8s2s7_s0008_nominacii_grantovyh_konkursov"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "grants",
+    "id": "pilot50_v4_grant_nomination_definition",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Что такое номинация грантового конкурса и сколько стандартных номинаций предусмотрено?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-16"
+  },
+  {
+    "aggregate_aspect": "application",
+    "aggregate_entity_class": "platform:generic",
+    "aggregate_intent": "платформа_фгаис.регистрация_и_заявка",
+    "aggregate_rank": 4,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "регистрация проходит по ссылке",
+          "перейти по ссылке для регистрации",
+          "зарегистрироваться на платформе"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "application",
+    "id": "synthetic_fgais_registration",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Как зарегистрироваться во ФГАИС «Молодёжь России»?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-17"
+  },
+  {
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "platform:generic",
+    "aggregate_intent": "платформа_фгаис.регистрация_и_заявка",
+    "aggregate_rank": 5,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "фильтры универсальные",
+          "поставить фильтр",
+          "отсортировать по регионам"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "generic",
+    "id": "synthetic_fgais_event_navigation",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Где во ФГАИС найти доступные мероприятия?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-18"
+  },
+  {
+    "aggregate_aspect": "selection_status",
+    "aggregate_entity_class": "platform:generic",
+    "aggregate_intent": "платформа_фгаис.регистрация_и_заявка",
+    "aggregate_rank": 9,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "статус «На рассмотрении»",
+          "статус на рассмотрении"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "статус «Одобрена»",
+          "заявка одобрена"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0016_statusy_zayavok"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "selection_status",
+    "id": "synthetic_fgais_status_meanings",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Что означают статусы заявки во ФГАИС?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-19"
+  },
+  {
+    "aggregate_aspect": "application",
+    "aggregate_entity_class": "grant:generic",
+    "aggregate_intent": "гранты.регистрация_и_заявка",
+    "aggregate_rank": 10,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "equivalent_chunk_ids": {
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm": [
+        "yonote_api_jdq60oodtx_s0006_poshagovyy_algoritm"
+      ]
+    },
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "верифицировать профиль ФГАИС через ЕСИА",
+          "привязать аккаунт Госуслуг"
+        ],
+        "kind": "text_any"
+      },
+      {
+        "alternatives": [
+          "подать заявку на ФГАИС",
+          "подать заявку в ФГАИС"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "application",
+    "id": "synthetic_grant_application_steps",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Как подать заявку на первый сезон Росмолодёжь.Гранты?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-20"
+  },
+  {
+    "aggregate_aspect": "grants",
+    "aggregate_entity_class": "grant:generic",
+    "aggregate_intent": "гранты.регистрация_и_заявка",
+    "aggregate_rank": 11,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "цель конкурса — вовлечение молодёжи",
+          "грантовый конкурс для молодёжи"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "grants",
+    "id": "synthetic_grants_overview",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Что такое гранты для физических лиц?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-21"
+  },
+  {
+    "aggregate_aspect": "technical",
+    "aggregate_entity_class": "technical:generic",
+    "aggregate_intent": "техподдержка.доступ_и_техническая_ошибка",
+    "aggregate_rank": 14,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "новый аккаунт"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "technical",
+    "id": "synthetic_fgais_lost_email_access",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Я потерял доступ к почте от профиля ФГАИС. Как восстановить доступ к данным?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-22"
+  },
+  {
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "other:event-scoped",
+    "aggregate_intent": "другое.прочее",
+    "aggregate_rank": 15,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "общественно-политическ"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_zrvcb9k240_s0001_o_meropriyatii"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "generic",
+    "id": "synthetic_territory_meanings_overview",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Что такое форум «Территория смыслов»?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-23"
+  },
+  {
+    "aggregate_aspect": "generic",
+    "aggregate_entity_class": "forum:named",
+    "aggregate_intent": "форумы.прочее",
+    "aggregate_rank": 16,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "alternatives": [
+          "молодёжное событие в Ленинградской области",
+          "форум в Ленинградской области"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0001_o_forume"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_irwwd4t2v8_s0001_o_forume"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "generic",
+    "id": "synthetic_ladoga_overview",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Что такое форум «Ладога»?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-24"
+  },
+  {
+    "aggregate_aspect": "selection_status",
+    "aggregate_entity_class": "forum:named",
+    "aggregate_intent": "форумы.статус_заявки",
+    "aggregate_rank": 17,
+    "allowed_cited_source_types": [
+      "yonote"
+    ],
+    "channel": "api",
+    "dataset_kind": "synthetic_calibration_pilot",
+    "evidence_scope": "directional_calibration_only",
+    "expected_answer_fact_groups": [
+      {
+        "context_any": [
+          "результаты отбора",
+          "списки участников"
+        ],
+        "context_position": "before",
+        "kind": "number",
+        "value": 14
+      },
+      {
+        "alternatives": [
+          "до даты начала смены",
+          "до начала смены"
+        ],
+        "kind": "text_any"
+      }
+    ],
+    "expected_behavior": "answer",
+    "expected_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty"
+    ],
+    "expected_cited_chunk_ids": [
+      "yonote_api_pmbmqm6lug_s0009_rezultaty"
+    ],
+    "expected_escalated": false,
+    "expected_response_profile": "selection_status",
+    "id": "synthetic_mashuk_selection_timing",
+    "label_status": "synthetic_curated",
+    "privacy_class": "standard",
+    "query": "Когда будут известны результаты отбора на форум «Машук»?",
+    "requires_human_review": false,
+    "schema_version": "1.0.0",
+    "split": "calibration",
+    "tags": [
+      "synthetic",
+      "calibration",
+      "pilot",
+      "top20",
+      "yonote",
+      "off_aspect_guard"
+    ],
+    "user_id": "synthetic-pilot50-v4-source-25"
+  }
+]

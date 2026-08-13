@@ -1,42 +1,77 @@
 # Текущее состояние проекта
 
-**Обновлено:** 13 августа 2026
+**Обновлено:** 14 августа 2026
 
 **Ветка:** `codex/real-rag`
 
-## Pilot50 v4: core-патч завершён локально, внешний запуск ещё не разрешён
+## Pilot50 v4: локальный контракт и D-042 готовы, server-local preflight ещё не выполнялся
 
-13 августа закончен regression-first change set ядра RAG без Yonote Apply, переиндексации,
-`/ask`, HDE/VK, deployment или платных внешних вызовов. Retrieval, rerank и generation теперь
-используют один query-proven план тем и аспектов; deterministic fast paths требуют точной
-привязки к опубликованному Yonote (`source=yonote_api`, `version=yonote-api-v1`,
-`status=published`) и fail closed при неполном multi-aspect запросе, metadata drift или
-несовпадении forum/category/ordinal. Добавлены bounded ответы для доказанных Pilot50-классов,
-но общие confidence, safety, entity и source-binding guards не ослаблены.
+Core RAG change set закончен, закоммичен и push-нут в GitHub отдельным commit
+`384bad99a733e4711dc765a8389a049a6cfa2a12`. Retrieval, rerank и generation используют один
+query-proven план тем и аспектов; fast paths требуют точной привязки к опубликованному Yonote
+(`source=yonote_api`, `version=yonote-api-v1`, `status=published`) и fail closed при неполном
+multi-aspect запросе, metadata drift или несовпадении forum/category/ordinal. Confidence, safety,
+entity и source-binding guards не ослаблены. Core был сделан без Yonote Apply, переиндексации,
+`/ask`, HDE/VK, deployment или платных внешних вызовов.
 
-Temporal слой теперь разбирает русские и числовые даты, дедлайны, время и диапазоны с защитой
-scope; guard может исправить только изолированное устаревшее утверждение о регистрации из
-фактически процитированного опубликованного источника. Offline scorer переведён на типизированные
-атомарные date/range/time/number/text claims с защитой от negation, correction, hearsay и history;
-legacy-оценивание не изменено. Дополнительно исправлены forum aliases, bounded intent неактивной
-кнопки ФГАИС, ложное совпадение профиля «положение» с «местоположение», разговорный технический
-запрос и продолжение диалога после уточнения мероприятия.
+Подготовлен новый immutable `pilot50_balanced_v4`: `50` calibration-кейсов, `25/25` strata,
+qrel coverage `50/50`, critical coverage `15/50`. Все qrels разрешаются только в frozen
+published-Yonote seed. Raw/canonical manifest SHA-256 —
+`bfd14ae638da0d65b2c07ff299f8f366a2d8fb8be772223a931e601691125ede`, materialized cases
+SHA-256 — `c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8`, source hashes —
+`5fa5b9a9be77bfe0a76efcecb0f9363a50cfbabfb2fdab66aeafadee47681283` и
+`07e4d462723663bcc4722df8b79e5c737cb2e45b3462380716a1368a5741ce64`. Генератор воспроизводит
+эти файлы байт-в-байт. Исправлены некорректные qrels/anchors v3, добавлены typed semantic facts,
+exact equivalent mapping только для доказанного duplicate chunk и `8` as-of temporal cases:
+`6 closed`, `1 completed`, `1 in_progress`. Это regression calibration, не independent holdout,
+human verdict или product conversion.
 
-Архитектурный и security review не выявил нового network/deploy/secret пути: Qdrant retrieval
-по-прежнему ограничен `status=published`, draft/archived и metadata drift блокируются тестами,
-а список temporal sources обязан точно совпадать с citations. `git diff --check` прошёл; Ruff
-прошёл; seed validation: `2186` records, `2152` published. Полный локальный pytest gate покрывает
-`3201` tests: `3200 passed`, `1 skipped`, `0 failed`. На Windows монолитный процесс после
-нескольких тысяч async fixtures исчерпывает создание локального event loop; поэтому тот же exact
-набор доказан независимыми file-shards, каждый из которых завершился, включая `77/77`
-`test_process_message`, `334/334` scorer, `266/266` graph и `60/60` v4 retrieval regressions.
+Temporal guard теперь отвечает о состоянии смены на указанную дату только из единственного
+точно совпавшего опубликованного Yonote-диапазона; wrong forum, неполный provenance и несколько
+диапазонов fail closed. Scorer проверяет typed date/range/time/number/text facts, temporal polarity,
+negation, correction, hearsay и history; legacy result shape не изменён. Privacy-safe
+`offline-rescore-v4` сначала полностью валидирует sealed integrity-rejected v3 evidence и затем
+переоценивает только `41` неизменившийся query; `9` contract-changed кейсов исключаются. Вывод
+содержит только агрегаты и hashes, явно имеет `official_v4_result=false`, `/ask=0`, network=0 и
+cost `0 RUB`. Tooling и tamper/PII regressions локально проверены, но фактический rescore
+приватного sealed v3 report ещё не выполнялся: он разрешён только server-local, `--network none`,
+в составе бесплатного preflight.
 
-Текущий следующий шаг — выборочно закоммитить и push-нуть только core change set и этот handoff,
-не добавляя четыре пользовательских untracked-документа. После push нужно на новом exact SHA
-подготовить immutable v4 contract и privacy-safe offline rescore сохранённых v3 результатов;
-только затем допустим одноразовый D-042 governance/preflight. Новый paid/server-local `/ask` run,
-Yonote Apply/indexing, HDE/VK и rollout до отдельного явного решения и успешного preflight
-запрещены. D-041 и rejected v3 повторно не используются.
+D-042 реализован как новая одноразовая chained waiver-модель ledger schema `1.2.0`, совместимая
+с историческими `1.0.0/1.1.0`. Она требует ровно одну предыдущую D-041 reservation, exact
+v3 -> v4 lineage, отдельные approval/waiver IDs, scope `pilot50-v4-candidate`, runner cap
+`30 RUB` и отдельную external provider-risk boundary `500 RUB`. Approval и waiver используют
+единое one-use пространство; duplicate, tamper, wrong digest/timestamp/lineage и concurrent run
+fail closed. Read-only eligibility check ничего не резервирует и не потребляет; реальная
+reservation создаётся атомарно внутри `eval.run_ask` до первого `/ask`.
+
+Подготовлен `scripts/run_pilot50_v4_candidate_server_local.sh`. Бесплатный preflight строит
+candidate только из exact detached clean SHA, проверяет production/Qdrant/seed/capacity/runtime,
+materializes exact v4, выполняет sealed-v3 offline rescore с `--network none`, проверяет D-042
+read-only и запечатывает только безопасные hashes/status. На preflight нет `/ask`, cost reservation
+или записи ledger. Run повторно сверяет все receipts, offline artifact и D-042 digest, запускает
+ровно `50` запросов с concurrency `1` и cap `30 RUB`, не делает automatic retry и выдаёт только
+GO/STOP после trace/integrity/quality checks. Candidate read-only, без published ports, с
+`YONOTE_SYNC_ENABLED=false`, `HDE_TRANSPORT_ENABLED=false`, пустыми HDE/VK/Yonote credentials;
+production и Qdrant обязаны совпасть до и после run.
+
+Архитектурный и security review не выявил нового production network/deploy/secret пути,
+eval/case facts в production-логике, ослабления published/source/category/forum guards, обхода
+safety/escalation или автоматического Yonote/indexing. `git diff --check` и Ruff прошли; seed
+validation: `2186` records, `2152` published. Полный локальный file-sharded pytest gate собрал
+`3252` tests: `3251 passed`, `1 skipped`, `0 failed`, включая `77/77` `test_process_message`,
+`351/351` eval scorer/runner, `266/266` graph, `60/60` v3 retrieval regressions, `136/136`
+Pilot50 и `7/7` нового v4 launcher. Единственный skip — PostgreSQL transport integration без
+отдельного runtime. Windows monolithic `test_graph.py` зависает после выполнения async fixtures;
+тот же exact `266/266` набор доказан четырьмя независимыми слоями `117 + 20 + 52 + 77`.
+
+Текущий следующий шаг — выборочно закоммитить и push-нуть финальный v4/D-042 change set и этот
+handoff, не добавляя четыре пользовательских untracked-документа. После успешного push владельцу
+нужно передать exact 40-character SHA и один Bash-блок только для бесплатного server-local
+preflight. На 14 августа server preflight, фактический offline rescore sealed v3, D-042
+reservation, новый paid `/ask`, Yonote Apply/indexing, HDE/VK и rollout не выполнялись. Paid v4
+run разрешается только после явного сообщения владельца `preflight=GO`; при STOP или integrity
+rejection автоматический повтор запрещён.
 
 ## Pilot50: v3 выполнил 50/50, но evidence integrity-rejected из-за одного timeout
 

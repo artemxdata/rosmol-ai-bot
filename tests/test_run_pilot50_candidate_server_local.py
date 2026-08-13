@@ -409,7 +409,9 @@ def test_candidate_environment_is_staging_ml_with_only_required_secrets() -> Non
 
     assert environment["APP_ENV"] == "staging"
     assert environment["RUNTIME_ROLE"] == "ml"
-    assert environment["PROMPT_VERSION"] == "pilot50-quality-v3"
+    assert environment["PROMPT_VERSION"] == (
+        "${PILOT50_CANDIDATE_PROMPT_VERSION:-pilot50-quality-v3}"
+    )
     assert environment["ML_PREWARM_ON_STARTUP"] == "true"
     assert environment["ML_UNLOAD_AFTER_USE"] == "true"
     assert environment["ML_UNLOAD_EMBEDDER_AFTER_USE"] == "true"
@@ -816,7 +818,7 @@ def test_effective_compose_and_started_container_are_both_fail_closed() -> None:
         assert "2" in validator
         assert "256" in validator
         assert "pilot50-candidate" in validator
-        assert "pilot50_balanced_v3" in validator
+        assert "dataset_id" in validator
         assert "APP_ENV" in validator
         assert "RUNTIME_ROLE" in validator
         assert "HDE_TRANSPORT_ENABLED" in validator
@@ -1266,7 +1268,7 @@ def test_stdout_is_allowlisted_and_ephemeral_secrets_are_never_printed() -> None
         safe_validator
     )
     assert "assert forbidden not in payload" in safe_validator
-    assert 'payload.get("dataset_id") == "pilot50_balanced_v3"' in safe_validator
+    assert 'payload.get("dataset_id") == dataset_id' in safe_validator
     assert '"source": "target_reported"' in safe_validator
     assert '"quality_gate"' in safe_validator
     assert '"source_binding_failures"' in safe_validator

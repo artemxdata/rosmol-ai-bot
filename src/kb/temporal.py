@@ -117,6 +117,23 @@ _FOREIGN_PARTICIPANT_RE = re.compile(
     r"\b(?:иностран\w*|foreign|друг\w*\s+гражданств\w*)\b",
     flags=re.IGNORECASE,
 )
+_AS_OF_DATE_QUERY_RE = re.compile(
+    rf"(?:по\s+состоянию\s+на|к)\s+{_WORD_DATE}",
+    flags=re.IGNORECASE,
+)
+_EVENT_STATE_QUERY_RE = re.compile(
+    r"\b(?:заверш\w*|продолжа\w*|проход\w*|ид[её]т|шла)\b",
+    flags=re.IGNORECASE,
+)
+_EVENT_SAME_MONTH_RANGE_RE = re.compile(
+    rf"(?<!\d)(?P<start>\d{{1,2}})\s*[-–—]\s*(?P<end>\d{{1,2}})\s+"
+    rf"(?P<month>{'|'.join(_RUSSIAN_MONTHS)})(?:\s+(?P<year>\d{{4}}))?",
+    flags=re.IGNORECASE,
+)
+_NAMED_SHIFT_QUERY_RE = re.compile(
+    r"\bсмен\w*\s+«(?P<name>[^»\r\n]{1,80})»",
+    flags=re.IGNORECASE,
+)
 _SEED_DEADLINE_CACHE: dict[
     str,
     tuple[int, int, date, dict[str, tuple[RegistrationDeadline, Chunk]]],
@@ -127,6 +144,128 @@ _SEED_DEADLINE_CACHE: dict[
 class RegistrationDeadline:
     closes_at: datetime
     explicit_time: bool
+
+
+@dataclass(frozen=True)
+class EventDateRange:
+    starts_on: date
+    ends_on: date
+
+
+def as_of_event_fact(
+    *,
+    message: str,
+    analysis: QueryAnalysis | None,
+    chunks: Iterable[Chunk],
+) -> tuple[str, Chunk] | None:
+    """Answer an explicit event-state-as-of question from one exact Yonote range."""
+
+    if analysis is None or not analysis.forum_normalized:
+        return None
+    if _EVENT_STATE_QUERY_RE.search(message) is None:
+        return None
+    as_of_match = _AS_OF_DATE_QUERY_RE.search(message)
+    if as_of_match is None:
+        return None
+    as_of = _parse_word_date(
+        as_of_match.group("day"),
+        as_of_match.group("month"),
+        as_of_match.group("year"),
+    )
+    if as_of is None:
+        return None
+
+    forum = analysis.forum_normalized.casefold()
+    candidates: list[tuple[EventDateRange, Chunk]] = []
+    for chunk in chunks:
+        metadata = chunk.metadata
+        if (
+            str(metadata.get("status") or "") != "published"
+            or str(metadata.get("source_type") or "") != "yonote"
+            or str(metadata.get("source") or "") != "yonote_api"
+            or str(metadata.get("version") or "") != "yonote-api-v1"
+            or str(metadata.get("forum_normalized") or "").casefold() != forum
+        ):
+            continue
+        event_range = _event_date_range_from_chunk(chunk)
+        if event_range is not None:
+            candidates.append((event_range, chunk))
+    if len(candidates) != 1:
+        return None
+
+    event_range, source_chunk = candidates[0]
+    subject = _event_subject_from_query(message)
+    range_label = (
+        f"с {_format_russian_date(event_range.starts_on)} "
+        f"по {_format_russian_date(event_range.ends_on)}"
+    )
+    as_of_label = _format_russian_date(as_of)
+    if as_of > event_range.ends_on:
+        state = (
+            f"Смена завершилась к {as_of_label}. "
+            f"{subject} проходила {range_label}."
+        )
+    elif event_range.starts_on <= as_of <= event_range.ends_on:
+        state = (
+            f"На {as_of_label} смена продолжалась. "
+            f"{subject} проходит {range_label}."
+        )
+    else:
+        state = (
+            f"На {as_of_label} смена ещё не началась. "
+            f"{subject} проходит {range_label}."
+        )
+    return state, source_chunk
+
+
+def _event_subject_from_query(message: str) -> str:
+    named = _NAMED_SHIFT_QUERY_RE.search(message)
+    if named is not None:
+        return f"Смена «{named.group('name').strip()}»"
+    if re.search(r"\bперв\w*\s+смен\w*\b", message, flags=re.IGNORECASE):
+        return "Первая смена"
+    return "Смена"
+
+
+def _event_date_range_from_chunk(chunk: Chunk) -> EventDateRange | None:
+    normalized = " ".join(chunk.text.replace("\xa0", " ").split()).casefold()
+    matches = list(_EVENT_SAME_MONTH_RANGE_RE.finditer(normalized))
+    if not matches:
+        return None
+    candidate = matches[0]
+    month = _RUSSIAN_MONTHS.get(candidate.group("month").casefold())
+    if month is None:
+        return None
+    year = candidate.group("year")
+    if year is None:
+        metadata_years = set(
+            re.findall(
+                r"(?<!\d)(20\d{2})(?!\d)",
+                " ".join(
+                    [
+                        str(chunk.metadata.get("source_file") or ""),
+                        str(chunk.metadata.get("intent_name") or ""),
+                        *(
+                            str(value)
+                            for value in (
+                                chunk.metadata.get("source_heading_path") or []
+                            )
+                        ),
+                    ]
+                ),
+            )
+        )
+        if len(metadata_years) != 1:
+            return None
+        year = next(iter(metadata_years))
+    try:
+        starts_on = date(int(year), month, int(candidate.group("start")))
+        ends_on = date(int(year), month, int(candidate.group("end")))
+    except ValueError:
+        return None
+    if starts_on >= ends_on:
+        return None
+    return EventDateRange(starts_on=starts_on, ends_on=ends_on)
 
 
 def extract_registration_deadline(text: str) -> RegistrationDeadline | None:

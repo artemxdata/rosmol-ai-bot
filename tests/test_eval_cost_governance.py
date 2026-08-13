@@ -22,6 +22,8 @@ RUNTIME_SHA = "a" * 40
 MANIFEST_SHA = "b" * 64
 SECOND_RUNTIME_SHA = "c" * 40
 SECOND_MANIFEST_SHA = "d" * 64
+THIRD_RUNTIME_SHA = "e" * 40
+THIRD_MANIFEST_SHA = "f" * 64
 NOW = datetime(2026, 8, 3, 9, 30, tzinfo=UTC)
 
 
@@ -74,6 +76,55 @@ def _comparison_waiver(
     }
     values.update(overrides)
     return PrivateFullComparisonWaiver(**values)
+
+
+def _chained_comparison_waiver(
+    **overrides: Any,
+) -> PrivateFullComparisonWaiver:
+    values: dict[str, Any] = {
+        "waiver_id": "owner-waive-v3-to-v4-20260814",
+        "decision_id": "D-042",
+        "provider_risk_ceiling_rub": 500.0,
+        "prior_scope": "pilot50-v3-candidate",
+        "prior_runtime_git_sha": SECOND_RUNTIME_SHA,
+        "prior_manifest_sha256": SECOND_MANIFEST_SHA,
+        "prior_case_count": 50,
+        "prior_approved_cap_rub": 30.0,
+        "requested_scope": "pilot50-v4-candidate",
+        "requested_runtime_git_sha": THIRD_RUNTIME_SHA,
+        "requested_manifest_sha256": THIRD_MANIFEST_SHA,
+        "requested_case_count": 50,
+        "requested_approved_cap_rub": 30.0,
+        "prior_waiver_decision_id": "D-041",
+    }
+    values.update(overrides)
+    return PrivateFullComparisonWaiver(**values)
+
+
+def _reserve_v2_and_v3(ledger: Path):
+    prior = _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+    current = _reserve(
+        ledger,
+        run_id="pilot50-v3",
+        runtime_git_sha=SECOND_RUNTIME_SHA,
+        manifest_sha256=SECOND_MANIFEST_SHA,
+        scope="pilot50-v3-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v3-20260803",
+        comparison_waiver=_comparison_waiver(),
+        now=NOW + timedelta(hours=1),
+    )
+    return prior, current
 
 
 @pytest.mark.parametrize(
@@ -701,6 +752,217 @@ def test_valid_v1_and_v1_1_mixed_ledger_remains_readable(
     )
 
     assert routine.path.exists()
+    assert len(list(ledger.glob("*.reservation.json"))) == 3
+
+
+def test_d042_chains_exactly_once_from_d041_even_after_rolling_window(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _, v3 = _reserve_v2_and_v3(ledger)
+
+    v4 = _reserve(
+        ledger,
+        run_id="pilot50-v4",
+        runtime_git_sha=THIRD_RUNTIME_SHA,
+        manifest_sha256=THIRD_MANIFEST_SHA,
+        scope="pilot50-v4-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v4-20260814",
+        comparison_waiver=_chained_comparison_waiver(),
+        now=NOW + timedelta(days=11),
+    )
+
+    assert v4.record["schema_version"] == "1.2.0"
+    assert v4.record["rolling_24h_waiver_decision_id"] == "D-042"
+    assert v4.record["prior_waiver_decision_id"] == "D-041"
+    assert v4.record["waived_reservation_sha256"] == hashlib.sha256(
+        json.dumps(
+            dict(v3.record),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    routine = _reserve(
+        ledger,
+        run_id="post-d042-routine",
+        now=NOW + timedelta(days=12),
+    )
+    assert routine.path.exists()
+    assert len(list(ledger.glob("*.reservation.json"))) == 4
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"prior_waiver_decision_id": "D-040"},
+        {"prior_runtime_git_sha": "9" * 40},
+        {"prior_manifest_sha256": "8" * 64},
+        {"prior_scope": "pilot50-v3-wrong"},
+    ],
+)
+def test_d042_rejects_any_prior_waiver_binding_mismatch(
+    tmp_path: Path,
+    override: dict[str, Any],
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve_v2_and_v3(ledger)
+
+    with pytest.raises(CostGovernanceError, match="exact prior waiver"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v4",
+            runtime_git_sha=THIRD_RUNTIME_SHA,
+            manifest_sha256=THIRD_MANIFEST_SHA,
+            scope="pilot50-v4-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-v4-20260814",
+            comparison_waiver=_chained_comparison_waiver(**override),
+            now=NOW + timedelta(days=11),
+        )
+
+    assert len(list(ledger.glob("*.reservation.json"))) == 2
+
+
+def test_d042_requires_the_prior_d041_waiver_record(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve(
+        ledger,
+        run_id="pilot50-v2",
+        scope="pilot50-v2-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v2-20260803",
+    )
+
+    with pytest.raises(CostGovernanceError, match="exact prior waiver"):
+        _reserve(
+            ledger,
+            run_id="pilot50-v4",
+            runtime_git_sha=THIRD_RUNTIME_SHA,
+            manifest_sha256=THIRD_MANIFEST_SHA,
+            scope="pilot50-v4-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id="owner-pilot50-v4-20260814",
+            comparison_waiver=_chained_comparison_waiver(),
+            now=NOW + timedelta(days=11),
+        )
+
+
+@pytest.mark.parametrize(
+    ("approval_id", "waiver_id", "message"),
+    [
+        (
+            "owner-waive-v2-to-v3-20260803",
+            "owner-waive-v3-to-v4-20260814",
+            "approval id has already been consumed",
+        ),
+        (
+            "owner-pilot50-v4-20260814",
+            "owner-pilot50-v3-20260803",
+            "waiver id has already been consumed",
+        ),
+    ],
+)
+def test_d042_uses_one_combined_owner_reference_namespace(
+    tmp_path: Path,
+    approval_id: str,
+    waiver_id: str,
+    message: str,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve_v2_and_v3(ledger)
+
+    with pytest.raises(CostGovernanceError, match=message):
+        _reserve(
+            ledger,
+            run_id="pilot50-v4",
+            runtime_git_sha=THIRD_RUNTIME_SHA,
+            manifest_sha256=THIRD_MANIFEST_SHA,
+            scope="pilot50-v4-candidate",
+            cap=30,
+            cases=50,
+            private_full=True,
+            approval_id=approval_id,
+            comparison_waiver=_chained_comparison_waiver(
+                waiver_id=waiver_id
+            ),
+            now=NOW + timedelta(days=11),
+        )
+
+
+def test_corrupt_d042_binding_fails_closed(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve_v2_and_v3(ledger)
+    v4 = _reserve(
+        ledger,
+        run_id="pilot50-v4",
+        runtime_git_sha=THIRD_RUNTIME_SHA,
+        manifest_sha256=THIRD_MANIFEST_SHA,
+        scope="pilot50-v4-candidate",
+        cap=30,
+        cases=50,
+        private_full=True,
+        approval_id="owner-pilot50-v4-20260814",
+        comparison_waiver=_chained_comparison_waiver(),
+        now=NOW + timedelta(days=11),
+    )
+    payload = json.loads(v4.path.read_text(encoding="utf-8"))
+    payload["waived_reservation_sha256"] = "0" * 64
+    v4.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CostGovernanceError, match="waiver binding is invalid"):
+        _reserve(
+            ledger,
+            run_id="blocked-after-d042-tamper",
+            now=NOW + timedelta(days=12),
+        )
+
+
+def test_concurrent_d042_attempts_write_exactly_one_v4_record(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    _reserve_v2_and_v3(ledger)
+    barrier = Barrier(2)
+
+    def attempt(index: int) -> tuple[str, str]:
+        barrier.wait(timeout=5)
+        try:
+            result = _reserve(
+                ledger,
+                run_id=f"pilot50-v4-{index}",
+                runtime_git_sha=THIRD_RUNTIME_SHA,
+                manifest_sha256=THIRD_MANIFEST_SHA,
+                scope="pilot50-v4-candidate",
+                cap=30,
+                cases=50,
+                private_full=True,
+                approval_id=f"owner-pilot50-v4-20260814-{index}",
+                comparison_waiver=_chained_comparison_waiver(
+                    waiver_id=f"owner-waive-v3-to-v4-20260814-{index}"
+                ),
+                now=NOW + timedelta(days=11),
+            )
+        except CostGovernanceError as exc:
+            return "error", str(exc)
+        return "ok", str(result.path)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, (1, 2)))
+
+    assert [status for status, _ in outcomes].count("ok") == 1
+    assert [status for status, _ in outcomes].count("error") == 1
     assert len(list(ledger.glob("*.reservation.json"))) == 3
 
 

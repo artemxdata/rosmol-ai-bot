@@ -25,6 +25,7 @@ LEDGER_ENV_VAR = "EVAL_COST_LEDGER_DIR"
 DEFAULT_LEDGER_DIR = Path("data/private/eval-cost-ledger-v1")
 LEDGER_SCHEMA_VERSION = "1.0.0"
 WAIVER_LEDGER_SCHEMA_VERSION = "1.1.0"
+CHAINED_WAIVER_LEDGER_SCHEMA_VERSION = "1.2.0"
 LEDGER_RECORD_TYPE = "live_eval_cost_reservation"
 ROUTINE_LIVE_EVAL_MAX_CASES = 10
 ROUTINE_LIVE_EVAL_MAX_COST_RUB = 100.0
@@ -68,6 +69,9 @@ _WAIVER_RECORD_FIELDS = _RECORD_FIELDS | frozenset(
         "waived_reservation_sha256",
         "provider_risk_ceiling_rub",
     }
+)
+_CHAINED_WAIVER_RECORD_FIELDS = _WAIVER_RECORD_FIELDS | frozenset(
+    {"prior_waiver_decision_id"}
 )
 
 
@@ -116,6 +120,7 @@ class PrivateFullComparisonWaiver:
     requested_manifest_sha256: str
     requested_case_count: int
     requested_approved_cap_rub: float
+    prior_waiver_decision_id: str | None = None
 
 
 def approval_required(
@@ -208,8 +213,14 @@ def reserve_live_eval_cost(
 
         record: dict[str, Any] = {
             "schema_version": (
-                WAIVER_LEDGER_SCHEMA_VERSION if waiver is not None
-                else LEDGER_SCHEMA_VERSION
+                CHAINED_WAIVER_LEDGER_SCHEMA_VERSION
+                if waiver is not None
+                and waiver.prior_waiver_decision_id is not None
+                else (
+                    WAIVER_LEDGER_SCHEMA_VERSION
+                    if waiver is not None
+                    else LEDGER_SCHEMA_VERSION
+                )
             ),
             "record_type": LEDGER_RECORD_TYPE,
             "reserved_at": _format_utc(reservation_time),
@@ -241,6 +252,10 @@ def reserve_live_eval_cost(
                     ),
                 }
             )
+            if waiver.prior_waiver_decision_id is not None:
+                record["prior_waiver_decision_id"] = (
+                    waiver.prior_waiver_decision_id
+                )
         filename = (
             reservation_time.strftime("%Y%m%dT%H%M%S%fZ")
             + f"-{uuid.uuid4().hex}.reservation.json"
@@ -357,7 +372,11 @@ def _load_and_validate_record(path: Path) -> dict[str, Any]:
         else (
             _WAIVER_RECORD_FIELDS
             if schema_version == WAIVER_LEDGER_SCHEMA_VERSION
-            else None
+            else (
+                _CHAINED_WAIVER_RECORD_FIELDS
+                if schema_version == CHAINED_WAIVER_LEDGER_SCHEMA_VERSION
+                else None
+            )
         )
     )
     if expected_fields is None:
@@ -394,7 +413,10 @@ def _load_and_validate_record(path: Path) -> dict[str, Any]:
     approval_id = _validated_approval_id(payload["high_cost_approval_id"])
     if expected_approval and approval_id is None:
         raise CostGovernanceError("cost ledger high-cost approval is missing")
-    if schema_version == WAIVER_LEDGER_SCHEMA_VERSION:
+    if schema_version in {
+        WAIVER_LEDGER_SCHEMA_VERSION,
+        CHAINED_WAIVER_LEDGER_SCHEMA_VERSION,
+    }:
         if private_full is not True:
             raise CostGovernanceError(
                 "cost ledger comparison waiver requires a private full reservation"
@@ -427,6 +449,11 @@ def _load_and_validate_record(path: Path) -> dict[str, Any]:
             raise CostGovernanceError(
                 "cost ledger provider risk ceiling is invalid"
             )
+        if schema_version == CHAINED_WAIVER_LEDGER_SCHEMA_VERSION:
+            _validated_reference(
+                payload["prior_waiver_decision_id"],
+                label="prior_waiver_decision_id",
+            )
     return payload
 
 
@@ -437,16 +464,34 @@ def _validate_ledger_cross_record_invariants(
     waiver_records = [
         record
         for record in records
-        if record.get("schema_version") == WAIVER_LEDGER_SCHEMA_VERSION
+        if record.get("schema_version")
+        in {
+            WAIVER_LEDGER_SCHEMA_VERSION,
+            CHAINED_WAIVER_LEDGER_SCHEMA_VERSION,
+        }
     ]
-    if len(waiver_records) > 1:
+    if len(waiver_records) > 2:
         raise CostGovernanceError(
-            "cost ledger contains more than one comparison waiver"
+            "cost ledger contains more than two comparison waivers"
+        )
+    waiver_schema_counts = {
+        schema: sum(record.get("schema_version") == schema for record in waiver_records)
+        for schema in (
+            WAIVER_LEDGER_SCHEMA_VERSION,
+            CHAINED_WAIVER_LEDGER_SCHEMA_VERSION,
+        )
+    }
+    if any(count > 1 for count in waiver_schema_counts.values()):
+        raise CostGovernanceError(
+            "cost ledger contains a duplicate comparison waiver generation"
         )
 
     for record in records:
         references = [record.get("high_cost_approval_id")]
-        if record.get("schema_version") == WAIVER_LEDGER_SCHEMA_VERSION:
+        if record.get("schema_version") in {
+            WAIVER_LEDGER_SCHEMA_VERSION,
+            CHAINED_WAIVER_LEDGER_SCHEMA_VERSION,
+        }:
             references.append(record.get("rolling_24h_waiver_id"))
         for reference in references:
             if reference is None:
@@ -460,23 +505,53 @@ def _validate_ledger_cross_record_invariants(
     for waiver_record in waiver_records:
         waiver_time = waiver_record["_reserved_at_datetime"]
         bound_digest = waiver_record["waived_reservation_sha256"]
-        prior_conflicts = [
-            record
-            for record in records
-            if record is not waiver_record
-            and record.get("private_full") is True
-            and record["_reserved_at_datetime"] <= waiver_time
-            and waiver_time - record["_reserved_at_datetime"] <= timedelta(hours=24)
-        ]
+        chained = (
+            waiver_record.get("schema_version")
+            == CHAINED_WAIVER_LEDGER_SCHEMA_VERSION
+        )
+        if chained:
+            prior_conflicts = [
+                record
+                for record in records
+                if record is not waiver_record
+                and record.get("private_full") is True
+                and record["_reserved_at_datetime"] <= waiver_time
+                and _reservation_payload_sha256(record) == bound_digest
+            ]
+        else:
+            # Preserve the v1.1 fail-closed rule: its one waiver had to cover
+            # the only earlier private-full reservation in the rolling window.
+            prior_conflicts = [
+                record
+                for record in records
+                if record is not waiver_record
+                and record.get("private_full") is True
+                and record["_reserved_at_datetime"] <= waiver_time
+                and waiver_time - record["_reserved_at_datetime"]
+                <= timedelta(hours=24)
+            ]
         if len(prior_conflicts) != 1:
             raise CostGovernanceError(
                 "cost ledger comparison waiver binding is invalid"
             )
         prior = prior_conflicts[0]
+        expected_prior_schema = (
+            WAIVER_LEDGER_SCHEMA_VERSION if chained else LEDGER_SCHEMA_VERSION
+        )
         if (
-            prior.get("schema_version") != LEDGER_SCHEMA_VERSION
-            or prior["_reserved_at_datetime"] >= waiver_time
+            prior.get("schema_version") != expected_prior_schema
             or _reservation_payload_sha256(prior) != bound_digest
+            or prior["_reserved_at_datetime"] >= waiver_time
+            or (
+                not chained
+                and waiver_time - prior["_reserved_at_datetime"]
+                > timedelta(hours=24)
+            )
+            or (
+                chained
+                and prior.get("rolling_24h_waiver_decision_id")
+                != waiver_record.get("prior_waiver_decision_id")
+            )
         ):
             raise CostGovernanceError(
                 "cost ledger comparison waiver binding is invalid"
@@ -521,11 +596,32 @@ def _enforce_waiver_once(
 ) -> None:
     if waiver is None:
         return
-    if any(record.get("rolling_24h_waiver_id") is not None for record in records):
+    prior_decision = waiver.prior_waiver_decision_id
+    existing_waivers = [
+        record
+        for record in records
+        if record.get("rolling_24h_waiver_id") is not None
+    ]
+    if prior_decision is None and existing_waivers:
         raise CostGovernanceError(
             "a private full comparison waiver has already been consumed"
         )
-    if any(record.get("high_cost_approval_id") == waiver.waiver_id for record in records):
+    if prior_decision is not None:
+        eligible_prior_waivers = [
+            record
+            for record in existing_waivers
+            if record.get("schema_version") == WAIVER_LEDGER_SCHEMA_VERSION
+            and record.get("rolling_24h_waiver_decision_id") == prior_decision
+        ]
+        if len(existing_waivers) != 1 or len(eligible_prior_waivers) != 1:
+            raise CostGovernanceError(
+                "chained comparison waiver requires the exact prior waiver"
+            )
+    if any(
+        record.get("high_cost_approval_id") == waiver.waiver_id
+        or record.get("rolling_24h_waiver_id") == waiver.waiver_id
+        for record in records
+    ):
         raise CostGovernanceError(
             "private full comparison waiver id has already been consumed"
         )
@@ -561,22 +657,42 @@ def _enforce_rolling_limits(
                 "another private full evaluation was reserved in the rolling 24h window"
             )
         if comparison_waiver is not None:
-            if len(recent_private_full) != 1:
-                raise CostGovernanceError(
-                    "private full comparison waiver requires exactly one conflicting "
-                    "reservation"
+            matching_prior = [
+                record
+                for record in records
+                if _record_matches_comparison_waiver(
+                    record,
+                    comparison_waiver,
                 )
-            prior = recent_private_full[0]
+            ]
+            if len(matching_prior) != 1:
+                if (
+                    comparison_waiver.prior_waiver_decision_id is None
+                    and not recent_private_full
+                ):
+                    raise CostGovernanceError(
+                        "private full comparison waiver requires exactly one "
+                        "conflicting reservation"
+                    )
+                if comparison_waiver.prior_waiver_decision_id is None:
+                    raise CostGovernanceError(
+                        "private full comparison waiver baseline does not match"
+                    )
+                raise CostGovernanceError(
+                    "chained comparison waiver requires the exact prior waiver"
+                )
+            prior = matching_prior[0]
             if prior["_reserved_at_datetime"] >= now:
                 raise CostGovernanceError(
                     "private full comparison waiver baseline is not earlier"
                 )
-            if not _record_matches_comparison_waiver(
-                prior,
-                comparison_waiver,
-            ):
+            unexpected_recent = [
+                record for record in recent_private_full if record is not prior
+            ]
+            if unexpected_recent:
                 raise CostGovernanceError(
-                    "private full comparison waiver baseline does not match"
+                    "private full comparison waiver does not cover another recent "
+                    "private full reservation"
                 )
             return prior
         return None
@@ -610,12 +726,22 @@ def _record_matches_comparison_waiver(
         (
             record.get("reservation_class") == "private_full",
             record.get("private_full") is True,
-            record.get("schema_version") == LEDGER_SCHEMA_VERSION,
+            record.get("schema_version")
+            == (
+                WAIVER_LEDGER_SCHEMA_VERSION
+                if waiver.prior_waiver_decision_id is not None
+                else LEDGER_SCHEMA_VERSION
+            ),
             record.get("scope") == waiver.prior_scope,
             record.get("runtime_git_sha") == waiver.prior_runtime_git_sha,
             record.get("manifest_sha256") == waiver.prior_manifest_sha256,
             record.get("case_count") == waiver.prior_case_count,
             record.get("approved_cap_rub") == waiver.prior_approved_cap_rub,
+            (
+                waiver.prior_waiver_decision_id is None
+                or record.get("rolling_24h_waiver_decision_id")
+                == waiver.prior_waiver_decision_id
+            ),
         )
     )
 
@@ -811,6 +937,14 @@ def _validated_private_full_comparison_waiver(
     )
     requested_cases = _validated_case_count(value.requested_case_count)
     requested_cap = _validated_cap(value.requested_approved_cap_rub)
+    prior_waiver_decision_id = (
+        _validated_reference(
+            value.prior_waiver_decision_id,
+            label="prior waiver decision id",
+        )
+        if value.prior_waiver_decision_id is not None
+        else None
+    )
 
     if any(
         (
@@ -843,4 +977,5 @@ def _validated_private_full_comparison_waiver(
         requested_manifest_sha256=requested_manifest,
         requested_case_count=requested_cases,
         requested_approved_cap_rub=requested_cap,
+        prior_waiver_decision_id=prior_waiver_decision_id,
     )

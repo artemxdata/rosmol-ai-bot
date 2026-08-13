@@ -10,7 +10,11 @@ from src.kb.event_facts import (
     concise_event_place_date_fact,
     foreign_registration_fact,
 )
-from src.kb.temporal import expired_registration_fact, extract_registration_deadline
+from src.kb.temporal import (
+    as_of_event_fact,
+    expired_registration_fact,
+    extract_registration_deadline,
+)
 from src.models import Chunk, QueryAnalysis, Question, ScoredChunk
 
 SOURCE_REF_RE = re.compile(r"\[src:([^\]]+)\]", re.IGNORECASE)
@@ -61,6 +65,13 @@ async def apply_response_guards(state: BotState) -> dict:
         seed_path=settings.kb_seed_path,
     )
     guard_name = "foreign_registration" if guarded else None
+    if guarded is None:
+        guarded = as_of_event_fact(
+            message=message,
+            analysis=analysis,
+            chunks=chunks,
+        )
+        guard_name = "event_state_as_of" if guarded else None
     if guarded is None:
         guarded = concise_event_place_date_fact(
             message=message,
@@ -157,6 +168,8 @@ def _guard_covers_all_aspects(
     if guard_name == "foreign_registration":
         return aspects <= {"registration", "foreign"}
     if guard_name == "place_and_date":
+        return aspects <= {"place_date"}
+    if guard_name == "event_state_as_of":
         return aspects <= {"place_date"}
     if guard_name == "registration_closed":
         return aspects <= {"registration"}

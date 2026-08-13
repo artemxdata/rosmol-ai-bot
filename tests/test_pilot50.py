@@ -20,6 +20,9 @@ V2_MANIFEST_PATH = (
 V3_MANIFEST_PATH = (
     pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v3.json"
 )
+V4_MANIFEST_PATH = (
+    pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v4.json"
+)
 EVAL_RUN_ID = "ask-eval-11111111-1111-1111-1111-111111111111"
 RUNTIME_GIT_SHA = "a" * 40
 APPROVAL_ID = "PILOT50-OWNER-20260810"
@@ -304,11 +307,63 @@ def _v3_candidate_raw_report(
     return report, trace_rows
 
 
+def _v4_candidate_raw_report(
+    cases: list[dict[str, Any]],
+    *,
+    cases_sha256: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    report, trace_rows = _candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha256,
+    )
+    approval_id = pilot50._v4_expected_approval_id(RUNTIME_GIT_SHA)
+    waiver_id = pilot50._v4_expected_waiver_id(RUNTIME_GIT_SHA)
+    cost_control = report["cost_control"]
+    cost_control["high_cost_approval_id"] = approval_id
+    contract = cost_control["candidate_contract"]
+    contract.update(
+        {
+            "contract_id": pilot50.V4_CANDIDATE_CONTRACT_ID,
+            "cost_scope": pilot50.V4_CANDIDATE_COST_SCOPE,
+            "rolling_24h_comparison_waiver_id": waiver_id,
+            "rolling_24h_comparison_waiver_decision_id": "D-042",
+            "prior_waiver_decision_id": "D-041",
+            "provider_residual_risk_ceiling_rub": 500.0,
+        }
+    )
+    reservation = cost_control["reservation"]
+    reservation.update(
+        {
+            "schema_version": "1.2.0",
+            "scope": pilot50.V4_CANDIDATE_COST_SCOPE,
+            "high_cost_approval_id": approval_id,
+            "rolling_24h_waiver_id": waiver_id,
+            "rolling_24h_waiver_decision_id": "D-042",
+            "prior_waiver_decision_id": "D-041",
+            "waived_reservation_sha256": "f" * 64,
+            "provider_risk_ceiling_rub": 500.0,
+        }
+    )
+    report["pilot50_candidate"]["contract_id"] = (
+        pilot50.V4_CANDIDATE_CONTRACT_ID
+    )
+    return report, trace_rows
+
+
 def _v3_candidate_materialized_workspace(
     tmp_path: Path,
 ) -> tuple[list[dict[str, Any]], Path, str]:
     cases, receipt = pilot50.build_materialized_cases(V3_MANIFEST_PATH)
     cases_path = tmp_path / "pilot50-v3-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    return cases, cases_path, str(receipt["cases_sha256"])
+
+
+def _v4_candidate_materialized_workspace(
+    tmp_path: Path,
+) -> tuple[list[dict[str, Any]], Path, str]:
+    cases, receipt = pilot50.build_materialized_cases(V4_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v4-cases.json"
     cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
     return cases, cases_path, str(receipt["cases_sha256"])
 
@@ -840,6 +895,76 @@ def test_v3_safe_result_binds_exact_comparison_waiver_and_rejects_tampering(
             expected_approval_id=approval_id,
             expected_rolling_24h_comparison_waiver_id=waiver_id,
             candidate_contract=pilot50.V3_CANDIDATE_CONTRACT_ID,
+        )
+
+
+def test_v4_safe_result_binds_exact_chained_d042_waiver_and_rejects_tampering(
+    tmp_path: Path,
+) -> None:
+    cases, cases_path, cases_sha = _v4_candidate_materialized_workspace(tmp_path)
+    report, trace_rows = _v4_candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha,
+    )
+    report_path = tmp_path / "pilot50-v4-report.json"
+    _write_json(report_path, report)
+    approval_id = pilot50._v4_expected_approval_id(RUNTIME_GIT_SHA)
+    waiver_id = pilot50._v4_expected_waiver_id(RUNTIME_GIT_SHA)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V4_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=approval_id,
+        expected_rolling_24h_comparison_waiver_id=waiver_id,
+        candidate_contract=pilot50.V4_CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["dataset_id"] == pilot50.V4_DATASET_ID
+    assert safe["status"] == "OK"
+    assert safe["quality_gate"]["schema_version"] == (
+        pilot50.V4_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION
+    )
+    assert safe["rolling_24h_waiver"] == {
+        "waiver_id": waiver_id,
+        "decision_id": "D-042",
+        "prior_waiver_decision_id": "D-041",
+        "waived_reservation_sha256": "f" * 64,
+        "provider_residual_risk_ceiling_rub": 500,
+        "runner_projected_stop_limit_rub": 30,
+    }
+    assert pilot50.validate_safe_result(safe) == safe
+
+    for field, value in (
+        ("waiver_id", "owner-wrong-waiver"),
+        ("decision_id", "D-999"),
+        ("prior_waiver_decision_id", "D-040"),
+        ("waived_reservation_sha256", "0" * 63),
+        ("provider_residual_risk_ceiling_rub", 501),
+        ("runner_projected_stop_limit_rub", 500),
+    ):
+        tampered_safe = copy.deepcopy(safe)
+        tampered_safe["rolling_24h_waiver"][field] = value
+        with pytest.raises(pilot50.Pilot50Error, match="comparison waiver"):
+            pilot50.validate_safe_result(tampered_safe)
+
+    tampered_report = copy.deepcopy(report)
+    tampered_report["cost_control"]["reservation"][
+        "prior_waiver_decision_id"
+    ] = "D-040"
+    _write_json(report_path, tampered_report)
+    with pytest.raises(pilot50.Pilot50Error, match="comparison waiver"):
+        pilot50.build_safe_result(
+            manifest_path=V4_MANIFEST_PATH,
+            cases_path=cases_path,
+            report_path=report_path,
+            trace_rows=trace_rows,
+            expected_runtime_git_sha=RUNTIME_GIT_SHA,
+            expected_approval_id=approval_id,
+            expected_rolling_24h_comparison_waiver_id=waiver_id,
+            candidate_contract=pilot50.V4_CANDIDATE_CONTRACT_ID,
         )
 
 
@@ -2432,6 +2557,152 @@ def test_diagnose_rejected_v3_prints_only_directional_payload_free_evidence(
         '"error"',
     ):
         assert forbidden_key not in stdout
+
+
+def test_v4_offline_rescore_is_bounded_payload_free_and_zero_cost(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary = "PRIVATE-OFFLINE-RESCORE-CANARY"
+    v3_cases_path, v3_report_path, hashes, report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path, canary=canary)
+    )
+    _v4_cases, v4_cases_path, v4_cases_sha = (
+        _v4_candidate_materialized_workspace(tmp_path)
+    )
+    v4_manifest_sha = hashlib.sha256(V4_MANIFEST_PATH.read_bytes()).hexdigest()
+    v4_runtime_sha = "b" * 40
+    argv = [
+        "offline-rescore-v4",
+        "--v3-manifest",
+        str(V3_MANIFEST_PATH),
+        "--v3-cases",
+        str(v3_cases_path),
+        "--v3-report",
+        str(v3_report_path),
+        "--v4-manifest",
+        str(V4_MANIFEST_PATH),
+        "--v4-cases",
+        str(v4_cases_path),
+        "--expected-v3-manifest-sha256",
+        hashes["manifest"],
+        "--expected-v3-cases-sha256",
+        hashes["cases"],
+        "--expected-v3-report-sha256",
+        hashes["report"],
+        "--expected-v3-runtime-git-sha",
+        RUNTIME_GIT_SHA,
+        "--expected-v4-manifest-sha256",
+        v4_manifest_sha,
+        "--expected-v4-cases-sha256",
+        v4_cases_sha,
+        "--expected-v4-runtime-git-sha",
+        v4_runtime_sha,
+    ]
+
+    assert pilot50.main(argv) == 0
+    stdout = capsys.readouterr().out
+    assert stdout.count("\n") == 1
+    output = json.loads(stdout)
+    assert stdout == pilot50._compact_canonical_json(output) + "\n"
+    assert set(output) == pilot50.V4_OFFLINE_RESCORE_FIELDS
+    assert output["schema_version"] == "pilot50-v4-offline-rescore-v1"
+    assert output["classification"] == "directional_calibration_only"
+    assert output["official_v4_result"] is False
+    assert output["human_product_verdict"] is False
+    assert output["network_calls"] == 0
+    assert output["ask_requests"] == 0
+    assert output["incremental_llm_cost_rub"] == 0.0
+    assert output["integrity"] == {
+        "source_status": "integrity_rejected",
+        "official_quality_gate_eligible": False,
+        "selective_reruns_performed": False,
+    }
+    assert output["coverage"] == {
+        "v3_cases_total": 50,
+        "v4_cases_total": 50,
+        "comparable_queries": 41,
+        "contract_changed_queries": 9,
+        "v4_temporal_contract_cases": 8,
+        "v4_qrel_cases": 50,
+        "v4_critical_cases": 15,
+    }
+    transitions = output["directional_rescore"]
+    assert transitions["old_scorer_passed"] == 40
+    assert sum(
+        transitions[field]
+        for field in (
+            "unchanged_pass",
+            "pass_to_fail",
+            "fail_to_pass",
+            "unchanged_fail",
+        )
+    ) == 41
+    assert output["bindings"] == {
+        "v3_manifest_sha256": hashes["manifest"],
+        "v3_cases_sha256": hashes["cases"],
+        "v3_report_sha256": hashes["report"],
+        "v3_runtime_git_sha": RUNTIME_GIT_SHA,
+        "v4_manifest_sha256": v4_manifest_sha,
+        "v4_cases_sha256": v4_cases_sha,
+        "v4_scorer_runtime_git_sha": v4_runtime_sha,
+    }
+    assert canary not in stdout
+    assert EVAL_RUN_ID not in stdout
+    assert str(report["results"][0]["response"]) not in stdout
+    for forbidden_key in (
+        '"query"',
+        '"response"',
+        '"id"',
+        '"request_id"',
+        '"eval_run_id"',
+        '"failure_reasons"',
+    ):
+        assert forbidden_key not in stdout
+
+
+def test_v4_offline_rescore_rejects_tampered_v4_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    v3_cases_path, v3_report_path, hashes, _report = (
+        _write_v3_rejected_diagnostics_fixture(tmp_path)
+    )
+    _v4_cases, v4_cases_path, v4_cases_sha = (
+        _v4_candidate_materialized_workspace(tmp_path)
+    )
+    argv = [
+        "offline-rescore-v4",
+        "--v3-manifest",
+        str(V3_MANIFEST_PATH),
+        "--v3-cases",
+        str(v3_cases_path),
+        "--v3-report",
+        str(v3_report_path),
+        "--v4-manifest",
+        str(V4_MANIFEST_PATH),
+        "--v4-cases",
+        str(v4_cases_path),
+        "--expected-v3-manifest-sha256",
+        hashes["manifest"],
+        "--expected-v3-cases-sha256",
+        hashes["cases"],
+        "--expected-v3-report-sha256",
+        hashes["report"],
+        "--expected-v3-runtime-git-sha",
+        RUNTIME_GIT_SHA,
+        "--expected-v4-manifest-sha256",
+        "0" * 64,
+        "--expected-v4-cases-sha256",
+        v4_cases_sha,
+        "--expected-v4-runtime-git-sha",
+        "b" * 40,
+    ]
+
+    assert pilot50.main(argv) == 2
+    assert capsys.readouterr().out == (
+        "pilot50=OFFLINE-RESCORE-V4 reason=validation_failed\n"
+    )
 
 
 def test_diagnose_rejected_v3_emits_ordered_boolean_fact_and_qrel_slots(

@@ -113,9 +113,21 @@ PILOT50_V3_PRIOR_RUNTIME_SHA = "64cc182d37a3c060439ed7a55f5cc875a27d786d"
 PILOT50_V3_PRIOR_CASES_SHA256 = (
     "b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
 )
+PILOT50_V4_CANDIDATE_CONTRACT_ID = "pilot50-v4-candidate-v1"
+PILOT50_V4_CANDIDATE_CASES_SHA256 = (
+    "c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8"
+)
+PILOT50_V4_CANDIDATE_COST_SCOPE = "pilot50-v4-candidate"
+PILOT50_V4_COMPARISON_WAIVER_DECISION_ID = "D-042"
+PILOT50_V4_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500.0
+PILOT50_V4_PRIOR_SCOPE = "pilot50-v3-candidate"
+PILOT50_V4_PRIOR_RUNTIME_SHA = "a5c5539ce2e8487418ed78ba64ae8ed9eab54863"
+PILOT50_V4_PRIOR_CASES_SHA256 = PILOT50_V3_CANDIDATE_CASES_SHA256
+PILOT50_V4_PRIOR_WAIVER_DECISION_ID = "D-041"
 PILOT50_CANDIDATE_CONTRACT_IDS = (
     PILOT50_CANDIDATE_CONTRACT_ID,
     PILOT50_V3_CANDIDATE_CONTRACT_ID,
+    PILOT50_V4_CANDIDATE_CONTRACT_ID,
 )
 PHASE0_RUNNER_CASE_FIELDS = frozenset(
     {
@@ -182,6 +194,29 @@ ANSWER_NUMBER_MAX = 1_000_000_000
 ANSWER_TIMEZONE_MAX_CHARS = 16
 ANSWER_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 ANSWER_TIMEZONE_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё_.+-]+")
+TEMPORAL_POLARITIES = frozenset({"closed", "completed", "in_progress"})
+TEMPORAL_POLARITY_PATTERNS: dict[str, tuple[str, ...]] = {
+    "closed": (
+        r"\bпри[её]м\w*\s+заяв\w*\s+(?:уже\s+)?"
+        r"(?:заверш(?:[её]н|ился|илась|ено)|закрыт(?:а|ы|о)?)\b",
+        r"\bрегистрац\w*\s+(?:уже\s+)?закрыт(?:а|ы|о)?\b",
+        r"\bрегистрац\w*\s+на\s+(?:форум|мероприят)\w*\s+"
+        r"«[^».!?]{1,96}»\s+(?:уже\s+)?закрыт(?:а|ы|о)?\b",
+        r"\b(?:нов\w+\s+)?заяв\w*[^,;.!?]{0,40}\bподат\w*"
+        r"[^,;.!?]{0,24}\bнельзя\b",
+        r"\bсрок\w*\s+(?:подач\w*|при[её]м\w*)\s+"
+        r"(?:ист[её]к|заверш[её]н)\b",
+    ),
+    "completed": (
+        r"\bсмена\s+(?:уже\s+)?(?:завершилась|прошла)\b",
+        r"\bмероприятие\s+(?:уже\s+)?завершилось\b",
+        r"\bфорум\s+(?:уже\s+)?завершился\b",
+    ),
+    "in_progress": (
+        r"\bсмена\s+(?:всё\s+ещ[её]\s+)?(?:продолжается|продолжалась|ид[её]т)\b",
+        r"\bмероприятие\s+(?:всё\s+ещ[её]\s+)?продолжается\b",
+    ),
+}
 SOURCE_CITATION_TOKEN_RE = re.compile(
     r"\[\s*src\s*:[^\]\r\n]*\]",
     flags=re.IGNORECASE,
@@ -248,6 +283,7 @@ SOURCE_DIAGNOSTIC_EXPECTATION_FIELDS = frozenset(
         "equivalent_chunks",
         "expected_answer_contains",
         "expected_answer_fact_groups",
+        "expected_temporal_polarity",
         "expected_behavior",
         "expected_chunk_ids",
         "expected_chunks",
@@ -514,6 +550,9 @@ def _normalize_case(
             "expected_answer_contains and expected_answer_fact_groups "
             "cannot be used together"
         )
+    temporal_as_of_date, expected_temporal_polarity = (
+        _normalize_temporal_expectation(raw)
+    )
     expected_message_masked_contains = _string_list(
         raw.get("expected_message_masked_contains") or []
     )
@@ -587,6 +626,9 @@ def _normalize_case(
     }
     if expected_answer_fact_groups:
         normalized["expected_answer_fact_groups"] = expected_answer_fact_groups
+    if expected_temporal_polarity:
+        normalized["temporal_as_of_date"] = temporal_as_of_date
+        normalized["expected_temporal_polarity"] = expected_temporal_polarity
     if label_status:
         normalized["label_status"] = label_status
     if split:
@@ -2521,6 +2563,13 @@ def _pilot50_candidate_contract_config(contract_id: str) -> dict[str, Any] | Non
             "cost_scope": PILOT50_V3_CANDIDATE_COST_SCOPE,
             "comparison_waiver_required": True,
         }
+    if contract_id == PILOT50_V4_CANDIDATE_CONTRACT_ID:
+        return {
+            "contract_id": PILOT50_V4_CANDIDATE_CONTRACT_ID,
+            "cases_file_sha256": PILOT50_V4_CANDIDATE_CASES_SHA256,
+            "cost_scope": PILOT50_V4_CANDIDATE_COST_SCOPE,
+            "comparison_waiver_required": True,
+        }
     return None
 
 
@@ -2535,6 +2584,17 @@ def _pilot50_v3_expected_waiver_id(runtime_git_sha: str) -> str:
     )
 
 
+def _pilot50_v4_expected_approval_id(runtime_git_sha: str) -> str:
+    return f"owner-chat-20260814-pilot50-v4-{runtime_git_sha}-cap30"
+
+
+def _pilot50_v4_expected_waiver_id(runtime_git_sha: str) -> str:
+    return (
+        "owner-chat-20260814-waive-v3-to-v4-"
+        f"{runtime_git_sha}-cap30"
+    )
+
+
 def _pilot50_candidate_comparison_waiver(
     contract: Mapping[str, Any] | None,
     *,
@@ -2544,11 +2604,15 @@ def _pilot50_candidate_comparison_waiver(
     if contract is None:
         if waiver_id:
             raise ValueError(
-                "--rolling-24h-comparison-waiver-id requires the Pilot50 v3 "
+                "--rolling-24h-comparison-waiver-id requires a comparison "
                 "candidate contract"
             )
         return None
-    if contract.get("contract_id") != PILOT50_V3_CANDIDATE_CONTRACT_ID:
+    contract_id = contract.get("contract_id")
+    if contract_id not in {
+        PILOT50_V3_CANDIDATE_CONTRACT_ID,
+        PILOT50_V4_CANDIDATE_CONTRACT_ID,
+    }:
         if waiver_id:
             raise ValueError(
                 "Pilot50 v2 rejects --rolling-24h-comparison-waiver-id"
@@ -2556,25 +2620,43 @@ def _pilot50_candidate_comparison_waiver(
         return None
 
     runtime_git_sha = str(contract.get("runtime_git_sha") or "")
-    expected_waiver_id = _pilot50_v3_expected_waiver_id(runtime_git_sha)
+    if contract_id == PILOT50_V3_CANDIDATE_CONTRACT_ID:
+        expected_waiver_id = _pilot50_v3_expected_waiver_id(runtime_git_sha)
+        decision_id = PILOT50_V3_COMPARISON_WAIVER_DECISION_ID
+        risk_ceiling = PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        prior_scope = PILOT50_V3_PRIOR_SCOPE
+        prior_runtime = PILOT50_V3_PRIOR_RUNTIME_SHA
+        prior_cases_sha = PILOT50_V3_PRIOR_CASES_SHA256
+        requested_scope = PILOT50_V3_CANDIDATE_COST_SCOPE
+        requested_cases_sha = PILOT50_V3_CANDIDATE_CASES_SHA256
+        prior_waiver_decision_id = None
+    else:
+        expected_waiver_id = _pilot50_v4_expected_waiver_id(runtime_git_sha)
+        decision_id = PILOT50_V4_COMPARISON_WAIVER_DECISION_ID
+        risk_ceiling = PILOT50_V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
+        prior_scope = PILOT50_V4_PRIOR_SCOPE
+        prior_runtime = PILOT50_V4_PRIOR_RUNTIME_SHA
+        prior_cases_sha = PILOT50_V4_PRIOR_CASES_SHA256
+        requested_scope = PILOT50_V4_CANDIDATE_COST_SCOPE
+        requested_cases_sha = PILOT50_V4_CANDIDATE_CASES_SHA256
+        prior_waiver_decision_id = PILOT50_V4_PRIOR_WAIVER_DECISION_ID
     if waiver_id != expected_waiver_id:
-        raise ValueError("Pilot50 v3 comparison waiver id is invalid")
+        raise ValueError("Pilot50 comparison waiver id is invalid")
     return PrivateFullComparisonWaiver(
         waiver_id=waiver_id,
-        decision_id=PILOT50_V3_COMPARISON_WAIVER_DECISION_ID,
-        provider_risk_ceiling_rub=(
-            PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
-        ),
-        prior_scope=PILOT50_V3_PRIOR_SCOPE,
-        prior_runtime_git_sha=PILOT50_V3_PRIOR_RUNTIME_SHA,
-        prior_manifest_sha256=PILOT50_V3_PRIOR_CASES_SHA256,
+        decision_id=decision_id,
+        provider_risk_ceiling_rub=risk_ceiling,
+        prior_scope=prior_scope,
+        prior_runtime_git_sha=prior_runtime,
+        prior_manifest_sha256=prior_cases_sha,
         prior_case_count=PILOT50_CANDIDATE_CASES_TOTAL,
         prior_approved_cap_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
-        requested_scope=PILOT50_V3_CANDIDATE_COST_SCOPE,
+        requested_scope=requested_scope,
         requested_runtime_git_sha=runtime_git_sha,
-        requested_manifest_sha256=PILOT50_V3_CANDIDATE_CASES_SHA256,
+        requested_manifest_sha256=requested_cases_sha,
         requested_case_count=PILOT50_CANDIDATE_CASES_TOTAL,
         requested_approved_cap_rub=PILOT50_CANDIDATE_COST_CAP_RUB,
+        prior_waiver_decision_id=prior_waiver_decision_id,
     )
 
 
@@ -2589,17 +2671,36 @@ def _pilot50_candidate_waiver_report_matches(
         "rolling_24h_waiver_decision_id",
         "waived_reservation_sha256",
         "provider_risk_ceiling_rub",
+        "prior_waiver_decision_id",
     }
-    if contract.get("contract_id") != PILOT50_V3_CANDIDATE_CONTRACT_ID:
+    contract_id = contract.get("contract_id")
+    if contract_id not in {
+        PILOT50_V3_CANDIDATE_CONTRACT_ID,
+        PILOT50_V4_CANDIDATE_CONTRACT_ID,
+    }:
         return waiver_fields.isdisjoint(reservation_report)
     runtime_git_sha = str(contract.get("runtime_git_sha") or "")
+    chained = contract_id == PILOT50_V4_CANDIDATE_CONTRACT_ID
+    expected_schema = "1.2.0" if chained else "1.1.0"
+    expected_waiver_id = (
+        _pilot50_v4_expected_waiver_id(runtime_git_sha)
+        if chained
+        else _pilot50_v3_expected_waiver_id(runtime_git_sha)
+    )
+    expected_decision_id = (
+        PILOT50_V4_COMPARISON_WAIVER_DECISION_ID
+        if chained
+        else PILOT50_V3_COMPARISON_WAIVER_DECISION_ID
+    )
     return all(
         (
-            reservation_report.get("schema_version") == "1.1.0",
+            reservation_report.get("schema_version") == expected_schema,
             reservation_report.get("rolling_24h_waiver_id")
-            == _pilot50_v3_expected_waiver_id(runtime_git_sha),
+            == expected_waiver_id,
             reservation_report.get("rolling_24h_waiver_decision_id")
-            == PILOT50_V3_COMPARISON_WAIVER_DECISION_ID,
+            == expected_decision_id,
+            reservation_report.get("prior_waiver_decision_id")
+            == (PILOT50_V4_PRIOR_WAIVER_DECISION_ID if chained else None),
             isinstance(
                 reservation_report.get("waived_reservation_sha256"),
                 str,
@@ -2609,7 +2710,11 @@ def _pilot50_candidate_waiver_report_matches(
             )
             is not None,
             reservation_report.get("provider_risk_ceiling_rub")
-            == PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB,
+            == (
+                PILOT50_V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
+                if chained
+                else PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+            ),
         )
     )
 
@@ -2681,9 +2786,20 @@ def _validated_pilot50_candidate_contract(
     if not strict_live:
         failures.append("strict_live")
     if candidate_config is not None and candidate_config["comparison_waiver_required"]:
-        if approval_id != _pilot50_v3_expected_approval_id(runtime_sha):
+        chained = contract_id == PILOT50_V4_CANDIDATE_CONTRACT_ID
+        expected_approval_id = (
+            _pilot50_v4_expected_approval_id(runtime_sha)
+            if chained
+            else _pilot50_v3_expected_approval_id(runtime_sha)
+        )
+        expected_waiver_id = (
+            _pilot50_v4_expected_waiver_id(runtime_sha)
+            if chained
+            else _pilot50_v3_expected_waiver_id(runtime_sha)
+        )
+        if approval_id != expected_approval_id:
             failures.append("approval")
-        if waiver_id != _pilot50_v3_expected_waiver_id(runtime_sha):
+        if waiver_id != expected_waiver_id:
             failures.append("rolling_24h_comparison_waiver")
     else:
         if SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
@@ -2714,13 +2830,22 @@ def _validated_pilot50_candidate_contract(
         "repricing_applied": False,
     }
     if candidate_config["comparison_waiver_required"]:
+        chained = contract_id == PILOT50_V4_CANDIDATE_CONTRACT_ID
         contract["rolling_24h_comparison_waiver_id"] = waiver_id
         contract["rolling_24h_comparison_waiver_decision_id"] = (
-            PILOT50_V3_COMPARISON_WAIVER_DECISION_ID
+            PILOT50_V4_COMPARISON_WAIVER_DECISION_ID
+            if chained
+            else PILOT50_V3_COMPARISON_WAIVER_DECISION_ID
         )
         contract["provider_residual_risk_ceiling_rub"] = (
-            PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
+            PILOT50_V4_COMPARISON_PROVIDER_RISK_CEILING_RUB
+            if chained
+            else PILOT50_V3_COMPARISON_PROVIDER_RISK_CEILING_RUB
         )
+        if chained:
+            contract["prior_waiver_decision_id"] = (
+                PILOT50_V4_PRIOR_WAIVER_DECISION_ID
+            )
     return contract
 
 
@@ -3496,8 +3621,9 @@ def _safe_cost_reservation_report(
         "rolling_24h_waiver_decision_id",
         "waived_reservation_sha256",
         "provider_risk_ceiling_rub",
+        "prior_waiver_decision_id",
     )
-    waiver_shape_present = record.get("schema_version") == "1.1.0" or any(
+    waiver_shape_present = record.get("schema_version") in {"1.1.0", "1.2.0"} or any(
         field in record for field in waiver_field_names
     )
     if waiver_shape_present:
@@ -3509,6 +3635,13 @@ def _safe_cost_reservation_report(
             record.get("waived_reservation_sha256") or ""
         )
         raw_provider_risk = record.get("provider_risk_ceiling_rub")
+        schema_version = record.get("schema_version")
+        chained = schema_version == "1.2.0"
+        prior_waiver_decision_id = (
+            str(record.get("prior_waiver_decision_id") or "")
+            if chained
+            else None
+        )
         provider_risk_valid = (
             not isinstance(raw_provider_risk, bool)
             and isinstance(raw_provider_risk, (int, float))
@@ -3518,20 +3651,28 @@ def _safe_cost_reservation_report(
         )
         waiver_valid = all(
             (
-                record.get("schema_version") == "1.1.0",
+                schema_version in {"1.1.0", "1.2.0"},
                 SAFE_COST_APPROVAL_ID_RE.fullmatch(waiver_id) is not None,
                 SAFE_COST_APPROVAL_ID_RE.fullmatch(waiver_decision_id)
                 is not None,
                 SHA256_RE.fullmatch(waived_reservation_sha256) is not None,
                 provider_risk_valid,
                 waiver_id != approval_id,
+                (
+                    SAFE_COST_APPROVAL_ID_RE.fullmatch(
+                        str(prior_waiver_decision_id or "")
+                    )
+                    is not None
+                    if chained
+                    else record.get("prior_waiver_decision_id") is None
+                ),
             )
         )
         report.update(
             {
                 "schema_version": (
-                    "1.1.0"
-                    if record.get("schema_version") == "1.1.0"
+                    str(schema_version)
+                    if schema_version in {"1.1.0", "1.2.0"}
                     else None
                 ),
                 "rolling_24h_waiver_id": (
@@ -3552,6 +3693,11 @@ def _safe_cost_reservation_report(
                 ),
                 "provider_risk_ceiling_rub": (
                     float(raw_provider_risk) if provider_risk_valid else None
+                ),
+                **(
+                    {"prior_waiver_decision_id": prior_waiver_decision_id}
+                    if chained
+                    else {}
                 ),
             }
         )
@@ -4848,6 +4994,7 @@ def score_case(
     equivalent_chunk_ids = case.get("equivalent_chunk_ids") or {}
     expected_answer_contains = case.get("expected_answer_contains") or []
     expected_answer_fact_groups = case.get("expected_answer_fact_groups") or []
+    expected_temporal_polarity = case.get("expected_temporal_polarity")
     if expected_answer_contains and expected_answer_fact_groups:
         raise ValueError(
             "expected_answer_contains and expected_answer_fact_groups "
@@ -4941,6 +5088,14 @@ def score_case(
         answer_contains_match = all(answer_fact_group_matches)
         checks["answer_contains_match"] = answer_contains_match
         required_checks["answer_contains_match"] = answer_contains_match
+    temporal_polarity_match: bool | None = None
+    if expected_temporal_polarity:
+        temporal_polarity_match = _answer_temporal_polarity_matches(
+            expected_temporal_polarity,
+            response_text,
+        )
+        checks["temporal_polarity_match"] = temporal_polarity_match
+        required_checks["temporal_polarity_match"] = temporal_polarity_match
     if expected_message_masked_contains:
         message_masked = str(trace.get("message_masked") or "")
         masked_contains_match = all(
@@ -5086,6 +5241,9 @@ def score_case(
             else {}
         ),
         "answer_contains_match": checks.get("answer_contains_match"),
+        "temporal_as_of_date": case.get("temporal_as_of_date"),
+        "expected_temporal_polarity": expected_temporal_polarity,
+        "temporal_polarity_match": temporal_polarity_match,
         "message_masked": trace.get("message_masked"),
         "expected_message_masked_contains": expected_message_masked_contains,
         "message_masked_contains_match": checks.get("message_masked_contains_match"),
@@ -5183,6 +5341,8 @@ def _failure_reasons(
             reasons.append("expected_chunk_not_cited")
     if required_checks.get("answer_contains_match") is False:
         reasons.append("answer_contains_mismatch")
+    if required_checks.get("temporal_polarity_match") is False:
+        reasons.append("temporal_polarity_mismatch")
     if required_checks.get("cited_source_types_allowed") is False:
         reasons.append("forbidden_cited_source_type")
     if required_checks.get("message_masked_contains_match") is False:
@@ -6534,6 +6694,29 @@ def _normalize_expected_answer_fact_groups(value: Any) -> list[dict[str, Any]]:
     return normalized_groups
 
 
+def _normalize_temporal_expectation(
+    raw: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    raw_as_of = raw.get("temporal_as_of_date")
+    raw_polarity = raw.get("expected_temporal_polarity")
+    if raw_as_of is None and raw_polarity is None:
+        return None, None
+    if raw_as_of is None or raw_polarity is None:
+        raise ValueError(
+            "temporal_as_of_date and expected_temporal_polarity must be used together"
+        )
+    as_of = _parse_answer_fact_iso_date(
+        raw_as_of,
+        label="temporal_as_of_date",
+    ).isoformat()
+    if not isinstance(raw_polarity, str) or raw_polarity not in TEMPORAL_POLARITIES:
+        raise ValueError(
+            "expected_temporal_polarity must be one of: "
+            f"{', '.join(sorted(TEMPORAL_POLARITIES))}"
+        )
+    return as_of, raw_polarity
+
+
 def _normalize_answer_context_any(
     value: Any,
     *,
@@ -6694,6 +6877,34 @@ def _answer_fact_group_matches(
             claims[claim_index + 1 :],
         ):
             return True
+    return False
+
+
+def _answer_temporal_polarity_matches(
+    expected_polarity: str,
+    response_text: str,
+) -> bool:
+    claims = _answer_fact_clauses(response_text)
+    for claim in claims:
+        if claim.is_question:
+            continue
+        for pattern in TEMPORAL_POLARITY_PATTERNS[expected_polarity]:
+            for match in re.finditer(pattern, claim.text):
+                start, end = match.span()
+                validation_claim = claim.text
+                validation_end = end
+                if expected_polarity == "closed" and "нельзя" in match.group(0):
+                    replacement = "приём заявок закрыт"
+                    validation_claim = (
+                        claim.text[:start] + replacement + claim.text[end:]
+                    )
+                    validation_end = start + len(replacement)
+                if not _answer_text_span_is_disallowed(
+                    validation_claim,
+                    start,
+                    validation_end,
+                ):
+                    return True
     return False
 
 

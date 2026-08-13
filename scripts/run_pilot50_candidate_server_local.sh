@@ -4,19 +4,52 @@ set -Eeuo pipefail
 umask 077
 exec 2>/dev/null
 
-readonly DATASET_ID="pilot50_balanced_v3"
-readonly CANDIDATE_CONTRACT_ID="pilot50-v3-candidate-v1"
-readonly MANIFEST_REL="eval/cases/pilot50_balanced_v3.json"
+readonly RUNNER_GENERATION="${PILOT50_RUNNER_GENERATION:-v3}"
+if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+  readonly DATASET_ID="pilot50_balanced_v4"
+  readonly CANDIDATE_PROMPT_VERSION="pilot50-quality-v4"
+  readonly CANDIDATE_CONTRACT_ID="pilot50-v4-candidate-v1"
+  readonly CANDIDATE_COST_SCOPE="pilot50-v4-candidate"
+  readonly MANIFEST_REL="eval/cases/pilot50_balanced_v4.json"
+  readonly EXPECTED_MANIFEST_SHA256="bfd14ae638da0d65b2c07ff299f8f366a2d8fb8be772223a931e601691125ede"
+  readonly EXPECTED_CASES_SHA256="c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8"
+  readonly QUALITY_GATE_SCHEMA_VERSION="pilot50-v4-quality-gate-v1"
+  readonly COMPARISON_WAIVER_DECISION_ID="D-042"
+  readonly PRIOR_WAIVER_DECISION_ID="D-041"
+  readonly PRIOR_CANDIDATE_SCOPE="pilot50-v3-candidate"
+  readonly PRIOR_CANDIDATE_SHA="a5c5539ce2e8487418ed78ba64ae8ed9eab54863"
+  readonly PRIOR_CASES_SHA256="3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112"
+  readonly SEALED_V3_MANIFEST_SHA256="fef1caa227777e2c198bd6acdc77471fbf2551732c85e2334f8cad781025e875"
+  readonly SEALED_V3_REPORT_SHA256="151d282ea78c532742343b2f901766ed4e42fbe761c551657ba03748d5cb95da"
+  readonly SEALED_V3_RUN_DIR="/var/lib/rosmol/pilot50-candidate/runs/pilot50_balanced_v3-${PRIOR_CANDIDATE_SHA}"
+else
+  [[ "$RUNNER_GENERATION" == "v3" ]] || {
+    printf 'pilot50_candidate_server_local=FAIL reason=runner_generation_invalid\n'
+    exit 1
+  }
+  readonly DATASET_ID="pilot50_balanced_v3"
+  readonly CANDIDATE_PROMPT_VERSION="pilot50-quality-v3"
+  readonly CANDIDATE_CONTRACT_ID="pilot50-v3-candidate-v1"
+  readonly CANDIDATE_COST_SCOPE="pilot50-v3-candidate"
+  readonly MANIFEST_REL="eval/cases/pilot50_balanced_v3.json"
+  readonly EXPECTED_MANIFEST_SHA256="fef1caa227777e2c198bd6acdc77471fbf2551732c85e2334f8cad781025e875"
+  readonly EXPECTED_CASES_SHA256="3c76d0de9a31cf3a36a38346d38fa75d5173ac2b452ddcbf60c551678580d112"
+  readonly QUALITY_GATE_SCHEMA_VERSION="pilot50-v3-quality-gate-v1"
+  readonly COMPARISON_WAIVER_DECISION_ID="D-041"
+  readonly PRIOR_WAIVER_DECISION_ID=""
+  readonly PRIOR_CANDIDATE_SCOPE="pilot50-v2-candidate"
+  readonly PRIOR_CANDIDATE_SHA="64cc182d37a3c060439ed7a55f5cc875a27d786d"
+  readonly PRIOR_CASES_SHA256="b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
+  readonly SEALED_V3_MANIFEST_SHA256=""
+  readonly SEALED_V3_REPORT_SHA256=""
+  readonly SEALED_V3_RUN_DIR=""
+fi
 readonly TARGET="http://pilot50-candidate-ml:8000/ask"
 readonly CASES_TOTAL="50"
 readonly TYPICAL_TOTAL="25"
 readonly ATYPICAL_TOTAL="25"
 readonly COST_CAP_RUB="30"
-readonly COMPARISON_WAIVER_DECISION_ID="D-041"
 readonly COMPARISON_PROVIDER_RISK_CEILING_RUB="500"
-readonly PRIOR_CANDIDATE_SCOPE="pilot50-v2-candidate"
-readonly PRIOR_CANDIDATE_SHA="64cc182d37a3c060439ed7a55f5cc875a27d786d"
-readonly PRIOR_CASES_SHA256="b027e469e062682b6dc341b2dd4c87440edffb1955c2111f38e6c44a92a3a14d"
 readonly SIMPLE_INPUT_PRICE_RUB_PER_MILLION="12.2"
 readonly SIMPLE_OUTPUT_PRICE_RUB_PER_MILLION="12.2"
 readonly COMPLEX_INPUT_PRICE_RUB_PER_MILLION="569.34"
@@ -52,6 +85,8 @@ STAGING_DIR=""
 EPHEMERAL_ENV_FILE=""
 RUNNER_ENV_FILE=""
 CANDIDATE_ID=""
+V4_OFFLINE_RESCORE_SHA256=""
+V4_GOVERNANCE_PRECHECK_SHA256=""
 compose=()
 
 fail() {
@@ -535,6 +570,8 @@ create_ephemeral_env() {
   {
     printf 'PILOT50_CANDIDATE_GIT_SHA=%s\n' "$EXPECTED_SHA"
     printf 'PILOT50_CANDIDATE_SOURCE_DIR=%s\n' "$build_source"
+    printf 'PILOT50_CANDIDATE_DATASET_ID=%s\n' "$DATASET_ID"
+    printf 'PILOT50_CANDIDATE_PROMPT_VERSION=%s\n' "$CANDIDATE_PROMPT_VERSION"
     printf 'PILOT50_CANDIDATE_API_AUTH_TOKEN=%s\n' "$api_token"
     printf 'PILOT50_CANDIDATE_USER_HASH_SECRET=%s\n' "$user_hash_secret"
     printf 'API_AUTH_TOKEN=%s\n' "$api_token"
@@ -585,6 +622,7 @@ validate_effective_compose() {
       "$RUNTIME_EGRESS_NETWORK" "$HF_CACHE_VOLUME" "$TORCH_CACHE_VOLUME" \
       "$MODEL_CACHE_VOLUME" "$KB_SEED_PATH" "$ADMIN_KB_DIR" \
       "$(if [[ -d "$SOURCE_DIR" ]]; then printf '%s' "$SOURCE_DIR"; else printf '%s' "$TOOLING_ROOT"; fi)" \
+      "$DATASET_ID" "$CANDIDATE_PROMPT_VERSION" \
       3<<'PY' 2>/dev/null
 import json
 import sys
@@ -599,6 +637,8 @@ import sys
     seed_path,
     admin_dir,
     build_source,
+    dataset_id,
+    prompt_version,
 ) = sys.argv[1:]
 payload = json.load(sys.stdin)
 assert set(payload.get("services") or {}) == {"pilot50-candidate-ml"}
@@ -608,7 +648,7 @@ assert service.get("build", {}).get("context") == build_source
 assert service.get("container_name") == "rosmol-pilot50-candidate-ml"
 assert service.get("labels") == {
     "com.rosmol.purpose": "pilot50-candidate",
-    "com.rosmol.dataset": "pilot50_balanced_v3",
+    "com.rosmol.dataset": dataset_id,
     "com.rosmol.candidate-git-sha": sha,
 }
 assert service.get("user") == "app"
@@ -631,7 +671,7 @@ environment = service.get("environment") or {}
 assert environment["APP_ENV"] == "staging"
 assert environment["RUNTIME_ROLE"] == "ml"
 assert environment["RELEASE_GIT_SHA"] == sha
-assert environment["PROMPT_VERSION"] == "pilot50-quality-v3"
+assert environment["PROMPT_VERSION"] == prompt_version
 assert environment["ML_PREWARM_ON_STARTUP"] == "true"
 assert environment["ML_UNLOAD_AFTER_USE"] == "true"
 assert environment["ML_UNLOAD_EMBEDDER_AFTER_USE"] == "true"
@@ -725,14 +765,16 @@ prepare_cases() {
     --output /evidence/pilot50-cases.json 2>/dev/null)"; then
     fail "v2_prepare_failed"
   fi
-  printf '%s' "$prepare_stdout" | python3 /dev/fd/3 3<<'PY' 2>/dev/null
+  printf '%s' "$prepare_stdout" \
+    | python3 /dev/fd/3 "$DATASET_ID" 3<<'PY' 2>/dev/null
 import json
 import sys
 
+dataset_id = sys.argv[1]
 value = json.load(sys.stdin)
 assert value.get("status") == "OK"
 assert value.get("operation") == "prepare"
-assert value.get("dataset_id") == "pilot50_balanced_v3"
+assert value.get("dataset_id") == dataset_id
 assert value.get("cases_total") == 50
 assert value.get("type_counts") == {"typical": 25, "atypical": 25}
 assert value.get("expected_behavior") == "answer"
@@ -767,6 +809,20 @@ validate_receipt() {
     || return 1
   [[ "$(receipt_value qdrant_seed_sha256 "$receipt")" =~ ^[0-9a-f]{64}$ ]] \
     || return 1
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    [[ "$(receipt_value offline_rescore_status "$receipt")" == "OK" ]] \
+      || return 1
+    [[ "$(receipt_value offline_rescore_sha256 "$receipt")" =~ ^[0-9a-f]{64}$ ]] \
+      || return 1
+    [[ "$(receipt_value governance_precheck_status "$receipt")" == "GO" ]] \
+      || return 1
+    [[ "$(receipt_value governance_decision_id "$receipt")" == \
+      "$COMPARISON_WAIVER_DECISION_ID" ]] || return 1
+    [[ "$(receipt_value prior_waiver_decision_id "$receipt")" == \
+      "$PRIOR_WAIVER_DECISION_ID" ]] || return 1
+    [[ "$(receipt_value governance_precheck_sha256 "$receipt")" =~ \
+      ^[0-9a-f]{64}$ ]] || return 1
+  fi
 }
 
 preflight_mode() {
@@ -858,6 +914,9 @@ preflight_mode() {
   source_sha="$(source_paths_sha)" || fail "source_paths_sha_unavailable"
   [[ "$manifest_sha" =~ ^[0-9a-f]{64}$ && "$cases_sha" =~ ^[0-9a-f]{64}$ && \
     "$source_sha" =~ ^[0-9a-f]{64}$ ]] || fail "preflight_hash_invalid"
+  [[ "$manifest_sha" == "$EXPECTED_MANIFEST_SHA256" && \
+    "$cases_sha" == "$EXPECTED_CASES_SHA256" ]] \
+    || fail "frozen_contract_hash_mismatch"
 
   if [[ "$EPHEMERAL_ENV_FILE" != /run/pilot50-candidate-env.* ]] || \
     ! sudo rm -f -- "$EPHEMERAL_ENV_FILE" >/dev/null 2>&1; then
@@ -875,6 +934,9 @@ preflight_mode() {
     -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
     "rosmol-ai-bot-pilot50-candidate:$EXPECTED_SHA" 2>/dev/null)" == \
     "$EXPECTED_SHA" ]] || fail "candidate_image_sha_mismatch"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    v4_read_only_preflight "$manifest_sha" "$cases_sha" "$staging_evidence"
+  fi
   CANDIDATE_ID="$("${compose[@]}" run -d --no-deps --use-aliases \
     --name "$CANDIDATE_CONTAINER" pilot50-candidate-ml 2>/dev/null)" \
     || fail "candidate_start_failed"
@@ -906,6 +968,15 @@ preflight_mode() {
       "$CASES_TOTAL" "$TYPICAL_TOTAL" "$ATYPICAL_TOTAL"
     printf 'target=%s\ncost_cap_rub=%s\n' "$TARGET" "$COST_CAP_RUB"
     printf 'runtime_smoke_status=OK\n'
+    if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+      printf 'offline_rescore_status=OK\n'
+      printf 'offline_rescore_sha256=%s\n' "$V4_OFFLINE_RESCORE_SHA256"
+      printf 'governance_precheck_status=GO\n'
+      printf 'governance_decision_id=%s\n' "$COMPARISON_WAIVER_DECISION_ID"
+      printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
+      printf 'governance_precheck_sha256=%s\n' \
+        "$V4_GOVERNANCE_PRECHECK_SHA256"
+    fi
     printf '%s\n' "$capacity"
   } >"$STAGING_DIR/preflight.receipt" || fail "preflight_receipt_create_failed"
   chmod 0600 "$STAGING_DIR/preflight.receipt" || fail "preflight_receipt_mode_failed"
@@ -926,6 +997,14 @@ preflight_mode() {
   printf 'qdrant_count=%s\n' "$qdrant_count"
   printf 'qdrant_fingerprint_sha256=%s\n' "$qdrant_sha"
   printf 'qdrant_seed_sha256=%s\n' "$qdrant_seed_sha"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    printf 'offline_rescore_status=OK\n'
+    printf 'offline_rescore_sha256=%s\n' "$V4_OFFLINE_RESCORE_SHA256"
+    printf 'governance_precheck_status=GO\n'
+    printf 'governance_decision_id=%s\n' "$COMPARISON_WAIVER_DECISION_ID"
+    printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
+    printf 'governance_precheck_sha256=%s\n' "$V4_GOVERNANCE_PRECHECK_SHA256"
+  fi
   printf '%s\n' "$capacity"
   printf 'cost_cap_rub=%s\n' "$COST_CAP_RUB"
 }
@@ -994,7 +1073,8 @@ validate_candidate_runtime() {
   }
   sudo docker inspect "$CANDIDATE_ID" 2>/dev/null \
     | python3 /dev/fd/3 "$EXPECTED_SHA" "$DATA_NETWORK" \
-      "$RUNTIME_EGRESS_NETWORK" 3<<'PY' 2>/dev/null
+      "$RUNTIME_EGRESS_NETWORK" "$DATASET_ID" "$CANDIDATE_PROMPT_VERSION" \
+      3<<'PY' 2>/dev/null
 import json
 import sys
 
@@ -1016,7 +1096,11 @@ def no_new_privileges_enabled(values):
 
 
 try:
-    sha, data_network, egress_network = sys.argv[1:]
+    sha, data_network, egress_network, *generation = sys.argv[1:]
+    if generation:
+        dataset_id, prompt_version = generation
+    else:
+        dataset_id, prompt_version = "pilot50_balanced_v3", None
     payload = json.load(sys.stdin)
     require("inspect", isinstance(payload, list) and len(payload) == 1)
     value = payload[0]
@@ -1068,7 +1152,7 @@ try:
         "labels",
         isinstance(labels, dict)
         and labels.get("com.rosmol.purpose") == "pilot50-candidate"
-        and labels.get("com.rosmol.dataset") == "pilot50_balanced_v3"
+        and labels.get("com.rosmol.dataset") == dataset_id
         and labels.get("com.rosmol.candidate-git-sha") == sha,
     )
     raw_env = config.get("Env")
@@ -1082,7 +1166,8 @@ try:
         "runtime_env",
         env.get("APP_ENV") == "staging"
         and env.get("RUNTIME_ROLE") == "ml"
-        and env.get("RELEASE_GIT_SHA") == sha,
+        and env.get("RELEASE_GIT_SHA") == sha
+        and (prompt_version is None or env.get("PROMPT_VERSION") == prompt_version),
     )
     require(
         "deadline_budget",
@@ -1246,9 +1331,13 @@ from eval.cost_governance import (
 from eval.run_ask import (
     PILOT50_V3_CANDIDATE_CASES_SHA256,
     PILOT50_V3_CANDIDATE_CONTRACT_ID,
+    PILOT50_V4_CANDIDATE_CASES_SHA256,
+    PILOT50_V4_CANDIDATE_CONTRACT_ID,
     _pilot50_candidate_comparison_waiver,
     _pilot50_v3_expected_approval_id,
     _pilot50_v3_expected_waiver_id,
+    _pilot50_v4_expected_approval_id,
+    _pilot50_v4_expected_waiver_id,
 )
 
 approval_id = _validated_approval_id(sys.argv[1])
@@ -1267,9 +1356,32 @@ cases_sha = sys.argv[4]
 ) = sys.argv[5:]
 provider_risk_ceiling = float(provider_risk_ceiling)
 cost_cap = float(cost_cap)
-assert cases_sha == PILOT50_V3_CANDIDATE_CASES_SHA256
-assert approval_id == _pilot50_v3_expected_approval_id(runtime_sha)
-assert waiver_id == _pilot50_v3_expected_waiver_id(runtime_sha)
+chained = decision_id == "D-042"
+assert decision_id == ("D-042" if chained else "D-041")
+contract_id = (
+    PILOT50_V4_CANDIDATE_CONTRACT_ID
+    if chained
+    else PILOT50_V3_CANDIDATE_CONTRACT_ID
+)
+expected_cases_sha = (
+    PILOT50_V4_CANDIDATE_CASES_SHA256
+    if chained
+    else PILOT50_V3_CANDIDATE_CASES_SHA256
+)
+expected_scope = "pilot50-v4-candidate" if chained else "pilot50-v3-candidate"
+expected_approval_id = (
+    _pilot50_v4_expected_approval_id(runtime_sha)
+    if chained
+    else _pilot50_v3_expected_approval_id(runtime_sha)
+)
+expected_waiver_id = (
+    _pilot50_v4_expected_waiver_id(runtime_sha)
+    if chained
+    else _pilot50_v3_expected_waiver_id(runtime_sha)
+)
+assert cases_sha == expected_cases_sha
+assert approval_id == expected_approval_id
+assert waiver_id == expected_waiver_id
 ledger = Path("/cost-ledger")
 assert ledger.is_dir() and not ledger.is_symlink()
 lock = ledger / ".cost-governance.lock"
@@ -1278,7 +1390,7 @@ now = datetime.now(UTC)
 records = _scan_records(ledger, now=now)
 waiver = _pilot50_candidate_comparison_waiver(
     {
-        "contract_id": PILOT50_V3_CANDIDATE_CONTRACT_ID,
+        "contract_id": contract_id,
         "runtime_git_sha": runtime_sha,
     },
     rolling_24h_comparison_waiver_id=waiver_id,
@@ -1293,9 +1405,10 @@ assert waiver.prior_case_count == 50
 assert waiver.prior_approved_cap_rub == cost_cap
 assert waiver.requested_manifest_sha256 == cases_sha
 assert waiver.requested_approved_cap_rub == cost_cap
+assert waiver.prior_waiver_decision_id == ("D-041" if chained else None)
 waiver = _validated_private_full_comparison_waiver(
     waiver,
-    scope="pilot50-v3-candidate",
+    scope=expected_scope,
     runtime_git_sha=runtime_sha,
     manifest_sha256=cases_sha,
     case_count=50,
@@ -1319,12 +1432,252 @@ print(_reservation_payload_sha256(prior))
 PY
 }
 
+find_sealed_v3_rejected_report() {
+  sudo python3 -I -S - "$SEALED_V3_RUN_DIR" \
+    "$SEALED_V3_MANIFEST_SHA256" "$PRIOR_CASES_SHA256" \
+    "$SEALED_V3_REPORT_SHA256" "$PRIOR_CANDIDATE_SHA" 2>/dev/null <<'PY'
+import hashlib
+import re
+import stat
+import sys
+from pathlib import Path
+from uuid import UUID
+
+run_dir = Path(sys.argv[1])
+manifest_sha, cases_sha, report_sha, runtime_sha = sys.argv[2:]
+source_dir = run_dir / "source"
+evidence_dir = run_dir / "evidence"
+manifest = source_dir / "eval/cases/pilot50_balanced_v3.json"
+cases = evidence_dir / "pilot50-cases.json"
+started = run_dir / "run.started"
+
+def require_dir(path, *, mode, app_owned=False):
+    metadata = path.lstat()
+    assert stat.S_ISDIR(metadata.st_mode) and not path.is_symlink()
+    assert path.resolve(strict=True) == path
+    assert stat.S_IMODE(metadata.st_mode) == mode
+    if app_owned:
+        assert metadata.st_uid == 10001 and metadata.st_gid == 10001
+
+def require_file(path, *, maximum, app_owned=False):
+    metadata = path.lstat()
+    assert stat.S_ISREG(metadata.st_mode) and not path.is_symlink()
+    assert metadata.st_nlink == 1 and 0 < metadata.st_size <= maximum
+    if app_owned:
+        assert metadata.st_uid == 10001 and metadata.st_gid == 10001
+        assert stat.S_IMODE(metadata.st_mode) == 0o600
+    return path.read_bytes()
+
+require_dir(run_dir, mode=0o700)
+require_dir(source_dir, mode=0o555)
+require_dir(evidence_dir, mode=0o700, app_owned=True)
+for absent in (
+    run_dir / "run.completed",
+    evidence_dir / "pilot50-ask-report.json",
+    evidence_dir / "pilot50-safe-result.json",
+):
+    assert not absent.exists() and not absent.is_symlink()
+rejected = sorted(evidence_dir.glob("pilot50-ask-report.ask-eval-*.rejected.json"))
+assert len(rejected) == 1
+rejected_report = rejected[0]
+match = re.fullmatch(
+    r"pilot50-ask-report\.(ask-eval-([0-9a-f-]{36}))\.rejected\.json",
+    rejected_report.name,
+)
+assert match is not None and str(UUID(match.group(2))) == match.group(2)
+assert {path.name for path in evidence_dir.iterdir()} == {
+    cases.name,
+    rejected_report.name,
+}
+for path, maximum, expected, app_owned in (
+    (manifest, 128 * 1024, manifest_sha, False),
+    (cases, 4 * 1024 * 1024, cases_sha, True),
+    (rejected_report, 32 * 1024 * 1024, report_sha, True),
+):
+    payload = require_file(path, maximum=maximum, app_owned=app_owned)
+    assert hashlib.sha256(payload).hexdigest() == expected
+started_text = require_file(started, maximum=4096).decode("ascii")
+assert started_text.endswith("\n") and "\r" not in started_text
+lines = started_text.splitlines()
+assert len(lines) == 10 and all(line.count("=") == 1 for line in lines)
+receipt = dict(line.split("=", 1) for line in lines)
+assert receipt == {
+    "schema_version": "pilot50-candidate-run-started-v1",
+    "candidate_sha": runtime_sha,
+    "cases_sha256": cases_sha,
+    "approval_id": f"owner-chat-20260811-pilot50-v3-{runtime_sha}-cap30",
+    "rolling_24h_waiver_id": (
+        "owner-chat-20260811-waive-rolling24h-v2-to-v3-"
+        f"{runtime_sha}-cap30"
+    ),
+    "rolling_24h_waiver_decision_id": "D-041",
+    "waived_reservation_sha256": receipt["waived_reservation_sha256"],
+    "provider_residual_risk_ceiling_rub": "500",
+    "runner_projected_stop_limit_rub": "30",
+    "cost_cap_rub": "30",
+}
+assert re.fullmatch(r"[0-9a-f]{64}", receipt["waived_reservation_sha256"])
+sys.stdout.write(str(rejected_report))
+PY
+}
+
+run_v4_offline_rescore() {
+  local evidence_dir="$1" manifest_sha="$2" cases_sha="$3" rejected_report="$4"
+  sudo docker run --rm --pull never --network none \
+    --user app --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m \
+    --cap-drop ALL --security-opt no-new-privileges=true \
+    --pids-limit 256 --memory 2g --cpus 2 \
+    -e PYTHONOPTIMIZE= -e PYTHONDONTWRITEBYTECODE=1 \
+    --mount "type=bind,src=$SOURCE_DIR,dst=/workspace,readonly" \
+    --mount "type=bind,src=$SEALED_V3_RUN_DIR/source/eval/cases/pilot50_balanced_v3.json,dst=/v3-manifest.json,readonly" \
+    --mount "type=bind,src=$SEALED_V3_RUN_DIR/evidence/pilot50-cases.json,dst=/v3-cases.json,readonly" \
+    --mount "type=bind,src=$rejected_report,dst=/v3-report.json,readonly" \
+    --mount "type=bind,src=$SOURCE_DIR/$MANIFEST_REL,dst=/v4-manifest.json,readonly" \
+    --mount "type=bind,src=$evidence_dir/pilot50-cases.json,dst=/v4-cases.json,readonly" \
+    -w /workspace --entrypoint python \
+    "rosmol-ai-bot-pilot50-candidate:$EXPECTED_SHA" \
+    -E -m scripts.pilot50 offline-rescore-v4 \
+    --v3-manifest /v3-manifest.json --v3-cases /v3-cases.json \
+    --v3-report /v3-report.json --v4-manifest /v4-manifest.json \
+    --v4-cases /v4-cases.json \
+    --expected-v3-manifest-sha256 "$SEALED_V3_MANIFEST_SHA256" \
+    --expected-v3-cases-sha256 "$PRIOR_CASES_SHA256" \
+    --expected-v3-report-sha256 "$SEALED_V3_REPORT_SHA256" \
+    --expected-v3-runtime-git-sha "$PRIOR_CANDIDATE_SHA" \
+    --expected-v4-manifest-sha256 "$manifest_sha" \
+    --expected-v4-cases-sha256 "$cases_sha" \
+    --expected-v4-runtime-git-sha "$EXPECTED_SHA" 2>/dev/null
+}
+
+validate_v4_offline_rescore() {
+  local manifest_sha="$1" cases_sha="$2"
+  python3 -I -S /dev/fd/3 "$EXPECTED_SHA" "$manifest_sha" "$cases_sha" \
+    "$SEALED_V3_MANIFEST_SHA256" "$PRIOR_CASES_SHA256" \
+    "$SEALED_V3_REPORT_SHA256" "$PRIOR_CANDIDATE_SHA" \
+    3<<'PY' 2>/dev/null
+import json
+import sys
+
+raw = sys.stdin.buffer.read(16385)
+assert 0 < len(raw) <= 16384
+assert all(byte == 10 or 32 <= byte != 127 for byte in raw)
+value = json.loads(raw)
+assert set(value) == {
+    "schema_version", "classification", "official_v4_result",
+    "human_product_verdict", "network_calls", "ask_requests",
+    "incremental_llm_cost_rub", "bindings", "integrity", "coverage",
+    "directional_rescore",
+}
+v4_runtime, v4_manifest, v4_cases, v3_manifest, v3_cases, v3_report, v3_runtime = (
+    sys.argv[1:]
+)
+assert value["schema_version"] == "pilot50-v4-offline-rescore-v1"
+assert value["classification"] == "directional_calibration_only"
+assert value["official_v4_result"] is False
+assert value["human_product_verdict"] is False
+assert value["network_calls"] == 0 and value["ask_requests"] == 0
+assert value["incremental_llm_cost_rub"] == 0.0
+assert value["bindings"] == {
+    "v3_manifest_sha256": v3_manifest,
+    "v3_cases_sha256": v3_cases,
+    "v3_report_sha256": v3_report,
+    "v3_runtime_git_sha": v3_runtime,
+    "v4_manifest_sha256": v4_manifest,
+    "v4_cases_sha256": v4_cases,
+    "v4_scorer_runtime_git_sha": v4_runtime,
+}
+assert value["integrity"] == {
+    "source_status": "integrity_rejected",
+    "official_quality_gate_eligible": False,
+    "selective_reruns_performed": False,
+}
+assert value["coverage"] == {
+    "v3_cases_total": 50,
+    "v4_cases_total": 50,
+    "comparable_queries": 41,
+    "contract_changed_queries": 9,
+    "v4_temporal_contract_cases": 8,
+    "v4_qrel_cases": 50,
+    "v4_critical_cases": 15,
+}
+directional = value["directional_rescore"]
+assert set(directional) == {
+    "old_scorer_passed", "v4_scorer_passed", "unchanged_pass",
+    "pass_to_fail", "fail_to_pass", "unchanged_fail",
+}
+assert all(type(item) is int and 0 <= item <= 41 for item in directional.values())
+assert sum(directional[key] for key in (
+    "unchanged_pass", "pass_to_fail", "fail_to_pass", "unchanged_fail"
+)) == 41
+assert directional["old_scorer_passed"] == (
+    directional["unchanged_pass"] + directional["pass_to_fail"]
+)
+assert directional["v4_scorer_passed"] == (
+    directional["unchanged_pass"] + directional["fail_to_pass"]
+)
+sys.stdout.write(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+v4_read_only_preflight() {
+  local approval_id cases_sha="$2" evidence_dir="$3" manifest_sha="$1"
+  local offline_path offline_stdout rejected_report validated_offline waiver_id
+
+  approval_id="${HIGH_COST_APPROVAL_ID:-}"
+  waiver_id="${PILOT50_ROLLING_24H_WAIVER_ID:-}"
+  [[ "$approval_id" == \
+    "owner-chat-20260814-pilot50-v4-${EXPECTED_SHA}-cap30" ]] \
+    || fail "approval_id_missing_or_invalid"
+  [[ "$waiver_id" == \
+    "owner-chat-20260814-waive-v3-to-v4-${EXPECTED_SHA}-cap30" ]] \
+    || fail "rolling_24h_comparison_waiver_id_missing_or_invalid"
+  [[ "$manifest_sha" == "$EXPECTED_MANIFEST_SHA256" && \
+    "$cases_sha" == "$EXPECTED_CASES_SHA256" ]] \
+    || fail "frozen_contract_hash_mismatch"
+
+  if ! rejected_report="$(find_sealed_v3_rejected_report)"; then
+    fail "sealed_v3_evidence_invalid"
+  fi
+  [[ "$rejected_report" == "$SEALED_V3_RUN_DIR/evidence/"*.rejected.json ]] \
+    || fail "sealed_v3_evidence_invalid"
+  if ! offline_stdout="$(run_v4_offline_rescore \
+    "$evidence_dir" "$manifest_sha" "$cases_sha" "$rejected_report")"; then
+    fail "offline_rescore_failed"
+  fi
+  if ! validated_offline="$(printf '%s' "$offline_stdout" \
+    | validate_v4_offline_rescore "$manifest_sha" "$cases_sha")"; then
+    fail "offline_rescore_output_invalid"
+  fi
+  offline_path="$evidence_dir/pilot50-v4-offline-rescore.json"
+  if sudo test -e "$offline_path" || sudo test -L "$offline_path"; then
+    fail "offline_rescore_artifact_exists"
+  fi
+  printf '%s\n' "$validated_offline" | sudo tee "$offline_path" >/dev/null \
+    || fail "offline_rescore_artifact_write_failed"
+  sudo chown 10001:10001 "$offline_path" \
+    || fail "offline_rescore_artifact_mode_failed"
+  sudo chmod 0600 "$offline_path" || fail "offline_rescore_artifact_mode_failed"
+  V4_OFFLINE_RESCORE_SHA256="$(sudo sha256sum "$offline_path" 2>/dev/null \
+    | cut -d ' ' -f 1)" || fail "offline_rescore_sha_unavailable"
+  [[ "$V4_OFFLINE_RESCORE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "offline_rescore_sha_invalid"
+
+  if ! V4_GOVERNANCE_PRECHECK_SHA256="$(cost_governance_preflight \
+    "$approval_id" "$waiver_id" "$cases_sha")"; then
+    fail "cost_governance_preflight_failed"
+  fi
+  [[ "$V4_GOVERNANCE_PRECHECK_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "cost_governance_preflight_failed"
+}
+
 validate_safe_stdout() {
   local cases_sha="$1" report_sha="$2" approval_id="$3" waiver_id="$4"
   local waived_reservation_sha="$5"
   python3 /dev/fd/3 "$cases_sha" "$report_sha" "$EXPECTED_SHA" \
     "$approval_id" "$waiver_id" "$waived_reservation_sha" \
-    "$COST_CAP_RUB" 3<<'PY' 2>/dev/null
+    "$COST_CAP_RUB" "$DATASET_ID" "$CANDIDATE_CONTRACT_ID" \
+    "$QUALITY_GATE_SCHEMA_VERSION" "$COMPARISON_WAIVER_DECISION_ID" \
+    "$PRIOR_WAIVER_DECISION_ID" 3<<'PY' 2>/dev/null
 import json
 import hashlib
 import math
@@ -1339,7 +1692,22 @@ import sys
     waiver_id,
     waived_reservation_sha,
     cap,
-) = sys.argv[1:]
+) = sys.argv[1:8]
+generation = sys.argv[8:]
+if generation:
+    (
+        dataset_id,
+        contract_id,
+        gate_schema_version,
+        waiver_decision_id,
+        prior_waiver_decision_id,
+    ) = generation
+else:
+    dataset_id = "pilot50_balanced_v3"
+    contract_id = "pilot50-v3-candidate-v1"
+    gate_schema_version = "pilot50-v3-quality-gate-v1"
+    waiver_decision_id = "D-041"
+    prior_waiver_decision_id = ""
 raw = sys.stdin.buffer.read(16385)
 assert len(raw) <= 16384 and raw and all(byte == 10 or 32 <= byte != 127 for byte in raw)
 payload = json.loads(raw)
@@ -1356,17 +1724,20 @@ assert isinstance(payload, dict) and set(payload) == expected_fields
 for forbidden in ("query", "response", "request_id", "trace_events", "error"):
     assert forbidden not in payload
 assert payload.get("schema_version") == "pilot50-safe-result-v1"
-assert payload.get("dataset_id") == "pilot50_balanced_v3"
+assert payload.get("dataset_id") == dataset_id
 assert payload.get("runtime_git_sha") == runtime_sha
 assert payload.get("approval_id") == approval_id
 waiver = payload.get("rolling_24h_waiver")
-assert waiver == {
+expected_waiver = {
     "waiver_id": waiver_id,
-    "decision_id": "D-041",
+    "decision_id": waiver_decision_id,
     "waived_reservation_sha256": waived_reservation_sha,
     "provider_residual_risk_ceiling_rub": 500,
     "runner_projected_stop_limit_rub": 30,
 }
+if prior_waiver_decision_id:
+    expected_waiver["prior_waiver_decision_id"] = prior_waiver_decision_id
+assert waiver == expected_waiver
 assert re.fullmatch(r"[0-9a-f]{64}", waived_reservation_sha)
 assert re.fullmatch(r"ask-eval-[0-9a-f-]{36}", str(payload.get("eval_run_id") or ""))
 assert payload.get("status") == "OK"
@@ -1413,7 +1784,7 @@ assert pricing == {
     "complete": True,
     "stopped": False,
     "source": "target_reported",
-    "contract_id": "pilot50-v3-candidate-v1",
+    "contract_id": contract_id,
     "rate_card_sha256": rate_card_sha,
     "target_telemetry_preserved": True,
     "target_telemetry_pricing_complete": True,
@@ -1479,7 +1850,7 @@ for name in criterion_order:
     assert row["passed"] is passed
     if not passed:
         failed.append(name)
-assert gate["schema_version"] == "pilot50-v3-quality-gate-v1"
+assert gate["schema_version"] == gate_schema_version
 assert gate["failed_criteria"] == failed
 assert gate["status"] == ("STOP" if failed else "GO")
 assert gate["output_contract_reasons"] == sorted({
@@ -1518,8 +1889,13 @@ run_mode() {
   verify_runner_contract_support
   approval_id="${HIGH_COST_APPROVAL_ID:-}"
   waiver_id="${PILOT50_ROLLING_24H_WAIVER_ID:-}"
-  expected_approval_id="owner-chat-20260811-pilot50-v3-${EXPECTED_SHA}-cap30"
-  expected_waiver_id="owner-chat-20260811-waive-rolling24h-v2-to-v3-${EXPECTED_SHA}-cap30"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    expected_approval_id="owner-chat-20260814-pilot50-v4-${EXPECTED_SHA}-cap30"
+    expected_waiver_id="owner-chat-20260814-waive-v3-to-v4-${EXPECTED_SHA}-cap30"
+  else
+    expected_approval_id="owner-chat-20260811-pilot50-v3-${EXPECTED_SHA}-cap30"
+    expected_waiver_id="owner-chat-20260811-waive-rolling24h-v2-to-v3-${EXPECTED_SHA}-cap30"
+  fi
   [[ "$approval_id" == "$expected_approval_id" ]] \
     || fail "approval_id_missing_or_invalid"
   [[ "$waiver_id" == "$expected_waiver_id" ]] \
@@ -1537,6 +1913,19 @@ run_mode() {
     2>/dev/null | cut -d ' ' -f 1)" || fail "source_seed_sha_unavailable"
   validate_receipt "$marker" "$manifest_sha" "$cases_sha" \
     || fail "preflight_receipt_mismatch"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    sudo test -f "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" \
+      || fail "offline_rescore_artifact_missing"
+    sudo test ! -L "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" \
+      || fail "offline_rescore_artifact_not_regular"
+    [[ "$(sudo stat -c '%u:%g:%a:%h' \
+      "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" 2>/dev/null)" == \
+      "10001:10001:600:1" ]] || fail "offline_rescore_artifact_mode_mismatch"
+    [[ "$(sudo sha256sum "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" \
+      2>/dev/null | cut -d ' ' -f 1)" == \
+      "$(receipt_value offline_rescore_sha256 "$marker")" ]] \
+      || fail "offline_rescore_artifact_changed"
+  fi
   [[ "$source_seed_sha" == "$(receipt_value qdrant_seed_sha256 "$marker")" ]] \
     || fail "candidate_seed_differs_from_runtime"
   verify_source_snapshot || fail "source_snapshot_invalid"
@@ -1605,6 +1994,11 @@ run_mode() {
   fi
   [[ "$waived_reservation_sha" =~ ^[0-9a-f]{64}$ ]] \
     || fail "cost_governance_preflight_failed"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    [[ "$waived_reservation_sha" == \
+      "$(receipt_value governance_precheck_sha256 "$marker")" ]] \
+      || fail "governance_changed_since_preflight"
+  fi
   (set -o noclobber; {
     printf 'schema_version=pilot50-candidate-run-started-v1\n'
     printf 'candidate_sha=%s\n' "$EXPECTED_SHA"
@@ -1613,6 +2007,13 @@ run_mode() {
     printf 'rolling_24h_waiver_id=%s\n' "$waiver_id"
     printf 'rolling_24h_waiver_decision_id=%s\n' \
       "$COMPARISON_WAIVER_DECISION_ID"
+    if [[ -n "$PRIOR_WAIVER_DECISION_ID" ]]; then
+      printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
+      printf 'offline_rescore_sha256=%s\n' \
+        "$(receipt_value offline_rescore_sha256 "$marker")"
+      printf 'governance_precheck_sha256=%s\n' \
+        "$(receipt_value governance_precheck_sha256 "$marker")"
+    fi
     printf 'waived_reservation_sha256=%s\n' "$waived_reservation_sha"
     printf 'provider_residual_risk_ceiling_rub=%s\n' \
       "$COMPARISON_PROVIDER_RISK_CEILING_RUB"
@@ -1699,6 +2100,13 @@ run_mode() {
     printf 'rolling_24h_waiver_id=%s\n' "$waiver_id"
     printf 'rolling_24h_waiver_decision_id=%s\n' \
       "$COMPARISON_WAIVER_DECISION_ID"
+    if [[ -n "$PRIOR_WAIVER_DECISION_ID" ]]; then
+      printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
+      printf 'offline_rescore_sha256=%s\n' \
+        "$(receipt_value offline_rescore_sha256 "$marker")"
+      printf 'governance_precheck_sha256=%s\n' \
+        "$(receipt_value governance_precheck_sha256 "$marker")"
+    fi
     printf 'waived_reservation_sha256=%s\n' "$waived_reservation_sha"
     printf 'provider_residual_risk_ceiling_rub=%s\n' \
       "$COMPARISON_PROVIDER_RISK_CEILING_RUB"
@@ -1736,6 +2144,12 @@ review_mode() {
   sudo test ! -L "$started" || fail "candidate_completed_artifact_not_regular"
   sudo test -f "$safe_result" || fail "candidate_completed_artifact_missing"
   sudo test ! -L "$safe_result" || fail "candidate_completed_artifact_not_regular"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    sudo test -f "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" \
+      || fail "offline_rescore_artifact_missing"
+    sudo test ! -L "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" \
+      || fail "offline_rescore_artifact_not_regular"
+  fi
   cases_sha="$(receipt_value cases_sha256 "$completed")"
   report_sha="$(receipt_value report_sha256 "$completed")"
   safe_sha="$(receipt_value safe_result_sha256 "$completed")"
@@ -1743,8 +2157,13 @@ review_mode() {
   approval_id="$(receipt_value approval_id "$completed")"
   waiver_id="$(receipt_value rolling_24h_waiver_id "$completed")"
   waived_reservation_sha="$(receipt_value waived_reservation_sha256 "$completed")"
-  expected_approval_id="owner-chat-20260811-pilot50-v3-${EXPECTED_SHA}-cap30"
-  expected_waiver_id="owner-chat-20260811-waive-rolling24h-v2-to-v3-${EXPECTED_SHA}-cap30"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    expected_approval_id="owner-chat-20260814-pilot50-v4-${EXPECTED_SHA}-cap30"
+    expected_waiver_id="owner-chat-20260814-waive-v3-to-v4-${EXPECTED_SHA}-cap30"
+  else
+    expected_approval_id="owner-chat-20260811-pilot50-v3-${EXPECTED_SHA}-cap30"
+    expected_waiver_id="owner-chat-20260811-waive-rolling24h-v2-to-v3-${EXPECTED_SHA}-cap30"
+  fi
   [[ "$(receipt_value schema_version "$completed")" == \
     "pilot50-candidate-run-completed-v1" ]] \
     || fail "candidate_completion_marker_invalid"
@@ -1755,10 +2174,18 @@ review_mode() {
     "$waived_reservation_sha" =~ ^[0-9a-f]{64}$ && \
     "$(receipt_value rolling_24h_waiver_decision_id "$completed")" == \
       "$COMPARISON_WAIVER_DECISION_ID" && \
+    "$(receipt_value prior_waiver_decision_id "$completed")" == \
+      "$PRIOR_WAIVER_DECISION_ID" && \
     "$(receipt_value provider_residual_risk_ceiling_rub "$completed")" == \
       "$COMPARISON_PROVIDER_RISK_CEILING_RUB" && \
     "$(receipt_value runner_projected_stop_limit_rub "$completed")" == \
       "$COST_CAP_RUB" ]] || fail "candidate_completion_marker_invalid"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    [[ "$(receipt_value offline_rescore_sha256 "$completed")" =~ \
+        ^[0-9a-f]{64}$ && \
+      "$(receipt_value governance_precheck_sha256 "$completed")" =~ \
+        ^[0-9a-f]{64}$ ]] || fail "candidate_completion_marker_invalid"
+  fi
   [[ "$(receipt_value schema_version "$started")" == \
       "pilot50-candidate-run-started-v1" && \
     "$(receipt_value candidate_sha "$started")" == "$EXPECTED_SHA" && \
@@ -1767,6 +2194,8 @@ review_mode() {
     "$(receipt_value rolling_24h_waiver_id "$started")" == "$waiver_id" && \
     "$(receipt_value rolling_24h_waiver_decision_id "$started")" == \
       "$COMPARISON_WAIVER_DECISION_ID" && \
+    "$(receipt_value prior_waiver_decision_id "$started")" == \
+      "$PRIOR_WAIVER_DECISION_ID" && \
     "$(receipt_value waived_reservation_sha256 "$started")" == \
       "$waived_reservation_sha" && \
     "$(receipt_value provider_residual_risk_ceiling_rub "$started")" == \
@@ -1775,6 +2204,17 @@ review_mode() {
       "$COST_CAP_RUB" && \
     "$(receipt_value cost_cap_rub "$started")" == "$COST_CAP_RUB" ]] \
     || fail "candidate_started_marker_invalid"
+  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+    [[ "$(receipt_value offline_rescore_sha256 "$started")" == \
+        "$(receipt_value offline_rescore_sha256 "$completed")" && \
+      "$(sudo sha256sum "$EVIDENCE_DIR/pilot50-v4-offline-rescore.json" \
+        2>/dev/null | cut -d ' ' -f 1)" == \
+        "$(receipt_value offline_rescore_sha256 "$completed")" && \
+      "$(receipt_value governance_precheck_sha256 "$started")" == \
+        "$(receipt_value governance_precheck_sha256 "$completed")" && \
+      "$(receipt_value governance_precheck_sha256 "$started")" == \
+        "$waived_reservation_sha" ]] || fail "candidate_started_marker_invalid"
+  fi
   [[ "$cases_sha" =~ ^[0-9a-f]{64}$ && "$report_sha" =~ ^[0-9a-f]{64}$ && \
     "$safe_sha" =~ ^[0-9a-f]{64}$ && \
     ( "$quality_status" == "GO" || "$quality_status" == "STOP" ) ]] \
