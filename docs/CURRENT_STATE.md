@@ -4,6 +4,28 @@
 
 **Ветка:** `codex/real-rag`
 
+## 15 августа: второй Recovery10 execution failure; качество ядра всё ещё не измерено
+
+Исправленный exact candidate `eda8c2aa355c40e0e8c77ea4a0a6291610ea78ec` прошёл бесплатный
+server-local preflight `GO`: `/ready` — `OK`, HDE/VK — `DISABLED`, capacity — `GO`, cases и
+manifest совпали. Разрешённый one-shot `run` снова завершился
+`candidate_ask_eval_failed`. Повтор этого run запрещён; по короткому статусу нельзя утверждать,
+сколько из десяти запросов выполнено, была ли LLM-стоимость и существует ли восстанавливаемый raw
+report.
+
+Диагностика sealed run перепривязывается к exact candidate/approval и остаётся строго read-only:
+она не вызывает `/ask` или LLM, не меняет evidence/production и возвращает только безопасные
+агрегаты report/trace/cost. Следующий шаг — доставить diagnostic tooling через GitHub и один раз
+прочитать сохранённое состояние нового run; затем устранить точную execution-причину либо
+восстановить quality verdict без повторного расхода.
+
+Результат fact-core `49/50` не является качеством готового бота: это узкая offline calibration
+детерминированного published-fact path с `0` LLM calls. Он доказывает наличие фактов и wiring этого
+пути, но не доказывает server-local LLM execution, ticket closure или конверсию `>=50%`.
+
+Локальный gate diagnostic rebinding: Ruff — `OK`; полный pytest — `3358 passed`, `1 skipped`,
+`0 failed`; validation seed — `2186 valid / 2152 published`; Bash syntax — `OK`.
+
 ## 15 августа: найдена точная причина остановки Recovery10 до оценки качества
 
 Расширенная безопасная диагностика commit

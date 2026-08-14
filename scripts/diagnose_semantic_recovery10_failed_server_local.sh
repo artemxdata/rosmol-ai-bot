@@ -6,10 +6,10 @@ exec 2>/dev/null
 
 readonly SERVER_PROJECT_DIR="/opt/rosmol-ai-bot"
 readonly PROD_CONTAINER="rosmol-app-ml"
-readonly SEALED_RUNTIME_SHA="b37f462f240b65cc1de76bae7fb4ff2a63235458"
+readonly SEALED_RUNTIME_SHA="eda8c2aa355c40e0e8c77ea4a0a6291610ea78ec"
 readonly SEALED_CASES_SHA256="f2168c9e8721c82e46165b3803bb7adc7f89249f50210d96dc3dcb03d2710aaf"
 readonly SEALED_MANIFEST_SHA256="419a6a62671d7dbb03c402ae688f400e5fa1dbe46565e2a477b01cfcb4662068"
-readonly SEALED_APPROVAL_ID="owner-chat-20260814-semantic10-b37f462f240b65cc1de76bae7fb4ff2a63235458-f2168c9e8721-cap200"
+readonly SEALED_APPROVAL_ID="owner-chat-20260814-semantic10-eda8c2aa355c40e0e8c77ea4a0a6291610ea78ec-f2168c9e8721-cap200"
 readonly SEALED_RUN_DIR="/var/lib/rosmol/semantic-recovery10/runs/semantic_recovery10_v1-${SEALED_RUNTIME_SHA}"
 readonly SEALED_IMAGE="rosmol-ai-bot-pilot50-candidate:${SEALED_RUNTIME_SHA}"
 readonly COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"

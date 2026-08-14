@@ -33,7 +33,7 @@ def test_failed_recovery10_diagnostic_has_valid_bash_syntax() -> None:
 
 def test_failed_recovery10_diagnostic_is_read_only_and_bound_to_sealed_run() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "b37f462f240b65cc1de76bae7fb4ff2a63235458" in text
+    assert "eda8c2aa355c40e0e8c77ea4a0a6291610ea78ec" in text
     assert "f2168c9e8721c82e46165b3803bb7adc7f89249f50210d96dc3dcb03d2710aaf" in text
     assert "419a6a62671d7dbb03c402ae688f400e5fa1dbe46565e2a477b01cfcb4662068" in text
     assert 'readonly COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"' in text
