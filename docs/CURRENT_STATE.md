@@ -34,7 +34,10 @@ Redis, HDE/VK или Yonote credentials; до и после сверяются p
 fingerprint. Gate требует минимум `49/50`, retrieval `50/50` и LLM calls `0`. Точный следующий шаг —
 один server-local запуск уже push-нутого handoff
 `05891caa288549a47698e9dbf7e73d7adf378184` без reindex, `/ask`, production restart и paid
-Pilot50. Команда передана владельцу, safe aggregate ещё не получен. После этого нужен независимый
+Pilot50. Владелец выполнил его на сервере: `fact_core_qdrant_diagnostic=OK`, calibration
+`GO`, `49/50`, retrieval и citations `50/50`, no-operator `50/50`, LLM calls `0`. Production
+snapshot, Qdrant count `2152` и fingerprint до/после совпали. Это доказывает работоспособность
+ядра на реальном production Qdrant, но остаётся calibration-only. Дальше нужен независимый
 holdout с ticket-level no-operator verdict; до
 доказанных `>=50%` release status остаётся `NO GO`. Если реальный runtime останется ниже порога,
 следующий bounded A/B — тот же retrieval contract в Dify/RAGFlow, а не полная миграция вслепую.
@@ -55,9 +58,10 @@ coverage по 36 registry forums вырос: проезд `1 -> 16`, прожи�
 это на восьми типах фактов, найденных только в теле общего FAQ, без LLM. Полный локальный gate
 по независимым файловым группам: `3308 passed`, `1 skipped`, `0 failed`; Ruff и seed validation
 `2186/2152 published` зелёные, обе frozen calibration-проверки сохранили `49/50`, retrieval
-`50/50`, LLM calls `0`. Оба локальных commit пока не push-нуты: точный следующий шаг остаётся
-server-local Qdrant diagnostic уже переданного immutable SHA
-`05891caa288549a47698e9dbf7e73d7adf378184`; до его safe aggregate remote не менять.
+`50/50`, LLM calls `0`. После успешной Qdrant-диагностики `05891...` локальные commits разрешено
+push-нуть. Следующий runtime gate — повторить бесплатную read-only Qdrant-диагностику на новом
+exact SHA с body-driven coverage и единым answer-plan, без reindex, `/ask`, paid LLM и изменения
+production.
 
 ## Pilot50 v4 завершён с валидным safe verdict `STOP`
 
