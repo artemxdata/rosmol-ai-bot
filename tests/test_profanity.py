@@ -76,3 +76,21 @@ def test_profanity_detects_common_russian_forms(text: str) -> None:
 )
 def test_profanity_avoids_regular_phrases(text: str) -> None:
     assert profanity.check(text) is False
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("как и блять", "как и"),
+        ("как блять подать заявку", "как подать заявку"),
+        ("блять, где посмотреть программу?", ", где посмотреть программу?"),
+    ],
+)
+def test_profanity_strip_preserves_actionable_request(text: str, expected: str) -> None:
+    assert profanity.strip(text) == expected
+
+
+def test_profanity_strip_leaves_regular_text_unchanged() -> None:
+    text = "Как подать заявку на форум?"
+
+    assert profanity.strip(text) == text

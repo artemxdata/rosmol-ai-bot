@@ -1506,6 +1506,11 @@ def _infer_category_from_message(message: str) -> str | None:
         return "общее"
     if any(marker in normalized for marker in ("возможности бота", "abilities", "что умеешь")):
         return "общее"
+    if "номинац" in normalized and any(
+        marker in normalized
+        for marker in ("конкурс", "сезон", "заяв", "проект", "стандартн")
+    ):
+        return "гранты"
     if _has_grant_project_context(normalized):
         if _has_ui_failure_context(normalized):
             return "техподдержка"

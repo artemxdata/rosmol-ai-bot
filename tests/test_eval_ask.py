@@ -2168,6 +2168,21 @@ def _score_typed_answer(
     )
 
 
+def test_typed_answer_keeps_email_address_inside_one_fact_clause() -> None:
+    result = _score_typed_answer(
+        [
+            {
+                "kind": "text_any",
+                "alternatives": ["по адресу support@myrosmol.ru"],
+            }
+        ],
+        "Отправь ID нового аккаунта по адресу support@myrosmol.ru.",
+    )
+
+    assert result["answer_contains_match"] is True
+    assert result["passed"] is True
+
+
 @pytest.mark.parametrize(
     ("polarity", "response"),
     [

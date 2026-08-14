@@ -226,7 +226,9 @@ BARE_URL_RE = re.compile(
     r"\b(?:https?://|www\.)[^\s<>\[\]]+",
     flags=re.IGNORECASE,
 )
-ANSWER_FACT_CLAUSE_BOUNDARY_RE = re.compile(r"\.(?!\d)|[!?;\r\n]+")
+ANSWER_FACT_CLAUSE_BOUNDARY_RE = re.compile(
+    r"(\.(?![0-9A-Za-zА-Яа-яЁё])|[!?;\r\n]+)"
+)
 ANSWER_FACT_ATOMIC_BOUNDARY_RE = re.compile(
     r"\s*(?:(?<!\d),|,(?!\d))\s*|"
     r"\s+-\s+(?=(?:при этом|в то же время|между тем|вместе с тем)\b)|"
@@ -7489,7 +7491,9 @@ def _answer_fact_clauses(value: Any) -> list[_AnswerFactClaim]:
     stripped = MARKDOWN_LINK_DESTINATION_RE.sub(" ", stripped)
     stripped = BARE_URL_RE.sub(" ", stripped)
     atomic_claims: list[_AnswerFactClaim] = []
-    parts = re.split(r"(\.(?!\d)|[!?;\r\n]+)", stripped)
+    # A dot inside an email address or domain is part of the factual value,
+    # not a sentence boundary (for example ``support@myrosmol.ru``).
+    parts = ANSWER_FACT_CLAUSE_BOUNDARY_RE.split(stripped)
     for index in range(0, len(parts), 2):
         raw_clause = parts[index]
         boundary = parts[index + 1] if index + 1 < len(parts) else ""

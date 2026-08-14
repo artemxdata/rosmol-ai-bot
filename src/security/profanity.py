@@ -65,6 +65,16 @@ def check(text: str) -> bool:
     )
 
 
+def strip(text: str) -> str:
+    """Remove profanity tokens while preserving the actionable request text."""
+
+    raw = str(text or "")
+    cleaned = PROFANITY_RE.sub(" ", raw)
+    cleaned = HOSTILE_PHRASE_RE.sub(" ", cleaned)
+    cleaned = OBFUSCATED_PROFANITY_RE.sub(" ", cleaned)
+    return " ".join(cleaned.split())
+
+
 def _normalize(text: str) -> str:
     normalized = str(text or "").casefold().replace("ё", "е")
     normalized = normalized.translate(_HOMOGLYPHS)

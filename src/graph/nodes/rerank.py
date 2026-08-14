@@ -25,7 +25,9 @@ from src.graph.question_utils import (
     QueryProvenSourceAspect,
     build_effective_questions,
     build_query_proven_topic_plan,
+    query_proven_clause_matches_source_aspects,
     source_aspect_matches_topic,
+    unmapped_explicit_request_clauses,
 )
 from src.graph.response_profiles import (
     asks_event_dates as asks_profile_event_dates,
@@ -34,6 +36,8 @@ from src.graph.response_profiles import (
     chunk_has_event_date_evidence,
 )
 from src.graph.state import BotState
+from src.kb.fact_cards import compose_fact_cards
+from src.kb.fact_extractor import aspects_are_compatible, plan_query_aspects
 from src.models import Chunk, Question, ScoredChunk
 from src.rag.errors import MLDependencyError
 from src.response_contract import get_response_contract
@@ -357,6 +361,14 @@ def _rerank_for_state(
         return _boost_source_only_confidence(
             [_source_candidate(chunk) for chunk in query_proven_candidates]
         )
+    fact_card_candidates = _complete_fact_card_candidates(
+        analysis=analysis,
+        request_text=current_request_text,
+        chunks=chunks,
+        query_proven_plan=query_proven_plan,
+    )
+    if fact_card_candidates:
+        return _boost_source_only_confidence(fact_card_candidates)
     query_proven_resolution_failed = bool(query_proven_plan.questions)
     query_proven_fast_path_blocked = (
         query_proven_plan.incomplete or query_proven_resolution_failed
@@ -545,6 +557,52 @@ def _rerank_for_state(
             break
 
     return selected[:MAX_RERANKED_CHUNKS]
+
+
+def _complete_fact_card_candidates(
+    *,
+    analysis: Any,
+    request_text: str,
+    chunks: list[Chunk],
+    query_proven_plan: Any,
+) -> list[ScoredChunk]:
+    """Select a complete published fact set before probabilistic reranking."""
+
+    if analysis is None or not request_text or not chunks:
+        return []
+    if query_proven_plan.incomplete:
+        return []
+    forum = str(getattr(analysis, "forum_normalized", None) or "").strip()
+    if bounded_query_intent(request_text, forum_normalized=forum) is not None:
+        return []
+    questions = build_effective_questions(analysis, request_text)
+    unmapped = unmapped_explicit_request_clauses(
+        analysis,
+        request_text,
+        aspect_matcher=lambda clause: query_proven_clause_matches_source_aspects(
+            clause,
+            query_proven_plan.source_aspects,
+        ),
+        questions=questions,
+    )
+    if any(not plan_query_aspects(clause) for clause in unmapped):
+        return []
+    scored = [_source_candidate(chunk) for chunk in chunks]
+    draft = compose_fact_cards(
+        request_text,
+        scored,
+        category=getattr(analysis, "category", None),
+        forum_normalized=getattr(analysis, "forum_normalized", None),
+        response_limit=450,
+    )
+    if draft is None:
+        return []
+    by_id = {chunk.chunk_id: chunk for chunk in scored}
+    return [
+        by_id[chunk_id]
+        for chunk_id in draft.cited_sources
+        if chunk_id in by_id
+    ]
 
 
 def _query_proven_aspect_candidates(
@@ -1181,6 +1239,20 @@ def _topic_match_rank(question: Question, chunk: Chunk) -> int:
     if _equivalent_topic_group(chunk_topic) == question_topic_group:
         return 1
     if _is_housing_compatible_travel_source(question_topic_group, chunk_topic, chunk.text):
+        return 1
+    if (
+        question_topic_group
+        != _equivalent_topic_group("daty_nachala_meropriyatiya")
+        and
+        str(question.category or "").strip() != "гранты"
+        and str((chunk.metadata or {}).get("source_type") or "").strip().casefold()
+        == FACTUAL_SOURCE_TYPE
+        and aspects_are_compatible(
+            question.text,
+            chunk.metadata,
+            chunk.text,
+        )
+    ):
         return 1
     return 2
 
@@ -1936,6 +2008,8 @@ def _query_entity_scoped_chunks(
             if _bounded_metadata_intent_match(normalized, chunk) is True
         ]
     if intent == GRANT_DIRECTIONS:
+        if len(plan_query_aspects(query)) > 1:
+            return None
         return [
             chunk
             for chunk in chunks
@@ -2032,6 +2106,8 @@ def _is_generic_rosmol_grants_chunk(chunk: Chunk) -> bool:
         return False
     forum = _normalize(str(metadata.get("forum_normalized") or ""))
     if not forum:
+        return True
+    if _is_physical_grants_chunk(chunk):
         return True
     return forum in {
         "гранты",

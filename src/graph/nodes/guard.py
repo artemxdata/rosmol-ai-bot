@@ -51,6 +51,7 @@ async def apply_response_guards(state: BotState) -> dict:
     message = state.get("message_masked") or state.get("message") or ""
     analysis = _single_forum_analysis(state.get("analysis"))
     chunks = state.get("reranked_chunks") or []
+    guard_chunks = _guard_source_chunks(state, chunks)
     settings = get_settings()
 
     if analysis is None:
@@ -61,7 +62,7 @@ async def apply_response_guards(state: BotState) -> dict:
     guarded = foreign_registration_fact(
         message=message,
         analysis=analysis,
-        chunks=chunks,
+        chunks=guard_chunks,
         seed_path=settings.kb_seed_path,
     )
     guard_name = "foreign_registration" if guarded else None
@@ -69,22 +70,29 @@ async def apply_response_guards(state: BotState) -> dict:
         guarded = as_of_event_fact(
             message=message,
             analysis=analysis,
-            chunks=chunks,
+            chunks=guard_chunks,
         )
         guard_name = "event_state_as_of" if guarded else None
     if guarded is None:
         guarded = concise_event_place_date_fact(
             message=message,
             analysis=analysis,
-            chunks=chunks,
+            chunks=guard_chunks,
         )
         guard_name = "place_and_date" if guarded else None
     if guarded is None:
         guarded = expired_registration_fact(
             message=message,
             analysis=analysis,
-            chunks=chunks,
-            seed_path=settings.kb_seed_path,
+            chunks=guard_chunks,
+            # Once generation has selected an exact published source, do not
+            # replace it with a deadline from another registration flow in the
+            # same forum document (for example a grant contest deadline).
+            seed_path=(
+                None
+                if state.get("cited_sources")
+                else settings.kb_seed_path
+            ),
         )
         guard_name = "registration_closed" if guarded else None
 
@@ -154,6 +162,29 @@ def _single_forum_analysis(analysis: QueryAnalysis | None) -> QueryAnalysis | No
     if analysis.forum_normalized == forum:
         return analysis
     return analysis.model_copy(update={"forum": forum, "forum_normalized": forum})
+
+
+def _guard_source_chunks(
+    state: BotState,
+    chunks: list[ScoredChunk] | list[Chunk],
+) -> list[ScoredChunk] | list[Chunk]:
+    """Keep a temporal rewrite bound to sources selected by generation.
+
+    A forum document can contain several independent registrations (participant,
+    volunteer, grant contest). Looking across every reranked neighbour can bind
+    the deadline of one flow to another. If generation already cited sources,
+    guards may reason only over those exact chunks.
+    """
+
+    cited_ids = {
+        str(value).strip()
+        for value in state.get("cited_sources", [])
+        if str(value or "").strip()
+    }
+    if not cited_ids:
+        return chunks
+    selected = [chunk for chunk in chunks if chunk.chunk_id in cited_ids]
+    return selected or chunks
 
 
 def _guard_covers_all_aspects(

@@ -43,10 +43,17 @@ from src.graph.response_profiles import (
     asks_event_dates as asks_profile_event_dates,
 )
 from src.graph.state import BotState
+from src.kb.fact_cards import compose_fact_cards
+from src.kb.fact_extractor import (
+    aspects_are_compatible,
+    extract_source_fact_excerpts,
+    plan_query_aspects,
+)
 from src.llm.cascade import select_generator_model
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
 from src.models import Complexity, QueryAnalysis, Question, ScoredChunk
 from src.response_contract import ResponseProfileName, get_response_contract
+from src.security import profanity
 
 _RESPONSE_CONTRACT = get_response_contract()
 TOKEN_RE = re.compile(r"[0-9a-zа-яё]{3,}", re.IGNORECASE)
@@ -249,22 +256,6 @@ async def _generate_core(state: BotState) -> dict:
             "cited_sources": [],
         }
 
-    request_bound_result = _request_bound_published_source_result(
-        state=state,
-        analysis=analysis,
-        chunks=chunks,
-        max_confidence=max_confidence,
-    )
-    if request_bound_result is not None:
-        if tracer:
-            tracer.add(
-                "generate",
-                int((perf_counter() - started_at) * 1000),
-                mode="request_bound_published_source_chunk",
-                chunks=len(request_bound_result.get("cited_sources") or []),
-            )
-        return request_bound_result
-
     current_plan = build_query_proven_topic_plan(
         analysis,
         _state_current_user_message(state),
@@ -284,6 +275,42 @@ async def _generate_core(state: BotState) -> dict:
             questions=questions,
         ),
     )
+    if not unmapped_clauses or _fact_card_can_cover_unmapped_clauses(
+        unmapped_clauses,
+    ):
+        fact_card_result = _fact_card_source_result(
+            state=state,
+            analysis=analysis,
+            questions=questions,
+            chunks=chunks,
+            max_confidence=max_confidence,
+        )
+        if fact_card_result is not None:
+            if tracer:
+                tracer.add(
+                    "generate",
+                    int((perf_counter() - started_at) * 1000),
+                    mode="fact_card_source",
+                    chunks=len(fact_card_result.get("cited_sources") or []),
+                )
+            return fact_card_result
+
+    request_bound_result = _request_bound_published_source_result(
+        state=state,
+        analysis=analysis,
+        chunks=chunks,
+        max_confidence=max_confidence,
+    )
+    if request_bound_result is not None:
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                mode="request_bound_published_source_chunk",
+                chunks=len(request_bound_result.get("cited_sources") or []),
+            )
+        return request_bound_result
+
     if unmapped_clauses:
         clause_questions = [
             Question(
@@ -587,6 +614,37 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                 result,
                 reason="source_response_contract_failed",
             )
+        if result.get("_fact_card_result"):
+            factual_chunks = [
+                chunk
+                for chunk in state.get("reranked_chunks", [])
+                if str((chunk.metadata or {}).get("source_type") or "")
+                .strip()
+                .casefold()
+                == FACTUAL_SOURCE_TYPE
+            ]
+            recomposed = compose_fact_cards(
+                _state_current_user_message(state),
+                factual_chunks,
+                category=analysis.category,
+                forum_normalized=analysis.forum_normalized,
+                response_limit=response_limit,
+            )
+            cited_ids = list(result.get("cited_sources") or [])
+            if (
+                recomposed is None
+                or recomposed.response != sanitized
+                or list(recomposed.cited_sources) != cited_ids
+                or _visible_response_length(sanitized) > response_limit
+                or _response_url_count(sanitized) > 1
+            ):
+                return _generation_contract_failure(
+                    result,
+                    reason="source_response_contract_failed",
+                )
+            guarded = dict(result)
+            guarded["generated_response"] = sanitized
+            return _without_internal_generation_markers(guarded)
         request_bound_analysis = result.get("_request_bound_analysis")
         request_bound_questions = result.get("_request_bound_questions")
         if isinstance(request_bound_analysis, QueryAnalysis) and isinstance(
@@ -883,6 +941,7 @@ def _without_internal_generation_markers(result: dict) -> dict:
         "_request_bound_analysis",
         "_request_bound_questions",
         "_selected_source_ids",
+        "_fact_card_result",
     }
     if not (internal_markers & result.keys()):
         return result
@@ -892,6 +951,7 @@ def _without_internal_generation_markers(result: dict) -> dict:
     cleaned.pop("_request_bound_analysis", None)
     cleaned.pop("_request_bound_questions", None)
     cleaned.pop("_selected_source_ids", None)
+    cleaned.pop("_fact_card_result", None)
     return cleaned
 
 
@@ -2715,6 +2775,62 @@ def build_deterministic_source_response(chunks: list[ScoredChunk] | ScoredChunk)
     return "\n\n".join(parts)
 
 
+def _fact_card_source_result(
+    *,
+    state: BotState,
+    analysis: QueryAnalysis,
+    questions: list[Question],
+    chunks: list[ScoredChunk],
+    max_confidence: float,
+) -> dict | None:
+    """Compose a source-reproducible answer through the stable KB ontology."""
+
+    if analysis.should_escalate or analysis.needs_clarification:
+        return None
+    settings = get_settings()
+    if max_confidence < getattr(settings, "reranker_threshold_low", 0.4):
+        return None
+    draft = compose_fact_cards(
+        _state_current_user_message(state),
+        chunks,
+        category=analysis.category,
+        forum_normalized=analysis.forum_normalized,
+        response_limit=_response_char_limit(analysis, questions),
+    )
+    if draft is None:
+        return None
+    return {
+        "generated_response": draft.response,
+        "generator_model": "source_chunk",
+        "cited_sources": list(draft.cited_sources),
+        "_fact_card_result": True,
+    }
+
+
+def _fact_card_can_cover_unmapped_clauses(clauses: list[str]) -> bool:
+    """Allow ontology-known clauses and ignore a standalone abusive preface.
+
+    The composer still requires a published source for every planned aspect.
+    Unknown requests such as Wi-Fi or parking therefore remain on the existing
+    fail-closed path.
+    """
+
+    filler = {"как", "и", "а", "ну", "же", "мне", "ты", "это"}
+    for clause in clauses:
+        if plan_query_aspects(clause):
+            continue
+        if profanity.check(clause):
+            remaining = {
+                token
+                for token in TOKEN_RE.findall(profanity.strip(clause).casefold())
+                if token not in filler
+            }
+            if not remaining:
+                continue
+        return False
+    return True
+
+
 def _request_bound_published_source_result(
     *,
     state: BotState,
@@ -3071,6 +3187,10 @@ def _questions_matching_published_source(
                 question,
                 chunk,
                 request_text=request_text,
+            ) or _published_aspect_bridge_matches(
+                analysis,
+                question,
+                chunk,
             ):
                 matching.append(question)
             continue
@@ -3080,6 +3200,28 @@ def _questions_matching_published_source(
         if _metadata_matches_specific_question(analysis, question, chunk):
             matching.append(question)
     return matching
+
+
+def _published_aspect_bridge_matches(
+    analysis: QueryAnalysis,
+    question: Question,
+    chunk: ScoredChunk,
+) -> bool:
+    """Bridge renamed source headings only inside an already proven scope.
+
+    Grant products keep their narrower season/audience guards below.  The
+    ontology bridge is for ordinary forum/platform heading drift, not for
+    crossing product contracts that happen to share words such as "заявка".
+    """
+
+    category = str(question.category or analysis.category or "").strip()
+    if category == "гранты":
+        return False
+    return aspects_are_compatible(
+        question.text,
+        chunk.metadata,
+        chunk.text,
+    )
 
 
 def _published_source_matches_question_scope(
@@ -3645,7 +3787,11 @@ def _published_source_excerpts(
             boundary_lines.append(closing_line)
         return boundary_lines
 
-    return []
+    return extract_source_fact_excerpts(
+        chunk.text,
+        " ".join([*(question.text for question in questions), request_text]),
+        chunk.metadata,
+    )
 
 
 def _compact_published_eligibility_line(line: str) -> str:

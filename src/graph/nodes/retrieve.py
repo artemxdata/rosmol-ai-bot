@@ -33,6 +33,7 @@ from src.graph.question_utils import (
     build_query_proven_topic_plan,
 )
 from src.graph.state import BotState
+from src.kb.aspect_catalog import topic_candidates_for_request
 from src.models import Question
 from src.rag.errors import MLDependencyError
 from src.response_contract import get_response_contract
@@ -301,6 +302,7 @@ async def retrieve(state: BotState) -> dict:
                     top_k=top_k,
                     current_message=current_message,
                     source_aspect=source_aspect,
+                    allow_catalog_supplement=topic_question_count <= 1,
                 )
                 attempt_method = "metadata" if used_metadata_lookup else "hybrid"
                 retrieval_methods.add(attempt_method)
@@ -617,6 +619,7 @@ async def _retrieve_attempt(
     top_k: int,
     current_message: str | None,
     source_aspect: QueryProvenSourceAspect | None = None,
+    allow_catalog_supplement: bool = True,
 ) -> tuple[list, bool]:
     retrieve_by_metadata = getattr(retriever, "retrieve_by_metadata", None)
     if filters.get("topic") and callable(retrieve_by_metadata):
@@ -636,7 +639,41 @@ async def _retrieve_attempt(
             **filters,
             "topic": topic_values if len(topic_values) > 1 else topic_values[0],
         }
-        return await retrieve_by_metadata(lookup_filters, top_k=top_k), True
+        found = await retrieve_by_metadata(lookup_filters, top_k=top_k)
+        if directional_topic is None and allow_catalog_supplement:
+            catalog_topics = topic_candidates_for_request(
+                query,
+                category=str(filters.get("category") or "").strip() or None,
+                forum_normalized=(
+                    str(filters.get("forum_normalized") or "").strip() or None
+                ),
+            )
+            additional_topics = [
+                candidate
+                for candidate in catalog_topics
+                if candidate not in topic_values
+                and candidate != INACTIVE_APPLICATION_BUTTON_TOPIC
+            ]
+            if additional_topics:
+                catalog_filters = {
+                    **filters,
+                    "topic": (
+                        additional_topics
+                        if len(additional_topics) > 1
+                        else additional_topics[0]
+                    ),
+                }
+                catalog_found = await retrieve_by_metadata(
+                    catalog_filters,
+                    top_k=top_k,
+                )
+                found = list(
+                    {
+                        chunk.chunk_id: chunk
+                        for chunk in (*found, *catalog_found)
+                    }.values()
+                )
+        return found, True
     return await retriever.retrieve(query, filters, top_k=top_k), False
 
 

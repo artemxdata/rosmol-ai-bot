@@ -549,6 +549,42 @@ async def test_future_patriot_deadline_remains_open_through_guard_and_verify(
 
 
 @pytest.mark.asyncio
+async def test_guard_does_not_borrow_deadline_from_an_uncited_registration_flow() -> None:
+    query = "Хочу попасть на форум ШУМ — что нужно сделать?"
+    llm = ForbiddenLLM()
+    analyzed = await analyze_query(
+        {
+            "message": query,
+            "message_masked": query,
+            "routing_hint": {},
+            "llm_client": llm,
+        }
+    )
+    state = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analyzed["analysis"],
+        "reranked_chunks": [
+            _chunk("yonote_api_zhjxnhwbyi_s0002_registraciya"),
+            _chunk("yonote_api_zhjxnhwbyi_s0012_grantovyy_konkurs"),
+        ],
+        "max_confidence": 0.99,
+        "llm_client": llm,
+    }
+
+    generated = await generate(state)
+    guarded = await apply_response_guards({**state, **generated})
+
+    assert generated["cited_sources"] == [
+        "yonote_api_zhjxnhwbyi_s0002_registraciya"
+    ]
+    assert guarded == {}
+    assert "регистрация на фгаис" in generated["generated_response"].casefold()
+    assert "13 июля" not in generated["generated_response"]
+
+
+@pytest.mark.asyncio
 async def test_request_bound_answer_reflects_changed_published_clause() -> None:
     query = "По «Ладоге» могут ли компенсировать дорогу?"
     source = _chunk("yonote_api_irwwd4t2v8_s0012_kompensaciya")

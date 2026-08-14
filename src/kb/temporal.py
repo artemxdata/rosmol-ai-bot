@@ -219,11 +219,13 @@ def as_of_event_fact(
 
 
 def _event_subject_from_query(message: str) -> str:
+    if re.search(r"\bперв\w*\s+смен\w*\b", message, flags=re.IGNORECASE):
+        return "Первая смена"
+    if re.search(r"\bвтор\w*\s+смен\w*\b", message, flags=re.IGNORECASE):
+        return "Вторая смена"
     named = _NAMED_SHIFT_QUERY_RE.search(message)
     if named is not None:
         return f"Смена «{named.group('name').strip()}»"
-    if re.search(r"\bперв\w*\s+смен\w*\b", message, flags=re.IGNORECASE):
-        return "Первая смена"
     return "Смена"
 
 
@@ -452,10 +454,21 @@ def expired_registration_fact(
     time_label = (
         f" в {deadline.closes_at:%H:%M} (мск)" if deadline.explicit_time else ""
     )
+    registration_channel = (
+        "\nРегистрация во ФГАИС завершена."
+        if re.search(
+            r"\bрегистрац\w*\s+во\s+фгаис\b",
+            source_chunk.text,
+            flags=re.IGNORECASE,
+        )
+        else ""
+    )
     return (
         (
             f"Регистрация {subject} закрыта: приём заявок завершился "
             f"{date_label}{time_label}.\n"
+            f"{registration_channel.lstrip()}"
+            f"{' ' if registration_channel else ''}"
             "Новую заявку сейчас подать нельзя. Следи за обновлениями в карточке "
             "мероприятия на платформе ФГАИС «Молодёжь России»."
         ),
