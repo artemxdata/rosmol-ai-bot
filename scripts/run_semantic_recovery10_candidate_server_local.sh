@@ -537,7 +537,7 @@ start_candidate() {
 }
 
 receipt_value() {
-  awk -F= -v key="$1" '$1 == key {print substr($0, length(key) + 2)}' "$2"
+  sudo awk -F= -v key="$1" '$1 == key {print substr($0, length(key) + 2)}' "$2"
 }
 
 runner_command() {

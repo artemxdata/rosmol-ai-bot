@@ -4,6 +4,25 @@
 
 **Ветка:** `codex/real-rag`
 
+## 14 августа: первый Recovery10 run остановлен до платных запросов из-за чтения receipt
+
+Бесплатный preflight exact candidate `63f54683aabb03ddd0f6531cd493465ed0ec9db6` прошёл `GO`:
+candidate runtime smoke — `OK`, HDE/VK — `DISABLED`, `10` cases, cases SHA-256
+`f2168c9e8721c82e46165b3803bb7adc7f89249f50210d96dc3dcb03d2710aaf`, cap — `200 RUB`.
+Первая команда `run` завершилась `preflight_receipt_mismatch` до `run.started`, запуска candidate
+и `eval.run_ask`. По exact control flow это означает ноль `/ask`, ноль LLM-вызовов и отсутствие
+расхода/reservation; approval остаётся неиспользованным.
+
+Причина в server-local обвязке: preflight намеренно создаёт receipt как `root:root 0600`, но
+helper `receipt_value` читал его обычным `awk` от пользователя `rosmolops`. Ошибка доступа была
+скрыта безопасным stderr policy и выглядела как несовпадение пустого значения. Исправление
+переводит только чтение receipt на `sudo awk` и закрепляется regression-тестом; поведение RAG,
+prompts, KB, production, Qdrant и каналы не меняется. Локальный gate после исправления: Ruff —
+`OK`; все `3351` tests покрыты отдельными file shards с per-test fallback для двух известных
+Windows async teardown hangs — `3350 passed`, `1 skipped`, `0 failed`; validation seed —
+`2186 valid / 2152 published`. Следующий шаг — новый exact commit/push, затем новый бесплатный
+preflight на новом SHA и один разрешённый Recovery10 run.
+
 ## 14 августа: Recovery10 готов к бесплатному preflight, HDE/VK остаются выключены
 
 После bounded semantic recovery подготовлен отдельный одноразовый server-local контур

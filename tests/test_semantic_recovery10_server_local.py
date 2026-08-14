@@ -81,6 +81,15 @@ def test_recovery10_preflight_has_no_paid_ask_and_binds_prior_evidence() -> None
     assert "2defcace63de2a2184b162fcae5fa8f4d50ed8317042ae64aabbb49181076a8d" in text
 
 
+def test_root_owned_preflight_receipt_is_read_through_sudo() -> None:
+    text = _text()
+    preflight = _function(text, "preflight_mode")
+    receipt_value = _function(text, "receipt_value")
+    assert 'sudo tee "$STAGING_DIR/preflight.receipt"' in preflight
+    assert 'sudo chmod 0600 "$STAGING_DIR/preflight.receipt"' in preflight
+    assert "sudo awk" in receipt_value
+
+
 def test_candidate_compose_explicitly_disables_channels_and_enables_recovery() -> None:
     payload = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     service = payload["services"]["pilot50-candidate-ml"]
