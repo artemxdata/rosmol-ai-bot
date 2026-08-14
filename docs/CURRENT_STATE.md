@@ -4,6 +4,33 @@
 
 **Ветка:** `codex/real-rag`
 
+## 14 августа: fact-first ядро готово к server-local проверке
+
+Core change set зафиксирован commit `95ae591ee03188cc0fb14ce2263ba011ec6e65e8`.
+Системная причина провала Pilot50 v4 была не в недостатке ещё одного prompt: analyzer topics,
+заголовки Yonote, retrieval, rerank, generation и temporal guards использовали разные признаки,
+поэтому правильный опубликованный факт терялся или смешивался с соседним процессом. Новый путь
+разбирает запрос как `entity -> requested aspects -> published facts -> bounded answer`, связывает
+переименованные темы через каталог фактических аспектов, отдельно закрывает каждый аспект
+multi-aspect запроса и fail closed при неоднозначности. Детерминированный ответ допускает только
+published Yonote с точным provenance; LLM остаётся fallback, а не источником фактов.
+
+Нулевая локальная wiring-проверка на неизменном calibration Pilot50 v4 дала `49/50`, retrieval
+recall `50/50`, LLM calls `0`; прежний server-local v4 результат этого набора был `8/50`.
+Это сильный regression-сигнал, но не independent holdout и не production conversion. Единственный
+формальный miss содержит правильный источник и естественную фразу; frozen evaluator ожидает
+обрезанный stem `общественно-политическ`, поэтому dataset ради `50/50` не менялся. Полный gate:
+`3274 passed`, `1 skipped`; отдельно `889/889` core/graph/regression tests, Ruff и validation
+`2186/2152 published` прошли. Пробная локальная CPU-индексация была остановлена как непрактичная
+после `64/2152`; частичная локальная коллекция удалена и пересоздана пустой.
+
+Миграция на Dify/RAGFlow сейчас не выполняется: она перенесла бы прежний semantic drift в другой
+оркестратор. Точный следующий шаг — push change set, затем на существующем server-local Qdrant
+выполнить бесплатный source/retrieval diagnostic exact SHA без reindex, HDE/VK, production restart
+и paid Pilot50. После этого нужен независимый holdout с ticket-level no-operator verdict; до
+доказанных `>=50%` release status остаётся `NO GO`. Если реальный runtime останется ниже порога,
+следующий bounded A/B — тот же retrieval contract в Dify/RAGFlow, а не полная миграция вслепую.
+
 ## Pilot50 v4 завершён с валидным safe verdict `STOP`
 
 Core RAG change set закончен, закоммичен и push-нут в GitHub отдельным commit
