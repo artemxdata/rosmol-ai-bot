@@ -20,13 +20,19 @@ recall `50/50`, LLM calls `0`; прежний server-local v4 результат
 Это сильный regression-сигнал, но не independent holdout и не production conversion. Единственный
 формальный miss содержит правильный источник и естественную фразу; frozen evaluator ожидает
 обрезанный stem `общественно-политическ`, поэтому dataset ради `50/50` не менялся. Полный gate:
-`3274 passed`, `1 skipped`; отдельно `889/889` core/graph/regression tests, Ruff и validation
+`3292 passed`, `1 skipped`; отдельно `889/889` core/graph/regression tests и `18/18` тестов новой
+server-local диагностики, Ruff и validation
 `2186/2152 published` прошли. Пробная локальная CPU-индексация была остановлена как непрактичная
 после `64/2152`; частичная локальная коллекция удалена и пересоздана пустой.
 
 Миграция на Dify/RAGFlow сейчас не выполняется: она перенесла бы прежний semantic drift в другой
-оркестратор. Точный следующий шаг — push change set, затем на существующем server-local Qdrant
-выполнить бесплатный source/retrieval diagnostic exact SHA без reindex, HDE/VK, production restart
+оркестратор. Бесплатная диагностика реального Qdrant зафиксирована commit
+`0dd07c8284f08a6ac9412464cb52c95745a40150`: exact Git snapshot кандидата запускается на уже
+установленном ML runtime, но в отдельной internal-сети и видит Qdrant только через proxy с двумя
+разрешёнными read-only путями — query и scroll. Диагностике не передаются Cloud.ru, PostgreSQL,
+Redis, HDE/VK или Yonote credentials; до и после сверяются production snapshot и полный Qdrant
+fingerprint. Gate требует минимум `49/50`, retrieval `50/50` и LLM calls `0`. Точный следующий шаг —
+push handoff SHA и один server-local запуск этой диагностики без reindex, `/ask`, production restart
 и paid Pilot50. После этого нужен независимый holdout с ticket-level no-operator verdict; до
 доказанных `>=50%` release status остаётся `NO GO`. Если реальный runtime останется ниже порога,
 следующий bounded A/B — тот же retrieval contract в Dify/RAGFlow, а не полная миграция вслепую.
