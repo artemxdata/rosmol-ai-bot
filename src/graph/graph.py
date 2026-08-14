@@ -3,7 +3,13 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from src.graph.answer_plan import plan_answer
-from src.graph.edges import route_after_analyze, route_after_rerank, route_after_verify
+from src.graph.edges import (
+    route_after_analyze,
+    route_after_generate,
+    route_after_rerank,
+    route_after_semantic_recovery,
+    route_after_verify,
+)
 from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.clarify import clarify
 from src.graph.nodes.escalate import escalate
@@ -12,6 +18,7 @@ from src.graph.nodes.guard import apply_response_guards
 from src.graph.nodes.rerank import rerank
 from src.graph.nodes.respond import respond
 from src.graph.nodes.retrieve import retrieve
+from src.graph.nodes.semantic_recovery import semantic_recovery
 from src.graph.nodes.verify import verify
 from src.graph.state import BotState
 
@@ -22,6 +29,7 @@ def build_graph():
     graph.add_node("plan", plan_answer)
     graph.add_node("retrieve", retrieve)
     graph.add_node("rerank", rerank)
+    graph.add_node("semantic_recovery", semantic_recovery)
     graph.add_node("generate", generate)
     graph.add_node("guard", apply_response_guards)
     graph.add_node("verify", verify)
@@ -40,9 +48,26 @@ def build_graph():
     graph.add_conditional_edges(
         "rerank",
         route_after_rerank,
-        {"generate": "generate", "escalate": "escalate"},
+        {
+            "generate": "generate",
+            "recover": "semantic_recovery",
+            "escalate": "escalate",
+        },
     )
-    graph.add_edge("generate", "guard")
+    graph.add_conditional_edges(
+        "generate",
+        route_after_generate,
+        {
+            "guard": "guard",
+            "recover": "semantic_recovery",
+            "escalate": "escalate",
+        },
+    )
+    graph.add_conditional_edges(
+        "semantic_recovery",
+        route_after_semantic_recovery,
+        {"retrieve": "retrieve", "escalate": "escalate"},
+    )
     graph.add_edge("guard", "verify")
     graph.add_conditional_edges(
         "verify",

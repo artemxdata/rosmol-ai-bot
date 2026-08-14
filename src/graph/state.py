@@ -33,6 +33,9 @@ class BotState(TypedDict, total=False):
     reranked_chunks: list[ScoredChunk]
     rerank_provenance: list[dict[str, Any]]
     max_confidence: float
+    semantic_recovery_attempted: bool
+    semantic_recovery_reason: str
+    semantic_recovery_question_count: int
     generated_response: str
     response_guard: str
     final_response: str

@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     ml_prewarm_on_startup: bool = False
     ml_prewarm_timeout_seconds: float = Field(default=120.0, ge=1)
     retrieval_strict_forum_stop_min_chunks: int = Field(default=3, ge=1)
+    semantic_recovery_enabled: bool = True
+    semantic_recovery_max_questions: int = Field(default=6, ge=1, le=8)
 
 
 @lru_cache

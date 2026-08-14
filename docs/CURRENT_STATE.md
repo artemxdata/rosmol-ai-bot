@@ -22,18 +22,28 @@ fingerprint не изменились. Ноль LLM-вызовов относи�
 `22/31`; выполнено `89` LLM-вызовов вместо прежних `113`. Следовательно, первый оставшийся
 узкий участок — semantic retrieval/selection, а не отсутствие текста ответа.
 
-Локальный gate: обе frozen calibration-проверки сохранили `49/50`, retrieval `50/50` и
-LLM calls `0`; полный набор из 144 test-файлов выполнен независимыми сегментами из-за известного
-Windows event-loop hang — `3333 passed`, `1 skipped`, `0 failed`. Ruff и KB validation прошли,
-`2186` valid / `2152` published. Production не менялся, текущий change set не развёрнут; четыре
-пользовательских untracked-документа сохранены без изменений.
+Защитный fact-layer зафиксирован и push-нут как
+`10ce25b5ecf9357087a43183b8416226e4cec912`. Следующий локальный change set реализует
+адаптивный semantic recovery вместо новых словарей под отдельные формулировки: только после
+`low_confidence`, отсутствия релевантных chunks или неполного source coverage LLM один раз
+декомпозирует свободный/multi-turn запрос в самостоятельные поисковые вопросы. Затем повторяются
+hybrid retrieval и rerank; при втором miss, невалидном JSON или недоступной модели запрос
+fail closed уходит оператору с исходной причиной. Известный fact path не вызывает LLM, а
+успешный обычный RAG не получает лишнего вызова. Модель не отвечает на этом шаге и не может
+создать источник; generation и verification по-прежнему принимают только published Yonote.
 
-Дальше запрещено наращивать словари под отдельные формулировки. Следующий системный этап:
-LLM строит типизированный семантический план свободного и multi-turn запроса, hybrid retrieval и
-reranker выбирают опубликованные доказательства, генератор синтезирует ответ только из них, а
-детерминированный слой проверяет факты, ссылки и safety. Проверка — на неиспользованных
-human-reviewed ticket-level кейсах; `28/31`, Product80 и Pilot50 не выдавать за доказательство
-`>=50%` production conversion.
+Локальный gate после semantic recovery: все 145 test-файлов покрыты непересекающимися
+file-shards с пофайловым fallback для известного Windows event-loop hang — `3341 passed`,
+`1 skipped`, `0 failed`; отдельный end-to-end node test доказывает цепочку `miss -> LLM rewrite
+-> retrieve -> rerank -> generate route` и один вызов модели. Ruff и KB validation прошли,
+`2186` valid / `2152` published. Обе frozen fact-core проверки сохранили `49/50`, retrieval
+`50/50`, LLM calls `0`; это по-прежнему только изолированный fast path. Production не менялся,
+semantic recovery не развёрнут; локальный Cloud.ru credential отсутствует, поэтому реальное
+качество LLM-rewrite ещё не измерено. Следующая допустимая проверка — один bounded server-local
+targeted eval не более 10 новых human-reviewed ticket-level кейсов с отдельным approval и cost
+reservation по D-036. До такого результата `28/31`, Product80 и Pilot50 не выдавать за
+доказательство `>=50%` production conversion. Четыре пользовательских untracked-документа
+сохранены без изменений.
 
 ## 14 августа: fact-first ядро готово к server-local проверке
 
