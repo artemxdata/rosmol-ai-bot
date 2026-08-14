@@ -41,6 +41,8 @@ def test_failed_recovery10_diagnostic_is_read_only_and_bound_to_sealed_run() -> 
     assert '--mount "type=bind,src=$COST_LEDGER_DIR,dst=/cost-ledger,readonly"' in text
     assert '--network "$DATA_NETWORK"' in text
     assert "ASK_EVAL_POSTGRES_DSN" in text
+    assert "mode & 0o022 == 0" in text
+    assert "2 <= len(entries) <= 8" in text
     assert "eval.run_ask" not in text
     assert "docker compose up" not in text
     assert "docker restart" not in text

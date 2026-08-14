@@ -90,6 +90,20 @@ def test_root_owned_preflight_receipt_is_read_through_sudo() -> None:
     assert "sudo awk" in receipt_value
 
 
+def test_quality_gate_exit_with_complete_report_is_summarized() -> None:
+    run = _function(_text(), "run_mode")
+    assert 'local approval_id ask_exit="0"' in run
+    assert '>/dev/null 2>&1 || ask_exit="$?"' in run
+    assert 'if [[ "$ask_exit" -eq 1 ]]; then' in run
+    assert 'sudo test -f "$raw_report" || fail "candidate_ask_eval_failed"' in run
+    assert 'elif [[ "$ask_exit" -eq 2 ]]; then' in run
+    assert 'fail "candidate_ask_eval_cost_stop"' in run
+    assert 'elif [[ "$ask_exit" -ne 0 ]]; then' in run
+    assert run.index('scripts.semantic_recovery10 summarize') > run.index(
+        'if [[ "$ask_exit" -eq 1 ]]'
+    )
+
+
 def test_candidate_compose_explicitly_disables_channels_and_enables_recovery() -> None:
     payload = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     service = payload["services"]["pilot50-candidate-ml"]

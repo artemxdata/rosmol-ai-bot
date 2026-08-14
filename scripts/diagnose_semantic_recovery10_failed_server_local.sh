@@ -211,38 +211,45 @@ manifest = evidence_dir / "semantic-recovery10-manifest.json"
 report = evidence_dir / "semantic-recovery10-ask-report.json"
 safe = evidence_dir / "semantic-recovery10-safe-result.json"
 
-def real_dir(path, mode, uid=None, gid=None):
+def real_dir(path, modes, uid=None, gid=None):
     meta = path.lstat()
     assert stat.S_ISDIR(meta.st_mode) and not path.is_symlink()
     assert path.resolve(strict=True) == path
-    assert stat.S_IMODE(meta.st_mode) == mode
+    mode = stat.S_IMODE(meta.st_mode)
+    assert mode in modes and mode & 0o022 == 0
     if uid is not None:
         assert meta.st_uid == uid and meta.st_gid == gid
 
-def regular(path, maximum, uid, gid, mode, allow_empty=False):
+def regular(path, maximum, uid, gid, exact_mode=None, allow_empty=False):
     meta = path.lstat()
     assert stat.S_ISREG(meta.st_mode) and not path.is_symlink()
     assert meta.st_nlink == 1 and meta.st_size <= maximum
     assert allow_empty or meta.st_size > 0
     assert meta.st_uid == uid and meta.st_gid == gid
-    assert stat.S_IMODE(meta.st_mode) == mode
+    mode = stat.S_IMODE(meta.st_mode)
+    assert mode & 0o022 == 0 and mode & 0o400 != 0
+    if exact_mode is not None:
+        assert mode == exact_mode
     return path.read_bytes()
 
-real_dir(run_dir, 0o700)
-real_dir(source_dir, 0o755)
-real_dir(evidence_dir, 0o700, 10001, 10001)
+real_dir(run_dir, {0o700})
+real_dir(source_dir, {0o555, 0o755})
+real_dir(evidence_dir, {0o700}, 10001, 10001)
 root_uid = run_dir.lstat().st_uid
 root_gid = run_dir.lstat().st_gid
 assert root_uid == 0 and root_gid == 0
-preflight_bytes = regular(preflight, 4096, 0, 0, 0o600)
-started_bytes = regular(started, 4096, 0, 0, 0o600)
-cases_bytes = regular(cases, 4 * 1024 * 1024, 10001, 10001, 0o600)
-manifest_bytes = regular(manifest, 128 * 1024, 10001, 10001, 0o600)
+preflight_bytes = regular(preflight, 4096, 0, 0, exact_mode=0o600)
+started_bytes = regular(started, 4096, 0, 0)
+cases_bytes = regular(
+    cases, 4 * 1024 * 1024, 10001, 10001, exact_mode=0o600
+)
+manifest_bytes = regular(
+    manifest, 128 * 1024, 10001, 10001, exact_mode=0o600
+)
 assert hashlib.sha256(cases_bytes).hexdigest() == cases_sha
 assert hashlib.sha256(manifest_bytes).hexdigest() == manifest_sha
 assert not completed.exists() and not completed.is_symlink()
 assert not safe.exists() and not safe.is_symlink()
-allowed_evidence = {cases.name, manifest.name}
 parts = [
     ("preflight.receipt", preflight_bytes),
     ("run.started", started_bytes),
@@ -251,11 +258,19 @@ parts = [
 ]
 if report.exists() or report.is_symlink():
     report_bytes = regular(
-        report, 32 * 1024 * 1024, 10001, 10001, 0o600, allow_empty=True
+        report, 32 * 1024 * 1024, 10001, 10001, allow_empty=True
     )
-    allowed_evidence.add(report.name)
     parts.append((f"evidence/{report.name}", report_bytes))
-assert {path.name for path in evidence_dir.iterdir()} == allowed_evidence
+entries = list(evidence_dir.iterdir())
+assert 2 <= len(entries) <= 8
+known_names = {cases.name, manifest.name, report.name}
+for path in entries:
+    if path.name in known_names:
+        continue
+    payload = regular(
+        path, 32 * 1024 * 1024, 10001, 10001, allow_empty=True
+    )
+    parts.append((f"evidence/{path.name}", payload))
 assert {path.name for path in run_dir.iterdir()} == {
     "source", "evidence", "preflight.receipt", "run.started"
 }

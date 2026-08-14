@@ -34,6 +34,16 @@ response, request ID и chunk text запрещены. HDE/VK остаются �
 связанные Recovery10/cost-governance tests — `73 passed`, сам новый diagnostic contract —
 `5 passed`.
 
+Первый read-only diagnostic handoff `e41dbe1feabc68f7e6bbee27284a21b21d2b00a4` был остановлен
+`sealed_evidence_invalid` до запуска diagnostic container, PostgreSQL query и любого нового
+`/ask`. Причина относится к host-side validator: он требовал точные mode и исчерпывающий список
+файлов там, где security contract требует правильного владельца, regular non-symlink files,
+отсутствие group/other write и жёсткие границы размера/количества. Validator переведён на эти
+инварианты и продолжает хэшировать все bounded evidence до/после чтения. Одновременно runner
+исправлен так, чтобы exit `1` от `eval.run_ask` с существующим raw report считался quality-gate
+остановкой и всё равно проходил safe summarize; cost stop и отсутствие report остаются
+fail-closed. Повтор старого one-shot по-прежнему запрещён.
+
 ## 14 августа: первый Recovery10 run остановлен до платных запросов из-за чтения receipt
 
 Бесплатный preflight exact candidate `63f54683aabb03ddd0f6531cd493465ed0ec9db6` прошёл `GO`:

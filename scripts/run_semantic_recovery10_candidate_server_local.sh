@@ -678,7 +678,7 @@ preflight_mode() {
 }
 
 run_mode() {
-  local approval_id cases_sha completed expected_approval_id manifest_sha
+  local approval_id ask_exit="0" cases_sha completed expected_approval_id manifest_sha
   local post_prod pre_prod pre_prod_sha raw_report report_sha safe_result safe_sha safe_stdout
   load_common_state
   sudo test -d "$RUN_DIR" || fail "preflight_not_found"
@@ -715,7 +715,7 @@ run_mode() {
     printf 'cost_cap_rub=%s\n' "$COST_CAP_RUB"
   } | sudo tee "$RUN_DIR/run.started" >/dev/null) 2>/dev/null \
     || fail "candidate_run_replay_refused"
-  if ! "${runner[@]}" -m eval.run_ask \
+  "${runner[@]}" -m eval.run_ask \
     --cases /evidence/semantic-recovery10-cases.json \
     --output /evidence/semantic-recovery10-ask-report.json \
     --no-markdown \
@@ -728,7 +728,12 @@ run_mode() {
     --kb-seed /workspace/data/knowledge_base_seed.json \
     --bypass-cache \
     --require-complete-traces \
-    >/dev/null 2>&1; then
+    >/dev/null 2>&1 || ask_exit="$?"
+  if [[ "$ask_exit" -eq 1 ]]; then
+    sudo test -f "$raw_report" || fail "candidate_ask_eval_failed"
+  elif [[ "$ask_exit" -eq 2 ]]; then
+    fail "candidate_ask_eval_cost_stop"
+  elif [[ "$ask_exit" -ne 0 ]]; then
     fail "candidate_ask_eval_failed"
   fi
   sudo test -f "$raw_report" || fail "candidate_raw_report_missing"
