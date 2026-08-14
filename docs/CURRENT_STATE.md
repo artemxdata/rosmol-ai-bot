@@ -39,21 +39,25 @@ holdout с ticket-level no-operator verdict; до
 доказанных `>=50%` release status остаётся `NO GO`. Если реальный runtime останется ниже порога,
 следующий bounded A/B — тот же retrieval contract в Dify/RAGFlow, а не полная миграция вслепую.
 
-После handoff локально найден следующий системный recall-дефект: aspect catalog распознавал
-большинство фактов только по названию Yonote-раздела и пропускал явные ответы внутри общих
-published FAQ chunks. Текущий незакоммиченный patch добавляет консервативную body-driven
-классификацию аспектов, но по-прежнему берёт сам ответ только из опубликованного source text и
+После handoff локальный commit `459d09f601bdd1797013917c80618e34af08ed07` исправил следующий
+системный recall-дефект: aspect catalog распознавал большинство фактов только по названию
+Yonote-раздела и пропускал явные ответы внутри общих published FAQ chunks. Консервативная
+body-driven классификация по-прежнему берёт ответ только из опубликованного source text и
 предпочитает точный тематический heading перед общим FAQ. На неизменном seed прямой composable
 coverage по 36 registry forums вырос: проезд `1 -> 16`, проживание `6 -> 21`, питание `12 -> 21`,
 условия участия `6 -> 18`, трансфер `9 -> 19`, доступность `0 -> 7`; даты и регистрация дают по
 `24`, место `23`, программа `18`, документы `13`. Это coverage contract, а не ticket conversion.
-Добавлен regression gate 36 forums x 11 common aspects; targeted core suites `276 passed`, graph
-`266 passed`, expanded fact/coverage suite `105 passed`, offline Pilot50 остаётся `49/50`,
-retrieval `50/50`, LLM calls `0`. Монолитный pytest собрал `3302` tests и без failures дошёл до
-`85%`, затем перестал продвигаться; весь оставшийся хвост повторно покрыт bounded suites
-`92 + 160 + 282 passed`. Ruff, `index_kb.py --validate-only` (`2186/2152`) и `git diff --check`
-зелёные. До server-local Qdrant результата patch не push-ить, чтобы не инвалидировать уже
-переданный exact SHA `05891...`.
+
+Следующий локальный commit `940bd0bcf5202adbabe5150dfb180c173d3ed763` исправляет потерю
+готового факта при запятой или союзе внутри названия форума и добавляет явный state-узел
+`analyze -> plan -> retrieve -> rerank -> generate`: план аспектов и частей текущего вопроса
+строится один раз и затем неизменно используется всеми RAG-стадиями. Сквозной gate доказывает
+это на восьми типах фактов, найденных только в теле общего FAQ, без LLM. Полный локальный gate
+по независимым файловым группам: `3308 passed`, `1 skipped`, `0 failed`; Ruff и seed validation
+`2186/2152 published` зелёные, обе frozen calibration-проверки сохранили `49/50`, retrieval
+`50/50`, LLM calls `0`. Оба локальных commit пока не push-нуты: точный следующий шаг остаётся
+server-local Qdrant diagnostic уже переданного immutable SHA
+`05891caa288549a47698e9dbf7e73d7adf378184`; до его safe aggregate remote не менять.
 
 ## Pilot50 v4 завершён с валидным safe verdict `STOP`
 
