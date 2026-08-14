@@ -75,6 +75,76 @@ def test_exact_forum_topic_does_not_pollute_program_as_registration() -> None:
     assert KnowledgeAspect.REGISTRATION not in aspects
 
 
+@pytest.mark.parametrize(
+    ("source_text", "expected"),
+    [
+        (
+            "Проезд до места проведения оплачивается участником самостоятельно.",
+            KnowledgeAspect.TRAVEL,
+        ),
+        (
+            "Проживание и питание участников обеспечивает принимающая сторона.",
+            KnowledgeAspect.ACCOMMODATION,
+        ),
+        ("Проживание и питание участников обеспечивает принимающая сторона.", KnowledgeAspect.FOOD),
+        ("Для участников с ОВЗ предусмотрена доступная среда.", KnowledgeAspect.ACCESSIBILITY),
+        ("Результаты отбора будут опубликованы в личном кабинете.", KnowledgeAspect.RESULTS),
+        (
+            "Чтобы отказаться от участия, отзови заявку в личном кабинете.",
+            KnowledgeAspect.CANCELLATION,
+        ),
+    ],
+)
+def test_source_aspects_use_explicit_facts_inside_generic_faq_chunks(
+    source_text: str,
+    expected: KnowledgeAspect,
+) -> None:
+    aspects = infer_source_aspects({"topic": "faq"}, source_text)
+
+    assert expected in aspects
+
+
+def test_source_body_aspects_ignore_generic_domain_words() -> None:
+    aspects = infer_source_aspects(
+        {"topic": "faq"},
+        "Организатор опубликует доступную программу для участников.",
+    )
+
+    assert KnowledgeAspect.ACCOMMODATION not in aspects
+    assert KnowledgeAspect.FOOD not in aspects
+    assert KnowledgeAspect.ACCESSIBILITY not in aspects
+    assert KnowledgeAspect.ELIGIBILITY not in aspects
+
+
+def test_fact_cards_answer_travel_from_a_generic_published_faq_chunk() -> None:
+    chunk = ScoredChunk(
+        chunk_id="yonote_api_generic_faq_s0001",
+        text="Проезд до места проведения оплачивается участником самостоятельно.",
+        metadata={
+            "source_type": "yonote",
+            "source": "yonote_api",
+            "version": "yonote-api-v1",
+            "status": "published",
+            "category": "форумы",
+            "forum_normalized": "Амур",
+            "topic": "faq",
+        },
+        score=0.98,
+        reranker_score=0.98,
+    )
+
+    draft = compose_fact_cards(
+        "Кто оплачивает проезд на форум Амур?",
+        [chunk],
+        category="форумы",
+        forum_normalized="Амур",
+    )
+
+    assert draft is not None
+    assert draft.cited_sources == ("yonote_api_generic_faq_s0001",)
+    assert "оплачивается участником самостоятельно" in draft.response
+
+
 def test_aspect_bridge_rejects_other_fact_and_shift_ordinal() -> None:
     results = _record("yonote_api_pmbmqm6lug_s0009_rezultaty")
     first_shift = _record("yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta")

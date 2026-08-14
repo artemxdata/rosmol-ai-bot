@@ -1125,7 +1125,7 @@ def _candidate_rank(
     query_tokens: set[str],
     preferred_rank: dict[str, int],
     requested_coverage: int,
-) -> tuple[int, int, int, int, float, str]:
+) -> tuple[int, int, int, int, int, float, str]:
     metadata = chunk.metadata or {}
     topic = str(metadata.get("topic") or "").strip()
     topic_rank = preferred_rank.get(topic, len(preferred_rank) + 1)
@@ -1145,7 +1145,12 @@ def _candidate_rank(
         metadata,
         chunk.text,
     )
+    # A precise published heading is stronger evidence than a facet discovered
+    # inside a broad FAQ body. Body discovery is the recall fallback when no
+    # dedicated card exists; it must not displace an exact source card.
+    heading_aspects = infer_source_aspects(metadata, "")
     return (
+        int(aspect not in heading_aspects),
         -answer_signal,
         topic_rank,
         -requested_coverage,

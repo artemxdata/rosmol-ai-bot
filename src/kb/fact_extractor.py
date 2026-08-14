@@ -329,6 +329,188 @@ _SOURCE_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     KnowledgeAspect.FOREIGN_PARTICIPATION: ("inostrannye_grazhdane", "иностран"),
 }
 
+# Yonote editors often keep several FAQ answers inside a broadly named section.
+# In that shape the heading is not enough to bind a user aspect to the source,
+# even though the published chunk body contains an explicit answer.  These
+# markers intentionally require a domain-specific phrase; generic words such as
+# ``организатор``, ``доступен`` or ``участник`` are not sufficient on their own.
+_SOURCE_BODY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
+    KnowledgeAspect.ELIGIBILITY: (
+        "возраст участников",
+        "возраст участника",
+        "возраст от",
+        "в возрасте от",
+        "участниками могут стать",
+        "к участию приглашаются",
+        "требования к участникам",
+    ),
+    KnowledgeAspect.SHIFTS: (
+        "первая смена",
+        "вторая смена",
+        "третья смена",
+        "четвертая смена",
+        "четвёртая смена",
+        "тематическая смена",
+        "смена «",
+    ),
+    KnowledgeAspect.PROGRAM: (
+        "программа форума",
+        "программа мероприятия",
+        "расписание форума",
+        "расписание мероприятия",
+        "программа будет опубликована",
+    ),
+    KnowledgeAspect.RESULTS: (
+        "результаты отбора",
+        "итоги отбора",
+        "результаты будут опубликованы",
+        "список прошедших",
+        "список победителей",
+    ),
+    KnowledgeAspect.STATUS: (
+        "статус заявки",
+        "заявка на рассмотрении",
+        "заявка одобрена",
+        "заявка отклонена",
+        "заявка отклонёна",
+        "резервный список",
+    ),
+    KnowledgeAspect.CONFIRMATION: (
+        "подтвердить участие",
+        "подтверждение участия",
+        "подтвердить свое участие",
+        "подтвердить своё участие",
+    ),
+    KnowledgeAspect.ACCOUNT_ACCESS: (
+        "восстановить пароль",
+        "восстановление пароля",
+        "объединить аккаунты",
+        "объединение аккаунтов",
+        "не могу войти в аккаунт",
+        "не получается войти в аккаунт",
+    ),
+    KnowledgeAspect.ACCOUNT_DELETION: (
+        "удалить аккаунт",
+        "удаление аккаунта",
+        "удалить учетную запись",
+        "удалить учётную запись",
+    ),
+    KnowledgeAspect.TRAVEL: (
+        "проезд",
+        "оплата проезда",
+        "проезд оплачивает",
+        "проезд оплачивается",
+        "проезд не оплачивается",
+        "компенсация проезда",
+        "расходы на проезд",
+        "дорога оплачивается",
+    ),
+    KnowledgeAspect.TRANSFER: (
+        "трансфер",
+        "шаттл",
+        "автобус до места проведения",
+        "автобусы до места проведения",
+    ),
+    KnowledgeAspect.ACCOMMODATION: (
+        "проживание",
+        "размещение участников",
+        "место размещения",
+        "гостиница для участников",
+        "палаточный лагерь",
+    ),
+    KnowledgeAspect.FOOD: (
+        "питание",
+        "прием пищи",
+        "приём пищи",
+        "питьевая вода",
+        "питьёвая вода",
+        "вегетарианское меню",
+    ),
+    KnowledgeAspect.DOCUMENTS: (
+        "необходимые документы",
+        "список документов",
+        "пакет документов",
+        "оригинал паспорта",
+        "копия паспорта",
+        "медицинская справка",
+    ),
+    KnowledgeAspect.MEDICAL: (
+        "медицинская помощь",
+        "медицинский пункт",
+        "медпункт",
+        "медицинская справка",
+        "дежурный врач",
+    ),
+    KnowledgeAspect.ACCESSIBILITY: (
+        "участники с овз",
+        "участников с овз",
+        "доступная среда",
+        "для людей с инвалидностью",
+        "сопровождающее лицо",
+    ),
+    KnowledgeAspect.CANCELLATION: (
+        "отказаться от участия",
+        "отказ от участия",
+        "отозвать заявку",
+        "отмена регистрации",
+        "отменить регистрацию",
+    ),
+    KnowledgeAspect.CONTACTS: (
+        "контакты организаторов",
+        "контакт организатора",
+        "телефон организаторов",
+        "телефон организатора",
+        "электронная почта",
+        "адрес электронной почты",
+    ),
+    KnowledgeAspect.VOLUNTEERING: (
+        "стать волонтером",
+        "стать волонтёром",
+        "набор волонтеров",
+        "набор волонтёров",
+        "волонтерская помощь",
+        "волонтёрская помощь",
+    ),
+    KnowledgeAspect.CERTIFICATE: (
+        "получить сертификат",
+        "сертификат участника",
+        "сертификат волонтера",
+        "сертификат волонтёра",
+        "диплом участника",
+    ),
+    KnowledgeAspect.CHAT: (
+        "чат участников",
+        "добавление в чат",
+        "добавят в чат",
+        "ссылка на чат",
+    ),
+    KnowledgeAspect.INVITATION: (
+        "письмо-вызов",
+        "письмо вызов",
+        "письмо-приглашение",
+        "официальное приглашение",
+    ),
+    KnowledgeAspect.DRESS_CODE: (
+        "дресс-код",
+        "дресс код",
+        "форма одежды",
+        "требования к одежде",
+    ),
+    KnowledgeAspect.CHILDREN: (
+        "участие детей",
+        "регистрация детей",
+        "с ребенком",
+        "с ребёнком",
+        "несовершеннолетние участники",
+    ),
+    KnowledgeAspect.FOREIGN_PARTICIPATION: (
+        "иностранные граждане",
+        "иностранные участники",
+        "граждане других стран",
+        "не гражданин рф",
+    ),
+}
+
 _ASPECT_UNIT_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     KnowledgeAspect.OVERVIEW: ("—", "является", "это ", "цель", "созда", "площадк"),
     KnowledgeAspect.REGISTRATION: (
@@ -532,6 +714,11 @@ def infer_source_aspects(
     # A few headings are intentionally broad. Their source body is used only
     # to add a compatible facet, never to invent a new entity or fact.
     source_normalized = normalize_fact_text(source_text)
+    aspects.update(
+        aspect
+        for aspect, markers in _SOURCE_BODY_MARKERS.items()
+        if any(_has_marker(source_normalized, marker) for marker in markers)
+    )
     if _has_marker(source_normalized, "билет"):
         aspects.add(KnowledgeAspect.TICKET)
     if any(

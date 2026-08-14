@@ -32,10 +32,28 @@ server-local диагностики, Ruff и validation
 разрешёнными read-only путями — query и scroll. Диагностике не передаются Cloud.ru, PostgreSQL,
 Redis, HDE/VK или Yonote credentials; до и после сверяются production snapshot и полный Qdrant
 fingerprint. Gate требует минимум `49/50`, retrieval `50/50` и LLM calls `0`. Точный следующий шаг —
-push handoff SHA и один server-local запуск этой диагностики без reindex, `/ask`, production restart
-и paid Pilot50. После этого нужен независимый holdout с ticket-level no-operator verdict; до
+один server-local запуск уже push-нутого handoff
+`05891caa288549a47698e9dbf7e73d7adf378184` без reindex, `/ask`, production restart и paid
+Pilot50. Команда передана владельцу, safe aggregate ещё не получен. После этого нужен независимый
+holdout с ticket-level no-operator verdict; до
 доказанных `>=50%` release status остаётся `NO GO`. Если реальный runtime останется ниже порога,
 следующий bounded A/B — тот же retrieval contract в Dify/RAGFlow, а не полная миграция вслепую.
+
+После handoff локально найден следующий системный recall-дефект: aspect catalog распознавал
+большинство фактов только по названию Yonote-раздела и пропускал явные ответы внутри общих
+published FAQ chunks. Текущий незакоммиченный patch добавляет консервативную body-driven
+классификацию аспектов, но по-прежнему берёт сам ответ только из опубликованного source text и
+предпочитает точный тематический heading перед общим FAQ. На неизменном seed прямой composable
+coverage по 36 registry forums вырос: проезд `1 -> 16`, проживание `6 -> 21`, питание `12 -> 21`,
+условия участия `6 -> 18`, трансфер `9 -> 19`, доступность `0 -> 7`; даты и регистрация дают по
+`24`, место `23`, программа `18`, документы `13`. Это coverage contract, а не ticket conversion.
+Добавлен regression gate 36 forums x 11 common aspects; targeted core suites `276 passed`, graph
+`266 passed`, expanded fact/coverage suite `105 passed`, offline Pilot50 остаётся `49/50`,
+retrieval `50/50`, LLM calls `0`. Монолитный pytest собрал `3302` tests и без failures дошёл до
+`85%`, затем перестал продвигаться; весь оставшийся хвост повторно покрыт bounded suites
+`92 + 160 + 282 passed`. Ruff, `index_kb.py --validate-only` (`2186/2152`) и `git diff --check`
+зелёные. До server-local Qdrant результата patch не push-ить, чтобы не инвалидировать уже
+переданный exact SHA `05891...`.
 
 ## Pilot50 v4 завершён с валидным safe verdict `STOP`
 
