@@ -4,6 +4,36 @@
 
 **Ветка:** `codex/real-rag`
 
+## 14 августа: Recovery10 получил execution FAIL; готовится бесплатное восстановление verdict
+
+Повторный бесплатный preflight exact candidate
+`b37f462f240b65cc1de76bae7fb4ff2a63235458` прошёл `GO`: candidate runtime smoke — `OK`,
+HDE/VK — `DISABLED`, `10` cases, cases SHA-256
+`f2168c9e8721c82e46165b3803bb7adc7f89249f50210d96dc3dcb03d2710aaf`, manifest SHA-256
+`419a6a62671d7dbb03c402ae688f400e5fa1dbe46565e2a477b01cfcb4662068`, cap — `200 RUB`.
+Разрешённый one-shot `run` завершился
+`semantic_recovery10_server_local=FAIL reason=candidate_ask_eval_failed`. Маркер `run.started`
+создаётся до запуска `eval.run_ask`, поэтому approval/run нельзя повторять или очищать вручную;
+из этого короткого статуса нельзя делать вывод ни о качестве semantic recovery, ни о числе
+выполненных запросов, ни о стоимости.
+
+Локально добавлена отдельная read-only диагностика sealed run. Она не запускает candidate,
+`/ask` или LLM, не пишет в evidence и подключается только к PostgreSQL для агрегированного
+`COUNT` по точному reservation run ID. Если полный raw report успел сохраниться, диагностика
+повторно применяет существующий валидатор Recovery10 и восстанавливает safe quality verdict;
+если report отсутствует, она различает отказ до cost reservation, rolling-24h cap, обрыв до
+первого trace, частичное выполнение cases и post-case finalization. В stdout разрешены только
+стадия, allowlisted причины, SHA-256, cost-ledger status и обезличенные counts/cost; query,
+response, request ID и chunk text запрещены. HDE/VK остаются выключенными, production и Qdrant
+не меняются. Следующий шаг — доставить diagnostic tooling через GitHub и один раз прочитать
+сохранённые evidence; новый платный запуск до этого запрещён.
+
+Локальный gate диагностического change set: Ruff — `OK`, validation seed —
+`2186 valid / 2152 published`; полный набор из `3356` tests покрыт комбинированным прогоном
+после известного Windows teardown-hang — `3355 passed`, `1 skipped`, `0 failed`. Отдельно
+связанные Recovery10/cost-governance tests — `73 passed`, сам новый diagnostic contract —
+`5 passed`.
+
 ## 14 августа: первый Recovery10 run остановлен до платных запросов из-за чтения receipt
 
 Бесплатный preflight exact candidate `63f54683aabb03ddd0f6531cd493465ed0ec9db6` прошёл `GO`:
