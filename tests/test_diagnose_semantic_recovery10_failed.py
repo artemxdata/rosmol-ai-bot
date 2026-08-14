@@ -225,6 +225,9 @@ def test_recovers_safe_result_when_cli_failed_only_on_trace_gate(
     assert result["failure_stage"] == "post_report_cli_gate"
     assert result["failure_reasons"] == ["trace_coverage_below_100_percent"]
     assert result["quality_verdict_available"] is True
+    assert result["report_diagnostic"]["status"] == "valid"
+    assert result["report_diagnostic"]["validation_failures"] == []
+    assert result["report_diagnostic"]["results_total"] == 10
     assert result["recovered_safe_result"]["counts"]["passed"] == 6
     assert result["recovered_safe_result"]["diagnostic_gate"]["status"] == "STOP"
     assert result["retry_forbidden"] is True
@@ -287,3 +290,67 @@ def test_classifies_partial_traces_after_exact_reservation(
     assert result["failure_reasons"] == ["runtime_or_case_execution_failed"]
     assert result["trace_aggregate"]["traces_total"] == 4
     assert result["artifacts"]["raw_report_present"] is False
+    assert result["report_diagnostic"] is None
+
+
+def test_reports_safe_structural_reason_for_invalid_raw_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    reservation = _reserve_exact(workspace)
+    raw_report = _report(
+        workspace,
+        run_id=reservation.record["run_id"],
+        trace_count=0,
+    )
+    raw_report["runtime_identity"]["verified_release_git_sha"] = "e" * 40
+    raw_report["results"] = raw_report["results"][:4]
+    raw_report["cases_total"] = 4
+    for row in raw_report["results"]:
+        row["http_success"] = False
+        row["failure_reasons"] = ["http_error"]
+    _write_json(
+        workspace["evidence"] / "semantic-recovery10-ask-report.json",
+        raw_report,
+    )
+    monkeypatch.setattr(
+        diagnostic,
+        "_fetch_trace_aggregate_sync",
+        lambda _run_id: {
+            "status": "ok",
+            "traces_total": 0,
+            "distinct_cases": 0,
+            "null_case_ids": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "errors": 0,
+            "llm_cost_rub": 0.0,
+        },
+    )
+
+    result = _diagnose(workspace)
+
+    report = result["report_diagnostic"]
+    assert result["failure_stage"] == "report_present_invalid"
+    assert result["failure_reasons"] == ["report_validation_failed"]
+    assert report["status"] == "invalid"
+    assert report["validation_failures"] == [
+        "report_cardinality_mismatch",
+        "result_identity_mismatch",
+        "runtime_identity_mismatch",
+    ]
+    assert report["cases_total"] == 4
+    assert report["results_total"] == 4
+    assert report["runtime_identity"] == {
+        "status": "other",
+        "expected_match": True,
+        "verified_match": False,
+        "matched_expected": True,
+    }
+    assert report["result_counts"]["http_error"] == 4
+    assert report["result_counts"]["trace_found"] == 0
+    assert report["failure_reason_counts"] == {"http_error": 4}
+    encoded = json.dumps(result, ensure_ascii=False).casefold()
+    for forbidden in ('"query"', '"response"', '"request_id"', '"chunk_text"'):
+        assert forbidden not in encoded

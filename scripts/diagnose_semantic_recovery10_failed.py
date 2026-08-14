@@ -8,6 +8,7 @@ import math
 import os
 import re
 import tempfile
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -20,6 +21,28 @@ SCHEMA_VERSION = "semantic-recovery10-failed-diagnostics-v1"
 EXPECTED_SCOPE = "ask-eval"
 FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+REPORT_VALIDATION_FAILURES = frozenset(
+    {
+        "report_json_unreadable",
+        "manifest_invalid",
+        "cases_invalid",
+        "manifest_cases_binding_mismatch",
+        "report_cardinality_mismatch",
+        "report_cases_binding_mismatch",
+        "report_target_mismatch",
+        "result_identity_mismatch",
+        "runtime_identity_mismatch",
+        "pricing_incomplete",
+        "reservation_invalid",
+        "reservation_binding_mismatch",
+        "reservation_run_id_mismatch",
+        "eval_run_id_mismatch",
+        "llm_cost_invalid",
+        "llm_budget_exceeded",
+        "llm_budget_stopped",
+        "llm_pricing_stopped",
+    }
+)
 
 _PREFLIGHT_FIELDS = frozenset(
     {
@@ -262,6 +285,242 @@ def _recover_safe_result(
     return recovered
 
 
+def _bool_or_none(value: object) -> bool | None:
+    return value if type(value) is bool else None
+
+
+def _finite_float_or_none(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _report_validation_diagnostic(
+    *,
+    manifest_path: Path,
+    cases_path: Path,
+    report_path: Path,
+    expected_runtime_git_sha: str,
+    expected_approval_id: str,
+    matching_record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return only allowlisted structure and aggregates from a raw ask report."""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        cases = json.loads(cases_path.read_text(encoding="utf-8-sig"))
+        report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {
+            "status": "unreadable",
+            "validation_failures": ["report_json_unreadable"],
+            "cases_total": None,
+            "results_total": None,
+            "cases_binding_match": None,
+            "target_match": None,
+            "result_identity_match": None,
+            "runtime_identity": None,
+            "cost_control": None,
+            "result_counts": None,
+            "failure_reason_counts": {},
+        }
+
+    failures: list[str] = []
+    cases_sha256 = _sha256(cases_path)
+    manifest_valid = (
+        isinstance(manifest, dict)
+        and manifest.get("dataset_id") == semantic_recovery10.DATASET_ID
+    )
+    if not manifest_valid:
+        failures.append("manifest_invalid")
+    cases_valid = (
+        isinstance(cases, list)
+        and len(cases) == semantic_recovery10.CASES_TOTAL
+    )
+    if not cases_valid:
+        failures.append("cases_invalid")
+    if not isinstance(manifest, dict) or manifest.get("cases_sha256") != cases_sha256:
+        failures.append("manifest_cases_binding_mismatch")
+
+    report_dict = report if isinstance(report, dict) else {}
+    raw_cases_total = report_dict.get("cases_total")
+    cases_total = (
+        raw_cases_total
+        if type(raw_cases_total) is int and raw_cases_total >= 0
+        else None
+    )
+    if not isinstance(report, dict) or raw_cases_total != semantic_recovery10.CASES_TOTAL:
+        failures.append("report_cardinality_mismatch")
+
+    cases_binding_match = (
+        report_dict.get("cases_file_sha256") == cases_sha256
+        if isinstance(report, dict)
+        else None
+    )
+    if cases_binding_match is not True:
+        failures.append("report_cases_binding_mismatch")
+    target_match = (
+        report_dict.get("target") == semantic_recovery10.TARGET
+        if isinstance(report, dict)
+        else None
+    )
+    if target_match is not True:
+        failures.append("report_target_mismatch")
+
+    raw_results = report_dict.get("results")
+    results = raw_results if isinstance(raw_results, list) else None
+    results_total = len(results) if results is not None else None
+    result_identity_match: bool | None = None
+    if cases_valid and results is not None:
+        case_ids = [str(case.get("id") or "") for case in cases if isinstance(case, dict)]
+        result_ids = [
+            str(row.get("id") or "") for row in results if isinstance(row, dict)
+        ]
+        result_identity_match = (
+            len(case_ids) == semantic_recovery10.CASES_TOTAL
+            and len(result_ids) == semantic_recovery10.CASES_TOTAL
+            and case_ids == result_ids
+            and len(set(case_ids)) == semantic_recovery10.CASES_TOTAL
+        )
+    if results_total != semantic_recovery10.CASES_TOTAL or result_identity_match is not True:
+        failures.append("result_identity_mismatch")
+
+    raw_runtime = report_dict.get("runtime_identity")
+    runtime = raw_runtime if isinstance(raw_runtime, dict) else {}
+    raw_runtime_status = runtime.get("status")
+    runtime_status = (
+        raw_runtime_status
+        if raw_runtime_status in {
+            "verified",
+            "invalid",
+            "observed_unbound",
+            "not_checked",
+        }
+        else "missing" if not runtime else "other"
+    )
+    runtime_diagnostic = {
+        "status": runtime_status,
+        "expected_match": (
+            runtime.get("expected_runtime_git_sha") == expected_runtime_git_sha
+        ),
+        "verified_match": (
+            runtime.get("verified_release_git_sha") == expected_runtime_git_sha
+        ),
+        "matched_expected": _bool_or_none(
+            runtime.get("matched_expected_runtime")
+        ),
+    }
+    if not all(
+        (
+            runtime_diagnostic["expected_match"] is True,
+            runtime_diagnostic["verified_match"] is True,
+            runtime_diagnostic["matched_expected"] is True,
+        )
+    ):
+        failures.append("runtime_identity_mismatch")
+
+    raw_cost_control = report_dict.get("cost_control")
+    cost_control = raw_cost_control if isinstance(raw_cost_control, dict) else {}
+    raw_reservation = cost_control.get("reservation")
+    reservation = raw_reservation if isinstance(raw_reservation, dict) else {}
+    pricing_complete = _bool_or_none(cost_control.get("pricing_complete"))
+    reservation_valid = _bool_or_none(reservation.get("valid"))
+    approved_cap = _finite_float_or_none(reservation.get("approved_cap_rub"))
+    reservation_binding_match = all(
+        (
+            reservation.get("runtime_git_sha") == expected_runtime_git_sha,
+            reservation.get("manifest_sha256") == cases_sha256,
+            reservation.get("case_count") == semantic_recovery10.CASES_TOTAL,
+            approved_cap == semantic_recovery10.COST_CAP_RUB,
+            reservation.get("high_cost_approval_id") == expected_approval_id,
+        )
+    )
+    expected_run_id = matching_record.get("run_id") if matching_record else None
+    reservation_run_id_match = (
+        reservation.get("run_id") == expected_run_id
+        if expected_run_id is not None
+        else None
+    )
+    eval_run_id_match = (
+        report_dict.get("eval_run_id") == expected_run_id
+        if expected_run_id is not None
+        else None
+    )
+    if pricing_complete is not True:
+        failures.append("pricing_incomplete")
+    if reservation_valid is not True:
+        failures.append("reservation_invalid")
+    if reservation_binding_match is not True:
+        failures.append("reservation_binding_mismatch")
+    if reservation_run_id_match is False:
+        failures.append("reservation_run_id_mismatch")
+    if eval_run_id_match is False:
+        failures.append("eval_run_id_mismatch")
+
+    cost = _finite_float_or_none(report_dict.get("llm_estimated_cost_rub"))
+    if cost is None or cost < 0 or cost > semantic_recovery10.COST_CAP_RUB:
+        failures.append("llm_cost_invalid")
+    budget_exceeded = _bool_or_none(report_dict.get("llm_budget_exceeded"))
+    budget_stopped = _bool_or_none(report_dict.get("llm_budget_stopped"))
+    pricing_stopped = _bool_or_none(report_dict.get("llm_pricing_stopped"))
+    if budget_exceeded is True:
+        failures.append("llm_budget_exceeded")
+    if budget_stopped is True:
+        failures.append("llm_budget_stopped")
+    if pricing_stopped is True:
+        failures.append("llm_pricing_stopped")
+
+    result_counts: dict[str, int] | None = None
+    failure_counts: Counter[str] = Counter()
+    if results is not None:
+        safe_rows = [row for row in results if isinstance(row, dict)]
+        for row in safe_rows:
+            failure_counts.update(semantic_recovery10._safe_failure_reasons(row))
+        result_counts = {
+            "passed": sum(row.get("passed") is True for row in safe_rows),
+            "trace_found": sum(row.get("trace_found") is True for row in safe_rows),
+            "http_success": sum(row.get("http_success") is True for row in safe_rows),
+            "http_error": sum(row.get("http_success") is False for row in safe_rows),
+            "was_escalated": sum(row.get("was_escalated") is True for row in safe_rows),
+            "semantic_recovery_attempted": sum(
+                row.get("semantic_recovery_attempted") is True for row in safe_rows
+            ),
+            "semantic_recovery_succeeded": sum(
+                semantic_recovery10._semantic_status(row)[1] for row in safe_rows
+            ),
+        }
+
+    unique_failures = list(dict.fromkeys(failures))
+    if not set(unique_failures) <= REPORT_VALIDATION_FAILURES:
+        raise ValueError("unsafe report diagnostic failure code")
+    return {
+        "status": "valid" if not unique_failures else "invalid",
+        "validation_failures": unique_failures,
+        "cases_total": cases_total,
+        "results_total": results_total,
+        "cases_binding_match": cases_binding_match,
+        "target_match": target_match,
+        "result_identity_match": result_identity_match,
+        "runtime_identity": runtime_diagnostic,
+        "cost_control": {
+            "pricing_complete": pricing_complete,
+            "reservation_valid": reservation_valid,
+            "reservation_binding_match": reservation_binding_match,
+            "reservation_run_id_match": reservation_run_id_match,
+            "eval_run_id_match": eval_run_id_match,
+            "budget_exceeded": budget_exceeded,
+            "budget_stopped": budget_stopped,
+            "pricing_stopped": pricing_stopped,
+            "llm_cost_rub": cost if cost is not None and cost >= 0 else None,
+        },
+        "result_counts": result_counts,
+        "failure_reason_counts": dict(sorted(failure_counts.items())),
+    }
+
+
 def diagnose_failed(
     *,
     evidence_dir: Path,
@@ -317,9 +576,18 @@ def diagnose_failed(
 
     report_present = report_path.is_file() and not report_path.is_symlink()
     report_sha256 = _sha256(report_path) if report_present else None
+    report_diagnostic: dict[str, Any] | None = None
     recovered: dict[str, Any] | None = None
     reasons: list[str] = []
     if report_present:
+        report_diagnostic = _report_validation_diagnostic(
+            manifest_path=manifest_path,
+            cases_path=cases_path,
+            report_path=report_path,
+            expected_runtime_git_sha=expected_runtime_git_sha,
+            expected_approval_id=expected_approval_id,
+            matching_record=matching_record,
+        )
         try:
             recovered = _recover_safe_result(
                 manifest_path=manifest_path,
@@ -332,7 +600,7 @@ def diagnose_failed(
                 raise ValueError("report exists without the exact reservation")
             if recovered.get("eval_run_id") != matching_record.get("run_id"):
                 raise ValueError("report and reservation run identity mismatch")
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        except (OSError, TypeError, ValueError, AttributeError, json.JSONDecodeError):
             recovered = None
             reasons = ["report_validation_failed"]
             stage = "report_present_invalid"
@@ -387,6 +655,7 @@ def diagnose_failed(
         "trace_aggregate": trace,
         "failure_stage": stage,
         "failure_reasons": reasons,
+        "report_diagnostic": report_diagnostic,
         "quality_verdict_available": recovered is not None,
         "retry_forbidden": True,
         "diagnostic_new_ask_calls": 0,

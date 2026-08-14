@@ -375,6 +375,7 @@ assert body == canonical
 assert set(payload) == {
     "schema_version", "status", "bindings", "artifacts", "reservation",
     "trace_aggregate", "failure_stage", "failure_reasons",
+    "report_diagnostic",
     "quality_verdict_available", "retry_forbidden",
     "diagnostic_new_ask_calls", "recovered_safe_result",
 }
@@ -436,6 +437,80 @@ assert payload["failure_stage"] in allowed_stages
 reasons = payload["failure_reasons"]
 assert type(reasons) is list and reasons and reasons == list(dict.fromkeys(reasons))
 assert set(reasons) <= allowed_reasons
+report_diagnostic = payload["report_diagnostic"]
+assert (report_diagnostic is None) is (artifacts["raw_report_present"] is False)
+if report_diagnostic is not None:
+    assert set(report_diagnostic) == {
+        "status", "validation_failures", "cases_total", "results_total",
+        "cases_binding_match", "target_match", "result_identity_match",
+        "runtime_identity", "cost_control", "result_counts",
+        "failure_reason_counts",
+    }
+    assert report_diagnostic["status"] in {"valid", "invalid", "unreadable"}
+    validation_failures = report_diagnostic["validation_failures"]
+    allowed_validation_failures = {
+        "report_json_unreadable", "manifest_invalid", "cases_invalid",
+        "manifest_cases_binding_mismatch", "report_cardinality_mismatch",
+        "report_cases_binding_mismatch", "report_target_mismatch",
+        "result_identity_mismatch", "runtime_identity_mismatch",
+        "pricing_incomplete", "reservation_invalid",
+        "reservation_binding_mismatch", "reservation_run_id_mismatch",
+        "eval_run_id_mismatch", "llm_cost_invalid", "llm_budget_exceeded",
+        "llm_budget_stopped", "llm_pricing_stopped",
+    }
+    assert type(validation_failures) is list
+    assert validation_failures == list(dict.fromkeys(validation_failures))
+    assert set(validation_failures) <= allowed_validation_failures
+    assert (report_diagnostic["status"] == "valid") is (not validation_failures)
+    for key in ("cases_total", "results_total"):
+        value = report_diagnostic[key]
+        assert value is None or type(value) is int and value >= 0
+    for key in ("cases_binding_match", "target_match", "result_identity_match"):
+        assert report_diagnostic[key] is None or type(report_diagnostic[key]) is bool
+    runtime = report_diagnostic["runtime_identity"]
+    if runtime is not None:
+        assert set(runtime) == {
+            "status", "expected_match", "verified_match", "matched_expected",
+        }
+        assert runtime["status"] in {
+            "verified", "invalid", "observed_unbound", "not_checked",
+            "missing", "other",
+        }
+        for key in ("expected_match", "verified_match", "matched_expected"):
+            assert runtime[key] is None or type(runtime[key]) is bool
+    cost = report_diagnostic["cost_control"]
+    if cost is not None:
+        assert set(cost) == {
+            "pricing_complete", "reservation_valid", "reservation_binding_match",
+            "reservation_run_id_match", "eval_run_id_match", "budget_exceeded",
+            "budget_stopped", "pricing_stopped", "llm_cost_rub",
+        }
+        for key in set(cost) - {"llm_cost_rub"}:
+            assert cost[key] is None or type(cost[key]) is bool
+        assert cost["llm_cost_rub"] is None or (
+            type(cost["llm_cost_rub"]) in {int, float}
+            and cost["llm_cost_rub"] >= 0
+        )
+    result_counts = report_diagnostic["result_counts"]
+    if result_counts is not None:
+        assert set(result_counts) == {
+            "passed", "trace_found", "http_success", "http_error",
+            "was_escalated", "semantic_recovery_attempted",
+            "semantic_recovery_succeeded",
+        }
+        assert all(type(value) is int and value >= 0 for value in result_counts.values())
+        if report_diagnostic["results_total"] is not None:
+            assert all(
+                value <= report_diagnostic["results_total"]
+                for value in result_counts.values()
+            )
+    failure_counts = report_diagnostic["failure_reason_counts"]
+    assert type(failure_counts) is dict
+    assert all(
+        re.fullmatch(r"[a-z][a-z0-9_.:-]{0,95}", key)
+        and type(value) is int and value >= 0
+        for key, value in failure_counts.items()
+    )
 assert payload["retry_forbidden"] is True
 assert payload["diagnostic_new_ask_calls"] == 0
 recovered = payload["recovered_safe_result"]

@@ -1,8 +1,32 @@
 # Текущее состояние проекта
 
-**Обновлено:** 14 августа 2026
+**Обновлено:** 15 августа 2026
 
 **Ветка:** `codex/real-rag`
+
+## 15 августа: Recovery10 не дошёл до ядра; локализуется точный дефект raw report
+
+Read-only диагностика tooling commit
+`d65b0e62b3afde6bb50b05d5ca242cc42b8bf551` успешно прочитала sealed failed run exact
+candidate `b37f462f240b65cc1de76bae7fb4ff2a63235458`. Cost reservation существует ровно одна и
+привязана к ожидаемым candidate/cases/approval; raw report сохранён с SHA-256
+`2f2786d4a98baa4fbf3de37aed92abc07fd0006a35f557ff7fe294003099f824`. При этом PostgreSQL
+содержит `0` trace этого eval run, агрегированная LLM-стоимость — `0 RUB`, safe result отсутствует,
+а canonical summarizer отклонил raw report как `report_validation_failed`. Следовательно, запуск
+не проверил качество semantic recovery и не дал нового результата по ядру: отказ произошёл до
+первого зафиксированного `/ask`, фактического LLM-вызова и расхода.
+
+Чтобы не гадать и не тратить новый approval, диагностика расширяется безопасной структурной
+расшифровкой raw report. Она выводит только allowlisted коды нарушенных контрактов, булевы
+привязки, количество сформированных results и обезличенные счётчики HTTP/trace/recovery; query,
+response, request ID, chunk text и любые секреты по-прежнему запрещены. Старый one-shot повторять
+нельзя. Следующий шаг — доставить диагностический commit и бесплатно повторно прочитать те же
+sealed evidence; затем точечно исправить pre-request execution и только после зелёных бесплатных
+проверок сформировать новый approval для настоящего bounded Recovery10. HDE/VK остаются
+выключенными, production runtime, Qdrant и KB не меняются.
+
+Локальный gate диагностического change set: Ruff — `OK`; полный pytest — `3357 passed`,
+`1 skipped`, `0 failed`; validation seed — `2186 valid / 2152 published`; Bash syntax — `OK`.
 
 ## 14 августа: Recovery10 получил execution FAIL; готовится бесплатное восстановление verdict
 
