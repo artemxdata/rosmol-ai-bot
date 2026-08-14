@@ -56,6 +56,174 @@ def test_query_aspects_do_not_confuse_word_substrings() -> None:
     assert KnowledgeAspect.CHILDREN not in program
 
 
+def test_process_words_do_not_create_forum_shift_or_children_aspects() -> None:
+    status = plan_query_aspects(
+        "Когда сменится статус заявки после отбора?"
+    )
+    details = plan_query_aspects("Где посмотреть детали статуса заявки?")
+
+    assert status == frozenset({KnowledgeAspect.RESULTS})
+    assert KnowledgeAspect.SHIFTS not in status
+    assert KnowledgeAspect.STATUS in details
+    assert KnowledgeAspect.CHILDREN not in details
+
+
+def test_shift_is_scope_for_results_but_a_fact_for_shift_catalog() -> None:
+    scoped = plan_query_aspects(
+        "Когда будут результаты отбора на первую смену форума?"
+    )
+    catalog = plan_query_aspects("Какие смены есть у форума?")
+
+    assert scoped == frozenset({KnowledgeAspect.RESULTS})
+    assert KnowledgeAspect.SHIFTS in catalog
+
+
+def test_result_or_invitation_owns_non_definition_status_request() -> None:
+    results = plan_query_aspects("Когда после отбора изменится статус заявки?")
+    invitation = plan_query_aspects("Когда придёт письмо-вызов и изменится статус?")
+    definition = plan_query_aspects(
+        "Когда будут результаты и что означает статус «Резерв»?"
+    )
+
+    assert KnowledgeAspect.STATUS not in results
+    assert KnowledgeAspect.STATUS not in invitation
+    assert KnowledgeAspect.STATUS in definition
+
+
+def test_temporal_process_qualifiers_do_not_create_unrelated_fact_slots() -> None:
+    after_selection = plan_query_aspects(
+        "После окончания отбора где появится программа и когда будет трансфер?"
+    )
+    invitation = plan_query_aspects(
+        "Я отправил заявку: когда ждать письмо с приглашением?"
+    )
+    trip_signal = plan_query_aspects(
+        "Когда после заявки уже можно собираться в дорогу?"
+    )
+
+    assert after_selection == frozenset(
+        {KnowledgeAspect.PROGRAM, KnowledgeAspect.TRANSFER}
+    )
+    assert invitation == frozenset({KnowledgeAspect.INVITATION})
+    assert trip_signal == frozenset({KnowledgeAspect.INVITATION})
+
+
+def test_selection_process_and_outcome_have_different_fact_slots() -> None:
+    stages = plan_query_aspects("Из каких этапов состоит отбор на форум?")
+    outcome = plan_query_aspects("Когда будет результат по моей заявке?")
+
+    assert stages == frozenset({KnowledgeAspect.REGISTRATION})
+    assert outcome == frozenset({KnowledgeAspect.RESULTS})
+
+
+def test_completed_application_uses_status_while_named_shift_stays_scope() -> None:
+    planned = plan_query_aspects(
+        "Я уже подал заявку на смену форума — что происходит дальше?"
+    )
+
+    assert planned == frozenset({KnowledgeAspect.STATUS})
+
+
+def test_grant_agreement_is_scope_for_report_deadline() -> None:
+    planned = plan_query_aspects(
+        "Какой срок отчётности указан в грантовом соглашении?"
+    )
+
+    assert planned == frozenset({KnowledgeAspect.GRANT_REPORT})
+
+
+def test_grant_application_process_has_explicit_status_and_agreement_slots() -> None:
+    review = plan_query_aspects(
+        "Сколько проверяют заявку после грантового конкурса?"
+    )
+    agreement = plan_query_aspects(
+        "Где найти приказ и договор для грантового соглашения?"
+    )
+
+    assert review == frozenset({KnowledgeAspect.STATUS})
+    assert agreement == frozenset(
+        {KnowledgeAspect.GRANT_AGREEMENT, KnowledgeAspect.RESULTS}
+    )
+
+
+def test_published_result_and_invitation_sentences_expose_their_fact_slots() -> None:
+    grant_dates = _record("yonote_api_fyxcuinesz_s0001_sroki_i_daty")
+    invitation = _record("yonote_api_aucookucja_s0020_rezultaty_otbora")
+
+    assert KnowledgeAspect.RESULTS in infer_source_aspects(
+        grant_dates,
+        grant_dates["text_clean"],
+    )
+    assert KnowledgeAspect.INVITATION in infer_source_aspects(
+        invitation,
+        invitation["text_clean"],
+    )
+
+
+def test_non_housing_use_of_placed_does_not_request_accommodation() -> None:
+    assert plan_query_aspects(
+        "Сообщение размещено в личном кабинете."
+    ) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "Сколько времени проверяют грантовый отчёт?",
+            KnowledgeAspect.GRANT_REPORT,
+        ),
+        (
+            "Когда откроется вкладка «Отчёт» и сколько дней есть на сдачу?",
+            KnowledgeAspect.GRANT_REPORT,
+        ),
+        (
+            "Как заключить грантовое соглашение?",
+            KnowledgeAspect.GRANT_AGREEMENT,
+        ),
+        (
+            "Где публикуют приказ о победителях грантового конкурса?",
+            KnowledgeAspect.RESULTS,
+        ),
+    ],
+)
+def test_grant_processes_have_explicit_query_aspects(
+    query: str,
+    expected: KnowledgeAspect,
+) -> None:
+    planned = plan_query_aspects(query)
+
+    assert expected in planned
+    assert KnowledgeAspect.SHIFTS not in planned
+    assert KnowledgeAspect.CHILDREN not in planned
+
+
+@pytest.mark.parametrize(
+    ("chunk_id", "expected"),
+    [
+        (
+            "yonote_api_g4yfzssrsd_s0043_4_tehnicheskaya_proverka",
+            KnowledgeAspect.STATUS,
+        ),
+        (
+            "yonote_api_g4yfzssrsd_s0053_poryadok_zaklyucheniya_soglasheniya",
+            KnowledgeAspect.GRANT_AGREEMENT,
+        ),
+        (
+            "yonote_api_g4yfzssrsd_s0070_sroki_otchetnosti",
+            KnowledgeAspect.GRANT_REPORT,
+        ),
+    ],
+)
+def test_grant_process_sources_have_explicit_aspects(
+    chunk_id: str,
+    expected: KnowledgeAspect,
+) -> None:
+    record = _record(chunk_id)
+
+    assert expected in infer_source_aspects(record, record["text_clean"])
+
+
 def test_as_of_registration_clause_creates_date_and_registration_slots() -> None:
     planned = plan_query_aspects(
         "По состоянию на 14 августа 2026 года приём уже закрыт?"
@@ -226,6 +394,69 @@ async def test_metadata_retrieval_uses_catalog_after_stale_analyzer_topic() -> N
         "s0002_registraciya_prohodit_po_ssylke_https_myrosmol_ru_auth_regis"
     ]
     assert len(retriever.filters) == 2
+
+
+@pytest.mark.parametrize(
+    ("query", "expected", "forbidden"),
+    [
+        (
+            "Когда откроется вкладка «Отчёт»?",
+            "в первый рабочий день после окончания срока реализации проекта",
+            "60 рабочих дней",
+        ),
+        (
+            "Сколько рабочих дней есть победителю 2026 года на сдачу отчётности?",
+            "20 рабочих дней",
+            "60 рабочих дней",
+        ),
+        (
+            "Сколько времени проверяют грантовый отчёт?",
+            "до 30 рабочих дней",
+            "60 рабочих дней",
+        ),
+        (
+            "Сколько дней дают победителю 2026 года на доработку отчёта?",
+            "30 рабочих дней",
+            "45 рабочих дней",
+        ),
+    ],
+)
+def test_grant_report_renderer_selects_the_requested_timeline(
+    query: str,
+    expected: str,
+    forbidden: str,
+) -> None:
+    draft = compose_fact_cards(
+        query,
+        [_chunk("yonote_api_g4yfzssrsd_s0070_sroki_otchetnosti")],
+        category="гранты",
+        forum_normalized="Гранты для физических лиц",
+        response_limit=900,
+    )
+
+    assert draft is not None
+    assert expected in draft.response
+    assert forbidden not in draft.response
+
+
+def test_grant_agreement_renderer_uses_only_published_process_steps() -> None:
+    draft = compose_fact_cards(
+        "Как заключить грантовое соглашение?",
+        [
+            _chunk(
+                "yonote_api_g4yfzssrsd_"
+                "s0053_poryadok_zaklyucheniya_soglasheniya"
+            )
+        ],
+        category="гранты",
+        forum_normalized="Гранты для физических лиц",
+        response_limit=900,
+    )
+
+    assert draft is not None
+    assert "доступны три вкладки" in draft.response
+    assert "сумма расходов" in draft.response
+    assert "сроки реализации проекта" in draft.response
 
 
 @pytest.mark.parametrize(

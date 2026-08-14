@@ -165,7 +165,14 @@ _QUERY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
         "отъезд",
         "заезд",
     ),
-    KnowledgeAspect.SHIFTS: ("смен", "заезд"),
+    KnowledgeAspect.SHIFTS: (
+        "смена",
+        "смены",
+        "смену",
+        "смене",
+        "сменой",
+        "заезд",
+    ),
     KnowledgeAspect.LOCATION: (
         "где проходит",
         "где пройдет",
@@ -176,7 +183,14 @@ _QUERY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
         "локац",
     ),
     KnowledgeAspect.PROGRAM: ("программ", "расписан", "артист"),
-    KnowledgeAspect.RESULTS: ("результат", "итог", "отбор", "список прошед"),
+    KnowledgeAspect.RESULTS: (
+        "результат",
+        "итог",
+        "отбор",
+        "список прошед",
+        "приказ о победител",
+        "публикац приказ",
+    ),
     KnowledgeAspect.STATUS: (
         "статус",
         "на рассмотрении",
@@ -232,19 +246,36 @@ _QUERY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     ),
     KnowledgeAspect.CONTACTS: ("контакт", "куда написать", "почта поддержки"),
     KnowledgeAspect.GRANT_NOMINATIONS: ("номинац", "направлен грант"),
-    KnowledgeAspect.GRANT_AGREEMENT: ("грантового соглашен", "грантовое соглашен"),
+    KnowledgeAspect.GRANT_AGREEMENT: (
+        "грантового соглашен",
+        "грантовое соглашен",
+        "заключить соглашен",
+        "заключение соглашен",
+        "подписать соглашен",
+    ),
     KnowledgeAspect.GRANT_REPORT: (
         "грантового отчет",
         "грантового отчёт",
         "итоговый отчет",
         "итоговый отчёт",
+        "сроки отчетност",
+        "сроки отчётност",
     ),
     KnowledgeAspect.VOLUNTEERING: ("волонтер", "волонтёр"),
     KnowledgeAspect.CERTIFICATE: ("сертификат", "диплом", "грамот"),
     KnowledgeAspect.CHAT: ("добавят в чат", "вступить в чат", "ссылка на чат"),
     KnowledgeAspect.INVITATION: ("письмо-вызов", "письмо вызов", "приглашен"),
     KnowledgeAspect.DRESS_CODE: ("дресс", "одежд"),
-    KnowledgeAspect.CHILDREN: ("с ребен", "с ребён", "дет", "ребенк", "ребёнк"),
+    KnowledgeAspect.CHILDREN: (
+        "с ребен",
+        "с ребён",
+        "с дет",
+        "дети",
+        "детей",
+        "ребен",
+        "ребён",
+        "несовершеннолет",
+    ),
     KnowledgeAspect.FOREIGN_PARTICIPATION: ("иностран", "другой стран", "не гражданин рф"),
 }
 
@@ -287,7 +318,13 @@ _SOURCE_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     KnowledgeAspect.LOCATION: ("mesto_", "ploschadk", "adres", "место проведения", "площадка"),
     KnowledgeAspect.PROGRAM: ("programma_", "raspisanie", "artist", "программа", "расписание"),
     KnowledgeAspect.RESULTS: ("rezultat", "otbor", "spiski", "результаты", "отбор"),
-    KnowledgeAspect.STATUS: ("statusy_zayavok", "rezervnyy_spisok", "статусы заявок"),
+    KnowledgeAspect.STATUS: (
+        "statusy_zayavok",
+        "rezervnyy_spisok",
+        "tehnicheskaya_proverka",
+        "статусы заявок",
+        "техническая проверка",
+    ),
     KnowledgeAspect.CONFIRMATION: ("podtverzhdenie_uchast", "подтверждение участия"),
     KnowledgeAspect.ACCOUNT_ACCESS: (
         "obedinenie_akkauntov",
@@ -317,9 +354,18 @@ _SOURCE_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     KnowledgeAspect.GRANT_NOMINATIONS: ("nominacii_grantovyh", "номинации грантовых"),
     KnowledgeAspect.GRANT_AGREEMENT: (
         "proverka_proekta_grantovogo_soglasheniya",
+        "poryadok_zaklyucheniya_soglasheniya",
         "проверка проекта грантового соглашения",
+        "порядок заключения соглашения",
     ),
-    KnowledgeAspect.GRANT_REPORT: ("proverka_otcheta", "проверка отчета", "проверка отчёта"),
+    KnowledgeAspect.GRANT_REPORT: (
+        "proverka_otcheta",
+        "sroki_otchetnosti",
+        "проверка отчета",
+        "проверка отчёта",
+        "сроки отчетности",
+        "сроки отчётности",
+    ),
     KnowledgeAspect.VOLUNTEERING: ("volonter", "volont", "волонт"),
     KnowledgeAspect.CERTIFICATE: ("sertifikat", "diplom", "сертификат"),
     KnowledgeAspect.CHAT: ("dobavlenie_v_chat", "добавление в чат"),
@@ -363,12 +409,16 @@ _SOURCE_BODY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     KnowledgeAspect.RESULTS: (
         "результаты отбора",
         "итоги отбора",
+        "итоги отборочного этапа",
         "результаты будут опубликованы",
         "список прошедших",
         "список победителей",
+        "приказ о победителях",
+        "дата публикации приказа",
     ),
     KnowledgeAspect.STATUS: (
         "статус заявки",
+        "статус на рассмотрении",
         "заявка на рассмотрении",
         "заявка одобрена",
         "заявка отклонена",
@@ -489,6 +539,8 @@ _SOURCE_BODY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
         "письмо вызов",
         "письмо-приглашение",
         "официальное приглашение",
+        "письмо с приглашением",
+        "приглашение необходимо подтвердить",
     ),
     KnowledgeAspect.DRESS_CODE: (
         "дресс-код",
@@ -499,6 +551,9 @@ _SOURCE_BODY_MARKERS: dict[KnowledgeAspect, tuple[str, ...]] = {
     KnowledgeAspect.CHILDREN: (
         "участие детей",
         "регистрация детей",
+        "дети до",
+        "дети проходят",
+        "для детей",
         "с ребенком",
         "с ребёнком",
         "несовершеннолетние участники",
@@ -595,8 +650,6 @@ def infer_query_aspects(text: str) -> frozenset[KnowledgeAspect]:
         for marker in ("найти", "поиск", "фильтр", "отфильтр")
     ) and _has_marker(normalized, "мероприят"):
         aspects.add(KnowledgeAspect.NAVIGATION)
-    if KnowledgeAspect.DATES in aspects and _has_marker(normalized, "заявк"):
-        aspects.add(KnowledgeAspect.REGISTRATION)
     if KnowledgeAspect.DATES in aspects and any(
         _has_marker(normalized, marker)
         for marker in ("прием заяв", "прием уже закрыт", "приём уже закрыт")
@@ -604,6 +657,72 @@ def infer_query_aspects(text: str) -> frozenset[KnowledgeAspect]:
         aspects.add(KnowledgeAspect.REGISTRATION)
     if _has_marker(normalized, "шаг") and _has_marker(normalized, "подач"):
         aspects.add(KnowledgeAspect.REGISTRATION)
+    if any(
+        _has_marker(normalized, marker)
+        for marker in ("отчет", "отчёт", "отчетност", "отчётност")
+    ) and any(
+        _has_marker(normalized, marker)
+        for marker in (
+            "провер",
+            "сдать",
+            "сдач",
+            "срок",
+            "доработ",
+            "вкладка",
+            "откро",
+        )
+    ):
+        aspects.add(KnowledgeAspect.GRANT_REPORT)
+    grant_context = any(
+        _has_marker(normalized, marker)
+        for marker in ("грант", "грантов", "грантополуч")
+    )
+    if grant_context and any(
+        _has_marker(normalized, marker)
+        for marker in ("соглашен", "договор")
+    ):
+        aspects.add(KnowledgeAspect.GRANT_AGREEMENT)
+    if grant_context and _has_marker(normalized, "приказ"):
+        aspects.add(KnowledgeAspect.RESULTS)
+    if (
+        grant_context
+        and _has_marker(normalized, "заявк")
+        and _has_marker(normalized, "провер")
+    ):
+        aspects.add(KnowledgeAspect.STATUS)
+    if (
+        _has_marker(normalized, "письм")
+        and _has_marker(normalized, "заявк")
+        and any(
+            _has_marker(normalized, marker)
+            for marker in ("когда", "ждать", "придет", "придёт")
+        )
+    ):
+        aspects.add(KnowledgeAspect.INVITATION)
+    if (
+        _has_marker(normalized, "когда")
+        and _has_marker(normalized, "заявк")
+        and not any(
+            _has_marker(normalized, marker)
+            for marker in ("подать", "подач", "регистрац", "прием", "приём")
+        )
+    ):
+        aspects.add(KnowledgeAspect.RESULTS)
+    if (
+        _has_marker(normalized, "подал")
+        and _has_marker(normalized, "заявк")
+        and not aspects.difference({KnowledgeAspect.DATES, KnowledgeAspect.SHIFTS})
+    ):
+        aspects.add(KnowledgeAspect.STATUS)
+    if (
+        _has_marker(normalized, "когда")
+        and _has_marker(normalized, "заявк")
+        and any(
+            _has_marker(normalized, marker)
+            for marker in ("дорог", "ехать", "поездк")
+        )
+    ):
+        aspects.add(KnowledgeAspect.INVITATION)
     if _has_marker(normalized, "форум") and any(
         _has_marker(normalized, marker)
         for marker in ("какие", "сейчас", "есть", "найти")
@@ -614,6 +733,19 @@ def infer_query_aspects(text: str) -> frozenset[KnowledgeAspect]:
         for marker in ("овз", "инвалид", "сопровождающ", "коляск", "сурдоперевод")
     ):
         aspects.discard(KnowledgeAspect.ACCESSIBILITY)
+    if KnowledgeAspect.ACCOMMODATION in aspects and not any(
+        _has_marker(normalized, marker)
+        for marker in (
+            "прожив",
+            "жиль",
+            "гостиниц",
+            "отел",
+            "палат",
+            "где размест",
+            "размещение участ",
+        )
+    ):
+        aspects.discard(KnowledgeAspect.ACCOMMODATION)
     return frozenset(aspects)
 
 
@@ -629,29 +761,114 @@ def plan_query_aspects(text: str) -> frozenset[KnowledgeAspect]:
         aspects.discard(KnowledgeAspect.OVERVIEW)
     if KnowledgeAspect.GRANT_REPORT in aspects:
         aspects.discard(KnowledgeAspect.RESULTS)
-    if KnowledgeAspect.CONFIRMATION in aspects and not any(
+        explicitly_asks_agreement = any(
+            _has_marker(normalized, marker)
+            for marker in (
+                "заключ",
+                "подпис",
+                "оформить соглашен",
+                "где найти соглашен",
+                "получить соглашен",
+                "проект грантового соглашен",
+            )
+        )
+        if not explicitly_asks_agreement:
+            aspects.discard(KnowledgeAspect.GRANT_AGREEMENT)
+    status_definition_requested = any(
         _has_marker(normalized, marker)
         for marker in ("что значит статус", "что означает статус", "статусы заявок")
-    ):
+    )
+    if KnowledgeAspect.STATUS in aspects and not status_definition_requested and aspects & {
+        KnowledgeAspect.CONFIRMATION,
+        KnowledgeAspect.INVITATION,
+        KnowledgeAspect.RESULTS,
+    }:
         aspects.discard(KnowledgeAspect.STATUS)
 
+    explicit_result_request = any(
+        _has_marker(normalized, marker)
+        for marker in (
+            "результат",
+            "итог",
+            "отбор",
+            "список",
+            "приказ",
+            "побед",
+        )
+    )
+    if (
+        KnowledgeAspect.RESULTS in aspects
+        and KnowledgeAspect.INVITATION in aspects
+        and not explicit_result_request
+    ):
+        aspects.discard(KnowledgeAspect.RESULTS)
+
+    result_is_context = bool(
+        _has_marker(normalized, "после")
+        and _has_marker(normalized, "отбор")
+        and not any(
+            _has_marker(normalized, marker)
+            for marker in ("результат", "итог", "список")
+        )
+        and aspects
+        & {
+            KnowledgeAspect.CONFIRMATION,
+            KnowledgeAspect.DOCUMENTS,
+            KnowledgeAspect.INVITATION,
+            KnowledgeAspect.PROGRAM,
+            KnowledgeAspect.TRANSFER,
+            KnowledgeAspect.TRAVEL,
+        }
+    )
+    if result_is_context:
+        aspects.discard(KnowledgeAspect.RESULTS)
+    if (
+        KnowledgeAspect.RESULTS in aspects
+        and _has_marker(normalized, "этап")
+        and _has_marker(normalized, "отбор")
+        and not any(
+            _has_marker(normalized, marker)
+            for marker in ("результат", "итог", "список", "прошел", "прошёл")
+        )
+    ):
+        aspects.discard(KnowledgeAspect.RESULTS)
+        aspects.add(KnowledgeAspect.REGISTRATION)
+
+    explicit_travel_request = any(
+        _has_marker(normalized, marker)
+        for marker in (
+            "проезд",
+            "компенс",
+            "оплач",
+            "билет до",
+            "как добраться",
+            "кто платит",
+            "за чей счет",
+            "за чей счёт",
+        )
+    )
+    if KnowledgeAspect.TRAVEL in aspects and not explicit_travel_request:
+        aspects.discard(KnowledgeAspect.TRAVEL)
+
     temporal_facets = {
+        KnowledgeAspect.CONFIRMATION,
         KnowledgeAspect.PROGRAM,
         KnowledgeAspect.RESULTS,
+        KnowledgeAspect.INVITATION,
+        KnowledgeAspect.STATUS,
         KnowledgeAspect.GRANT_AGREEMENT,
         KnowledgeAspect.GRANT_REPORT,
     }
     if aspects & temporal_facets:
         aspects.discard(KnowledgeAspect.DATES)
-    if (
-        KnowledgeAspect.SHIFTS in aspects
-        and KnowledgeAspect.DATES in aspects
-        and re.search(
-            r"\b(?:какие(?:\s+\w+){0,3}|список|названия)\s+смен\w*\b",
-            normalized,
-        )
-        is None
-    ):
+    requests_shift_catalog = re.search(
+        r"\b(?:какие(?:\s+\w+){0,3}|список|названия)\s+смен\w*\b",
+        normalized,
+    ) is not None
+    if KnowledgeAspect.SHIFTS in aspects and not requests_shift_catalog:
+        # A named/numbered shift normally scopes another requested fact:
+        # results, program, dates or registration. It is not a second fact
+        # slot unless the user explicitly asks for the list of shifts.
         aspects.discard(KnowledgeAspect.SHIFTS)
     explicit_navigation = bool(
         (

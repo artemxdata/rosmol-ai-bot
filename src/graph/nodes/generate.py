@@ -234,6 +234,26 @@ async def _generate_core(state: BotState) -> dict:
     started_at = perf_counter()
     tracer = state.get("trace")
     analysis = state["analysis"]
+    if state.get("should_escalate") or analysis.should_escalate:
+        reason = (
+            state.get("escalation_reason")
+            or analysis.escalation_reason
+            or "needs_operator"
+        )
+        if tracer:
+            tracer.add(
+                "generate",
+                int((perf_counter() - started_at) * 1000),
+                skipped=True,
+                reason="analysis_requires_operator",
+            )
+        return {
+            "should_escalate": True,
+            "escalation_reason": reason,
+            "generated_response": "",
+            "generator_model": "source_only",
+            "cited_sources": [],
+        }
     questions = effective_questions(state, analysis)
     chunks = [
         chunk

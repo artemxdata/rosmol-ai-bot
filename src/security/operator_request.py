@@ -227,6 +227,19 @@ def _is_personal_status_request(normalized: str) -> bool:
         return True
     if any(marker in normalized for marker in PERSONAL_STATUS_MARKERS):
         return True
+    personal_invitation_failure = bool(
+        re.search(r"\b(?:я|мне|мой|моя|моё|мое|мою|моей)\b", normalized)
+        and any(marker in normalized for marker in ("письм", "приглаш", "вызов"))
+        and (
+            re.search(r"\bне\s+(?:приш|получил|получила)", normalized)
+            or any(
+                marker in normalized
+                for marker in ("ничего нет", "нет на почте")
+            )
+        )
+    )
+    if personal_invitation_failure:
+        return True
     if "я подал заяв" in normalized and any(
         marker in normalized for marker in ("прошел ли", "прошёл ли")
     ):

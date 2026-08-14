@@ -766,6 +766,37 @@ async def test_unmapped_compound_clause_uses_generic_fail_closed_path(
 
 
 @pytest.mark.asyncio
+async def test_generation_cannot_bypass_operator_decision() -> None:
+    query = "Я прошла отбор, но приглашение на почту так и не пришло."
+    llm = ForbiddenLLM()
+    analysis = QueryAnalysis(
+        category="форумы",
+        response_profile=ResponseProfileName.SELECTION_STATUS,
+        should_escalate=True,
+        escalation_reason="personal_status",
+    )
+
+    result = await generate(
+        {
+            "message": query,
+            "message_masked": query,
+            "analysis": analysis,
+            "reranked_chunks": [
+                _chunk("yonote_api_u7b5sscrri_s0014_podtverzhdenie_uchastiya_v_forume")
+            ],
+            "max_confidence": 0.99,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "personal_status"
+    assert result["generated_response"] == ""
+    assert result["cited_sources"] == []
+
+
+@pytest.mark.asyncio
 async def test_source_answerable_nonregistry_clause_uses_generic_composition() -> None:
     query = (
         "Почта от старого профиля ФГАИС потеряна: как перенести данные и "

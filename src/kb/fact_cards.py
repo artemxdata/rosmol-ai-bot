@@ -330,6 +330,7 @@ def _render_fact_card(
     renderers = (
         _render_account_access,
         _render_confirmation,
+        _render_grant_application_review,
         _render_statuses,
         _render_named_shifts,
         _render_grant_nominations,
@@ -462,6 +463,31 @@ def _render_confirmation(
     return claims
 
 
+def _render_grant_application_review(
+    chunk: ScoredChunk,
+    *,
+    query: str,
+    aspects: frozenset[KnowledgeAspect],
+) -> list[str]:
+    if KnowledgeAspect.STATUS not in aspects:
+        return []
+    normalized_query = _normalized(query)
+    normalized = _normalized(chunk.text)
+    topic = str((chunk.metadata or {}).get("topic") or "")
+    if topic != "4_tehnicheskaya_proverka" or not all(
+        marker in normalized_query for marker in ("заяв", "провер")
+    ):
+        return []
+    if not all(
+        marker in normalized
+        for marker in ("сроки технической проверки", "указываются в объявлении")
+    ):
+        return []
+    return [
+        "Сроки технической проверки заявки указываются в объявлении о конкурсе."
+    ]
+
+
 def _render_named_shifts(
     chunk: ScoredChunk,
     *,
@@ -487,10 +513,28 @@ def _render_grant_review(
     query: str,
     aspects: frozenset[KnowledgeAspect],
 ) -> list[str]:
-    del query
+    normalized_query = _normalized(query)
     normalized = _normalized(chunk.text)
     duration = re.search(r"(?:до\s+)?(\d+)\s+(рабочих\s+)?дн", normalized)
     if KnowledgeAspect.GRANT_AGREEMENT in aspects:
+        if (
+            "для заключения соглашения" in normalized
+            and "три вкладки" in normalized
+            and "сумма расходов" in normalized
+            and "сумме гранта" in normalized
+            and "сроки реализации проекта" in normalized
+        ):
+            return [
+                (
+                    "Для заключения соглашения открой раздел "
+                    "«Грантовые соглашения»: там доступны три вкладки."
+                ),
+                (
+                    "Во вкладке «Проект» проверь, что сумма расходов строго "
+                    "соответствует сумме гранта по приказу."
+                ),
+                "Там же укажи сроки реализации проекта.",
+            ]
         if duration is None or "проект" not in normalized or "куратор" not in normalized:
             return []
         return [
@@ -502,13 +546,83 @@ def _render_grant_review(
             ),
         ]
     if KnowledgeAspect.GRANT_REPORT in aspects:
-        if duration is None or "отчет" not in normalized:
+        if "отчет" not in normalized:
+            return []
+        asks_tab_opening = "вкладк" in normalized_query and any(
+            marker in normalized_query for marker in ("откро", "доступ")
+        )
+        if asks_tab_opening and all(
+            marker in normalized
+            for marker in ("вкладка", "откроется", "первый рабочий день")
+        ):
+            return [
+                (
+                    "Вкладка «Отчёт» откроется в первый рабочий день после "
+                    "окончания срока реализации проекта."
+                ),
+                (
+                    "Срок реализации указан в Приложении 1 к соглашению в "
+                    "разделе «Грантовые соглашения»."
+                ),
+            ]
+
+        asks_rework = any(
+            marker in normalized_query
+            for marker in ("доработ", "исправ", "устран")
+        )
+        if asks_rework and re.search(
+            r"для грантополучател\w* с 2026 года.{0,32}30 рабочих дней",
+            normalized,
+        ):
+            return [
+                (
+                    "Для грантополучателей с 2026 года на исправление отчёта "
+                    "после комментариев даётся 30 рабочих дней."
+                )
+            ]
+
+        asks_check = "провер" in normalized_query or (
+            "статус отчет на проверке" in normalized_query
+        )
+        check_duration = re.search(
+            r"(?:провер\w*|на проверке).{0,80}(?:в среднем\s+)?до\s+"
+            r"(\d+)\s+рабочих\s+дн",
+            normalized,
+        )
+        if asks_check and check_duration is not None:
+            days = check_duration.group(1)
+            claims = [
+                (
+                    "Проверка отчёта занимает до "
+                    f"{days} рабочих дней."
+                ),
+                f"Проверка отчёта: {days} рабочих дней — максимальный срок.",
+            ]
+            if "срок может увеличиваться" in normalized:
+                claims.append("Иногда этот срок может увеличиваться.")
+            return claims
+
+        asks_submission = any(
+            marker in normalized_query
+            for marker in ("сдать", "сдач", "срок", "отчетност", "отчётност")
+        )
+        current_submission = re.search(
+            r"для победител\w* с 2026 года.{0,16}?(\d+)\s+рабочих\s+дн",
+            normalized,
+        )
+        if asks_submission and current_submission is not None:
+            return [
+                (
+                    "Для победителей с 2026 года срок сдачи отчётности — "
+                    f"{current_submission.group(1)} рабочих дней с даты "
+                    "открытия вкладки «Отчёт»."
+                )
+            ]
+
+        if duration is None:
             return []
         unit = "рабочих дней" if duration.group(2) else "дней"
-        return [
-            f"Проверка отчёта занимает до {duration.group(1)} {unit}.",
-            f"Проверка отчёта: {duration.group(1)} {unit} — максимальный срок."
-        ]
+        return [f"Проверка отчёта занимает до {duration.group(1)} {unit}."]
     return []
 
 
@@ -860,13 +974,41 @@ def _render_results_or_program(
     query: str,
     aspects: frozenset[KnowledgeAspect],
 ) -> list[str]:
-    del query
     if not aspects & {KnowledgeAspect.RESULTS, KnowledgeAspect.PROGRAM}:
         return []
     lines = _source_lines(chunk)
     if not lines:
         return []
     if KnowledgeAspect.RESULTS in aspects:
+        normalized_query = _normalized(query)
+        result_lines = [
+            line
+            for line in lines
+            if any(
+                marker in _normalized(line)
+                for marker in (
+                    "результат",
+                    "итоги отбор",
+                    "список победител",
+                    "приказ о победител",
+                    "публикации приказа",
+                )
+            )
+        ]
+        if any(marker in normalized_query for marker in ("приказ", "опублик")):
+            publication = next(
+                (
+                    line
+                    for line in result_lines
+                    if any(
+                        marker in _normalized(line)
+                        for marker in ("приказ", "опублик", "размещается")
+                    )
+                ),
+                None,
+            )
+            if publication:
+                return [_clean_claim(publication)]
         normalized = _normalized(lines[0])
         duration = re.search(r"за\s+(\d+)\s+календарн\w*\s+дн", normalized)
         if duration and "до даты начала смен" in normalized:
@@ -876,6 +1018,8 @@ def _render_results_or_program(
                     "до даты начала смены — предельный срок публикации."
                 )
             ]
+        if result_lines:
+            return [_clean_claim(result_lines[0])]
     return [_clean_claim(lines[0])]
 
 

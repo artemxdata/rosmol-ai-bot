@@ -256,6 +256,22 @@ def test_operator_review_still_routes_personal_registration_lookup(text: str) ->
     assert operator_review_reason(text) == "personal_status"
 
 
+def test_operator_review_routes_missing_personal_invitation() -> None:
+    assert (
+        operator_review_reason(
+            "Я прошла отбор, но приглашение на почту так и не пришло."
+        )
+        == "personal_status"
+    )
+
+
+def test_operator_review_keeps_general_invitation_timing_in_rag() -> None:
+    assert (
+        operator_review_reason("Когда участникам направляют письма-приглашения?")
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     "text",
     [
