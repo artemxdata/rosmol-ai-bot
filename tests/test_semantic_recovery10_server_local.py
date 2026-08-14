@@ -105,6 +105,7 @@ def test_quality_gate_exit_with_complete_report_is_summarized() -> None:
 
 
 def test_candidate_compose_explicitly_disables_channels_and_enables_recovery() -> None:
+    text = _text()
     payload = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     service = payload["services"]["pilot50-candidate-ml"]
     environment = service["environment"]
@@ -114,6 +115,9 @@ def test_candidate_compose_explicitly_disables_channels_and_enables_recovery() -
     assert environment["VK_GROUP_TOKEN"] == ""
     assert environment["SEMANTIC_RECOVERY_ENABLED"] == "true"
     assert environment["SEMANTIC_RECOVERY_MAX_QUESTIONS"] == "6"
+    assert 'readonly CANDIDATE_PROMPT_VERSION="semrec10-v1"' in text
+    assert len("semrec10-v1") <= 20
+    assert "assert 1 <= len(prompt_version) <= 20" in text
     assert service["ports"] == []
     assert service["read_only"] is True
     assert service["cap_drop"] == ["ALL"]

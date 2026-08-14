@@ -81,7 +81,13 @@ class Settings(BaseSettings):
     reranker_threshold_high: float = Field(default=0.7, ge=0, le=1)
     cache_similarity_threshold: float = Field(default=0.95, ge=0, le=1)
     cache_ttl_hours: int = Field(default=24, ge=1)
-    prompt_version: str = "pilot50-quality-v2"
+    # request_traces.prompt_version is VARCHAR(20); reject incompatible
+    # candidates during startup instead of silently losing their traces.
+    prompt_version: str = Field(
+        default="pilot50-quality-v2",
+        min_length=1,
+        max_length=20,
+    )
 
     session_ttl_seconds: int = Field(default=1800, ge=60)
     rate_limit_messages: int = Field(default=20, ge=1)

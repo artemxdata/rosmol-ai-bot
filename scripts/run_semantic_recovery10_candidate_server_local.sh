@@ -13,6 +13,7 @@ readonly SERVER_ENV_FILE="/opt/rosmol-ai-bot/.env.production"
 readonly PROD_CONTAINER="rosmol-app-ml"
 readonly CANDIDATE_CONTAINER="rosmol-pilot50-candidate-ml"
 readonly CANDIDATE_IMAGE_PREFIX="rosmol-ai-bot-pilot50-candidate"
+readonly CANDIDATE_PROMPT_VERSION="semrec10-v1"
 readonly BASE_DIR="/var/lib/rosmol/semantic-recovery10"
 readonly COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"
 readonly PRIOR_RUN_DIR="/var/lib/rosmol/pilot50-candidate/runs/pilot50_balanced_v4-d5cf413492a079c396c56017f51acaa3ebbacb3c"
@@ -334,7 +335,7 @@ create_ephemeral_env() {
     printf 'PILOT50_CANDIDATE_GIT_SHA=%s\n' "$EXPECTED_SHA"
     printf 'PILOT50_CANDIDATE_SOURCE_DIR=%s\n' "$build_source"
     printf 'PILOT50_CANDIDATE_DATASET_ID=%s\n' "$DATASET_ID"
-    printf 'PILOT50_CANDIDATE_PROMPT_VERSION=semantic-recovery10-v1\n'
+    printf 'PILOT50_CANDIDATE_PROMPT_VERSION=%s\n' "$CANDIDATE_PROMPT_VERSION"
     printf 'PILOT50_CANDIDATE_API_AUTH_TOKEN=%s\n' "$api_token"
     printf 'PILOT50_CANDIDATE_USER_HASH_SECRET=%s\n' "$user_hash_secret"
     printf 'API_AUTH_TOKEN=%s\nUSER_HASH_SECRET=%s\n' "$api_token" "$user_hash_secret"
@@ -375,11 +376,12 @@ build_compose_command() {
 
 validate_effective_compose() {
   "${compose[@]}" config --format json 2>/dev/null \
-    | python3 /dev/fd/3 "$EXPECTED_SHA" "$DATASET_ID" 3<<'PY' 2>/dev/null
+    | python3 /dev/fd/3 "$EXPECTED_SHA" "$DATASET_ID" \
+      "$CANDIDATE_PROMPT_VERSION" 3<<'PY' 2>/dev/null
 import json
 import sys
 
-sha, dataset = sys.argv[1:]
+sha, dataset, prompt_version = sys.argv[1:]
 payload = json.load(sys.stdin)
 assert set(payload.get("services") or {}) == {"pilot50-candidate-ml"}
 service = payload["services"]["pilot50-candidate-ml"]
@@ -398,6 +400,8 @@ assert env["HDE_TRANSPORT_ENABLED"] == "false"
 assert env["YONOTE_SYNC_ENABLED"] == "false"
 assert env["SEMANTIC_RECOVERY_ENABLED"] == "true"
 assert env["SEMANTIC_RECOVERY_MAX_QUESTIONS"] == "6"
+assert env["PROMPT_VERSION"] == prompt_version
+assert 1 <= len(prompt_version) <= 20
 for key in (
     "WEBHOOK_AUTH_TOKEN", "ADMIN_AUTH_TOKEN", "HDE_TRIGGER_PREFIX",
     "HDE_BASE_URL", "HDE_API_EMAIL", "HDE_API_KEY", "HDE_BOT_USER_ID",

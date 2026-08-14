@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from src.config import Settings
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
 from src.models import Chunk, Question
@@ -7,6 +10,11 @@ from src.models import Chunk, Question
 
 def test_quality_prompt_bundle_has_explicit_version() -> None:
     assert Settings(_env_file=None).prompt_version == "pilot50-quality-v2"
+
+
+def test_prompt_version_cannot_exceed_trace_schema_limit() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, prompt_version="x" * 21)
 
 
 def test_generator_prompt_compacts_source_metadata() -> None:

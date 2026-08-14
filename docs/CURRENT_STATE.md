@@ -4,6 +4,36 @@
 
 **Ветка:** `codex/real-rag`
 
+## 15 августа: найдена точная причина остановки Recovery10 до оценки качества
+
+Расширенная безопасная диагностика commit
+`806319b5659db917de68b08c3d974be79a6d1e20` доказала полный порядок событий: runner отправил
+первый из десяти `/ask` и получил HTTP success, но для eval run не появилось ни одной
+`request_traces`; поэтому pricing остался incomplete/stopped, стоимость составила `0 RUB`, а
+fail-closed cost gate не разрешил следующие девять запросов. Runtime identity и привязки
+candidate/cases/reservation совпали. Это не quality verdict semantic recovery и не новый низкий
+результат ядра.
+
+Точная причина находится в контракте трассировки: candidate задавал
+`PROMPT_VERSION=semantic-recovery10-v1` длиной 22 символа, а
+`request_traces.prompt_version` имеет тип `VARCHAR(20)`. Вставка trace падала после уже
+успешного HTTP-ответа, а `_safe_log` не превращал ошибку телеметрии в ошибку `/ask`. Минимальное
+исправление использует короткий стабильный идентификатор `semrec10-v1`; конфигурация теперь
+запрещает значения длиннее 20 символов при старте, а effective-compose preflight сверяет точное
+значение и ограничение до любого платного запроса. Схема БД, production runtime, Qdrant, KB и
+HDE/VK не меняются.
+
+Следующий шаг после локального gate и доставки через GitHub — новый бесплатный server-local
+preflight на exact commit, затем один новый bounded Recovery10 с прежним пределом `200 RUB`.
+Старый sealed run и его approval повторно не используются. После получения настоящей матрицы
+Recovery10 отдельным этапом настраивается актуализация опубликованной базы Yonote: разные
+read-only credentials для локального контура и сервера, локальный pull только в проверяемый
+versioned snapshot, diff/validation перед индексацией и никакого автоматического применения в
+production. Секреты не передаются через чат и не попадают в Git.
+
+Локальный gate исправления: Ruff — `OK`; полный pytest — `3358 passed`, `1 skipped`,
+`0 failed`; validation seed — `2186 valid / 2152 published`; Bash syntax — `OK`.
+
 ## 15 августа: Recovery10 не дошёл до ядра; локализуется точный дефект raw report
 
 Read-only диагностика tooling commit
