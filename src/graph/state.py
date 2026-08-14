@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 from uuid import UUID
 
+from src.graph.question_utils import QueryProvenTopicPlan
 from src.logging.tracer import Tracer
 from src.models import Chunk, QueryAnalysis, ScoredChunk, Session, VerificationResult
 
@@ -24,6 +25,8 @@ class BotState(TypedDict, total=False):
     analysis: QueryAnalysis
     analyzer_mode: str
     analyzer_fallback: bool
+    answer_plan: QueryProvenTopicPlan
+    answer_plan_message: str
     metadata_filter: dict[str, Any]
     retrieved_chunks: list[Chunk]
     retrieval_provenance: list[dict[str, Any]]

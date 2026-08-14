@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Any
 
 from src.config import get_settings
+from src.graph.answer_plan import answer_plan_for_state, current_request_text
 from src.graph.provenance import finite_score, rerank_question_provenance
 from src.graph.query_normalization import (
     ACCOUNT_DATA_RECOVERY,
@@ -24,7 +25,6 @@ from src.graph.question_utils import (
     FALLBACK_QUESTION_MARKERS,
     QueryProvenSourceAspect,
     build_effective_questions,
-    build_query_proven_topic_plan,
     query_proven_clause_matches_source_aspects,
     source_aspect_matches_topic,
     unmapped_explicit_request_clauses,
@@ -345,7 +345,8 @@ def _rerank_for_state(
 ) -> list[ScoredChunk]:
     current_request_text = _current_request_text(state)
     analysis = state.get("analysis")
-    query_proven_plan = build_query_proven_topic_plan(
+    query_proven_plan = answer_plan_for_state(
+        state,
         analysis,
         current_request_text,
     )
@@ -1037,7 +1038,7 @@ def _has_trusted_topic_analysis(state: BotState) -> bool:
 
 
 def _current_request_text(state: BotState) -> str:
-    return str(state.get("message_masked") or state.get("message") or "")
+    return current_request_text(state)
 
 
 def _chunk_matches_trusted_topic_scope(

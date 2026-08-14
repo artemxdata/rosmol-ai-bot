@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from src.graph.answer_plan import plan_answer
 from src.graph.edges import route_after_analyze, route_after_rerank, route_after_verify
 from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.clarify import clarify
@@ -18,6 +19,7 @@ from src.graph.state import BotState
 def build_graph():
     graph = StateGraph(BotState)
     graph.add_node("analyze", analyze_query)
+    graph.add_node("plan", plan_answer)
     graph.add_node("retrieve", retrieve)
     graph.add_node("rerank", rerank)
     graph.add_node("generate", generate)
@@ -31,8 +33,9 @@ def build_graph():
     graph.add_conditional_edges(
         "analyze",
         route_after_analyze,
-        {"clarify": "clarify", "retrieve": "retrieve", "escalate": "escalate"},
+        {"clarify": "clarify", "retrieve": "plan", "escalate": "escalate"},
     )
+    graph.add_edge("plan", "retrieve")
     graph.add_edge("retrieve", "rerank")
     graph.add_conditional_edges(
         "rerank",

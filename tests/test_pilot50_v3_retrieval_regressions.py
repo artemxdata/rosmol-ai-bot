@@ -204,6 +204,42 @@ def test_technical_symptom_stays_with_generic_action_request() -> None:
     ) == ["какого хуя не грузится фгаис. что мне делать"]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Будет ли трансфер на форум «Больше, чем путешествие»?",
+        "Будет ли трансфер на форум Больше, чем путешествие?",
+    ],
+)
+def test_forum_name_with_comma_remains_one_request_clause(query: str) -> None:
+    analysis = QueryAnalysis(
+        category="форумы",
+        forum_normalized="Больше, чем путешествие",
+    )
+
+    assert split_explicit_request_clauses(analysis, query) == [
+        "будет ли трансфер на форум «больше, чем путешествие»"
+        if "«" in query
+        else "будет ли трансфер на форум больше, чем путешествие"
+    ]
+
+
+def test_real_compound_request_still_splits_after_quoted_forum_name() -> None:
+    analysis = QueryAnalysis(
+        category="форумы",
+        forum_normalized="Больше, чем путешествие",
+    )
+
+    assert split_explicit_request_clauses(
+        analysis,
+        "Будет ли трансфер на форум «Больше, чем путешествие», "
+        "и какие документы нужны?",
+    ) == [
+        "будет ли трансфер на форум «больше, чем путешествие»",
+        "какие документы нужны",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_retrieve_consumes_the_same_complete_query_proven_plan() -> None:
     query = (

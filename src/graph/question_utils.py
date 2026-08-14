@@ -97,6 +97,10 @@ QUERY_PROVEN_ANAPHORIC_FRAGMENT_RE = re.compile(
     r"^(?:сколько|како\w*)\s+(?:их|там|это|они|он|она)\b",
     re.IGNORECASE | re.UNICODE,
 )
+QUERY_PROVEN_QUOTED_SCOPE_RE = re.compile(
+    r"«[^»\r\n]{2,200}»|„[^“\r\n]{2,200}“|\"[^\"\r\n]{2,200}\"",
+    re.UNICODE,
+)
 
 _NAMED_SECTION_PREFIX_STOP_RE = re.compile(
     r"^(?:для|среди|на|и|в|во|по|при|от|до)(?:\s|$)",
@@ -1415,6 +1419,10 @@ def split_explicit_request_clauses(
     )
     if not normalized_message:
         return []
+    protected_message, protected_scopes = _protect_request_clause_scopes(
+        normalized_message,
+        analysis=analysis,
+    )
     matches_aspect = aspect_matcher or (lambda _clause: False)
     leading_context = _query_proven_leading_context(
         normalized_message,
@@ -1422,7 +1430,7 @@ def split_explicit_request_clauses(
     )
     primary = [
         _strip_clause_lead(clause)
-        for clause in QUERY_PROVEN_CLAUSE_RE.split(normalized_message)
+        for clause in QUERY_PROVEN_CLAUSE_RE.split(protected_message)
         if _strip_clause_lead(clause)
     ]
     primary = _attach_conditional_request_fragments(primary)
@@ -1438,6 +1446,10 @@ def split_explicit_request_clauses(
             aspect_matcher=matches_aspect,
         )
         for candidate in candidates:
+            candidate = _restore_request_clause_scopes(
+                candidate,
+                protected_scopes,
+            )
             if matches_aspect(candidate):
                 clauses.append(candidate)
                 continue
@@ -1447,6 +1459,46 @@ def split_explicit_request_clauses(
                 continue
             clauses.append(candidate)
     return clauses
+
+
+def _protect_request_clause_scopes(
+    message: str,
+    *,
+    analysis: QueryAnalysis,
+) -> tuple[str, dict[str, str]]:
+    """Keep entity names and quoted values atomic during clause splitting."""
+
+    protected = message
+    values = {match.group(0) for match in QUERY_PROVEN_QUOTED_SCOPE_RE.finditer(message)}
+    forum = str(analysis.forum_normalized or analysis.forum or "").strip()
+    if forum:
+        values.update(forum_filter_values(forum))
+        values.add(forum)
+    normalized_values = {
+        " ".join(str(value).casefold().replace("ё", "е").split())
+        for value in values
+        if len(str(value).strip()) >= 2
+    }
+    restore: dict[str, str] = {}
+    for index, value in enumerate(
+        sorted(normalized_values, key=lambda item: (-len(item), item))
+    ):
+        if value not in protected:
+            continue
+        placeholder = f"\ue000{index}\ue001"
+        protected = protected.replace(value, placeholder)
+        restore[placeholder] = value
+    return protected, restore
+
+
+def _restore_request_clause_scopes(
+    clause: str,
+    restore: dict[str, str],
+) -> str:
+    restored = clause
+    for placeholder, value in restore.items():
+        restored = restored.replace(placeholder, value)
+    return restored
 
 
 def unmapped_explicit_request_clauses(

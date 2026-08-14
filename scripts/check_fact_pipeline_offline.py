@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from eval.run_ask import score_case
 from scripts.check_fact_card_oracle import ForbiddenLLM, _cases, _seed
+from src.graph.answer_plan import plan_answer
 from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.generate import generate
 from src.graph.nodes.guard import apply_response_guards
@@ -136,6 +137,7 @@ async def main() -> int:
             "retriever": retriever,
             "reranker": reranker,
         }
+        state.update(plan_answer(state))
         retrieved = await retrieve(state)
         state.update(retrieved)
         reranked = await rerank(state)

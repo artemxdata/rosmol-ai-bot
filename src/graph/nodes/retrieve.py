@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.answer_plan import answer_plan_for_state, current_request_text
 from src.graph.provenance import (
     MAX_PROVENANCE_ATTEMPTS,
     MAX_PROVENANCE_FILTER_ATTEMPTS,
@@ -30,7 +31,6 @@ from src.graph.query_normalization import (
 from src.graph.question_utils import (
     QueryProvenSourceAspect,
     build_effective_questions,
-    build_query_proven_topic_plan,
 )
 from src.graph.state import BotState
 from src.kb.aspect_catalog import topic_candidates_for_request
@@ -195,12 +195,12 @@ async def retrieve(state: BotState) -> dict:
         "category": analysis.category,
         "source_type": FACTUAL_SOURCE_TYPE,
     }
-    current_message = state.get("message_masked") or state.get("message") or ""
+    current_message = current_request_text(state)
     message = (
         state.get("contextual_message")
         or current_message
     )
-    current_plan = build_query_proven_topic_plan(analysis, current_message)
+    current_plan = answer_plan_for_state(state, analysis, current_message)
     current_questions = list(current_plan.questions) or build_effective_questions(
         analysis,
         current_message,

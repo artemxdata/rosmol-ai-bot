@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from eval.run_ask import score_case
+from src.graph.answer_plan import plan_answer
 from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.generate import generate
 from src.graph.nodes.guard import apply_response_guards
@@ -92,6 +93,7 @@ async def main() -> int:
             "max_confidence": 0.99,
             "llm_client": llm,
         }
+        state.update(plan_answer(state))
         generated = await generate(state)
         guarded = await apply_response_guards({**state, **generated})
         result = {**generated, **guarded}

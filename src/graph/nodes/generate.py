@@ -5,6 +5,7 @@ from collections.abc import Callable
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.answer_plan import answer_plan_for_state, current_request_text
 from src.graph.nodes.respond import normalize_final_response
 from src.graph.provenance import (
     MAX_PROVENANCE_SOURCE_IDS,
@@ -22,6 +23,7 @@ from src.graph.query_normalization import (
 from src.graph.question_utils import (
     FALLBACK_QUESTION_MARKERS,
     QueryProvenSourceAspect,
+    QueryProvenTopicPlan,
     build_effective_questions,
     build_query_proven_topic_plan,
     named_section_entities,
@@ -256,7 +258,8 @@ async def _generate_core(state: BotState) -> dict:
             "cited_sources": [],
         }
 
-    current_plan = build_query_proven_topic_plan(
+    current_plan = answer_plan_for_state(
+        state,
         analysis,
         _state_current_user_message(state),
     )
@@ -674,6 +677,11 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                     request_bound_questions,
                 ),
                 request_text=_state_current_user_message(state),
+                query_plan=answer_plan_for_state(
+                    state,
+                    analysis,
+                    _state_current_user_message(state),
+                ),
             )
             if (
                 bounded_source_result is None
@@ -706,6 +714,11 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                 source_chunks=selected_chunks,
                 response_limit=response_limit,
                 request_text=_state_current_user_message(state),
+                query_plan=answer_plan_for_state(
+                    state,
+                    analysis,
+                    _state_current_user_message(state),
+                ),
             )
             if bounded_source_result is not None:
                 if tracer := state.get("trace"):
@@ -807,6 +820,11 @@ async def _generate_with_llm_or_source_fallback(
                 response_limit or _response_char_limit(analysis, questions)
             ),
             request_text=_state_current_user_message(state),
+            query_plan=answer_plan_for_state(
+                state,
+                analysis,
+                _state_current_user_message(state),
+            ),
         )
         if allow_bounded_source
         else None
@@ -2852,7 +2870,8 @@ def _request_bound_published_source_result(
     if max_confidence < getattr(settings, "reranker_threshold_low", 0.4):
         return None
     request_text = _state_current_user_message(state)
-    plan = build_query_proven_topic_plan(
+    plan = answer_plan_for_state(
+        state,
         analysis,
         request_text,
     )
@@ -2925,6 +2944,7 @@ def _request_bound_published_source_result(
             resolved_questions,
         ),
         request_text=request_text,
+        query_plan=plan,
     )
     if result is None:
         return None
@@ -3021,6 +3041,7 @@ def _bounded_published_source_result(
     source_chunks: list[ScoredChunk],
     response_limit: int,
     request_text: str = "",
+    query_plan: QueryProvenTopicPlan | None = None,
 ) -> dict | None:
     """Build a strict, bounded answer from selected published Yonote clauses.
 
@@ -3044,7 +3065,10 @@ def _bounded_published_source_result(
     if any(not _is_published_yonote_release_chunk(chunk) for chunk in source_chunks):
         return None
     if request_text:
-        current_plan = build_query_proven_topic_plan(analysis, request_text)
+        current_plan = query_plan or build_query_proven_topic_plan(
+            analysis,
+            request_text,
+        )
         if unmapped_explicit_request_clauses(
             analysis=analysis,
             message=request_text,
@@ -5976,7 +6000,8 @@ def _tokens(text: str) -> set[str]:
 
 
 def effective_questions(state: BotState, analysis: QueryAnalysis) -> list[Question]:
-    current_plan = build_query_proven_topic_plan(
+    current_plan = answer_plan_for_state(
+        state,
         analysis,
         _state_current_user_message(state),
     )
@@ -6013,10 +6038,4 @@ def _state_message_for_search(state: BotState) -> str:
 
 
 def _state_current_user_message(state: BotState) -> str:
-    message = str(state.get("message_masked") or state.get("message") or "")
-    pending, separator, _clarification = message.partition(
-        "\nУточнение пользователя:"
-    )
-    if separator and pending.strip():
-        return pending.strip()
-    return message
+    return current_request_text(state)
