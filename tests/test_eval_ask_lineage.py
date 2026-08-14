@@ -132,6 +132,34 @@ def test_score_case_marks_old_union_trace_as_legacy_coarse() -> None:
     assert result["lineage_attribution"] == "legacy_coarse"
 
 
+def test_score_case_exports_bounded_semantic_recovery_diagnostics() -> None:
+    result = score_case(
+        {"id": "case-recovery", "query": "safe query"},
+        {"http_status": 200, "response": "safe response"},
+        {
+            "trace_events": [
+                {
+                    "node": "semantic_recovery",
+                    "metadata": {
+                        "status": "ok",
+                        "reason": "low_confidence",
+                        "model": "private-model-name-is-not-exported",
+                        "model_questions": 3,
+                        "effective_questions": 5,
+                    },
+                }
+            ]
+        },
+    )
+
+    assert result["semantic_recovery_attempted"] is True
+    assert result["semantic_recovery_status"] == "ok"
+    assert result["semantic_recovery_reason"] == "low_confidence"
+    assert result["semantic_recovery_model_questions"] == 3
+    assert result["semantic_recovery_effective_questions"] == 5
+    assert "semantic_recovery_model" not in result
+
+
 def test_gold_ticket_identity_survives_ask_scoring_and_matches_stage_funnel() -> None:
     ticket_hash = "a" * 24
     normalized = _normalize_case(

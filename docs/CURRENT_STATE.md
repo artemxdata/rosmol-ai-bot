@@ -4,6 +4,33 @@
 
 **Ветка:** `codex/real-rag`
 
+## 14 августа: Recovery10 готов к бесплатному preflight, HDE/VK остаются выключены
+
+После bounded semantic recovery подготовлен отдельный одноразовый server-local контур
+`semantic_recovery10_v1`. Он детерминированно выбирает по пять типовых и нетиповых провалов из
+завершённого Pilot50 v4 (`cases SHA-256 c88a...`, `report SHA-256 2def...`) с приоритетом
+recoverable escalation и source/answer failures. Это exposed targeted regression diagnostic, а
+не новый holdout и не оценка production conversion; исторический baseline выбранных десяти
+кейсов равен `0/10 passed` по определению selection rule.
+
+Preflight не вызывает `/ask` и не резервирует деньги: он проверяет exact detached Git SHA,
+чистый worktree, неизменность старых evidence, healthy production, capacity, cost ledger и
+собирает отдельный read-only candidate. В candidate нет опубликованных портов, HDE/VK credentials
+пустые, `HDE_TRANSPORT_ENABLED=false`, Yonote sync выключен; бесплатный smoke ограничен `/ready`.
+Платный режим разрешает ровно `10` последовательных запросов без cache, требует полные trace,
+подписанный pre/post runtime identity, одноразовый approval, точную привязку reservation к SHA
+cases и stop-limit `200 RUB`. Safe result выводит только агрегаты, хэши, стоимость и факт
+срабатывания semantic recovery; тексты вопросов, ответов, request ID и chunk text остаются в
+закрытом server evidence.
+
+Локальный gate после добавления Recovery10: Ruff — `OK`; все тест-файлы пройдены независимыми
+shards из-за известного Windows event-loop hang — `3349 passed`, `1 skipped`, `0 failed`;
+validation seed — `2186 valid / 2152 published`. Ни production, ни Qdrant, ни HDE/VK не
+изменялись, платных вызовов не было. Следующий шаг после commit/push — один бесплатный `preflight`;
+он вернёт exact cases SHA и approval ID. Только после явного подтверждения этого exact сочетания
+допустим один платный `run`; даже `GO` Recovery10 не является release gate и не разрешает включать
+HDE/VK.
+
 ## 14 августа: отделён защитный fact-layer от масштабируемого LLM-ядра
 
 Повторная read-only Qdrant-диагностика exact commit

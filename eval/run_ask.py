@@ -1014,15 +1014,29 @@ async def run_eval(
             "expected_cases_file_sha256 requires a private holdout/replay or "
             "an approved Phase 0 manifest"
         )
+    targeted_runtime_contract = bool(
+        expected_runtime_git_sha is not None
+        and strict_live
+        and high_cost_approval_id
+        and len(cases) <= ROUTINE_LIVE_EVAL_MAX_CASES
+        and max_cases is None
+        and trace_lookup is True
+        and bypass_cache is True
+        and require_complete_traces is True
+        and max_llm_cost_rub is not None
+        and math.isfinite(max_llm_cost_rub)
+        and ROUTINE_LIVE_EVAL_MAX_COST_RUB < max_llm_cost_rub <= 200.0
+    )
     if expected_runtime_git_sha is not None and not (
         calibration_replay
         or source_diagnostic_cases
         or bool(str(llm_cost_repricing_contract or "").strip())
         or bool(str(pilot50_candidate_contract or "").strip())
+        or targeted_runtime_contract
     ):
         raise ValueError(
             "expected_runtime_git_sha is only valid for calibration_replay "
-            "or source_observed_diagnostic"
+            "or a bounded, signed, trace-complete targeted live contract"
         )
     if sealed_holdout and (
         expected_runtime_git_sha is not None
@@ -1269,6 +1283,11 @@ async def run_eval(
             raise ValueError(
                 "strict-live source_observed_diagnostic requires signed cache bypass"
             )
+    elif targeted_runtime_contract:
+        evaluation_runtime_git_sha = _validated_source_diagnostic_runtime_sha(
+            expected_runtime_git_sha,
+            required=True,
+        )
     validated_repricing_contract = _validated_pilot50_repricing_contract(
         llm_cost_repricing_contract,
         cases=cases,
@@ -1772,6 +1791,7 @@ async def run_eval(
                 or source_diagnostic_cases
                 or validated_repricing_contract is not None
                 or validated_candidate_contract is not None
+                or targeted_runtime_contract
             ):
                 phase0_execution_stage = "runtime_postflight"
                 try:
@@ -1973,6 +1993,7 @@ async def run_eval(
             and (strict_live or evaluation_runtime_git_sha is not None)
             or validated_repricing_contract is not None
             or validated_candidate_contract is not None
+            or targeted_runtime_contract
         ),
     )
     if (
@@ -1993,6 +2014,8 @@ async def run_eval(
         and runtime_identity["status"] != "verified"
     ):
         raise RuntimeError("Pilot50 candidate runtime identity was not verified")
+    if targeted_runtime_contract and runtime_identity["status"] != "verified":
+        raise RuntimeError("targeted live runtime identity was not verified")
     metrics["runtime_identity"] = runtime_identity
     metrics["cost_control"] = {
         "strict_live": strict_live,
@@ -4978,6 +5001,7 @@ def score_case(
     status = http_result.get("http_status")
     http_success = isinstance(status, int) and 200 <= status < 300
     trace = trace or {}
+    semantic_recovery = _semantic_recovery_diagnostics(trace)
     llm_accounting_fields = (
         "llm_usage",
         "llm_prompt_tokens",
@@ -5285,6 +5309,7 @@ def score_case(
         "trace_total_latency_ms": trace.get("total_latency_ms"),
         "llm_usage": trace.get("llm_usage"),
         "generate_retry_reasons": _generate_retry_reasons(trace),
+        **semantic_recovery,
         "llm_prompt_tokens": trace.get("llm_prompt_tokens"),
         "llm_completion_tokens": trace.get("llm_completion_tokens"),
         "llm_total_tokens": trace.get("llm_total_tokens"),
@@ -5538,6 +5563,26 @@ def _generate_retry_reasons(trace: dict[str, Any]) -> list[str]:
         if reason:
             reasons.append(reason)
     return reasons
+
+
+def _semantic_recovery_diagnostics(trace: dict[str, Any]) -> dict[str, Any]:
+    metadata = _latest_trace_event_metadata(trace, "semantic_recovery")
+    attempted = "semantic_recovery" in _trace_node_sequence(trace)
+    status = str(metadata.get("status") or "").strip().casefold()
+    if status not in {"ok", "failed"}:
+        status = None
+    reason = _safe_trace_label(metadata.get("reason"))
+    return {
+        "semantic_recovery_attempted": attempted,
+        "semantic_recovery_status": status,
+        "semantic_recovery_reason": reason,
+        "semantic_recovery_model_questions": _trace_nonnegative_int(
+            metadata.get("model_questions")
+        ),
+        "semantic_recovery_effective_questions": _trace_nonnegative_int(
+            metadata.get("effective_questions")
+        ),
+    }
 
 
 def _likely_infrastructure_failure(results: list[dict[str, Any]]) -> bool:

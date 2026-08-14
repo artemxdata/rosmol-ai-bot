@@ -710,3 +710,34 @@ gate, бесплатный isolated preflight `GO`, неизменные product
 approval/waiver IDs. Любой execution failure, quality `GO` или quality `STOP` завершает one-shot
 без retry. Billing остаётся `pending_provider_reconciliation`; следующий paid eval снова STOP без
 нового решения. Acceptance и ограничения интерпретации остаются mechanical-only по D-040.
+
+## D-043. Semantic recovery проверяется одним Recovery10 без включения HDE/VK
+
+**Статус:** принято 14 августа 2026; дополняет D-036 и не является разрешением платного запуска.
+
+После Pilot50 v4 новый bounded semantic-recovery слой проверяется не полным повтором 50 кейсов,
+а набором `semantic_recovery10_v1`: по пять типовых и нетиповых провалов завершённого v4. Selection
+детерминированно приоритизирует прежние `low_confidence`/`no_relevant_chunks`/source-coverage
+эскалации и затем source/answer failures, сохраняя исходный порядок. Набор является exposed
+targeted regression diagnostic, имеет исторический baseline `0/10 passed` по определению отбора и
+не считается независимым holdout, human product verdict или оценкой ticket conversion.
+
+Владелец обозначил допустимый верхний предел `200 RUB` для одного хорошего теста, но по D-036
+это ещё не executable approval. Бесплатный preflight сначала обязан зафиксировать exact candidate
+Git SHA, cases SHA-256, manifest SHA-256, `10` cases и hard stop-limit `200 RUB`; только после
+отдельного подтверждения сформированного approval ID разрешён один `run`. Approval одноразовый:
+reservation, начатый/неуспешный/завершённый run, `GO` или `STOP` исключают retry без нового решения.
+
+Recovery10 выполняется только в isolated server-local candidate: production не перезапускается,
+Qdrant используется только для поиска, cache bypass подписан, concurrency равен `1`, trace coverage
+обязана быть `10/10`, runtime SHA проверяется подписанным `/ready` до и после запросов. Candidate не
+имеет опубликованных портов и credentials каналов, `HDE_TRANSPORT_ENABLED=false`, VK token fields
+пусты, Yonote sync выключен. HDE и VK остаются выключенными независимо от Recovery10 verdict;
+включение каналов требует отдельного release gate, security acceptance и короткого smoke.
+
+Diagnostic `GO` требует минимум `5/10 passed`, минимум `5/10` ответов без оператора, ноль cache hit,
+полные trace, полную pricing telemetry и стоимость не выше cap. Safe output содержит только
+агрегаты и SHA; query/response/request IDs/chunk text остаются в закрытом server evidence. Даже
+`GO` доказывает только работоспособность конкретной recovery-гипотезы на exposed failures. Цель
+`>=50%` production ticket conversion подтверждается отдельно новым human-reviewed multi-turn
+cohort после correction cycle.
