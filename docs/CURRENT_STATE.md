@@ -4,6 +4,26 @@
 
 **Ветка:** `codex/real-rag`
 
+## 15 августа: exact candidate доставлен на сервер; добавлен бесплатный runtime smoke
+
+Владелец вручную получил через GitHub и checkout в detached HEAD exact candidate
+`0715a17fae2f658008deb291e37fe6bbb5bb7d8f`; server worktree подтвердил
+`candidate_checkout=OK`. Это не перезапуск production: работающий runtime остаётся на
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, HDE/VK выключены.
+
+Чтобы проверить новый candidate в тот же день и не упираться в занятый rolling-24h cost ledger,
+server-local runner получил отдельный режим `smoke`. Он создаёт чистый Git-archive snapshot exact
+SHA, собирает и запускает изолированный candidate без опубликованных портов и channel/Yonote
+credentials, проверяет container identity, `/ready`, все readiness checks, release SHA и
+неизменность production snapshot, после чего удаляет временный container и snapshot. Режим не
+читает prior Pilot50 evidence, не создаёт cases/receipt/approval/reservation и не вызывает
+`/ask`, поэтому не тратит LLM-бюджет и не изменяет eval ledger.
+
+Полный локальный gate: Ruff — `OK`; все тесты в восьми непересекающихся file shards —
+`3379 passed`, `1 skipped`, `0 failed`; KB validation — `2186 valid / 2152 published`; Bash syntax
+и `git diff --check` — `OK`. Следующий шаг — доставить exact smoke-tooling SHA и выполнить один
+`smoke`; платный semantic test и Blind50 не запускаются до отдельного валидного gate.
+
 ## 15 августа: semantic recovery закрывает поздний source-coverage тупик
 
 После Recovery10 `10/10` подтверждено, что `0` вызовов semantic recovery на этом наборе не был

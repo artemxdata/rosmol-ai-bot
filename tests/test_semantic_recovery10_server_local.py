@@ -85,6 +85,24 @@ def test_recovery10_preflight_has_no_paid_ask_and_binds_prior_evidence() -> None
     assert "2defcace63de2a2184b162fcae5fa8f4d50ed8317042ae64aabbb49181076a8d" in text
 
 
+def test_candidate_smoke_is_free_ephemeral_and_independent_from_eval_ledger() -> None:
+    text = _text()
+    smoke = _function(text, "smoke_mode")
+    assert "prepare_source_snapshot" in smoke
+    assert "start_candidate" in smoke
+    assert "production_snapshot" in smoke
+    assert "remove_owned_candidate" in smoke
+    assert "cleanup_temp" in smoke
+    assert "candidate_runtime_smoke=OK" in smoke
+    assert "channels_status=HDE_VK_DISABLED" in smoke
+    assert "prepare_source_and_cases" not in smoke
+    assert "cost_capacity_snapshot" not in smoke
+    assert "reserve" not in smoke
+    assert "eval.run_ask" not in smoke
+    assert "run.started" not in smoke
+    assert "preflight.receipt" not in smoke
+
+
 def test_cost_capacity_preflight_is_read_only_and_precedes_one_shot_marker() -> None:
     text = _text()
     snapshot = _function(text, "cost_capacity_snapshot")

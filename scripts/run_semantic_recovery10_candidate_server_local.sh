@@ -141,7 +141,7 @@ require_command() {
 validate_invocation() {
   [[ "$#" -eq 2 ]] || fail "usage"
   case "$MODE" in
-    preflight | run | review | cleanup) ;;
+    smoke | preflight | run | review | cleanup) ;;
     *) fail "usage" ;;
   esac
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "candidate_sha_invalid"
@@ -593,11 +593,9 @@ cost_capacity_value() {
     | awk -F= -v expected="$key" '$1 == expected {print substr($0, index($0, "=") + 1)}'
 }
 
-prepare_source_and_cases() {
-  local cases_path manifest_path
+prepare_source_snapshot() {
   sudo install -d -m 0700 -o root -g root "$BASE_DIR" "$BASE_DIR/runs" \
     || fail "base_directory_create_failed"
-  sudo test ! -e "$RUN_DIR" || fail "preflight_already_exists"
   STAGING_DIR="$(sudo mktemp -d \
     "$BASE_DIR/runs/.staging-$EXPECTED_SHA-XXXXXX" 2>/dev/null)" \
     || fail "staging_create_failed"
@@ -611,6 +609,14 @@ prepare_source_and_cases() {
   if sudo find "$STAGING_DIR/source" -type l -print -quit | grep -q .; then
     fail "source_snapshot_has_symlink"
   fi
+  SOURCE_DIR="$STAGING_DIR/source"
+  EVIDENCE_DIR="$STAGING_DIR/evidence"
+}
+
+prepare_source_and_cases() {
+  local cases_path manifest_path
+  sudo test ! -e "$RUN_DIR" || fail "preflight_already_exists"
+  prepare_source_snapshot
   cases_path="$STAGING_DIR/evidence/semantic-recovery10-cases.json"
   manifest_path="$STAGING_DIR/evidence/semantic-recovery10-manifest.json"
   sudo env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$STAGING_DIR/source" \
@@ -625,8 +631,27 @@ prepare_source_and_cases() {
     || fail "recovery10_artifact_owner_failed"
   sudo chmod 0600 "$cases_path" "$manifest_path" \
     || fail "recovery10_artifact_mode_failed"
-  SOURCE_DIR="$STAGING_DIR/source"
-  EVIDENCE_DIR="$STAGING_DIR/evidence"
+}
+
+smoke_mode() {
+  local capacity post_prod pre_prod
+  load_common_state
+  capacity="$(capacity_snapshot)" || fail "capacity_check_failed"
+  [[ "$(printf '%s\n' "$capacity" | awk -F= \
+    '$1 == "capacity_status" {print $2}')" == "GO" ]] || fail "capacity"
+  pre_prod="$(production_snapshot)" || fail "production_snapshot_failed"
+  prepare_source_snapshot
+  start_candidate
+  post_prod="$(production_snapshot)" || fail "production_snapshot_failed"
+  [[ "$post_prod" == "$pre_prod" ]] || fail "production_changed_during_smoke"
+  remove_owned_candidate || fail "candidate_cleanup_failed"
+  cleanup_temp || fail "smoke_cleanup_failed"
+  printf 'semantic_recovery_candidate_smoke=OK\n'
+  printf 'candidate_runtime_smoke=OK\n'
+  printf 'channels_status=HDE_VK_DISABLED\n'
+  printf 'candidate_sha=%s\n' "$EXPECTED_SHA"
+  printf 'production_runtime_sha=%s\n' "$PROD_RUNTIME_SHA"
+  printf '%s\n' "$capacity"
 }
 
 validate_frozen_preflight() {
@@ -866,6 +891,7 @@ cleanup_mode() {
 
 validate_invocation "$@"
 case "$MODE" in
+  smoke) smoke_mode ;;
   preflight) preflight_mode ;;
   run) run_mode ;;
   review) review_mode ;;
