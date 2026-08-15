@@ -99,6 +99,7 @@ def _candidate_report(
     cases_sha: str,
     runtime_sha: str,
     approval_id: str,
+    cost_cap_rub: float = recovery10.COST_CAP_RUB,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for index, case in enumerate(cases):
@@ -133,7 +134,8 @@ def _candidate_report(
                 "runtime_git_sha": runtime_sha,
                 "manifest_sha256": cases_sha,
                 "case_count": 10,
-                "approved_cap_rub": 200.0,
+                "approved_cap_rub": cost_cap_rub,
+                "approval_required": cost_cap_rub > 100,
                 "high_cost_approval_id": approval_id,
             },
         },
@@ -157,11 +159,12 @@ def test_summarize_emits_only_safe_aggregate_and_go_gate(tmp_path: Path) -> None
         prior_report_path=prior_report,
         output_cases_path=cases_path,
         output_manifest_path=manifest_path,
+        cost_cap_rub=99,
     )
     cases = json.loads(cases_path.read_text(encoding="utf-8"))
     cases_sha = recovery10._file_sha256(cases_path)
     runtime_sha = "a" * 40
-    approval_id = f"owner-chat-semantic10-{runtime_sha}-cap200"
+    approval_id = f"owner-chat-semantic10-{runtime_sha}-cap99"
     report_path = tmp_path / "report.json"
     _write(
         report_path,
@@ -170,6 +173,7 @@ def test_summarize_emits_only_safe_aggregate_and_go_gate(tmp_path: Path) -> None
             cases_sha=cases_sha,
             runtime_sha=runtime_sha,
             approval_id=approval_id,
+            cost_cap_rub=99,
         ),
     )
     output_path = tmp_path / "safe.json"
@@ -181,6 +185,7 @@ def test_summarize_emits_only_safe_aggregate_and_go_gate(tmp_path: Path) -> None
         output_path=output_path,
         expected_runtime_git_sha=runtime_sha,
         expected_approval_id=approval_id,
+        expected_cost_cap_rub=99,
     )
 
     assert safe["diagnostic_gate"]["status"] == "GO"
@@ -194,6 +199,10 @@ def test_summarize_emits_only_safe_aggregate_and_go_gate(tmp_path: Path) -> None
         "semantic_recovery_succeeded": 7,
     }
     assert recovery10.show_safe(output_path) == safe
+    assert safe["budget"]["max_rub"] == 99
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))[
+        "targeted_gate"
+    ]["cost_cap_rub"] == 99
     encoded = output_path.read_text(encoding="utf-8").casefold()
     assert '"query"' not in encoded
     assert '"response"' not in encoded

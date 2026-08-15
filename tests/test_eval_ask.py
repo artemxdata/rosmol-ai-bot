@@ -7291,6 +7291,69 @@ async def test_expected_runtime_sha_is_rejected_for_regular_eval(
 
 
 @pytest.mark.asyncio
+async def test_targeted_cap99_consumes_exact_optional_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases_path = tmp_path / "cases.json"
+    output_path = tmp_path / "report.json"
+    cases_path.write_text(
+        json.dumps([{"id": "recovery-1", "query": "Когда начинается форум?"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("API_AUTH_TOKEN", "x" * 32)
+    monkeypatch.setattr(
+        run_ask_module,
+        "_local_llm_pricing_preflight_failure",
+        lambda: None,
+    )
+
+    class TracePool:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    trace_pool = TracePool()
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> TracePool:
+        return trace_pool
+
+    reserve_calls: list[dict[str, object]] = []
+
+    def fake_reserve(**kwargs: object) -> object:
+        reserve_calls.append(kwargs)
+        raise run_ask_module.CostGovernanceError("stop after contract capture")
+
+    monkeypatch.setattr(run_ask_module.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(run_ask_module, "reserve_live_eval_cost", fake_reserve)
+
+    with pytest.raises(
+        run_ask_module.CostGovernanceError,
+        match="contract capture",
+    ):
+        await run_eval(
+            cases_path=cases_path,
+            output_path=output_path,
+            target="http://localhost:8001/ask",
+            trace_lookup=True,
+            trace_dsn="postgresql://eval:test@postgres:5432/eval",
+            bypass_cache=True,
+            max_llm_cost_rub=99.0,
+            high_cost_approval_id="OWNER-RECOVERY10-CAP99",
+            expected_runtime_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+            require_complete_traces=True,
+        )
+
+    assert len(reserve_calls) == 1
+    assert reserve_calls[0]["approved_cap_rub"] == 99.0
+    assert reserve_calls[0]["high_cost_approval_id"] == "OWNER-RECOVERY10-CAP99"
+    assert reserve_calls[0]["consume_optional_approval"] is True
+    assert trace_pool.closed is True
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_source_diagnostic_rejects_runtime_mismatch_before_ask(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

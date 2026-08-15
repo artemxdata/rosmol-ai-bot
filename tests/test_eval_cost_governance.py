@@ -15,6 +15,7 @@ from eval.cost_governance import (
     CostLedgerLockedError,
     PrivateFullComparisonWaiver,
     approval_required,
+    inspect_routine_cost_capacity,
     reserve_live_eval_cost,
 )
 
@@ -39,6 +40,7 @@ def _reserve(
     scope: str = "product80-calibration",
     manifest_sha256: str = MANIFEST_SHA,
     comparison_waiver: PrivateFullComparisonWaiver | None = None,
+    consume_optional_approval: bool = False,
     now: datetime = NOW,
 ):
     return reserve_live_eval_cost(
@@ -50,6 +52,7 @@ def _reserve(
         approved_cap_rub=cap,
         private_full=private_full,
         high_cost_approval_id=approval_id,
+        consume_optional_approval=consume_optional_approval,
         private_full_comparison_waiver=comparison_waiver,
         ledger_dir=ledger,
         now=now,
@@ -190,6 +193,70 @@ def test_reservation_uses_env_ledger_and_persists_complete_schema(
         "approval_required": False,
         "high_cost_approval_id": None,
     }
+
+
+def test_optional_exact_approval_can_be_consumed_below_routine_cap(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    approval_id = "OWNER-RECOVERY10-CAP99"
+
+    reservation = _reserve(
+        ledger,
+        run_id="recovery10-cap99",
+        cap=99,
+        approval_id=approval_id,
+        consume_optional_approval=True,
+    )
+
+    assert reservation.record["approval_required"] is False
+    assert reservation.record["high_cost_approval_id"] == approval_id
+    with pytest.raises(CostGovernanceError, match="already been consumed"):
+        _reserve(
+            ledger,
+            run_id="recovery10-cap99-replay",
+            cap=99,
+            approval_id=approval_id,
+            consume_optional_approval=True,
+            now=NOW + timedelta(days=2),
+        )
+
+
+def test_routine_capacity_preview_is_read_only_and_uses_rolling_caps(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger"
+    prior = _reserve(
+        ledger,
+        run_id="prior-cap200",
+        cap=200,
+        approval_id="OWNER-PRIOR-CAP200",
+    )
+    before = prior.path.read_bytes()
+
+    available = inspect_routine_cost_capacity(
+        requested_cap_rub=99,
+        ledger_dir=ledger,
+        now=NOW + timedelta(hours=1),
+    )
+    rejected = inspect_routine_cost_capacity(
+        requested_cap_rub=101,
+        ledger_dir=ledger,
+        now=NOW + timedelta(hours=1),
+    )
+
+    assert available == {
+        "status": "GO",
+        "requested_cap_rub": 99.0,
+        "rolling_24h_cap_rub": 300.0,
+        "rolling_24h_routine_reserved_rub": 200.0,
+        "rolling_24h_routine_available_rub": 100.0,
+        "ledger_fingerprint_sha256": available["ledger_fingerprint_sha256"],
+    }
+    assert len(available["ledger_fingerprint_sha256"]) == 64
+    assert rejected["status"] == "STOP"
+    assert prior.path.read_bytes() == before
+    assert list(ledger.glob("*.reservation.json")) == [prior.path]
 
 
 def test_sequential_high_cost_approval_replay_is_rejected_forever(

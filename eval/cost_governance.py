@@ -142,6 +142,60 @@ def approval_required(
     )
 
 
+def inspect_routine_cost_capacity(
+    *,
+    requested_cap_rub: float,
+    ledger_dir: str | Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Inspect the exact rolling routine capacity without reserving or writing."""
+    requested = Decimal(str(_validated_cap(requested_cap_rub)))
+    inspected_at = _validated_now(now)
+    target_ledger = _validated_ledger_dir(ledger_dir)
+    if (target_ledger / _LOCK_FILENAME).exists():
+        raise CostLedgerLockedError(
+            "cost ledger is locked or contains a stale lock; refusing automatic recovery"
+        )
+    records = _scan_records(target_ledger, now=inspected_at)
+    cutoff = inspected_at - timedelta(hours=24)
+    recent_routine = [
+        record
+        for record in records
+        if record["reservation_class"] == "routine"
+        and record["_reserved_at_datetime"] >= cutoff
+    ]
+    reserved = sum(
+        (Decimal(str(record["approved_cap_rub"])) for record in recent_routine),
+        start=Decimal("0"),
+    )
+    rolling_cap = Decimal(str(ROUTINE_ROLLING_24H_CAP_RUB))
+    available = max(Decimal("0"), rolling_cap - reserved)
+    canonical_records = [
+        {
+            key: value
+            for key, value in record.items()
+            if key != "_reserved_at_datetime"
+        }
+        for record in records
+    ]
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            canonical_records,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+    ).hexdigest()
+    return {
+        "status": "GO" if requested <= available else "STOP",
+        "requested_cap_rub": float(requested),
+        "rolling_24h_cap_rub": float(rolling_cap),
+        "rolling_24h_routine_reserved_rub": float(reserved),
+        "rolling_24h_routine_available_rub": float(available),
+        "ledger_fingerprint_sha256": fingerprint,
+    }
+
+
 def reserve_live_eval_cost(
     *,
     scope: str,
@@ -152,6 +206,7 @@ def reserve_live_eval_cost(
     approved_cap_rub: float,
     private_full: bool,
     high_cost_approval_id: str | None = None,
+    consume_optional_approval: bool = False,
     private_full_comparison_waiver: PrivateFullComparisonWaiver | None = None,
     ledger_dir: str | Path | None = None,
     now: datetime | None = None,
@@ -172,6 +227,8 @@ def reserve_live_eval_cost(
     validated_cap = _validated_cap(approved_cap_rub)
     if not isinstance(private_full, bool):
         raise CostGovernanceError("private_full must be a boolean")
+    if not isinstance(consume_optional_approval, bool):
+        raise CostGovernanceError("consume_optional_approval must be a boolean")
 
     needs_approval = approval_required(
         case_count=validated_case_count,
@@ -183,7 +240,7 @@ def reserve_live_eval_cost(
         raise CostGovernanceError(
             "this live evaluation requires a one-time high-cost approval id"
         )
-    if not needs_approval:
+    if not needs_approval and not consume_optional_approval:
         approval_id = None
     waiver = _validated_private_full_comparison_waiver(
         private_full_comparison_waiver,

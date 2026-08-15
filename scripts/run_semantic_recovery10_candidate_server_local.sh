@@ -6,7 +6,7 @@ exec 2>/dev/null
 
 readonly DATASET_ID="semantic_recovery10_v1"
 readonly TARGET="http://pilot50-candidate-ml:8000/ask"
-readonly COST_CAP_RUB="200"
+readonly COST_CAP_RUB="99"
 readonly CASES_TOTAL="10"
 readonly SERVER_PROJECT_DIR="/opt/rosmol-ai-bot"
 readonly SERVER_ENV_FILE="/opt/rosmol-ai-bot/.env.production"
@@ -566,6 +566,33 @@ runner_command() {
   )
 }
 
+cost_capacity_snapshot() {
+  sudo docker run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --pids-limit 64 \
+    --memory 256m \
+    --cpus 1 \
+    --user 10001:10001 \
+    --env PYTHONDONTWRITEBYTECODE=1 \
+    --mount "type=bind,src=$SOURCE_DIR,dst=/workspace,readonly" \
+    --mount "type=bind,src=$COST_LEDGER_DIR,dst=/cost-ledger,readonly" \
+    --workdir /workspace \
+    --entrypoint python \
+    "$CANDIDATE_IMAGE_PREFIX:$EXPECTED_SHA" \
+    -m scripts.semantic_recovery10 cost-preflight \
+    --ledger-dir /cost-ledger \
+    --requested-cap-rub "$COST_CAP_RUB" 2>/dev/null
+}
+
+cost_capacity_value() {
+  local key="$1" payload="$2"
+  printf '%s\n' "$payload" \
+    | awk -F= -v expected="$key" '$1 == expected {print substr($0, index($0, "=") + 1)}'
+}
+
 prepare_source_and_cases() {
   local cases_path manifest_path
   sudo install -d -m 0700 -o root -g root "$BASE_DIR" "$BASE_DIR/runs" \
@@ -591,7 +618,8 @@ prepare_source_and_cases() {
     --prior-cases "$PRIOR_RUN_DIR/evidence/pilot50-cases.json" \
     --prior-report "$PRIOR_RUN_DIR/evidence/pilot50-ask-report.json" \
     --output-cases "$cases_path" \
-    --output-manifest "$manifest_path" >/dev/null 2>&1 \
+    --output-manifest "$manifest_path" \
+    --cost-cap-rub "$COST_CAP_RUB" >/dev/null 2>&1 \
     || fail "recovery10_prepare_failed"
   sudo chown 10001:10001 "$cases_path" "$manifest_path" \
     || fail "recovery10_artifact_owner_failed"
@@ -605,6 +633,8 @@ validate_frozen_preflight() {
   local cases_sha manifest_sha receipt="$RUN_DIR/preflight.receipt"
   sudo test -f "$receipt" || fail "preflight_receipt_missing"
   sudo test ! -L "$receipt" || fail "preflight_receipt_invalid"
+  [[ "$(receipt_value schema_version "$receipt")" == \
+    "semantic-recovery10-preflight-v2" ]] || fail "preflight_receipt_mismatch"
   cases_sha="$(sudo sha256sum "$EVIDENCE_DIR/semantic-recovery10-cases.json" \
     2>/dev/null | cut -d ' ' -f 1)" || fail "cases_sha_unavailable"
   manifest_sha="$(sudo sha256sum "$EVIDENCE_DIR/semantic-recovery10-manifest.json" \
@@ -615,12 +645,15 @@ validate_frozen_preflight() {
     || fail "preflight_receipt_mismatch"
   [[ "$(receipt_value manifest_sha256 "$receipt")" == "$manifest_sha" ]] \
     || fail "preflight_receipt_mismatch"
+  [[ "$(receipt_value cost_cap_rub "$receipt")" == "$COST_CAP_RUB" ]] \
+    || fail "preflight_receipt_mismatch"
   [[ "$(sudo sha256sum "$KB_SEED_PATH" 2>/dev/null | cut -d ' ' -f 1)" == \
     "$(receipt_value kb_seed_sha256 "$receipt")" ]] || fail "kb_seed_changed"
 }
 
 preflight_mode() {
-  local capacity cases_sha kb_sha manifest_sha prod_snapshot prod_snapshot_sha
+  local capacity cases_sha cost_capacity cost_fingerprint kb_sha manifest_sha
+  local prod_snapshot prod_snapshot_sha
   load_common_state
   [[ "$(sudo sha256sum "$PRIOR_RUN_DIR/evidence/pilot50-cases.json" \
     2>/dev/null | cut -d ' ' -f 1)" == "$PRIOR_CASES_SHA256" ]] \
@@ -644,11 +677,21 @@ preflight_mode() {
     2>/dev/null | cut -d ' ' -f 1)"
   kb_sha="$(sudo sha256sum "$KB_SEED_PATH" 2>/dev/null | cut -d ' ' -f 1)"
   start_candidate
+  cost_capacity="$(cost_capacity_snapshot)" \
+    || fail "rolling_24h_cap_rejected"
+  [[ "$(cost_capacity_value cost_capacity_status "$cost_capacity")" == "GO" ]] \
+    || fail "rolling_24h_cap_rejected"
+  [[ "$(cost_capacity_value requested_cap_rub "$cost_capacity")" == \
+    "$COST_CAP_RUB" ]] || fail "cost_capacity_invalid"
+  cost_fingerprint="$(cost_capacity_value \
+    cost_ledger_fingerprint_sha256 "$cost_capacity")"
+  [[ "$cost_fingerprint" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "cost_capacity_invalid"
   [[ "$(production_snapshot)" == "$prod_snapshot" ]] \
     || fail "production_changed_during_preflight"
   remove_owned_candidate || fail "candidate_cleanup_failed"
   {
-    printf 'schema_version=semantic-recovery10-preflight-v1\n'
+    printf 'schema_version=semantic-recovery10-preflight-v2\n'
     printf 'candidate_sha=%s\n' "$EXPECTED_SHA"
     printf 'production_runtime_sha=%s\n' "$PROD_RUNTIME_SHA"
     printf 'production_snapshot_sha256=%s\n' "$prod_snapshot_sha"
@@ -657,6 +700,7 @@ preflight_mode() {
     printf 'kb_seed_sha256=%s\n' "$kb_sha"
     printf 'cases_total=%s\n' "$CASES_TOTAL"
     printf 'cost_cap_rub=%s\n' "$COST_CAP_RUB"
+    printf 'cost_ledger_fingerprint_sha256=%s\n' "$cost_fingerprint"
     printf 'channels_status=HDE_VK_DISABLED\n'
     printf '%s\n' "$capacity"
   } | sudo tee "$STAGING_DIR/preflight.receipt" >/dev/null \
@@ -676,13 +720,15 @@ preflight_mode() {
   printf 'cases_sha256=%s\n' "$cases_sha"
   printf 'manifest_sha256=%s\n' "$manifest_sha"
   printf 'cost_cap_rub=%s\n' "$COST_CAP_RUB"
-  printf 'approval_id=owner-chat-20260814-semantic10-%s-%s-cap200\n' \
-    "$EXPECTED_SHA" "${cases_sha:0:12}"
+  printf 'approval_id=owner-chat-20260814-semantic10-%s-%s-cap%s\n' \
+    "$EXPECTED_SHA" "${cases_sha:0:12}" "$COST_CAP_RUB"
+  printf '%s\n' "$cost_capacity"
   printf '%s\n' "$capacity"
 }
 
 run_mode() {
-  local approval_id ask_exit="0" cases_sha completed expected_approval_id manifest_sha
+  local approval_id ask_exit="0" cases_sha completed cost_capacity cost_fingerprint
+  local expected_approval_id manifest_sha
   local post_prod pre_prod pre_prod_sha raw_report report_sha safe_result safe_sha safe_stdout
   load_common_state
   sudo test -d "$RUN_DIR" || fail "preflight_not_found"
@@ -692,7 +738,7 @@ run_mode() {
   validate_frozen_preflight
   cases_sha="$(receipt_value cases_sha256 "$RUN_DIR/preflight.receipt")"
   manifest_sha="$(receipt_value manifest_sha256 "$RUN_DIR/preflight.receipt")"
-  expected_approval_id="owner-chat-20260814-semantic10-${EXPECTED_SHA}-${cases_sha:0:12}-cap200"
+  expected_approval_id="owner-chat-20260814-semantic10-${EXPECTED_SHA}-${cases_sha:0:12}-cap${COST_CAP_RUB}"
   approval_id="${HIGH_COST_APPROVAL_ID:-}"
   [[ "$approval_id" == "$expected_approval_id" ]] \
     || fail "approval_id_missing_or_invalid"
@@ -707,6 +753,15 @@ run_mode() {
   [[ "$pre_prod_sha" == \
     "$(receipt_value production_snapshot_sha256 "$RUN_DIR/preflight.receipt")" ]] \
     || fail "production_changed_since_preflight"
+  cost_capacity="$(cost_capacity_snapshot)" \
+    || fail "rolling_24h_cap_rejected"
+  [[ "$(cost_capacity_value cost_capacity_status "$cost_capacity")" == "GO" ]] \
+    || fail "rolling_24h_cap_rejected"
+  cost_fingerprint="$(cost_capacity_value \
+    cost_ledger_fingerprint_sha256 "$cost_capacity")"
+  [[ "$cost_fingerprint" == "$(receipt_value \
+    cost_ledger_fingerprint_sha256 "$RUN_DIR/preflight.receipt")" ]] \
+    || fail "cost_ledger_changed_since_preflight"
   start_candidate
   create_runner_env
   runner_command
@@ -748,6 +803,7 @@ run_mode() {
     --output /evidence/semantic-recovery10-safe-result.json \
     --expected-runtime-git-sha "$EXPECTED_SHA" \
     --expected-approval-id "$approval_id" \
+    --expected-cost-cap-rub "$COST_CAP_RUB" \
     >/dev/null 2>&1; then
     fail "candidate_summarize_failed"
   fi

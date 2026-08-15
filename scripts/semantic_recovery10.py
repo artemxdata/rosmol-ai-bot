@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from eval.cost_governance import inspect_routine_cost_capacity
+
 DATASET_ID = "semantic_recovery10_v1"
 SCHEMA_VERSION = "semantic-recovery10-v1"
 SAFE_RESULT_SCHEMA_VERSION = "semantic-recovery10-safe-result-v1"
@@ -78,6 +80,13 @@ def _write_exclusive(path: Path, value: object) -> None:
         handle.write(data)
 
 
+def _validated_cost_cap(value: float) -> float:
+    cost_cap = float(value)
+    if not math.isfinite(cost_cap) or cost_cap <= 0 or cost_cap > COST_CAP_RUB:
+        raise ValueError("Recovery10 cost cap must be within (0, 200] RUB")
+    return cost_cap
+
+
 def _group(case: dict[str, Any]) -> str:
     group = str(case.get("pilot50_group") or "").strip().casefold()
     if group in {"typical", "atypical"}:
@@ -114,7 +123,9 @@ def prepare(
     prior_report_path: Path,
     output_cases_path: Path,
     output_manifest_path: Path,
+    cost_cap_rub: float = COST_CAP_RUB,
 ) -> dict[str, Any]:
+    cost_cap_rub = _validated_cost_cap(cost_cap_rub)
     if _file_sha256(prior_cases_path) != PRIOR_CASES_SHA256:
         raise ValueError("prior cases SHA-256 mismatch")
     if _file_sha256(prior_report_path) != PRIOR_REPORT_SHA256:
@@ -213,7 +224,7 @@ def prepare(
             "minimum_no_operator": 5,
             "required_trace_coverage": 1.0,
             "maximum_cache_hits": 0,
-            "cost_cap_rub": COST_CAP_RUB,
+            "cost_cap_rub": cost_cap_rub,
         },
     }
     manifest_bytes = _canonical_json_bytes(manifest)
@@ -244,7 +255,9 @@ def summarize(
     output_path: Path,
     expected_runtime_git_sha: str,
     expected_approval_id: str,
+    expected_cost_cap_rub: float = COST_CAP_RUB,
 ) -> dict[str, Any]:
+    expected_cost_cap_rub = _validated_cost_cap(expected_cost_cap_rub)
     if FULL_GIT_SHA_RE.fullmatch(expected_runtime_git_sha) is None:
         raise ValueError("expected runtime Git SHA must be a full lowercase SHA")
     manifest = _read_json(manifest_path)
@@ -252,6 +265,18 @@ def summarize(
     report = _read_json(report_path)
     if not isinstance(manifest, dict) or manifest.get("dataset_id") != DATASET_ID:
         raise ValueError("Recovery10 manifest mismatch")
+    targeted_gate = manifest.get("targeted_gate")
+    raw_manifest_cost_cap = (
+        targeted_gate.get("cost_cap_rub")
+        if isinstance(targeted_gate, dict)
+        else None
+    )
+    if (
+        isinstance(raw_manifest_cost_cap, bool)
+        or not isinstance(raw_manifest_cost_cap, (int, float))
+        or float(raw_manifest_cost_cap) != expected_cost_cap_rub
+    ):
+        raise ValueError("Recovery10 manifest cost cap mismatch")
     if not isinstance(cases, list) or len(cases) != CASES_TOTAL:
         raise ValueError("Recovery10 cases mismatch")
     cases_sha256 = _file_sha256(cases_path)
@@ -286,7 +311,9 @@ def summarize(
         or reservation.get("runtime_git_sha") != expected_runtime_git_sha
         or reservation.get("manifest_sha256") != cases_sha256
         or reservation.get("case_count") != CASES_TOTAL
-        or float(reservation.get("approved_cap_rub", -1)) != COST_CAP_RUB
+        or float(reservation.get("approved_cap_rub", -1)) != expected_cost_cap_rub
+        or reservation.get("approval_required")
+        is not (expected_cost_cap_rub > 100.0)
         or reservation.get("high_cost_approval_id") != expected_approval_id
     ):
         raise ValueError("Recovery10 cost reservation mismatch")
@@ -294,7 +321,7 @@ def summarize(
     if (
         not math.isfinite(cost)
         or cost < 0
-        or cost > COST_CAP_RUB
+        or cost > expected_cost_cap_rub
         or report.get("llm_budget_exceeded") is True
         or report.get("llm_budget_stopped") is True
         or report.get("llm_pricing_stopped") is True
@@ -335,7 +362,11 @@ def summarize(
             "passed": cache_hits == 0,
         },
         "pricing": {"passed": True},
-        "budget": {"actual_rub": cost, "maximum_rub": COST_CAP_RUB, "passed": True},
+        "budget": {
+            "actual_rub": cost,
+            "maximum_rub": expected_cost_cap_rub,
+            "passed": True,
+        },
     }
     status = "GO" if all(item["passed"] for item in criteria.values()) else "STOP"
     safe = {
@@ -372,7 +403,7 @@ def summarize(
         },
         "llm_cost_rub": cost,
         "budget": {
-            "max_rub": COST_CAP_RUB,
+            "max_rub": expected_cost_cap_rub,
             "exceeded": False,
             "stopped": False,
         },
@@ -399,6 +430,28 @@ def show_safe(path: Path) -> dict[str, Any]:
     return payload
 
 
+def cost_preflight(
+    ledger_dir: Path,
+    *,
+    requested_cap_rub: float = COST_CAP_RUB,
+) -> dict[str, Any]:
+    requested_cap_rub = _validated_cost_cap(requested_cap_rub)
+    payload = inspect_routine_cost_capacity(
+        requested_cap_rub=requested_cap_rub,
+        ledger_dir=ledger_dir,
+    )
+    if set(payload) != {
+        "status",
+        "requested_cap_rub",
+        "rolling_24h_cap_rub",
+        "rolling_24h_routine_reserved_rub",
+        "rolling_24h_routine_available_rub",
+        "ledger_fingerprint_sha256",
+    }:
+        raise ValueError("unexpected cost capacity schema")
+    return payload
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bounded semantic-recovery diagnostic")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -407,6 +460,7 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--prior-report", type=Path, required=True)
     prepare_parser.add_argument("--output-cases", type=Path, required=True)
     prepare_parser.add_argument("--output-manifest", type=Path, required=True)
+    prepare_parser.add_argument("--cost-cap-rub", type=float, default=COST_CAP_RUB)
     summarize_parser = subparsers.add_parser("summarize")
     summarize_parser.add_argument("--manifest", type=Path, required=True)
     summarize_parser.add_argument("--cases", type=Path, required=True)
@@ -414,8 +468,20 @@ def _build_parser() -> argparse.ArgumentParser:
     summarize_parser.add_argument("--output", type=Path, required=True)
     summarize_parser.add_argument("--expected-runtime-git-sha", required=True)
     summarize_parser.add_argument("--expected-approval-id", required=True)
+    summarize_parser.add_argument(
+        "--expected-cost-cap-rub",
+        type=float,
+        default=COST_CAP_RUB,
+    )
     show_parser = subparsers.add_parser("show-safe")
     show_parser.add_argument("--input", type=Path, required=True)
+    cost_parser = subparsers.add_parser("cost-preflight")
+    cost_parser.add_argument("--ledger-dir", type=Path, required=True)
+    cost_parser.add_argument(
+        "--requested-cap-rub",
+        type=float,
+        default=COST_CAP_RUB,
+    )
     return parser
 
 
@@ -427,6 +493,7 @@ def main() -> None:
             prior_report_path=args.prior_report,
             output_cases_path=args.output_cases,
             output_manifest_path=args.output_manifest,
+            cost_cap_rub=args.cost_cap_rub,
         )
     elif args.command == "summarize":
         payload = summarize(
@@ -436,9 +503,33 @@ def main() -> None:
             output_path=args.output,
             expected_runtime_git_sha=args.expected_runtime_git_sha,
             expected_approval_id=args.expected_approval_id,
+            expected_cost_cap_rub=args.expected_cost_cap_rub,
         )
-    else:
+    elif args.command == "show-safe":
         payload = show_safe(args.input)
+    else:
+        payload = cost_preflight(
+            args.ledger_dir,
+            requested_cap_rub=args.requested_cap_rub,
+        )
+        print(f"cost_capacity_status={payload['status']}")
+        print(f"requested_cap_rub={payload['requested_cap_rub']:g}")
+        print(f"rolling_24h_cap_rub={payload['rolling_24h_cap_rub']:g}")
+        print(
+            "rolling_24h_routine_reserved_rub="
+            f"{payload['rolling_24h_routine_reserved_rub']:g}"
+        )
+        print(
+            "rolling_24h_routine_available_rub="
+            f"{payload['rolling_24h_routine_available_rub']:g}"
+        )
+        print(
+            "cost_ledger_fingerprint_sha256="
+            f"{payload['ledger_fingerprint_sha256']}"
+        )
+        if payload["status"] != "GO":
+            raise SystemExit(1)
+        return
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False))
 
 

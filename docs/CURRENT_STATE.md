@@ -4,27 +4,36 @@
 
 **Ветка:** `codex/real-rag`
 
-## 15 августа: второй Recovery10 execution failure; качество ядра всё ещё не измерено
+## 15 августа: причина второго Recovery10 доказана; готовится защищённый запуск на 99 RUB
 
-Исправленный exact candidate `eda8c2aa355c40e0e8c77ea4a0a6291610ea78ec` прошёл бесплатный
-server-local preflight `GO`: `/ready` — `OK`, HDE/VK — `DISABLED`, capacity — `GO`, cases и
-manifest совпали. Разрешённый one-shot `run` снова завершился
-`candidate_ask_eval_failed`. Повтор этого run запрещён; по короткому статусу нельзя утверждать,
-сколько из десяти запросов выполнено, была ли LLM-стоимость и существует ли восстанавливаемый raw
-report.
+Read-only диагностика commit `45fe695c0dc1b184a82eccb88a2887e83a43b4f1` доказала, что exact
+candidate `eda8c2aa355c40e0e8c77ea4a0a6291610ea78ec` не выполнил ни одного `/ask` и не сделал ни
+одного LLM-вызова. Raw report и safe result отсутствуют, trace к запуску не привязан, новая
+стоимость равна `0 RUB`. Отказ произошёл до новой cost reservation: после первого аварийного
+Recovery10 в rolling-24h ledger осталась консервативная routine reservation `200 RUB`; запрос ещё
+на `200 RUB` не помещался в общий предел `300 RUB`. Это execution/governance failure, а не новый
+вердикт качества ядра. Повтор старого run и его approval запрещён.
 
-Диагностика sealed run перепривязывается к exact candidate/approval и остаётся строго read-only:
-она не вызывает `/ask` или LLM, не меняет evidence/production и возвращает только безопасные
-агрегаты report/trace/cost. Следующий шаг — доставить diagnostic tooling через GitHub и один раз
-прочитать сохранённое состояние нового run; затем устранить точную execution-причину либо
-восстановить quality verdict без повторного расхода.
+Точечное исправление оставляет старую reservation неизменной и задаёт новому Recovery10 предел
+`99 RUB`: `200 + 99 = 299 <= 300`. Бесплатный server-local preflight теперь до публикации
+одноразовой попытки read-only проверяет фактический остаток rolling-24h ledger, фиксирует его
+SHA-256 fingerprint и привязывает к receipt; перед `run.started` состояние проверяется повторно.
+Exact owner approval сохраняется в ledger и остаётся глобально одноразовым даже при лимите ниже
+обычного порога `100 RUB`; manifest, runner, reservation и safe summarizer обязаны совпадать по
+пределу `99 RUB`. HDE/VK остаются выключенными, production runtime/KB/Qdrant не меняются. Работа
+с Yonote отложена до получения настоящего server-local quality verdict.
+
+Следующий шаг — закончить локальный gate, отправить exact commit в GitHub, получить бесплатный
+server-local preflight `GO` с `requested=99`, `reserved=200`, `available=100`, затем выполнить один
+новый Recovery10. Только его полные десять trace и safe aggregate дадут первый честный verdict
+semantic recovery.
 
 Результат fact-core `49/50` не является качеством готового бота: это узкая offline calibration
 детерминированного published-fact path с `0` LLM calls. Он доказывает наличие фактов и wiring этого
 пути, но не доказывает server-local LLM execution, ticket closure или конверсию `>=50%`.
 
-Локальный gate diagnostic rebinding: Ruff — `OK`; полный pytest — `3358 passed`, `1 skipped`,
-`0 failed`; validation seed — `2186 valid / 2152 published`; Bash syntax — `OK`.
+Локальный gate change set: Ruff — `OK`; полный pytest — `3362 passed`, `1 skipped`, `0 failed`;
+validation seed — `2186 valid / 2152 published`; Bash syntax и `git diff --check` — `OK`.
 
 ## 15 августа: найдена точная причина остановки Recovery10 до оценки качества
 
@@ -45,13 +54,11 @@ candidate/cases/reservation совпали. Это не quality verdict semantic
 значение и ограничение до любого платного запроса. Схема БД, production runtime, Qdrant, KB и
 HDE/VK не меняются.
 
-Следующий шаг после локального gate и доставки через GitHub — новый бесплатный server-local
-preflight на exact commit, затем один новый bounded Recovery10 с прежним пределом `200 RUB`.
-Старый sealed run и его approval повторно не используются. После получения настоящей матрицы
-Recovery10 отдельным этапом настраивается актуализация опубликованной базы Yonote: разные
-read-only credentials для локального контура и сервера, локальный pull только в проверяемый
-versioned snapshot, diff/validation перед индексацией и никакого автоматического применения в
-production. Секреты не передаются через чат и не попадают в Git.
+Этот первоначальный план предполагал новый bounded Recovery10 с пределом `200 RUB`, но он был
+остановлен rolling-24h ledger до cost reservation и до первого `/ask`; точная причина и актуальный
+план на `99 RUB` зафиксированы в верхнем разделе. Старые sealed run и approval повторно не
+используются. Актуализация Yonote отдельно отложена до настоящей матрицы Recovery10; секреты не
+передаются через чат и не попадают в Git.
 
 Локальный gate исправления: Ruff — `OK`; полный pytest — `3358 passed`, `1 skipped`,
 `0 failed`; validation seed — `2186 valid / 2152 published`; Bash syntax — `OK`.

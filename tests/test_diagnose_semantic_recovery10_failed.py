@@ -59,6 +59,7 @@ def _workspace(tmp_path: Path) -> dict[str, Any]:
             "disclaimer": "Targeted regression only.",
             "cases_total": 10,
             "cases_sha256": cases_sha,
+            "targeted_gate": {"cost_cap_rub": 200.0},
         },
     )
     preflight = tmp_path / "preflight.receipt"
@@ -167,6 +168,7 @@ def _report(
                 "manifest_sha256": workspace["cases_sha"],
                 "case_count": 10,
                 "approved_cap_rub": 200.0,
+                "approval_required": True,
                 "high_cost_approval_id": APPROVAL_ID,
             },
         },

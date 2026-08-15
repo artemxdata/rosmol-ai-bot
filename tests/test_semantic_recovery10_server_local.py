@@ -54,7 +54,7 @@ def test_recovery10_runner_has_valid_bash_syntax() -> None:
 def test_recovery10_runner_is_bounded_and_does_not_use_channels_or_ssh() -> None:
     text = _text()
     assert 'readonly CASES_TOTAL="10"' in text
-    assert 'readonly COST_CAP_RUB="200"' in text
+    assert 'readonly COST_CAP_RUB="99"' in text
     assert 'readonly TARGET="http://pilot50-candidate-ml:8000/ask"' in text
     assert "owner-chat-20260814-semantic10-" in text
     assert "--concurrency 1" in text
@@ -76,9 +76,28 @@ def test_recovery10_preflight_has_no_paid_ask_and_binds_prior_evidence() -> None
     assert 'semantic_recovery10.py" prepare' not in preflight
     assert "prepare_source_and_cases" in preflight
     assert "start_candidate" in preflight
+    assert "cost_capacity_snapshot" in preflight
+    assert "cost_capacity_status" in preflight
+    assert "cost_ledger_fingerprint_sha256" in preflight
+    assert "semantic-recovery10-preflight-v2" in preflight
     assert "candidate_runtime_smoke=OK" in preflight
     assert "c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8" in text
     assert "2defcace63de2a2184b162fcae5fa8f4d50ed8317042ae64aabbb49181076a8d" in text
+
+
+def test_cost_capacity_preflight_is_read_only_and_precedes_one_shot_marker() -> None:
+    text = _text()
+    snapshot = _function(text, "cost_capacity_snapshot")
+    run = _function(text, "run_mode")
+
+    assert "--network none" in snapshot
+    assert "--read-only" in snapshot
+    assert 'src=$COST_LEDGER_DIR,dst=/cost-ledger,readonly' in snapshot
+    assert "cost-preflight" in snapshot
+    assert run.index('cost_capacity="$(cost_capacity_snapshot)"') < run.index(
+        'sudo tee "$RUN_DIR/run.started"'
+    )
+    assert "cost_ledger_changed_since_preflight" in run
 
 
 def test_root_owned_preflight_receipt_is_read_through_sudo() -> None:
@@ -88,6 +107,8 @@ def test_root_owned_preflight_receipt_is_read_through_sudo() -> None:
     assert 'sudo tee "$STAGING_DIR/preflight.receipt"' in preflight
     assert 'sudo chmod 0600 "$STAGING_DIR/preflight.receipt"' in preflight
     assert "sudo awk" in receipt_value
+    validate = _function(text, "validate_frozen_preflight")
+    assert "semantic-recovery10-preflight-v2" in validate
 
 
 def test_quality_gate_exit_with_complete_report_is_summarized() -> None:

@@ -1025,7 +1025,7 @@ async def run_eval(
         and require_complete_traces is True
         and max_llm_cost_rub is not None
         and math.isfinite(max_llm_cost_rub)
-        and ROUTINE_LIVE_EVAL_MAX_COST_RUB < max_llm_cost_rub <= 200.0
+        and 0 < max_llm_cost_rub <= 200.0
     )
     if expected_runtime_git_sha is not None and not (
         calibration_replay
@@ -1473,6 +1473,7 @@ async def run_eval(
                     approved_cap_rub=max_llm_cost_rub,
                     private_full=private_contract_run,
                     high_cost_approval_id=validated_high_cost_approval_id,
+                    consume_optional_approval=targeted_runtime_contract,
                     ledger_dir=cost_ledger_dir,
                 )
             else:
