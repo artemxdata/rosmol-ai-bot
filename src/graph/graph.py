@@ -72,7 +72,11 @@ def build_graph():
     graph.add_conditional_edges(
         "verify",
         route_after_verify,
-        {"respond": "respond", "escalate": "escalate"},
+        {
+            "respond": "respond",
+            "recover": "semantic_recovery",
+            "escalate": "escalate",
+        },
     )
     graph.add_edge("respond", END)
     graph.add_edge("clarify", END)

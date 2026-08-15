@@ -9,6 +9,7 @@ _SEMANTIC_RECOVERY_REASONS = frozenset(
         "no_relevant_chunks",
         "no_sources_for_generation",
         "insufficient_sources",
+        "partial_source_coverage",
     }
 )
 
@@ -50,9 +51,13 @@ def route_after_semantic_recovery(state: BotState) -> str:
 
 
 def route_after_verify(state: BotState) -> str:
-    if state.get("should_escalate"):
-        return "escalate"
     verification = state.get("verification")
+    if state.get("should_escalate"):
+        if not (verification and verification.has_hallucination) and (
+            _can_attempt_semantic_recovery(state)
+        ):
+            return "recover"
+        return "escalate"
     if verification and verification.has_hallucination:
         return "escalate"
     return "respond"

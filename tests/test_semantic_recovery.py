@@ -8,12 +8,20 @@ from src.graph.edges import (
     route_after_generate,
     route_after_rerank,
     route_after_semantic_recovery,
+    route_after_verify,
 )
 from src.graph.nodes.rerank import rerank
 from src.graph.nodes.retrieve import retrieve
 from src.graph.nodes.semantic_recovery import semantic_recovery
 from src.graph.question_utils import QueryProvenTopicPlan
-from src.models import Chunk, Complexity, QueryAnalysis, Question, ScoredChunk
+from src.models import (
+    Chunk,
+    Complexity,
+    QueryAnalysis,
+    Question,
+    ScoredChunk,
+    VerificationResult,
+)
 
 
 class CapturingRecoveryLLM:
@@ -156,6 +164,47 @@ def test_source_coverage_failure_can_recover_but_llm_failure_cannot() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "reason",
+    ["insufficient_sources", "partial_source_coverage"],
+)
+def test_late_source_coverage_failure_can_recover_once(reason: str) -> None:
+    state = {
+        "analysis": _analysis(),
+        "llm_client": object(),
+        "should_escalate": True,
+        "escalation_reason": reason,
+    }
+
+    assert route_after_verify(state) == "recover"
+    assert route_after_verify({**state, "semantic_recovery_attempted": True}) == (
+        "escalate"
+    )
+
+
+def test_verifier_contract_failure_does_not_retry_retrieval() -> None:
+    state = {
+        "analysis": _analysis(),
+        "llm_client": object(),
+        "should_escalate": True,
+        "escalation_reason": "missing_source_citations",
+    }
+
+    assert route_after_verify(state) == "escalate"
+
+
+def test_verifier_hallucination_fails_closed_even_with_recoverable_reason() -> None:
+    state = {
+        "analysis": _analysis(),
+        "llm_client": object(),
+        "should_escalate": True,
+        "escalation_reason": "insufficient_sources",
+        "verification": VerificationResult(has_hallucination=True),
+    }
+
+    assert route_after_verify(state) == "escalate"
+
+
 def test_semantic_recovery_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "src.graph.edges.get_settings",
@@ -207,6 +256,7 @@ async def test_semantic_recovery_builds_grounded_search_questions() -> None:
     assert result["escalation_reason"] == ""
     assert result["answer_plan"] == QueryProvenTopicPlan()
     assert result["reranked_chunks"] == []
+    assert result["partial_source_missing_coverage"] == []
     recovered = result["analysis"]
     assert recovered.complexity == Complexity.COMPLEX
     assert [question.text for question in recovered.questions] == [

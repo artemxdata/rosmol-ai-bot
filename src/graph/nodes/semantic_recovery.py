@@ -107,6 +107,7 @@ async def semantic_recovery(state: BotState) -> dict[str, Any]:
         "max_confidence": 0.0,
         "generated_response": "",
         "cited_sources": [],
+        "partial_source_missing_coverage": [],
         "should_escalate": False,
         "escalation_reason": "",
     }

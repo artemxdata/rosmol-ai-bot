@@ -37,6 +37,7 @@ class BotState(TypedDict, total=False):
     semantic_recovery_reason: str
     semantic_recovery_question_count: int
     generated_response: str
+    partial_source_missing_coverage: list[str]
     response_guard: str
     final_response: str
     cited_sources: list[str]
