@@ -218,6 +218,82 @@ def test_builder_keeps_text_private_and_emits_registry_compatible_entry(
     assert first_components.isdisjoint(second_components)
 
 
+def test_builder_supports_independent_full_ticket_holdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _private_fixture(tmp_path, monkeypatch, population=24)
+    arguments = fixture["arguments"]
+    cases_path = arguments["cases_path"]
+    conversations_path = arguments["conversations_path"]
+    config_path = arguments["config_path"]
+
+    cases = [
+        {**json.loads(line), "split": "holdout"}
+        for line in cases_path.read_text(encoding="utf-8").splitlines()
+    ]
+    conversations = [
+        {**item, "split": "holdout"}
+        for item in json.loads(conversations_path.read_text(encoding="utf-8"))
+    ]
+    cases_path.write_text(_jsonl(cases), encoding="utf-8")
+    conversations_path.write_text(
+        json.dumps(conversations, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _refresh_artifact_manifest(arguments["artifact_manifest_path"])
+    config = _small_config().model_dump(mode="json")
+    config.update(
+        {
+            "schema_version": "gold-ticket-sampling.v1",
+            "dataset_id": "blind_test_v1",
+            "purpose": "independent_holdout",
+            "source_split": "holdout",
+            "stable_rank_namespace": "synthetic-blind-test-v1",
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = build_gold_ticket_dataset(
+        **arguments,
+        output_dir=fixture["private_root"] / "eval" / "blind-test-v1",
+    )
+
+    assert result["selected_total"] == 10
+    entry = json.loads(
+        (
+            fixture["private_root"]
+            / "eval"
+            / "blind-test-v1"
+            / "blind_test_v1_registry.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert entry["evaluation_role"] == "holdout"
+    assert entry["independent_evaluation"] is True
+
+
+def test_sampling_purpose_must_match_source_split() -> None:
+    payload = _small_config().model_dump(mode="json")
+    payload["source_split"] = "holdout"
+
+    with pytest.raises(ValueError, match="purpose and source split"):
+        GoldSamplingConfig.model_validate(payload)
+
+
+def test_sampling_allows_zero_quota_for_absent_risk_flag() -> None:
+    payload = _small_config().model_dump(mode="json")
+    payload["risk_slot_quotas"].update(
+        {
+            "critical_profile": payload["risk_slot_quotas"]["critical_profile"] + 1,
+            "role_review_required": 0,
+        }
+    )
+
+    config = GoldSamplingConfig.model_validate(payload)
+
+    assert config.risk_slot_quotas["role_review_required"] == 0
+
+
 def test_builder_rejects_paths_outside_private_and_manifest_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

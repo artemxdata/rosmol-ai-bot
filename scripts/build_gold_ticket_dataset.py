@@ -82,7 +82,9 @@ _FORBIDDEN_METADATA_KEYS = frozenset(
 class GoldSamplingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = Field(pattern=r"^gold150-sampling\.v1$")
+    schema_version: str = Field(
+        pattern=r"^(gold150-sampling|gold-ticket-sampling)\.v1$"
+    )
     dataset_id: str = Field(pattern=r"^[a-z][a-z0-9._-]{2,63}$")
     dataset_version: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,31}$")
     registry_created_at: str = Field(
@@ -91,8 +93,8 @@ class GoldSamplingConfig(BaseModel):
             r"([01]\d|2[0-3]):[0-5]\d:[0-5]\d\+00:00$"
         )
     )
-    purpose: str = Field(pattern=r"^sanity_calibration$")
-    source_split: str = Field(pattern=r"^calibration$")
+    purpose: str = Field(pattern=r"^(sanity_calibration|independent_holdout)$")
+    source_split: str = Field(pattern=r"^(calibration|holdout)$")
     measurement_unit: str = Field(pattern=r"^full_ticket$")
     target_total: int = Field(gt=0)
     traffic_target: int = Field(gt=0)
@@ -107,6 +109,12 @@ class GoldSamplingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_contract(self) -> GoldSamplingConfig:
+        expected_split = {
+            "sanity_calibration": "calibration",
+            "independent_holdout": "holdout",
+        }[self.purpose]
+        if self.source_split != expected_split:
+            raise ValueError("sampling purpose and source split are inconsistent")
         if self.target_total != self.traffic_target + self.risk_target:
             raise ValueError("target_total must equal traffic_target + risk_target")
         if self.traffic_strata != (
@@ -116,8 +124,8 @@ class GoldSamplingConfig(BaseModel):
             raise ValueError("traffic strata must remain profile × route")
         if set(self.risk_slot_quotas) != _KNOWN_RISK_FLAGS:
             raise ValueError("risk_slot_quotas must contain the exact v1 risk flags")
-        if any(value <= 0 for value in self.risk_slot_quotas.values()):
-            raise ValueError("risk quotas must be positive")
+        if any(value < 0 for value in self.risk_slot_quotas.values()):
+            raise ValueError("risk quotas must be non-negative")
         if sum(self.risk_slot_quotas.values()) != self.risk_target:
             raise ValueError("risk quotas must sum to risk_target")
         if not self.critical_profiles or len(set(self.critical_profiles)) != len(
@@ -798,8 +806,12 @@ def _build_registry_payload(
         "contains_raw_text": False,
         "pii_possible": True,
         "contains_operator_answers": contains_operator_answers,
-        "evaluation_role": "calibration_sanity",
-        "independent_evaluation": False,
+        "evaluation_role": (
+            "holdout"
+            if config.purpose == "independent_holdout"
+            else "calibration_sanity"
+        ),
+        "independent_evaluation": config.purpose == "independent_holdout",
         "human_review_status": "pending",
         "cases_total": len(selected),
         "hashes": hashes,

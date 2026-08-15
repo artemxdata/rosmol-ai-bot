@@ -4,6 +4,43 @@
 
 **Ветка:** `codex/real-rag`
 
+## 15 августа: Recovery10 закрыт `10/10`; сформирован новый независимый Blind50
+
+Server-local запуск exact candidate `f3cd634b1a232e47a49c7841bde9391a090e67df` завершён
+валидным safe verdict: `semantic_recovery10_server_local=OK`, `passed=10/10`,
+`no_operator=10/10`, trace coverage `10/10`, cache hits `0`, стоимость `0 RUB`, p50 `4.892 s`,
+p95 `11.412 s`. Исторический baseline для этих десяти провалов был `0/10`. HDE/VK во время
+прогона оставались выключены. Все привязки candidate/cases/manifest/report подтверждены SHA-256.
+
+Это реальное исправление десяти ранее падавших запросов, но не доказательство общей конверсии:
+на запуске не потребовались ни LLM, ни semantic recovery. Следовательно, детерминированный
+published-fact path текущего ядра закрыл выбранные старые дефекты, а способность обобщаться на
+новые формулировки и полные диалоги ещё должна быть измерена отдельно. Recovery10 и прежние
+Pilot50/Product80 запрещено включать в знаменатель нового продуктового результата.
+
+Для следующего измерения локально и без чтения текстов в stdout сформирован private
+`blind50_product@v1`: `50` уникальных full-ticket duplicate components из holdout, которых не было
+в прежнем Product80. Исходная доступная популяция после исключений — `105` уникальных компонентов.
+В выборке `30` traffic и `20` risk tickets; фактически присутствуют `10` multi-turn, `20`
+time-sensitive, `33` critical-profile и `7` operator-route cases. Dataset зарегистрирован в
+private registry как `independent_evaluation=true`, `evaluation_role=holdout`, state `reviewing`;
+тексты, ticket IDs и ответы не добавлены в Git и не передавались на сервер.
+
+Tracked sampling-tooling теперь явно поддерживает пару
+`independent_holdout -> source_split=holdout`, выставляет правильную роль registry и разрешает
+нулевую квоту только для действительно отсутствующего risk-флага. Для Blind50 это необходимо:
+среди оставшихся `105` компонентов нет `role_review_required`, поэтому выдумывать такую страту
+или возвращать уже exposed cases нельзя. Focused gate: Ruff — `OK`, builder tests — `11 passed`.
+Полный локальный gate: Ruff — `OK`; все `3366` test items проверены восемью непересекающимися
+file shards после известного Windows teardown-hang единого pytest-процесса — `3365 passed`,
+`1 skipped`, `0 failed`; KB validation — `2186 valid / 2152 published`; `git diff --check` — `OK`.
+
+Следующий шаг: завершить human reference для Blind50 до просмотра ответов нового runtime, затем
+выполнить один ordered full-ticket local run с сохранением истории между user turns. Прямой
+release threshold — минимум `25/50` полностью решённых тикетов без оператора; отдельный stage
+funnel должен показать крупнейшую системную потерю. До этого результата production runtime,
+Yonote, KB/Qdrant и каналы не менять; HDE/VK остаются выключенными.
+
 ## 15 августа: причина второго Recovery10 доказана; готовится защищённый запуск на 99 RUB
 
 Read-only диагностика commit `45fe695c0dc1b184a82eccb88a2887e83a43b4f1` доказала, что exact

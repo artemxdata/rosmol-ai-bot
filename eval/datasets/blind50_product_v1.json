@@ -1,0 +1,40 @@
+{
+  "schema_version": "gold-ticket-sampling.v1",
+  "dataset_id": "blind50_product",
+  "dataset_version": "v1",
+  "registry_created_at": "2026-08-15T05:00:00+00:00",
+  "purpose": "independent_holdout",
+  "source_split": "holdout",
+  "measurement_unit": "full_ticket",
+  "target_total": 50,
+  "traffic_target": 30,
+  "risk_target": 20,
+  "traffic_strata": [
+    "expected_response_profile",
+    "expected_route"
+  ],
+  "risk_slot_quotas": {
+    "multi_turn": 8,
+    "time_sensitive": 3,
+    "critical_profile": 6,
+    "operator_route": 3,
+    "role_review_required": 0
+  },
+  "critical_profiles": [
+    "dates",
+    "application",
+    "selection_status",
+    "travel",
+    "eligibility",
+    "documents"
+  ],
+  "stable_rank_namespace": "rosmol-blind50-product-v1",
+  "operator_answers_used_as_facts": false,
+  "weak_labels_are_sampling_hints_only": true,
+  "review_policy": {
+    "primary_human_review_required": true,
+    "dual_review_all_critical": true,
+    "deterministic_secondary_audit_fraction": 0.25,
+    "adjudication_required_on_disagreement": true
+  }
+}
