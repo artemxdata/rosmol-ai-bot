@@ -23,6 +23,20 @@ RANK_CUTOFFS = (1, 3, 5, 10)
 
 ACTIONS = ("answer", "clarify", "escalate", "scope_note")
 ACTION_SET = frozenset(ACTIONS)
+TICKET_OUTCOMES = frozenset(
+    {
+        "bot_resolved_first_turn",
+        "bot_resolved_multi_turn",
+        "operator_required",
+        "scope_resolved",
+        "unresolved",
+    }
+)
+NO_OPERATOR_OUTCOMES = frozenset(
+    {"bot_resolved_first_turn", "bot_resolved_multi_turn", "scope_resolved"}
+)
+PRODUCT_RELEASE_MIN_TICKETS = 50
+PRODUCT_RELEASE_MIN_CLOSED_RATE = 0.5
 ANSWERABILITY_VALUES = frozenset({"full", "partial", "none"})
 GENERATION_STATUSES = frozenset({"pass", "partial", "fail"})
 VERIFICATION_DECISIONS = frozenset({"pass", "partial", "escalate", "reject"})
@@ -226,6 +240,7 @@ def build_stage_funnel_report(
             action_pairs.append((step.expected_action, observation.observed_action))
 
     action_report = _action_report(action_pairs)
+    ticket_report = _ticket_product_report(tickets, rows)
     metrics = {
         **action_report["metrics"],
         **{
@@ -248,7 +263,101 @@ def build_stage_funnel_report(
         "action_confusion_matrix": action_report["confusion_matrix"],
         "action_per_class": action_report["per_class"],
         "metrics": metrics,
+        "ticket_product_metrics": ticket_report["metrics"],
+        "product_release_threshold": ticket_report["release_threshold"],
+        "tickets": ticket_report["tickets"],
         "steps": rows,
+    }
+
+
+def _ticket_product_report(
+    tickets: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    rows_by_ticket: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        rows_by_ticket.setdefault(int(row["ticket_no"]), []).append(row)
+
+    ticket_rows: list[dict[str, Any]] = []
+    for ticket_no, ticket in enumerate(tickets, start=1):
+        raw_outcome = ticket.get("expected_ticket_outcome")
+        if raw_outcome is None:
+            expected_outcome = "unknown"
+        else:
+            expected_outcome = str(raw_outcome).strip()
+            if expected_outcome not in TICKET_OUTCOMES:
+                raise ValueError("GoldTicket contains an unknown expected_ticket_outcome")
+        step_rows = sorted(rows_by_ticket.get(ticket_no, []), key=lambda row: row["step_no"])
+        first_losses = [str(row["first_loss_stage"]) for row in step_rows]
+        exact_failures = [
+            loss
+            for loss in first_losses
+            if loss not in {"pass", "unscored", "label_or_content_gap"}
+        ]
+        if step_rows and all(loss == "pass" for loss in first_losses):
+            status = "pass"
+            first_loss = "pass"
+        elif exact_failures:
+            status = "fail"
+            first_loss = next(
+                loss
+                for loss in first_losses
+                if loss not in {"pass", "unscored", "label_or_content_gap"}
+            )
+        else:
+            status = "unscored"
+            first_loss = next(
+                (loss for loss in first_losses if loss != "pass"),
+                "unscored",
+            )
+        eligible = expected_outcome != "unknown"
+        closed_without_operator = (
+            eligible and status == "pass" and expected_outcome in NO_OPERATOR_OUTCOMES
+        )
+        ticket_rows.append(
+            {
+                "ticket_no": ticket_no,
+                "evaluation_steps": len(step_rows),
+                "expected_ticket_outcome": expected_outcome,
+                "status": status,
+                "first_loss_stage": first_loss,
+                "eligible_for_conversion": eligible,
+                "closed_without_operator": closed_without_operator,
+            }
+        )
+
+    eligible_rows = [row for row in ticket_rows if row["eligible_for_conversion"]]
+    closed = sum(row["closed_without_operator"] is True for row in eligible_rows)
+    passed = sum(row["status"] == "pass" for row in eligible_rows)
+    unscored = sum(row["status"] == "unscored" for row in eligible_rows)
+    conversion = _metric(closed, len(eligible_rows))
+    threshold_passed = (
+        len(eligible_rows) >= PRODUCT_RELEASE_MIN_TICKETS
+        and unscored == 0
+        and conversion["rate"] is not None
+        and float(conversion["rate"]) >= PRODUCT_RELEASE_MIN_CLOSED_RATE
+    )
+    return {
+        "metrics": {
+            "eligible_tickets": len(eligible_rows),
+            "quality_passed_tickets": passed,
+            "unscored_tickets": unscored,
+            "expected_operator_required_tickets": sum(
+                row["expected_ticket_outcome"] == "operator_required"
+                for row in eligible_rows
+            ),
+            "closed_without_operator": conversion,
+        },
+        "release_threshold": {
+            "minimum_tickets": PRODUCT_RELEASE_MIN_TICKETS,
+            "minimum_closed_without_operator_rate": PRODUCT_RELEASE_MIN_CLOSED_RATE,
+            "actual_tickets": len(eligible_rows),
+            "actual_closed_without_operator": closed,
+            "actual_rate": conversion["rate"],
+            "unscored_tickets": unscored,
+            "passed": threshold_passed,
+        },
+        "tickets": ticket_rows,
     }
 
 

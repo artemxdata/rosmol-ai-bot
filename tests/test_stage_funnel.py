@@ -140,6 +140,100 @@ def test_report_scores_action_and_true_rank_metrics() -> None:
     assert report["first_loss_stage_counts"] == {"pass": 1, "final_behavior": 1}
 
 
+def test_ticket_product_metric_counts_full_ticket_not_individual_steps() -> None:
+    resolved = _grounded_ticket(ticket_id="resolved")
+    resolved["expected_ticket_outcome"] = "bot_resolved_multi_turn"
+    resolved["evaluation_steps"] = [
+        deepcopy(resolved["evaluation_steps"][0]),  # type: ignore[index]
+        {
+            **deepcopy(resolved["evaluation_steps"][0]),  # type: ignore[index]
+            "step_id": "resolved-step-2",
+        },
+    ]
+    first_observation = _grounded_observation(ticket_id="resolved")
+    second_observation = {
+        **deepcopy(first_observation),
+        "step_id": "resolved-step-2",
+        "observed_action": "clarify",
+    }
+    operator = _ticket(
+        ticket_id="operator",
+        action="escalate",
+        answerability="none",
+    )
+    operator["expected_ticket_outcome"] = "operator_required"
+    operator_observation = {
+        "ticket_id_hash": "operator",
+        "step_id": "operator-step",
+        "observed_action": "escalate",
+    }
+
+    report = build_stage_funnel_report(
+        [resolved, operator],
+        [first_observation, second_observation, operator_observation],
+    )
+
+    assert report["ticket_product_metrics"] == {
+        "eligible_tickets": 2,
+        "quality_passed_tickets": 1,
+        "unscored_tickets": 0,
+        "expected_operator_required_tickets": 1,
+        "closed_without_operator": {
+            "numerator": 0,
+            "denominator": 2,
+            "rate": 0.0,
+        },
+    }
+    assert report["tickets"] == [
+        {
+            "ticket_no": 1,
+            "evaluation_steps": 2,
+            "expected_ticket_outcome": "bot_resolved_multi_turn",
+            "status": "fail",
+            "first_loss_stage": "final_behavior",
+            "eligible_for_conversion": True,
+            "closed_without_operator": False,
+        },
+        {
+            "ticket_no": 2,
+            "evaluation_steps": 1,
+            "expected_ticket_outcome": "operator_required",
+            "status": "pass",
+            "first_loss_stage": "pass",
+            "eligible_for_conversion": True,
+            "closed_without_operator": False,
+        },
+    ]
+
+
+def test_product_release_threshold_requires_25_of_50_and_no_unscored_tickets() -> None:
+    tickets: list[dict[str, object]] = []
+    observations: list[dict[str, object]] = []
+    for ordinal in range(50):
+        ticket_id = f"ticket-{ordinal}"
+        ticket = _grounded_ticket(ticket_id=ticket_id)
+        ticket["expected_ticket_outcome"] = "bot_resolved_first_turn"
+        observation = _grounded_observation(ticket_id=ticket_id)
+        if ordinal >= 25:
+            observation["observed_action"] = "clarify"
+        tickets.append(ticket)
+        observations.append(observation)
+
+    report = build_stage_funnel_report(tickets, observations)
+
+    assert report["ticket_product_metrics"]["closed_without_operator"] == {
+        "numerator": 25,
+        "denominator": 50,
+        "rate": 0.5,
+    }
+    assert report["product_release_threshold"]["passed"] is True
+
+    observations[0].pop("claim_verdicts")
+    unscored = build_stage_funnel_report(tickets, observations)
+    assert unscored["product_release_threshold"]["unscored_tickets"] == 1
+    assert unscored["product_release_threshold"]["passed"] is False
+
+
 def test_recall_uses_all_relevant_qrels_in_denominator() -> None:
     ticket = _ticket(
         qrels=[
