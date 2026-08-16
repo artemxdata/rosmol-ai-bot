@@ -70,6 +70,13 @@ TONE_RE = re.compile(
 PROTECTED_TOKEN_RE = re.compile(
     r"""
     (?:
+        (?<!\d)\d{1,2}[./]\d{1,2}[./]\d{4}(?!\d)
+        |
+        (?-i:
+            [\u0410-\u042f\u0401A-Z][\u0410-\u044f\u0401\u0451A-Za-z0-9-]{1,63}\.
+            [\u0410-\u042f\u0401A-Z][\u0410-\u044f\u0401\u0451A-Za-z0-9-]{1,63}
+        )
+        |
         [A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}
         |
         https?://(?:
@@ -102,6 +109,9 @@ EMAIL_SPACE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 TIME_SPACE_RE = re.compile(r"\b(\d{1,2}):\s+(\d{2})\b")
+DATE_SPACE_RE = re.compile(
+    r"(?<!\d)(\d{1,2})\s*([./])\s*(\d{1,2})\s*([./])\s*(\d{4})(?!\d)"
+)
 URL_QUERY_SPACE_RE = re.compile(r"(?<=[A-Za-z0-9_/])\?\s+(?=[A-Za-z0-9_=&%-])")
 WHITESPACE_RE = re.compile(r"\s+")
 TONE_PHRASE_REPLACEMENTS = (
@@ -252,6 +262,7 @@ def _repair_structured_token_spacing(response: str) -> str:
         repaired,
     )
     repaired = TIME_SPACE_RE.sub(r"\1:\2", repaired)
+    repaired = DATE_SPACE_RE.sub(r"\1\2\3\4\5", repaired)
     return URL_QUERY_SPACE_RE.sub("?", repaired)
 
 

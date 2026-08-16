@@ -635,6 +635,29 @@ def test_normalize_final_response_preserves_links_email_and_time_spacing() -> No
     )
 
 
+def test_normalize_final_response_preserves_dates_and_dotted_names() -> None:
+    final = normalize_final_response(
+        "Подать заявку можно до 12. 09. 2026 в 23:59 мск."
+        "Регистрация идёт на сайте Таврида.Арт."
+        "Следующий шаг описан на платформе «Росмолодёжь.Форумы». "
+        "[src:registration]"
+    )
+
+    assert final == (
+        "Подать заявку можно до 12.09.2026 в 23:59 мск. "
+        "Регистрация идёт на сайте Таврида.Арт. "
+        "Следующий шаг описан на платформе «Росмолодёжь.Форумы»."
+    )
+
+
+def test_normalize_final_response_still_splits_real_joined_sentences() -> None:
+    final = normalize_final_response(
+        "Регистрация завершена.Следующий этап начнётся завтра. [src:registration]"
+    )
+
+    assert final == "Регистрация завершена. Следующий этап начнётся завтра."
+
+
 @pytest.mark.asyncio
 async def test_respond_repairs_llm_spacing_inside_structured_tokens() -> None:
     result = await respond(

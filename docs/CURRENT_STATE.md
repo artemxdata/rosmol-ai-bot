@@ -4,6 +4,38 @@
 
 **Ветка:** `codex/real-rag`
 
+## 16 августа: локализованы и исправлены четыре реальных провала Pilot50 v5
+
+Safe diagnostics v2 tooling `a5b79e84e296c1e77f9bf407f77109acbc89df77` повторно
+прочитал те же sealed report/safe result без `/ask`, сети и LLM-вызовов. Все пять непройденных
+кейсов использовали `fact_card_source`, получили опубликованные источники и корректные citation
+bindings; retry и operator escalation не было. Значит, общий retrieval/generation path уже
+сработал, а дефект находился после формирования ответа.
+
+Точная локальная репродукция выявила системную порчу структурированных фактов в
+`normalize_final_response`: глобальная вставка пробела после точки превращала `12.09.2026` в
+`12. 09. 2026`, `Таврида.Арт` в `Таврида. Арт`, а `Росмолодёжь.Форумы` в
+`Росмолодёжь. Форумы`. Из-за этого падали ordinals `11`, `29`, `44`, `48`, включая оба critical
+case. Финальный normalizer теперь сначала восстанавливает и защищает numeric dates и dotted
+proper names, но по-прежнему разделяет действительно склеенные предложения.
+
+Повтор полного локального пути `analyze -> fact-card generation -> response guard -> final
+normalization -> typed scoring` дал: ordinal `11` — `1/1` fact groups, `29` — `8/8`, `44` —
+`4/4`, `48` — `3/3`. Единственный оставшийся ordinal `23` содержит правильную опубликованную
+фразу `главная общественно-политическая площадка`, но frozen calibration label хранит усечённый
+stem `общественно-политическ`, который намеренно не проходит строгую границу слова. Общий scorer
+не ослаблялся ради ошибочной метки. Прогноз честного повторного Pilot50 v5: `49/50`, `0` critical
+failures и quality gate `GO`; это всё ещё exposed calibration, а не production conversion.
+
+Regression tests покрывают дату, оба dotted name, настоящий joined-sentence repair и фактический
+published-source generation path. Полный локальный gate: Ruff — `OK`; `3403` pytest nodeids
+выполнены изолированными пакетами без failed batch (`3402 passed`, известный `1 skipped`); KB
+validation — `2186 valid / 2152 published`; `git diff --check` — `OK`. Production остаётся на
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, HDE/VK выключены. Следующий шаг после push exact
+candidate — бесплатный server-local preflight и один Pilot50 v5 run с hard cap `30 RUB`;
+ожидаемый фактический LLM cost `0 RUB`. После подтверждения `49/50` приоритет возвращается к
+независимому full-ticket Blind50 с прямым порогом `>=25/50`.
+
 ## 16 августа: Pilot50 v5 дал `45/50` против прежних `8/50`
 
 Offline recovery exact candidate `e3277e88ee3bf46ab3d375beed740f96248d53bc` завершён без

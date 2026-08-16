@@ -17,6 +17,7 @@ from src.graph.nodes.generate import (
     generate,
 )
 from src.graph.nodes.guard import apply_response_guards
+from src.graph.nodes.respond import normalize_final_response
 from src.graph.nodes.verify import verify
 from src.kb.temporal import MOSCOW_TZ
 from src.logging.tracer import Tracer
@@ -197,7 +198,8 @@ async def test_pilot50_single_published_source_uses_bounded_extractive_fast_path
     assert result.get("should_escalate") is not True
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == [chunk_id]
-    assert all(fragment in result["generated_response"] for fragment in expected)
+    final_response = normalize_final_response(result["generated_response"])
+    assert all(fragment in final_response for fragment in expected)
 
 
 @pytest.mark.asyncio
@@ -406,8 +408,9 @@ async def test_stage_v2_supported_queries_use_request_bound_published_sources(
     assert result.get("should_escalate") is not True
     assert result["generator_model"] == "source_chunk"
     assert result["cited_sources"] == list(chunk_ids)
-    assert all(fragment in result["generated_response"] for fragment in expected)
-    assert all(fragment not in result["generated_response"] for fragment in absent)
+    final_response = normalize_final_response(result["generated_response"])
+    assert all(fragment in final_response for fragment in expected)
+    assert all(fragment not in final_response for fragment in absent)
     selection = next(
         event for event in reversed(tracer.events) if event.node == "generate_selection"
     )
