@@ -15,20 +15,26 @@ candidate container отсутствует. Canonical raw report создаёт�
 задвоить расход и нарушить one-shot evidence. Домашняя сеть владельца влияет только на SSH;
 вычисления и outbound provider traffic выполнялись на сервере.
 
-Tooling `97cb4d2685d5cc6a646846b50a14e0484eb4fcc7` добавляет отдельный interrupted-run recovery.
-Он принимает только этот exact v5 candidate, проверяет immutable source snapshot, preflight и
-run.started receipts, canonical report `50/50`, verified pre/post runtime identity, exact image,
-cases/manifest/approval hashes и отсутствие completed/safe artifacts. Затем в контейнере exact
-candidate с `--network none` запускается только `scripts.pilot50 summarize`; исходный run/evidence
-монтируется read-only, новый `/ask`, cost reservation и сетевой вызов невозможны. Recovered safe
-result сохраняется в отдельном one-shot recovery-каталоге, исходный незавершённый run не
-переписывается.
+Первый recovery-tooling `97cb4d2685d5cc6a646846b50a14e0484eb4fcc7` отклонил report с
+`sealed_report_not_summarizable`. Причина установлена в коде: обычный `scripts.pilot50 summarize`
+всегда повторно читает trace из PostgreSQL, тогда как recovery-контейнер намеренно запускается
+без DSN и с `--network none`. Это дефект recovery-tooling, а не новый результат качества и не
+повреждение canonical report; повтор платного `/ask` по-прежнему запрещён.
 
-Локальный gate recovery: focused `496 passed`; полный набор выполнен по одному test-файлу из-за
-Windows teardown-hang — `152/152` файлов, `3391` test items collected, `0 failed`; Ruff, Bash
-syntax, KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Следующий шаг:
-owner вручную получает exact tooling SHA из GitHub и запускает один offline recovery. Его safe
-output даст фактическое сравнение с прежними `8/50`; HDE/VK и production не изменяются.
+Исправленный tooling `1741b00b3f2c9628916b7cdda64faa49cdf5d5ea` принимает только exact v5
+candidate и прежние immutable artifacts. Он восстанавливает минимальные trace rows из `50/50`
+уже запечатанных report rows только при полном `trace_found`, identity binding, `cache_hit=false`
+и отсутствии request/trace/lookup errors. Затем exact candidate code выполняет прежние
+`build_safe_result` и `validate_safe_result` со всеми runtime, manifest, cases, approval, cost,
+quality и cardinality invariants. Source/evidence остаются read-only; сеть, DSN, `/ask`, новая
+reservation и LLM недоступны. Safe result публикуется в отдельном one-shot recovery-каталоге.
+
+Локальный gate исправления: `3399` test items collected, `3398 passed`, `1 skipped`, `0 failed`;
+из-за известного Windows teardown-hang `tests/test_graph.py` проверен 14 независимыми группами
+(`266/266`), остальные `152` файла — отдельно (`3132 passed`, `1 skipped`). Ruff, Bash syntax,
+KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Следующий шаг: owner
+вручную получает exact tooling SHA из GitHub и запускает один offline recovery. Его safe output
+даст фактическое сравнение с прежними `8/50`; HDE/VK и production не изменяются.
 
 ## 16 августа: готов exact широкий Pilot50 v5 recheck нового ядра
 
