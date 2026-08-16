@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/run_fact_core_qdrant_diagnostic_server_local.sh"
 CANDIDATE_SHA = "a" * 40
 PRODUCTION_SHA = "c38f0e055630fae2af50720fae81acee20ff4f6a"
-MANIFEST_SHA = "bfd14ae638da0d65b2c07ff299f8f366a2d8fb8be772223a931e601691125ede"
-CASES_SHA = "c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8"
+MANIFEST_SHA = "12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4"
+CASES_SHA = "9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
 
 
 def _text() -> str:
@@ -54,14 +54,14 @@ def _validator_python() -> str:
 
 def _payload(*, status: str = "GO") -> dict[str, Any]:
     return {
-        "schema_version": "fact-core-qdrant-calibration-v1",
+        "schema_version": "fact-core-qdrant-postprocess-calibration-v1",
         "classification": "calibration_only",
         "disclaimer": (
             "Mechanical first-turn regression calibration; not an independent "
             "holdout, human product verdict, or production traffic conversion."
         ),
         "candidate_sha": CANDIDATE_SHA,
-        "dataset_id": "pilot50_balanced_v4",
+        "dataset_id": "pilot50_balanced_v5",
         "manifest_sha256": MANIFEST_SHA,
         "cases_sha256": CASES_SHA,
         "minimum_passed": 49,
@@ -173,6 +173,7 @@ def test_launcher_uses_exact_private_free_candidate_snapshot() -> None:
         "scripts/check_fact_pipeline_qdrant.py",
         "scripts/qdrant_readonly_proxy.py",
         "eval/run_ask.py",
+        "src/graph/nodes/respond.py",
     ):
         assert path in text
 

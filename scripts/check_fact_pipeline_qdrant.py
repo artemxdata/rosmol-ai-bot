@@ -1,9 +1,9 @@
 """Run the fact-first graph against the real read-only Qdrant retrieval path.
 
 This is a zero-LLM regression calibration diagnostic.  It exercises
-analyze -> retrieve -> rerank -> generate -> guards with the production
-embedding and reranker models, but it is not an independent holdout or a
-production conversion measurement.
+analyze -> retrieve -> rerank -> generate -> guards -> respond -> score with
+the production embedding and reranker models, but it is not an independent
+holdout or a production conversion measurement.
 """
 
 from __future__ import annotations
@@ -29,14 +29,15 @@ from src.graph.nodes.analyze import analyze_query
 from src.graph.nodes.generate import generate
 from src.graph.nodes.guard import apply_response_guards
 from src.graph.nodes.rerank import rerank
+from src.graph.nodes.respond import respond
 from src.graph.nodes.retrieve import retrieve
 from src.rag.embedder import Embedder
 from src.rag.reranker import Reranker
 from src.rag.retriever import Retriever
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = ROOT / "eval/cases/pilot50_balanced_v4.json"
-EXPECTED_DATASET_ID = "pilot50_balanced_v4"
+DEFAULT_MANIFEST = ROOT / "eval/cases/pilot50_balanced_v5.json"
+EXPECTED_DATASET_ID = "pilot50_balanced_v5"
 EXPECTED_CASES_TOTAL = 50
 MINIMUM_PASS_COUNT = 49
 SHA_RE = re.compile(r"[0-9a-f]{64}")
@@ -142,13 +143,14 @@ async def _score_cases(
         state.update(await rerank(state))
         generated = await generate(state)
         guarded = await apply_response_guards({**state, **generated})
-        result = {**generated, **guarded}
+        responded = await respond({**state, **generated, **guarded})
+        result = {**generated, **guarded, **responded}
         scored_cases.append(
             score_case(
                 case,
                 {
                     "http_status": 200,
-                    "response": result.get("generated_response", ""),
+                    "response": result.get("final_response", ""),
                 },
                 _trace(
                     query=query,
@@ -219,7 +221,7 @@ def build_summary(
         else "STOP"
     )
     return {
-        "schema_version": "fact-core-qdrant-calibration-v1",
+        "schema_version": "fact-core-qdrant-postprocess-calibration-v1",
         "classification": "calibration_only",
         "disclaimer": (
             "Mechanical first-turn regression calibration; not an independent "

@@ -7,9 +7,9 @@ exec 2>/dev/null
 readonly SERVER_PROJECT_DIR="/opt/rosmol-ai-bot"
 readonly PROD_CONTAINER="rosmol-app-ml"
 readonly EXPECTED_PRODUCTION_SHA="c38f0e055630fae2af50720fae81acee20ff4f6a"
-readonly MANIFEST_REL="eval/cases/pilot50_balanced_v4.json"
-readonly EXPECTED_MANIFEST_SHA256="bfd14ae638da0d65b2c07ff299f8f366a2d8fb8be772223a931e601691125ede"
-readonly EXPECTED_CASES_SHA256="c88a52225f6eec3b21a5837a94f12670f5a8ff1006818f559cb81e438d52fab8"
+readonly MANIFEST_REL="eval/cases/pilot50_balanced_v5.json"
+readonly EXPECTED_MANIFEST_SHA256="12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4"
+readonly EXPECTED_CASES_SHA256="9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
 readonly EXPECTED_QDRANT_COUNT="2152"
 readonly EXPECTED_QDRANT_FINGERPRINT_SHA256="f753b69665f216039b944546886f611410107e1344e52b159ab3f221b60aefa5"
 readonly EXPECTED_QDRANT_SEED_SHA256="aead5e930c513d9d5aeaacd3f3d4b8ce99fab536434343e7fcd6e9917de93e8a"
@@ -197,6 +197,7 @@ load_state() {
     "scripts/run_fact_core_qdrant_diagnostic_server_local.sh" \
     "scripts/pilot50.py" \
     "eval/run_ask.py" \
+    "src/graph/nodes/respond.py" \
     "$MANIFEST_REL"; do
     git -C "$TOOLING_ROOT" ls-files --error-unmatch "$path" \
       >/dev/null 2>&1 || fail "diagnostic_source_not_tracked"
@@ -648,14 +649,16 @@ assert set(payload) == {
     "dataset_id", "manifest_sha256", "cases_sha256", "minimum_passed",
     "counts", "failures", "status",
 }
-assert payload["schema_version"] == "fact-core-qdrant-calibration-v1"
+assert payload["schema_version"] == (
+    "fact-core-qdrant-postprocess-calibration-v1"
+)
 assert payload["classification"] == "calibration_only"
 assert payload["disclaimer"] == (
     "Mechanical first-turn regression calibration; not an independent holdout, "
     "human product verdict, or production traffic conversion."
 )
 assert payload["candidate_sha"] == candidate_sha
-assert payload["dataset_id"] == "pilot50_balanced_v4"
+assert payload["dataset_id"] == "pilot50_balanced_v5"
 assert payload["manifest_sha256"] == manifest_sha
 assert payload["cases_sha256"] == cases_sha
 assert payload["minimum_passed"] == 49

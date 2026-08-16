@@ -70,7 +70,9 @@ TONE_RE = re.compile(
 PROTECTED_TOKEN_RE = re.compile(
     r"""
     (?:
-        (?<!\d)\d{1,2}[./]\d{1,2}[./]\d{4}(?!\d)
+        (?<![\w.])\d+(?:\.\d+)+(?![\w.])
+        |
+        (?<!\d)\d{1,2}/\d{1,2}/\d{4}(?!\d)
         |
         (?-i:
             [\u0410-\u042f\u0401A-Z][\u0410-\u044f\u0401\u0451A-Za-z0-9-]{1,63}\.
@@ -113,6 +115,9 @@ DATE_SPACE_RE = re.compile(
     r"(?<!\d)(\d{1,2})\s*([./])\s*(\d{1,2})\s*([./])\s*(\d{4})(?!\d)"
 )
 URL_QUERY_SPACE_RE = re.compile(r"(?<=[A-Za-z0-9_/])\?\s+(?=[A-Za-z0-9_=&%-])")
+JOINED_SENTENCE_RE = re.compile(
+    r"(?<=[.!?])(?=(?:[«„“\"'(\[]*)[\u0410-\u042f\u0401A-Z])"
+)
 WHITESPACE_RE = re.compile(r"\s+")
 TONE_PHRASE_REPLACEMENTS = (
     (
@@ -226,7 +231,7 @@ def _normalize_tone_to_ty(response: str) -> str:
 def _normalize_spacing(response: str) -> str:
     response = _repair_structured_token_spacing(response)
     protected, tokens = _protect_structured_tokens(response)
-    protected = re.sub(r"(?<=[.!?])(?=\S)", " ", protected)
+    protected = JOINED_SENTENCE_RE.sub(" ", protected)
     protected = re.sub(
         r"(?<=[\w\u0410-\u042f\u0430-\u044f\u0401\u0451]):(?=[^\s/\d])",
         ": ",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from scripts.qdrant_readonly_proxy import ALLOWED_POST_PATHS, _upstream_api_key
 CANDIDATE_SHA = "a" * 40
 MANIFEST_SHA = "b" * 64
 CASES_SHA = "c" * 64
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _scored(*, passed: bool = True, retrieval: bool = True) -> dict[str, object]:
@@ -83,6 +85,16 @@ def test_forbidden_llm_fails_closed_and_counts_attempt() -> None:
     with pytest.raises(AssertionError, match="must not call an LLM"):
         asyncio.run(llm.generate(prompt="forbidden"))
     assert llm.calls == 1
+
+
+def test_diagnostic_scores_the_post_respond_final_response() -> None:
+    source = (ROOT / "scripts/check_fact_pipeline_qdrant.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "responded = await respond" in source
+    assert '"response": result.get("final_response", "")' in source
+    assert 'result.get("generated_response", "")' not in source
 
 
 def test_proxy_allows_only_qdrant_query_and_scroll_paths() -> None:

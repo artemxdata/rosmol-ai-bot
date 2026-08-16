@@ -658,6 +658,18 @@ def test_normalize_final_response_still_splits_real_joined_sentences() -> None:
     assert final == "Регистрация завершена. Следующий этап начнётся завтра."
 
 
+def test_normalize_final_response_preserves_numeric_tokens_and_abbreviations() -> None:
+    final = normalize_final_response(
+        "Версия 3.1, координаты 54.095204, 44.910895."
+        "Проверь п.2.1 и т.д.Следующий шаг описан отдельно. [src:details]"
+    )
+
+    assert final == (
+        "Версия 3.1, координаты 54.095204, 44.910895. "
+        "Проверь п.2.1 и т.д. Следующий шаг описан отдельно."
+    )
+
+
 @pytest.mark.asyncio
 async def test_respond_repairs_llm_spacing_inside_structured_tokens() -> None:
     result = await respond(

@@ -4,6 +4,39 @@
 
 **Ветка:** `codex/real-rag`
 
+## 16 августа: второй paid Pilot запрещён; готов бесплатный Qdrant end-to-end gate
+
+Server-local preflight exact candidate `ec01e64a36ef57451d3b161d2a64dc648f2fa169` завершился
+`cost_capacity_check_failed` до `/ask`, cost reservation и любых LLM-вызовов. Это не результат
+качества и не влияние клиентского Wi-Fi: rolling governance уже содержит сегодняшний
+`private_full` Pilot50 run exact candidate `e3277e88ee3bf46ab3d375beed740f96248d53bc`. V5 намеренно
+разрешает только один full-run за 24 часа и запрещает comparison waiver, поэтому второй платный
+replay в тот же день корректно остановлен.
+
+Для проверки исправления без ожидания и без обхода governance существующий read-only Qdrant
+diagnostic переведён на `pilot50_balanced_v5` и полный путь `analyze -> retrieve -> rerank ->
+generate -> guards -> respond -> score`. Он использует production Qdrant через allowlisted
+read-only proxy и production embedding/reranker cache, но не имеет `/ask`, LLM/API credentials,
+PostgreSQL, Redis, channel/Yonote credentials или внешней сети. Cost ledger не читается и не
+изменяется; production runtime и Qdrant до/после запуска сравниваются побайтно по безопасным
+snapshot/fingerprint.
+
+Одновременно исправлен весь класс небезопасной пунктуационной нормализации. Аудит `2152`
+published chunks нашёл `153` различных dotted numeric tokens в `304` вхождениях: кроме дат под
+риском были версии, координаты и номера пунктов. Теперь автоматический пробел вставляется только
+перед высокоуверенным началом нового предложения; dotted numbers, сокращения и уже защищённые
+proper names сохраняются. Regression покрывает `3.1`, координаты, `п.2.1`, `т.д.`, даты,
+`Таврида.Арт`, `Росмолодёжь.Форумы` и настоящий joined sentence.
+
+Полная локальная репродукция всех 50 v5-кейсов через postprocess дала `49/50`, `0` LLM calls;
+единственный ordinal `23` остаётся ошибкой frozen stem-label. Локальный gate: Ruff — `OK`;
+выполнены все `3405` pytest nodeids (`3404 passed`, известный `1 skipped`, `0 failed`), включая
+повтор зависшего Windows teardown-пакета меньшими группами; KB validation —
+`2186 valid / 2152 published`; Bash syntax и `git diff --check` — `OK`. Следующий шаг после push
+exact candidate — один бесплатный server-local Qdrant diagnostic. Ожидаемый результат `49/50`,
+`llm_calls=0`, `status=GO`; затем остаётся завершить независимую human-разметку Blind50, которая
+сейчас фактически пуста (`0/50` reviewed), и выполнить её full-ticket gate `>=25/50`.
+
 ## 16 августа: локализованы и исправлены четыре реальных провала Pilot50 v5
 
 Safe diagnostics v2 tooling `a5b79e84e296c1e77f9bf407f77109acbc89df77` повторно
