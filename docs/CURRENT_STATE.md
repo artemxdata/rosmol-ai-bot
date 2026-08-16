@@ -4,6 +4,32 @@
 
 **Ветка:** `codex/real-rag`
 
+## 16 августа: Pilot50 v5 завершил raw report; verdict восстанавливается без replay
+
+Ручная диагностика server-local run exact candidate
+`e3277e88ee3bf46ab3d375beed740f96248d53bc` зафиксировала:
+`preflight.receipt=PRESENT`, `run.started=PRESENT`, canonical
+`evidence/pilot50-ask-report.json=PRESENT`, `run.completed=ABSENT`, safe result отсутствует,
+candidate container отсутствует. Canonical raw report создаётся eval-runner только после полного
+формирования отчёта и postflight runtime identity, поэтому повтор `/ask` запрещён: он мог бы
+задвоить расход и нарушить one-shot evidence. Домашняя сеть владельца влияет только на SSH;
+вычисления и outbound provider traffic выполнялись на сервере.
+
+Tooling `97cb4d2685d5cc6a646846b50a14e0484eb4fcc7` добавляет отдельный interrupted-run recovery.
+Он принимает только этот exact v5 candidate, проверяет immutable source snapshot, preflight и
+run.started receipts, canonical report `50/50`, verified pre/post runtime identity, exact image,
+cases/manifest/approval hashes и отсутствие completed/safe artifacts. Затем в контейнере exact
+candidate с `--network none` запускается только `scripts.pilot50 summarize`; исходный run/evidence
+монтируется read-only, новый `/ask`, cost reservation и сетевой вызов невозможны. Recovered safe
+result сохраняется в отдельном one-shot recovery-каталоге, исходный незавершённый run не
+переписывается.
+
+Локальный gate recovery: focused `496 passed`; полный набор выполнен по одному test-файлу из-за
+Windows teardown-hang — `152/152` файлов, `3391` test items collected, `0 failed`; Ruff, Bash
+syntax, KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Следующий шаг:
+owner вручную получает exact tooling SHA из GitHub и запускает один offline recovery. Его safe
+output даст фактическое сравнение с прежними `8/50`; HDE/VK и production не изменяются.
+
 ## 16 августа: готов exact широкий Pilot50 v5 recheck нового ядра
 
 Candidate `e3277e88ee3bf46ab3d375beed740f96248d53bc` фиксирует один прямой повтор
