@@ -429,7 +429,7 @@ canonical = json.dumps(
 ).encode("ascii")
 assert raw[:-1] == canonical
 assert set(payload) == {"schema_version", "bindings", "summary", "failures"}
-assert payload["schema_version"] == "pilot50-v5-failure-diagnostics-v1"
+assert payload["schema_version"] == "pilot50-v5-failure-diagnostics-v2"
 assert payload["bindings"] == {
     "candidate_sha": candidate_sha,
     "manifest_sha256": manifest_sha,
@@ -457,6 +457,13 @@ allowed_checks = {
 allowed_behaviors = {"answer", "clarify", "escalate", "scope_note"}
 allowed_paths = {"source_chunk", "not_run", "simple", "complex", "unknown"}
 allowed_latency = {"<5s", "5-15s", "15-30s", ">=30s"}
+allowed_modes = {
+    "bounded_published_source_chunk", "complex_deterministic_source_chunk",
+    "complex_partial_source_chunk", "complex_single_official_source_chunk",
+    "complex_source_chunk", "fact_card_source", "general_catalog_source_chunk",
+    "partial_source_chunk", "request_bound_published_source_chunk", "source_chunk",
+}
+allowed_response_lengths = {"empty", "1-200", "201-450", "451-1000", ">1000"}
 allowed_reasons = {
     "analyzer_failed", "attachment_only", "empty_generated_response",
     "final_response_empty", "final_response_too_long",
@@ -489,6 +496,9 @@ row_fields = {
     "ordinal", "group", "critical", "was_escalated", "escalation_reason",
     "observed_behavior", "failed_boolean_checks", "generator_path",
     "generate_retry_reasons", "latency_bucket",
+    "generation_mode", "answer_fact_group_matches", "response_length_bucket",
+    "retrieved_source_count", "reranked_source_count", "selected_source_count",
+    "cited_source_count",
 }
 rows = payload["failures"]
 assert isinstance(rows, list) and len(rows) == 5
@@ -504,6 +514,18 @@ for row in rows:
     assert row["observed_behavior"] in allowed_behaviors
     assert row["generator_path"] in allowed_paths
     assert row["latency_bucket"] in allowed_latency
+    assert row["generation_mode"] in allowed_modes
+    assert row["response_length_bucket"] in allowed_response_lengths
+    fact_matches = row["answer_fact_group_matches"]
+    assert isinstance(fact_matches, list) and 1 <= len(fact_matches) <= 12
+    assert all(type(match) is bool for match in fact_matches)
+    assert not all(fact_matches)
+    for count_field in (
+        "retrieved_source_count", "reranked_source_count",
+        "selected_source_count", "cited_source_count",
+    ):
+        assert type(row[count_field]) is int and 0 <= row[count_field] <= 100
+    assert row["selected_source_count"] >= row["cited_source_count"] >= 1
     reason = row["escalation_reason"]
     assert reason is None or (
         isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason)

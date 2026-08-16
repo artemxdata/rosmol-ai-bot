@@ -12,9 +12,26 @@ from typing import Any
 
 WORKSPACE = Path("/workspace")
 EXPECTED_PILOT50_PATH = WORKSPACE / "scripts" / "pilot50.py"
-FAILURE_DIAGNOSTIC_SCHEMA_VERSION = "pilot50-v5-failure-diagnostics-v1"
+FAILURE_DIAGNOSTIC_SCHEMA_VERSION = "pilot50-v5-failure-diagnostics-v2"
 V5_ADDITIONAL_DIAGNOSTIC_BOOLEAN_CHECK_FIELDS = frozenset(
     {"answer_contains_match", "temporal_polarity_match"}
+)
+V5_DIAGNOSTIC_GENERATION_MODES = frozenset(
+    {
+        "bounded_published_source_chunk",
+        "complex_deterministic_source_chunk",
+        "complex_partial_source_chunk",
+        "complex_single_official_source_chunk",
+        "complex_source_chunk",
+        "fact_card_source",
+        "general_catalog_source_chunk",
+        "partial_source_chunk",
+        "request_bound_published_source_chunk",
+        "source_chunk",
+    }
+)
+V5_DIAGNOSTIC_RESPONSE_LENGTH_BUCKETS = frozenset(
+    {"empty", "1-200", "201-450", "451-1000", ">1000"}
 )
 
 
@@ -52,6 +69,49 @@ def _v5_diagnostic_boolean_checks(
     if len(fields) != len(set(fields)):
         raise RecoveryError("v5 diagnostic check membership is invalid")
     return tuple(fields)
+
+
+def _v5_answer_fact_group_matches(
+    case: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> list[bool]:
+    groups = case.get("expected_answer_fact_groups")
+    matches = result.get("answer_fact_group_matches")
+    if (
+        not isinstance(groups, list)
+        or not groups
+        or not isinstance(matches, list)
+        or len(matches) != len(groups)
+        or any(type(value) is not bool for value in matches)
+    ):
+        raise RecoveryError("v5 answer fact group evidence is invalid")
+    return list(matches)
+
+
+def _v5_source_count(value: Any, *, label: str) -> int:
+    if (
+        not isinstance(value, list)
+        or len(value) > 100
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise RecoveryError(f"v5 {label} source evidence is invalid")
+    return len(value)
+
+
+def _v5_response_length_bucket(value: Any) -> str:
+    if not isinstance(value, str):
+        raise RecoveryError("v5 response evidence is invalid")
+    length = len(value)
+    if length == 0:
+        return "empty"
+    if length <= 200:
+        return "1-200"
+    if length <= 450:
+        return "201-450"
+    if length <= 1_000:
+        return "451-1000"
+    return ">1000"
 
 
 def trace_rows_from_sealed_report(
@@ -164,6 +224,13 @@ def build_failure_diagnostics(
         escalation_reason = pilot50._diagnostic_escalation_reason(
             review_row.get("escalation_reason")
         )
+        generation_mode = result.get("generation_mode")
+        if generation_mode not in V5_DIAGNOSTIC_GENERATION_MODES:
+            raise RecoveryError("v5 diagnostic generation mode is invalid")
+        answer_fact_group_matches = _v5_answer_fact_group_matches(case, result)
+        response_length_bucket = _v5_response_length_bucket(result.get("response"))
+        if response_length_bucket not in V5_DIAGNOSTIC_RESPONSE_LENGTH_BUCKETS:
+            raise RecoveryError("v5 diagnostic response length is invalid")
         row = {
             "ordinal": ordinal,
             "group": group,
@@ -180,6 +247,25 @@ def build_failure_diagnostics(
             ),
             "latency_bucket": pilot50._diagnostic_latency_bucket(
                 result.get("trace_total_latency_ms")
+            ),
+            "generation_mode": generation_mode,
+            "answer_fact_group_matches": answer_fact_group_matches,
+            "response_length_bucket": response_length_bucket,
+            "retrieved_source_count": _v5_source_count(
+                result.get("retrieved_chunk_ids"),
+                label="retrieved",
+            ),
+            "reranked_source_count": _v5_source_count(
+                result.get("reranked_chunk_ids"),
+                label="reranked",
+            ),
+            "selected_source_count": _v5_source_count(
+                result.get("selected_source_ids"),
+                label="selected",
+            ),
+            "cited_source_count": _v5_source_count(
+                result.get("ordered_cited_source_ids"),
+                label="cited",
             ),
         }
         failures.append(row)

@@ -592,7 +592,7 @@ def _add_diagnostic_checks(
     report: dict[str, Any],
 ) -> None:
     assert len(cases) == 50
-    for result in report["results"]:
+    for case, result in zip(cases, report["results"], strict=True):
         result.update(
             {
                 "passed": True,
@@ -600,6 +600,16 @@ def _add_diagnostic_checks(
                 "was_escalated": False,
                 "escalation_reason": None,
                 "private_boolean_canary": False,
+                "answer_fact_group_matches": [
+                    True for _group in case.get("expected_answer_fact_groups", [])
+                ],
+                "generation_mode": "fact_card_source",
+                "retrieved_chunk_ids": list(case.get("expected_chunk_ids", [])),
+                "reranked_chunk_ids": list(case.get("expected_chunk_ids", [])),
+                "selected_source_ids": list(case.get("expected_chunk_ids", [])),
+                "ordered_cited_source_ids": list(
+                    case.get("expected_cited_chunk_ids", [])
+                ),
             }
         )
         for field in (
@@ -1133,6 +1143,7 @@ def test_v5_recovery_diagnostics_emit_only_failed_payload_free_rows(
         report["results"][index]["passed"] = False
     report["results"][critical_index]["behavior_match"] = False
     report["results"][noncritical_index]["answer_contains_match"] = False
+    report["results"][noncritical_index]["answer_fact_group_matches"][0] = False
     report["results"][temporal_index]["temporal_polarity_match"] = False
     report["results"][critical_index]["response"] = canary
     report["private_diagnostic_canary"] = canary

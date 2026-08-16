@@ -111,6 +111,9 @@ def test_recovered_failure_diagnostics_are_offline_and_payload_free() -> None:
     assert '"failed_total": 5' in validator
     assert '"critical_failed": 2' in validator
     assert '"temporal_polarity_match"' in validator
+    assert '"pilot50-v5-failure-diagnostics-v2"' in validator
+    assert '"answer_fact_group_matches"' in validator
+    assert '"generation_mode"' in validator
     assert "validate_sealed_recovery" in diagnose
 
 
