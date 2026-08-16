@@ -11,7 +11,7 @@ from uuid import UUID
 
 import pytest
 
-from scripts import pilot50
+from scripts import pilot50, recover_pilot50_v5_offline
 
 MANIFEST_PATH = pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v1.json"
 V2_MANIFEST_PATH = (
@@ -1040,6 +1040,10 @@ def test_v5_safe_result_binds_exact_approval_without_comparison_waiver(
         cases,
         cases_sha256=cases_sha,
     )
+    assert recover_pilot50_v5_offline.trace_rows_from_sealed_report(
+        report,
+        expected_cases_total=50,
+    ) == trace_rows
     report_path = tmp_path / "pilot50-v5-report.json"
     _write_json(report_path, report)
     approval_id = pilot50._v5_expected_approval_id(RUNTIME_GIT_SHA)

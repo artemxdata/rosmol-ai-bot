@@ -66,7 +66,10 @@ def test_recovery_never_replays_ask_and_reads_original_evidence_only() -> None:
     recover = _function(text, "recover_safe_result")
 
     assert "--network none" in recover
-    assert "scripts.pilot50 summarize" in recover
+    assert "scripts.pilot50 summarize" not in recover
+    assert "RECOVERY_HELPER_REL" in recover
+    assert "dst=/tooling/recover.py,readonly" in recover
+    assert "-E /tooling/recover.py" in recover
     assert "eval.run_ask" not in text
     assert "reserve_live_eval_cost" not in text
     assert "pilot50-ask-report.json" in recover

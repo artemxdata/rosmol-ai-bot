@@ -17,6 +17,7 @@ readonly CANDIDATE_CONTRACT_ID="pilot50-v5-recheck-v1"
 readonly APPROVAL_ID="owner-chat-20260816-pilot50-v5-${SEALED_CANDIDATE_SHA}-cap30"
 readonly CANDIDATE_IMAGE="rosmol-ai-bot-pilot50-candidate:${SEALED_CANDIDATE_SHA}"
 readonly CANDIDATE_CONTAINER="rosmol-pilot50-candidate-ml"
+readonly RECOVERY_HELPER_REL="scripts/recover_pilot50_v5_offline.py"
 readonly RUN_DIR="${BASE_DIR}/runs/${DATASET_ID}-${SEALED_CANDIDATE_SHA}"
 readonly SOURCE_DIR="${RUN_DIR}/source"
 readonly EVIDENCE_DIR="${RUN_DIR}/evidence"
@@ -94,6 +95,9 @@ load_tooling() {
   git -C "$TOOLING_ROOT" ls-files --error-unmatch \
     scripts/recover_pilot50_v5_interrupted_server_local.sh >/dev/null 2>&1 \
     || fail "recovery_tool_not_tracked"
+  git -C "$TOOLING_ROOT" ls-files --error-unmatch \
+    "$RECOVERY_HELPER_REL" >/dev/null 2>&1 \
+    || fail "recovery_helper_not_tracked"
 }
 
 source_paths_sha() {
@@ -247,9 +251,10 @@ recover_safe_result() {
     -e PYTHONOPTIMIZE= -e PYTHONDONTWRITEBYTECODE=1 \
     --mount "type=bind,src=$SOURCE_DIR,dst=/workspace,readonly" \
     --mount "type=bind,src=$EVIDENCE_DIR,dst=/evidence,readonly" \
+    --mount "type=bind,src=$TOOLING_ROOT/$RECOVERY_HELPER_REL,dst=/tooling/recover.py,readonly" \
     --mount "type=bind,src=$STAGING_DIR,dst=/recovery" \
     -w /workspace --entrypoint python "$CANDIDATE_IMAGE" \
-    -E -m scripts.pilot50 summarize \
+    -E /tooling/recover.py \
     --manifest "/workspace/$MANIFEST_REL" \
     --cases /evidence/pilot50-cases.json \
     --report /evidence/pilot50-ask-report.json \
