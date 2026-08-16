@@ -4,7 +4,38 @@
 
 **Ветка:** `codex/real-rag`
 
-## 16 августа: Pilot50 v5 завершил raw report; verdict восстанавливается без replay
+## 16 августа: Pilot50 v5 дал `45/50` против прежних `8/50`
+
+Offline recovery exact candidate `e3277e88ee3bf46ab3d375beed740f96248d53bc` завершён без
+повторного `/ask`: `new_ask_calls=0`, `network_calls=0`. Sealed bindings подтверждены:
+report `7693739a623bfc604b5b409b13386e53683b97617d1364bc3712205f0a42f381`, safe result
+`5983f485a424ee50d9e2c58ed78e3ae01d2498ea867643ee0a5d9ad3b069bf38`, cases
+`9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529`.
+
+На тех же 50 exposed calibration-вопросах v4 -> v5 mechanical first-turn closure вырос с
+`8/50 = 16%` до `45/50 = 90%`: typical `7/25 -> 23/25`, atypical `1/25 -> 22/25`.
+Output-contract escalations уменьшились `10 -> 0`, source-binding failures `3 -> 0`, critical
+failures `14/15 -> 2/15`. p50 снизился с `4977` до `4442 ms`, p95 — с `36938` до `9211 ms`.
+Все 50 trace найдены, cache hits `0`, budget не превышен. Фактический LLM cost равен `0 RUB`:
+скачок обеспечен текущим deterministic published-fact path, а не подгонкой LLM-вызовов.
+
+Quality gate формально остаётся `STOP` только из-за строгого требования `0` critical failures:
+фактически не прошли два adversarial/off-aspect guard-кейса. Это сильный regression-сигнал и
+прямое доказательство, что прежний уровень `8/50` преодолён, но не независимая оценка production
+conversion и не доказательство семантической «резиновости» на новых полных тикетах.
+
+Tooling `5d3b77c178e5672b82aebb2355db073e18734207` готовит следующий шаг без нового платного
+прогона: exact-bound режим `diagnose` повторно валидирует source, report, recovered safe result и
+их SHA, затем в контейнере exact candidate с `--network none` выводит только пять failed rows.
+Разрешены ordinal, group, critical flag, allowlisted failed checks, generator/retry path и latency
+bucket; вопросы, ответы, IDs, network, PostgreSQL, `/ask`, reservation и LLM исключены. Локальный
+gate: `3401` test items collected, `3400 passed`, `1 skipped`, `0 failed`; Ruff, Bash syntax, KB
+validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Следующий шаг — owner
+выполняет один бесплатный `diagnose`, после чего два critical закрываются системными regression
+fixes, а затем выполняется независимый full-ticket Blind50 с порогом `>=25/50`. HDE/VK остаются
+выключенными.
+
+## 16 августа: Pilot50 v5 завершил raw report; verdict восстановлен без replay
 
 Ручная диагностика server-local run exact candidate
 `e3277e88ee3bf46ab3d375beed740f96248d53bc` зафиксировала:
@@ -32,9 +63,9 @@ reservation и LLM недоступны. Safe result публикуется в �
 Локальный gate исправления: `3399` test items collected, `3398 passed`, `1 skipped`, `0 failed`;
 из-за известного Windows teardown-hang `tests/test_graph.py` проверен 14 независимыми группами
 (`266/266`), остальные `152` файла — отдельно (`3132 passed`, `1 skipped`). Ruff, Bash syntax,
-KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Следующий шаг: owner
-вручную получает exact tooling SHA из GitHub и запускает один offline recovery. Его safe output
-даст фактическое сравнение с прежними `8/50`; HDE/VK и production не изменяются.
+KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Owner получил exact
+tooling `f1cf442a47d47d3cbe4395e92c3a4b215ed9d2ed` из GitHub и успешно выполнил offline recovery;
+его результат зафиксирован в предыдущем разделе. HDE/VK и production не изменялись.
 
 ## 16 августа: готов exact широкий Pilot50 v5 recheck нового ядра
 
