@@ -110,6 +110,7 @@ def test_recovered_failure_diagnostics_are_offline_and_payload_free() -> None:
     assert '"response"' not in validator
     assert '"failed_total": 5' in validator
     assert '"critical_failed": 2' in validator
+    assert '"temporal_polarity_match"' in validator
     assert "validate_sealed_recovery" in diagnose
 
 

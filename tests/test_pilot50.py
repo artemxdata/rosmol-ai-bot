@@ -619,6 +619,7 @@ def _add_diagnostic_checks(
             "generator_model_match",
             "no_false_insufficient_source_response",
             "no_non_answer_response",
+            "temporal_polarity_match",
         ):
             result[field] = True
 
@@ -1120,10 +1121,19 @@ def test_v5_recovery_diagnostics_emit_only_failed_payload_free_rows(
         for index, case in enumerate(cases)
         if not pilot50._candidate_case_is_critical(case)
         and index != critical_index
+        and not case.get("expected_temporal_polarity")
     )
-    for index in (critical_index, noncritical_index):
+    temporal_index = next(
+        index
+        for index, case in enumerate(cases)
+        if case.get("expected_temporal_polarity")
+        and not pilot50._candidate_case_is_critical(case)
+    )
+    for index in (critical_index, noncritical_index, temporal_index):
         report["results"][index]["passed"] = False
-        report["results"][index]["behavior_match"] = False
+    report["results"][critical_index]["behavior_match"] = False
+    report["results"][noncritical_index]["answer_contains_match"] = False
+    report["results"][temporal_index]["temporal_polarity_match"] = False
     report["results"][critical_index]["response"] = canary
     report["private_diagnostic_canary"] = canary
     report_path = tmp_path / "pilot50-v5-diagnostic-report.json"
@@ -1162,16 +1172,21 @@ def test_v5_recovery_diagnostics_emit_only_failed_payload_free_rows(
     assert diagnostics["schema_version"] == (
         recover_pilot50_v5_offline.FAILURE_DIAGNOSTIC_SCHEMA_VERSION
     )
-    assert diagnostics["summary"]["failed_total"] == 2
+    assert diagnostics["summary"]["failed_total"] == 3
     assert diagnostics["summary"]["critical_failed"] == 1
     assert [row["ordinal"] for row in diagnostics["failures"]] == sorted(
-        [critical_index + 1, noncritical_index + 1]
+        [critical_index + 1, noncritical_index + 1, temporal_index + 1]
     )
     assert sum(row["critical"] for row in diagnostics["failures"]) == 1
-    assert all(
-        row["failed_boolean_checks"] == ["behavior_match"]
-        for row in diagnostics["failures"]
-    )
+    expected_checks = {
+        critical_index: ["behavior_match"],
+        noncritical_index: ["answer_contains_match"],
+        temporal_index: ["temporal_polarity_match"],
+    }
+    assert [row["failed_boolean_checks"] for row in diagnostics["failures"]] == [
+        expected_checks[index]
+        for index in sorted([critical_index, noncritical_index, temporal_index])
+    ]
     assert canary not in json.dumps(diagnostics, ensure_ascii=False)
 
 

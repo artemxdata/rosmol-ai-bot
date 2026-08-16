@@ -452,7 +452,7 @@ allowed_checks = {
     "generator_model_match", "message_masked_contains_match",
     "message_masked_forbidden_absent_match",
     "no_false_insufficient_source_response", "no_non_answer_response",
-    "routing_response_profile_match",
+    "routing_response_profile_match", "temporal_polarity_match",
 }
 allowed_behaviors = {"answer", "clarify", "escalate", "scope_note"}
 allowed_paths = {"source_chunk", "not_run", "simple", "complex", "unknown"}

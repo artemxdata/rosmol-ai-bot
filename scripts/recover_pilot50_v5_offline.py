@@ -13,10 +13,45 @@ from typing import Any
 WORKSPACE = Path("/workspace")
 EXPECTED_PILOT50_PATH = WORKSPACE / "scripts" / "pilot50.py"
 FAILURE_DIAGNOSTIC_SCHEMA_VERSION = "pilot50-v5-failure-diagnostics-v1"
+V5_ADDITIONAL_DIAGNOSTIC_BOOLEAN_CHECK_FIELDS = frozenset(
+    {"answer_contains_match", "temporal_polarity_match"}
+)
 
 
 class RecoveryError(ValueError):
     pass
+
+
+def _v5_diagnostic_boolean_checks(
+    *,
+    pilot50: ModuleType,
+    case: Mapping[str, Any],
+    result: Mapping[str, Any],
+    was_escalated: bool,
+) -> tuple[str, ...]:
+    """Return every boolean that the v5 eval used for its sealed verdict."""
+
+    fields = list(
+        pilot50._diagnostic_boolean_checks(
+            case,
+            result,
+            was_escalated=was_escalated,
+        )
+    )
+    additional_fields: list[str] = []
+    if case.get("expected_answer_fact_groups") and "answer_contains_match" not in fields:
+        additional_fields.append("answer_contains_match")
+    if case.get("expected_temporal_polarity"):
+        additional_fields.append("temporal_polarity_match")
+    for field in additional_fields:
+        if field not in V5_ADDITIONAL_DIAGNOSTIC_BOOLEAN_CHECK_FIELDS:
+            raise RecoveryError("v5 diagnostic check is not allowlisted")
+        if type(result.get(field)) is not bool:
+            raise RecoveryError("v5 diagnostic check is not a boolean")
+        fields.append(field)
+    if len(fields) != len(set(fields)):
+        raise RecoveryError("v5 diagnostic check membership is invalid")
+    return tuple(fields)
 
 
 def trace_rows_from_sealed_report(
@@ -109,9 +144,10 @@ def build_failure_diagnostics(
         was_escalated = review_row.get("was_escalated")
         if type(was_escalated) is not bool:
             raise RecoveryError("diagnostic escalation evidence is invalid")
-        check_fields = pilot50._diagnostic_boolean_checks(
-            case,
-            result,
+        check_fields = _v5_diagnostic_boolean_checks(
+            pilot50=pilot50,
+            case=case,
+            result=result,
             was_escalated=was_escalated,
         )
         failed_checks = sorted(
