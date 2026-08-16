@@ -13,6 +13,9 @@ readonly DATASET_ID="pilot50_balanced_v5"
 readonly MANIFEST_REL="eval/cases/pilot50_balanced_v5.json"
 readonly EXPECTED_MANIFEST_SHA256="12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4"
 readonly EXPECTED_CASES_SHA256="9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
+readonly SEALED_REPORT_SHA256="7693739a623bfc604b5b409b13386e53683b97617d1364bc3712205f0a42f381"
+readonly SEALED_SAFE_RESULT_SHA256="5983f485a424ee50d9e2c58ed78e3ae01d2498ea867643ee0a5d9ad3b069bf38"
+readonly SEALED_RECOVERY_TOOLING_SHA="f1cf442a47d47d3cbe4395e92c3a4b215ed9d2ed"
 readonly CANDIDATE_CONTRACT_ID="pilot50-v5-recheck-v1"
 readonly APPROVAL_ID="owner-chat-20260816-pilot50-v5-${SEALED_CANDIDATE_SHA}-cap30"
 readonly CANDIDATE_IMAGE="rosmol-ai-bot-pilot50-candidate:${SEALED_CANDIDATE_SHA}"
@@ -23,6 +26,7 @@ readonly SOURCE_DIR="${RUN_DIR}/source"
 readonly EVIDENCE_DIR="${RUN_DIR}/evidence"
 readonly RECOVERY_ROOT="${BASE_DIR}/recoveries"
 readonly RECOVERY_DIR="${RECOVERY_ROOT}/${DATASET_ID}-${SEALED_CANDIDATE_SHA}-${EXPECTED_TOOLING_SHA}"
+readonly SEALED_RECOVERY_DIR="${RECOVERY_ROOT}/${DATASET_ID}-${SEALED_CANDIDATE_SHA}-${SEALED_RECOVERY_TOOLING_SHA}"
 
 TOOLING_ROOT=""
 STAGING_DIR=""
@@ -64,7 +68,7 @@ require_command() {
 }
 
 validate_invocation() {
-  [[ "$#" -eq 3 && "$MODE" == "recover" ]] || fail "usage"
+  [[ "$#" -eq 3 && "$MODE" =~ ^(recover|diagnose)$ ]] || fail "usage"
   [[ "$EXPECTED_TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]] \
     || fail "tooling_sha_invalid"
   [[ "$SEALED_CANDIDATE_SHA" == "$ALLOWED_CANDIDATE_SHA" ]] \
@@ -254,7 +258,7 @@ recover_safe_result() {
     --mount "type=bind,src=$TOOLING_ROOT/$RECOVERY_HELPER_REL,dst=/tooling/recover.py,readonly" \
     --mount "type=bind,src=$STAGING_DIR,dst=/recovery" \
     -w /workspace --entrypoint python "$CANDIDATE_IMAGE" \
-    -E /tooling/recover.py \
+    -E /tooling/recover.py recover \
     --manifest "/workspace/$MANIFEST_REL" \
     --cases /evidence/pilot50-cases.json \
     --report /evidence/pilot50-ask-report.json \
@@ -317,6 +321,228 @@ print(quality["status"])
 PY
 }
 
+validate_sealed_recovery() {
+  sudo python3 -I -S - "$SEALED_RECOVERY_DIR" \
+    "$SEALED_RECOVERY_TOOLING_SHA" "$SEALED_CANDIDATE_SHA" \
+    "$EXPECTED_CASES_SHA256" "$SEALED_REPORT_SHA256" \
+    "$SEALED_SAFE_RESULT_SHA256" 2>/dev/null <<'PY'
+import hashlib
+import json
+import stat
+import sys
+from pathlib import Path
+
+recovery_dir = Path(sys.argv[1])
+tooling_sha, candidate_sha, cases_sha, report_sha, safe_sha = sys.argv[2:]
+metadata = recovery_dir.lstat()
+assert stat.S_ISDIR(metadata.st_mode) and not recovery_dir.is_symlink()
+assert recovery_dir.resolve(strict=True) == recovery_dir
+assert stat.S_IMODE(metadata.st_mode) == 0o700
+assert {path.name for path in recovery_dir.iterdir()} == {
+    "pilot50-safe-result.json",
+    "recovery.receipt",
+}
+
+def regular(path, maximum):
+    item = path.lstat()
+    assert stat.S_ISREG(item.st_mode) and not path.is_symlink()
+    assert item.st_nlink == 1 and 0 < item.st_size <= maximum
+    assert stat.S_IMODE(item.st_mode) == 0o600
+    return path.read_bytes()
+
+safe_bytes = regular(recovery_dir / "pilot50-safe-result.json", 128 * 1024)
+receipt_bytes = regular(recovery_dir / "recovery.receipt", 4096)
+assert hashlib.sha256(safe_bytes).hexdigest() == safe_sha
+receipt_text = receipt_bytes.decode("ascii")
+assert receipt_text.endswith("\n") and "\r" not in receipt_text
+lines = receipt_text.splitlines()
+assert lines and all(line.count("=") == 1 for line in lines)
+receipt = dict(line.split("=", 1) for line in lines)
+assert len(receipt) == len(lines)
+assert receipt == {
+    "schema_version": "pilot50-v5-interrupted-recovery-v1",
+    "tooling_sha": tooling_sha,
+    "candidate_sha": candidate_sha,
+    "cases_sha256": cases_sha,
+    "report_sha256": report_sha,
+    "safe_result_sha256": safe_sha,
+    "quality_status": "STOP",
+    "source_run_status": "started_report_present",
+    "new_ask_calls": "0",
+    "network_calls": "0",
+}
+safe = json.loads(safe_bytes)
+assert isinstance(safe, dict)
+assert safe.get("dataset_id") == "pilot50_balanced_v5"
+assert safe.get("runtime_git_sha") == candidate_sha
+assert safe.get("cases_sha256") == cases_sha
+assert safe.get("report_sha256") == report_sha
+quality = safe.get("quality_gate")
+assert isinstance(quality, dict) and quality.get("status") == "STOP"
+assert quality.get("failed_criteria") == ["critical_case_failures"]
+assert quality["criteria"]["critical_case_failures"]["actual"] == 2
+assert safe["policy_pass"]["overall"]["passed"] == 45
+PY
+}
+
+run_failure_diagnostics() {
+  sudo docker run --rm --pull never --network none \
+    --user app --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+    --cap-drop ALL --security-opt no-new-privileges=true \
+    --pids-limit 128 --memory 1g --cpus 1 \
+    -e PYTHONOPTIMIZE= -e PYTHONDONTWRITEBYTECODE=1 \
+    --mount "type=bind,src=$SOURCE_DIR,dst=/workspace,readonly" \
+    --mount "type=bind,src=$EVIDENCE_DIR,dst=/evidence,readonly" \
+    --mount "type=bind,src=$SEALED_RECOVERY_DIR,dst=/recovered,readonly" \
+    --mount "type=bind,src=$TOOLING_ROOT/$RECOVERY_HELPER_REL,dst=/tooling/recover.py,readonly" \
+    -w /workspace --entrypoint python "$CANDIDATE_IMAGE" \
+    -E /tooling/recover.py diagnose \
+    --manifest "/workspace/$MANIFEST_REL" \
+    --cases /evidence/pilot50-cases.json \
+    --report /evidence/pilot50-ask-report.json \
+    --safe-result /recovered/pilot50-safe-result.json \
+    --expected-runtime-git-sha "$SEALED_CANDIDATE_SHA" \
+    --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+    --expected-cases-sha256 "$EXPECTED_CASES_SHA256" \
+    --expected-report-sha256 "$SEALED_REPORT_SHA256" \
+    --expected-safe-result-sha256 "$SEALED_SAFE_RESULT_SHA256" \
+    2>/dev/null
+}
+
+validate_failure_diagnostics() {
+  python3 -I -S /dev/fd/3 "$SEALED_CANDIDATE_SHA" \
+    "$EXPECTED_MANIFEST_SHA256" "$EXPECTED_CASES_SHA256" \
+    "$SEALED_REPORT_SHA256" "$SEALED_SAFE_RESULT_SHA256" \
+    3<<'PY' 2>/dev/null
+import json
+import re
+import sys
+
+candidate_sha, manifest_sha, cases_sha, report_sha, safe_sha = sys.argv[1:]
+raw = sys.stdin.buffer.read()
+assert 0 < len(raw) <= 16 * 1024
+assert raw.isascii() and raw.endswith(b"\n") and raw.count(b"\n") == 1
+payload = json.loads(raw)
+canonical = json.dumps(
+    payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+).encode("ascii")
+assert raw[:-1] == canonical
+assert set(payload) == {"schema_version", "bindings", "summary", "failures"}
+assert payload["schema_version"] == "pilot50-v5-failure-diagnostics-v1"
+assert payload["bindings"] == {
+    "candidate_sha": candidate_sha,
+    "manifest_sha256": manifest_sha,
+    "cases_sha256": cases_sha,
+    "report_sha256": report_sha,
+    "safe_result_sha256": safe_sha,
+    "quality_status": "STOP",
+}
+assert payload["summary"] == {
+    "failed_total": 5,
+    "critical_failed": 2,
+    "typical_failed": 2,
+    "atypical_failed": 3,
+}
+allowed_checks = {
+    "answer_contains_match", "behavior_match", "cited_source_types_allowed",
+    "escalation_match", "escalation_reason_match", "expected_chunk_hit",
+    "expected_cited_chunk_hit", "expected_cited_or_equivalent_chunk_hit",
+    "expected_or_equivalent_chunk_hit", "forbidden_response_profiles_absent",
+    "generator_model_match", "message_masked_contains_match",
+    "message_masked_forbidden_absent_match",
+    "no_false_insufficient_source_response", "no_non_answer_response",
+    "routing_response_profile_match",
+}
+allowed_behaviors = {"answer", "clarify", "escalate", "scope_note"}
+allowed_paths = {"source_chunk", "not_run", "simple", "complex", "unknown"}
+allowed_latency = {"<5s", "5-15s", "15-30s", ">=30s"}
+allowed_reasons = {
+    "analyzer_failed", "attachment_only", "empty_generated_response",
+    "final_response_empty", "final_response_too_long",
+    "final_response_too_many_links", "final_response_unapproved_emoji",
+    "hallucination_detected", "insufficient_sources", "llm_generation_failed",
+    "llm_not_configured", "llm_response_contract_failed",
+    "llm_response_profile_failed", "llm_response_too_long",
+    "llm_source_citation_failed", "llm_source_coverage_failed",
+    "llm_source_fact_binding_failed", "low_confidence",
+    "missing_source_citations", "ml_dependency_missing", "needs_operator",
+    "no_relevant_chunks", "no_sources_for_generation", "non_yonote_source",
+    "operator_requested", "other", "partial_source_coverage", "personal_status",
+    "rate_limited", "repeated_support_failure", "request_timeout", "rerank_failed",
+    "retrieval_failed", "safety_abuse", "safety_bullying",
+    "safety_dangerous_instruction", "safety_medical_emergency",
+    "safety_psychological_crisis", "safety_self_harm", "safety_threat",
+    "source_response_contract_failed", "technical_issue",
+    "unknown_source_citation", "unsafe_sensitive_data_request",
+    "unsupported_instruction", "upstream_escalation",
+}
+allowed_retries = {
+    "empty_generated_response", "final_response_empty", "final_response_too_long",
+    "final_response_too_many_links", "final_response_unapproved_emoji",
+    "llm_generation_failed", "llm_response_contract_failed",
+    "llm_response_profile_failed", "llm_response_too_long",
+    "llm_source_citation_failed", "llm_source_coverage_failed",
+    "llm_source_fact_binding_failed", "source_response_contract_failed",
+}
+row_fields = {
+    "ordinal", "group", "critical", "was_escalated", "escalation_reason",
+    "observed_behavior", "failed_boolean_checks", "generator_path",
+    "generate_retry_reasons", "latency_bucket",
+}
+rows = payload["failures"]
+assert isinstance(rows, list) and len(rows) == 5
+ordinals = []
+for row in rows:
+    assert isinstance(row, dict) and set(row) == row_fields
+    ordinal = row["ordinal"]
+    assert type(ordinal) is int and 1 <= ordinal <= 50
+    ordinals.append(ordinal)
+    assert row["group"] == ("typical" if ordinal <= 25 else "atypical")
+    assert type(row["critical"]) is bool
+    assert type(row["was_escalated"]) is bool
+    assert row["observed_behavior"] in allowed_behaviors
+    assert row["generator_path"] in allowed_paths
+    assert row["latency_bucket"] in allowed_latency
+    reason = row["escalation_reason"]
+    assert reason is None or (
+        isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason)
+        and reason in allowed_reasons
+    )
+    checks = row["failed_boolean_checks"]
+    assert isinstance(checks, list) and checks == sorted(set(checks)) and checks
+    assert all(check in allowed_checks for check in checks)
+    retries = row["generate_retry_reasons"]
+    assert isinstance(retries, list) and len(retries) <= 2
+    assert retries == list(dict.fromkeys(retries))
+    assert all(retry in allowed_retries for retry in retries)
+assert ordinals == sorted(set(ordinals))
+assert sum(row["critical"] for row in rows) == 2
+assert sum(row["group"] == "typical" for row in rows) == 2
+assert sum(row["group"] == "atypical" for row in rows) == 3
+sys.stdout.write(canonical.decode("ascii"))
+PY
+}
+
+diagnose_failures() {
+  local raw validated
+  validate_sealed_recovery || fail "sealed_recovery_invalid"
+  raw="$(run_failure_diagnostics)" || fail "failure_diagnostics_failed"
+  [[ ${#raw} -le 16384 ]] || fail "failure_diagnostics_oversized"
+  validated="$(printf '%s\n' "$raw" | validate_failure_diagnostics)" \
+    || fail "failure_diagnostics_invalid"
+  verify_source_snapshot || fail "source_snapshot_changed"
+  validate_sealed_recovery || fail "sealed_recovery_changed"
+  printf 'pilot50_v5_failure_diagnostics=OK\n'
+  printf 'tooling_sha=%s\n' "$EXPECTED_TOOLING_SHA"
+  printf 'candidate_sha=%s\n' "$SEALED_CANDIDATE_SHA"
+  printf 'report_sha256=%s\n' "$SEALED_REPORT_SHA256"
+  printf 'safe_result_sha256=%s\n' "$SEALED_SAFE_RESULT_SHA256"
+  printf 'new_ask_calls=0\n'
+  printf 'network_calls=0\n'
+  printf '%s\n' "$validated"
+}
+
 write_recovery_receipt() {
   local cases_sha="$1" report_sha="$2" safe_sha="$3" quality_status="$4"
   {
@@ -349,6 +575,15 @@ main() {
     || fail "sealed_interruption_invalid"
   [[ "$report_sha" =~ ^[0-9a-f]{64}$ ]] || fail "sealed_report_sha_invalid"
   validate_candidate_image || fail "candidate_image_invalid"
+  if [[ "$MODE" == "diagnose" ]]; then
+    [[ "$report_sha" == "$SEALED_REPORT_SHA256" ]] \
+      || fail "sealed_report_sha_mismatch"
+    diagnose_failures
+    return 0
+  fi
+  if validate_sealed_recovery; then
+    fail "recovery_already_completed"
+  fi
   sudo test -d "$RECOVERY_ROOT" || {
     owner_uid="$(id -u)"
     owner_gid="$(id -g)"

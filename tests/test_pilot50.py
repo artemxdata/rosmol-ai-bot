@@ -1094,6 +1094,87 @@ def test_v5_safe_result_binds_exact_approval_without_comparison_waiver(
         )
 
 
+def test_v5_recovery_diagnostics_emit_only_failed_payload_free_rows(
+    tmp_path: Path,
+) -> None:
+    canary = "PRIVATE-V5-DIAGNOSTIC-CANARY"
+    cases, cases_path, cases_sha = _v5_candidate_materialized_workspace(tmp_path)
+    report, trace_rows = _v5_candidate_raw_report(cases, cases_sha256=cases_sha)
+    _add_diagnostic_checks(cases, report)
+    for result in report["results"]:
+        result.update(
+            {
+                "passed": True,
+                "observed_behavior": "answer",
+                "was_escalated": False,
+                "escalation_reason": None,
+            }
+        )
+    critical_index = next(
+        index
+        for index, case in enumerate(cases)
+        if pilot50._candidate_case_is_critical(case)
+    )
+    noncritical_index = next(
+        index
+        for index, case in enumerate(cases)
+        if not pilot50._candidate_case_is_critical(case)
+        and index != critical_index
+    )
+    for index in (critical_index, noncritical_index):
+        report["results"][index]["passed"] = False
+        report["results"][index]["behavior_match"] = False
+    report["results"][critical_index]["response"] = canary
+    report["private_diagnostic_canary"] = canary
+    report_path = tmp_path / "pilot50-v5-diagnostic-report.json"
+    _write_json(report_path, report)
+    approval_id = pilot50._v5_expected_approval_id(RUNTIME_GIT_SHA)
+    safe = pilot50.build_safe_result(
+        manifest_path=V5_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=approval_id,
+        candidate_contract=pilot50.V5_CANDIDATE_CONTRACT_ID,
+    )
+    assert safe["quality_gate"]["status"] == "STOP"
+    assert safe["quality_gate"]["criteria"]["critical_case_failures"]["actual"] == 1
+    safe_path = tmp_path / "pilot50-v5-diagnostic-safe.json"
+    _write_json(safe_path, safe)
+    review_rows = pilot50.build_review_rows(
+        manifest_path=V5_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        safe_result_path=safe_path,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+    )
+
+    diagnostics = recover_pilot50_v5_offline.build_failure_diagnostics(
+        pilot50=pilot50,
+        cases=cases,
+        report=report,
+        review_rows=review_rows,
+        safe=safe,
+        bindings={"quality_status": "STOP"},
+    )
+
+    assert diagnostics["schema_version"] == (
+        recover_pilot50_v5_offline.FAILURE_DIAGNOSTIC_SCHEMA_VERSION
+    )
+    assert diagnostics["summary"]["failed_total"] == 2
+    assert diagnostics["summary"]["critical_failed"] == 1
+    assert [row["ordinal"] for row in diagnostics["failures"]] == sorted(
+        [critical_index + 1, noncritical_index + 1]
+    )
+    assert sum(row["critical"] for row in diagnostics["failures"]) == 1
+    assert all(
+        row["failed_boolean_checks"] == ["behavior_match"]
+        for row in diagnostics["failures"]
+    )
+    assert canary not in json.dumps(diagnostics, ensure_ascii=False)
+
+
 @pytest.mark.parametrize(
     ("typical_closed", "atypical_closed", "expected_status", "failed_criteria"),
     [

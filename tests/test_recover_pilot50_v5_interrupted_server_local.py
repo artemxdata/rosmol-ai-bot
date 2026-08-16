@@ -81,6 +81,38 @@ def test_recovery_never_replays_ask_and_reads_original_evidence_only() -> None:
         assert forbidden not in text
 
 
+def test_recovered_failure_diagnostics_are_offline_and_payload_free() -> None:
+    text = _text()
+    diagnose = _function(text, "diagnose_failures")
+    runner = _function(text, "run_failure_diagnostics")
+    validator = _function(text, "validate_failure_diagnostics")
+
+    for required in (
+        (
+            'readonly SEALED_REPORT_SHA256="'
+            '7693739a623bfc604b5b409b13386e53683b97617d1364bc3712205f0a42f381"'
+        ),
+        (
+            'readonly SEALED_SAFE_RESULT_SHA256="'
+            '5983f485a424ee50d9e2c58ed78e3ae01d2498ea867643ee0a5d9ad3b069bf38"'
+        ),
+        'readonly SEALED_RECOVERY_TOOLING_SHA="f1cf442a47d47d3cbe4395e92c3a4b215ed9d2ed"',
+        "pilot50_v5_failure_diagnostics=OK",
+        "new_ask_calls=0",
+        "network_calls=0",
+    ):
+        assert required in text
+    assert "--network none" in runner
+    assert "recover.py diagnose" in runner
+    assert "eval.run_ask" not in runner
+    assert "reserve_live_eval_cost" not in runner
+    assert '"query"' not in validator
+    assert '"response"' not in validator
+    assert '"failed_total": 5' in validator
+    assert '"critical_failed": 2' in validator
+    assert "validate_sealed_recovery" in diagnose
+
+
 def test_recovery_preserves_incomplete_run_and_publishes_separate_evidence() -> None:
     text = _text()
     validate = _function(text, "validate_sealed_interruption")
