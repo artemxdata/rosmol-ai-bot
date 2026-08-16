@@ -5,7 +5,24 @@ umask 077
 exec 2>/dev/null
 
 readonly RUNNER_GENERATION="${PILOT50_RUNNER_GENERATION:-v3}"
-if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+  readonly DATASET_ID="pilot50_balanced_v5"
+  readonly CANDIDATE_PROMPT_VERSION="pilot50-quality-v5"
+  readonly CANDIDATE_CONTRACT_ID="pilot50-v5-recheck-v1"
+  readonly CANDIDATE_COST_SCOPE="pilot50-v5-recheck"
+  readonly MANIFEST_REL="eval/cases/pilot50_balanced_v5.json"
+  readonly EXPECTED_MANIFEST_SHA256="12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4"
+  readonly EXPECTED_CASES_SHA256="9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
+  readonly QUALITY_GATE_SCHEMA_VERSION="pilot50-v5-quality-gate-v1"
+  readonly COMPARISON_WAIVER_DECISION_ID=""
+  readonly PRIOR_WAIVER_DECISION_ID=""
+  readonly PRIOR_CANDIDATE_SCOPE=""
+  readonly PRIOR_CANDIDATE_SHA=""
+  readonly PRIOR_CASES_SHA256=""
+  readonly SEALED_V3_MANIFEST_SHA256=""
+  readonly SEALED_V3_REPORT_SHA256=""
+  readonly SEALED_V3_RUN_DIR=""
+elif [[ "$RUNNER_GENERATION" == "v4" ]]; then
   readonly DATASET_ID="pilot50_balanced_v4"
   readonly CANDIDATE_PROMPT_VERSION="pilot50-quality-v4"
   readonly CANDIDATE_CONTRACT_ID="pilot50-v4-candidate-v1"
@@ -822,11 +839,16 @@ validate_receipt() {
       "$PRIOR_WAIVER_DECISION_ID" ]] || return 1
     [[ "$(receipt_value governance_precheck_sha256 "$receipt")" =~ \
       ^[0-9a-f]{64}$ ]] || return 1
+  elif [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    [[ "$(receipt_value cost_precheck_status "$receipt")" == "GO" ]] \
+      || return 1
+    [[ "$(receipt_value approval_id "$receipt")" == \
+      "owner-chat-20260816-pilot50-v5-${EXPECTED_SHA}-cap30" ]] || return 1
   fi
 }
 
 preflight_mode() {
-  local capacity cases_sha manifest_sha owner_gid owner_uid
+  local approval_id capacity cases_sha manifest_sha owner_gid owner_uid
   local post_prod post_qdrant prod_snapshot prod_snapshot_sha
   local qdrant qdrant_count qdrant_rest
   local qdrant_seed_sha qdrant_sha
@@ -936,6 +958,10 @@ preflight_mode() {
     "$EXPECTED_SHA" ]] || fail "candidate_image_sha_mismatch"
   if [[ "$RUNNER_GENERATION" == "v4" ]]; then
     v4_read_only_preflight "$manifest_sha" "$cases_sha" "$staging_evidence"
+  elif [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    approval_id="owner-chat-20260816-pilot50-v5-${EXPECTED_SHA}-cap30"
+    [[ "$(routine_cost_capacity_check "$approval_id" "$cases_sha")" == \
+      "GO" ]] || fail "cost_capacity_check_failed"
   fi
   CANDIDATE_ID="$("${compose[@]}" run -d --no-deps --use-aliases \
     --name "$CANDIDATE_CONTAINER" pilot50-candidate-ml 2>/dev/null)" \
@@ -976,6 +1002,9 @@ preflight_mode() {
       printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
       printf 'governance_precheck_sha256=%s\n' \
         "$V4_GOVERNANCE_PRECHECK_SHA256"
+    elif [[ "$RUNNER_GENERATION" == "v5" ]]; then
+      printf 'cost_precheck_status=GO\n'
+      printf 'approval_id=%s\n' "$approval_id"
     fi
     printf '%s\n' "$capacity"
   } >"$STAGING_DIR/preflight.receipt" || fail "preflight_receipt_create_failed"
@@ -1004,6 +1033,9 @@ preflight_mode() {
     printf 'governance_decision_id=%s\n' "$COMPARISON_WAIVER_DECISION_ID"
     printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
     printf 'governance_precheck_sha256=%s\n' "$V4_GOVERNANCE_PRECHECK_SHA256"
+  elif [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    printf 'cost_precheck_status=GO\n'
+    printf 'approval_id=%s\n' "$approval_id"
   fi
   printf '%s\n' "$capacity"
   printf 'cost_cap_rub=%s\n' "$COST_CAP_RUB"
@@ -1432,6 +1464,60 @@ print(_reservation_payload_sha256(prior))
 PY
 }
 
+routine_cost_capacity_check() {
+  local approval_id="$1" cases_sha="$2"
+  sudo docker run --rm --interactive --pull never --network none \
+    --user app --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+    --cap-drop ALL --security-opt no-new-privileges=true \
+    -v "$SOURCE_DIR:/workspace:ro" -v "$COST_LEDGER_DIR:/cost-ledger:ro" \
+    -w /workspace --entrypoint python \
+    "rosmol-ai-bot-pilot50-candidate:$EXPECTED_SHA" \
+    - "$approval_id" "$EXPECTED_SHA" "$cases_sha" "$CANDIDATE_COST_SCOPE" \
+      "$COST_CAP_RUB" 2>/dev/null <<'PY'
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+from eval.cost_governance import (
+    _enforce_approval_once,
+    _enforce_rolling_limits,
+    _scan_records,
+    _validated_approval_id,
+)
+from eval.run_ask import (
+    PILOT50_V5_CANDIDATE_CASES_SHA256,
+    PILOT50_V5_CANDIDATE_COST_SCOPE,
+    _pilot50_v5_expected_approval_id,
+)
+
+approval_id = _validated_approval_id(sys.argv[1])
+assert approval_id is not None
+runtime_sha, cases_sha, scope, cost_cap = sys.argv[2:]
+cost_cap = float(cost_cap)
+assert approval_id == _pilot50_v5_expected_approval_id(runtime_sha)
+assert cases_sha == PILOT50_V5_CANDIDATE_CASES_SHA256
+assert scope == PILOT50_V5_CANDIDATE_COST_SCOPE
+assert cost_cap == 30.0
+ledger = Path("/cost-ledger")
+assert ledger.is_dir() and not ledger.is_symlink()
+lock = ledger / ".cost-governance.lock"
+assert not lock.exists() and not lock.is_symlink()
+now = datetime.now(UTC)
+records = _scan_records(ledger, now=now)
+_enforce_approval_once(records, approval_id=approval_id)
+prior = _enforce_rolling_limits(
+    records,
+    now=now,
+    requested_cap=cost_cap,
+    private_full=True,
+    requested_runtime_git_sha=runtime_sha,
+    comparison_waiver=None,
+)
+assert prior is None
+print("GO")
+PY
+}
+
 find_sealed_v3_rejected_report() {
   sudo python3 -I -S - "$SEALED_V3_RUN_DIR" \
     "$SEALED_V3_MANIFEST_SHA256" "$PRIOR_CASES_SHA256" \
@@ -1718,8 +1804,9 @@ expected_fields = {
     "mechanical_first_turn_closure", "policy_pass", "trace_coverage",
     "cache_hits", "budget", "pricing", "latency_ms", "llm_cost_rub",
     "cases_sha256", "report_sha256", "disclaimer", "quality_gate",
-    "rolling_24h_waiver",
 }
+if waiver_decision_id:
+    expected_fields.add("rolling_24h_waiver")
 assert isinstance(payload, dict) and set(payload) == expected_fields
 for forbidden in ("query", "response", "request_id", "trace_events", "error"):
     assert forbidden not in payload
@@ -1727,18 +1814,21 @@ assert payload.get("schema_version") == "pilot50-safe-result-v1"
 assert payload.get("dataset_id") == dataset_id
 assert payload.get("runtime_git_sha") == runtime_sha
 assert payload.get("approval_id") == approval_id
-waiver = payload.get("rolling_24h_waiver")
-expected_waiver = {
-    "waiver_id": waiver_id,
-    "decision_id": waiver_decision_id,
-    "waived_reservation_sha256": waived_reservation_sha,
-    "provider_residual_risk_ceiling_rub": 500,
-    "runner_projected_stop_limit_rub": 30,
-}
-if prior_waiver_decision_id:
-    expected_waiver["prior_waiver_decision_id"] = prior_waiver_decision_id
-assert waiver == expected_waiver
-assert re.fullmatch(r"[0-9a-f]{64}", waived_reservation_sha)
+if waiver_decision_id:
+    waiver = payload.get("rolling_24h_waiver")
+    expected_waiver = {
+        "waiver_id": waiver_id,
+        "decision_id": waiver_decision_id,
+        "waived_reservation_sha256": waived_reservation_sha,
+        "provider_residual_risk_ceiling_rub": 500,
+        "runner_projected_stop_limit_rub": 30,
+    }
+    if prior_waiver_decision_id:
+        expected_waiver["prior_waiver_decision_id"] = prior_waiver_decision_id
+    assert waiver == expected_waiver
+    assert re.fullmatch(r"[0-9a-f]{64}", waived_reservation_sha)
+else:
+    assert not waiver_id and not waived_reservation_sha
 assert re.fullmatch(r"ask-eval-[0-9a-f-]{36}", str(payload.get("eval_run_id") or ""))
 assert payload.get("status") == "OK"
 assert payload.get("classification") == "calibration_only"
@@ -1884,12 +1974,16 @@ run_mode() {
   local pre_qdrant_count pre_qdrant_rest pre_qdrant_seed_sha pre_qdrant_sha
   local quality_status raw_report report_sha safe_result safe_sha safe_stdout
   local validated_safe waiver_id waived_reservation_sha
+  local -a waiver_args=()
 
   load_common_state
   verify_runner_contract_support
   approval_id="${HIGH_COST_APPROVAL_ID:-}"
   waiver_id="${PILOT50_ROLLING_24H_WAIVER_ID:-}"
-  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+  if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    expected_approval_id="owner-chat-20260816-pilot50-v5-${EXPECTED_SHA}-cap30"
+    expected_waiver_id=""
+  elif [[ "$RUNNER_GENERATION" == "v4" ]]; then
     expected_approval_id="owner-chat-20260814-pilot50-v4-${EXPECTED_SHA}-cap30"
     expected_waiver_id="owner-chat-20260814-waive-v3-to-v4-${EXPECTED_SHA}-cap30"
   else
@@ -1898,8 +1992,13 @@ run_mode() {
   fi
   [[ "$approval_id" == "$expected_approval_id" ]] \
     || fail "approval_id_missing_or_invalid"
-  [[ "$waiver_id" == "$expected_waiver_id" ]] \
-    || fail "rolling_24h_comparison_waiver_id_missing_or_invalid"
+  if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    [[ -z "$waiver_id" ]] || fail "rolling_24h_comparison_waiver_forbidden"
+  else
+    [[ "$waiver_id" == "$expected_waiver_id" ]] \
+      || fail "rolling_24h_comparison_waiver_id_missing_or_invalid"
+    waiver_args=(--rolling-24h-comparison-waiver-id "$waiver_id")
+  fi
   sudo test -d "$RUN_DIR" || fail "preflight_not_found"
   sudo test ! -L "$RUN_DIR" || fail "run_directory_not_regular"
   [[ "$(sudo readlink -f -- "$RUN_DIR" 2>/dev/null)" == "$RUN_DIR" ]] \
@@ -1988,12 +2087,18 @@ run_mode() {
   require_candidate_runtime
 
   runner_command
-  if ! waived_reservation_sha="$(cost_governance_preflight \
+  if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    [[ "$(routine_cost_capacity_check "$approval_id" "$cases_sha")" == \
+      "GO" ]] || fail "cost_capacity_check_failed"
+    waived_reservation_sha=""
+  elif ! waived_reservation_sha="$(cost_governance_preflight \
     "$approval_id" "$waiver_id" "$cases_sha")"; then
     fail "cost_governance_preflight_failed"
   fi
-  [[ "$waived_reservation_sha" =~ ^[0-9a-f]{64}$ ]] \
-    || fail "cost_governance_preflight_failed"
+  if [[ "$RUNNER_GENERATION" != "v5" ]]; then
+    [[ "$waived_reservation_sha" =~ ^[0-9a-f]{64}$ ]] \
+      || fail "cost_governance_preflight_failed"
+  fi
   if [[ "$RUNNER_GENERATION" == "v4" ]]; then
     [[ "$waived_reservation_sha" == \
       "$(receipt_value governance_precheck_sha256 "$marker")" ]] \
@@ -2004,20 +2109,24 @@ run_mode() {
     printf 'candidate_sha=%s\n' "$EXPECTED_SHA"
     printf 'cases_sha256=%s\n' "$cases_sha"
     printf 'approval_id=%s\n' "$approval_id"
-    printf 'rolling_24h_waiver_id=%s\n' "$waiver_id"
-    printf 'rolling_24h_waiver_decision_id=%s\n' \
-      "$COMPARISON_WAIVER_DECISION_ID"
-    if [[ -n "$PRIOR_WAIVER_DECISION_ID" ]]; then
-      printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
-      printf 'offline_rescore_sha256=%s\n' \
-        "$(receipt_value offline_rescore_sha256 "$marker")"
-      printf 'governance_precheck_sha256=%s\n' \
-        "$(receipt_value governance_precheck_sha256 "$marker")"
+    if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+      printf 'cost_precheck_status=GO\n'
+    else
+      printf 'rolling_24h_waiver_id=%s\n' "$waiver_id"
+      printf 'rolling_24h_waiver_decision_id=%s\n' \
+        "$COMPARISON_WAIVER_DECISION_ID"
+      if [[ -n "$PRIOR_WAIVER_DECISION_ID" ]]; then
+        printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
+        printf 'offline_rescore_sha256=%s\n' \
+          "$(receipt_value offline_rescore_sha256 "$marker")"
+        printf 'governance_precheck_sha256=%s\n' \
+          "$(receipt_value governance_precheck_sha256 "$marker")"
+      fi
+      printf 'waived_reservation_sha256=%s\n' "$waived_reservation_sha"
+      printf 'provider_residual_risk_ceiling_rub=%s\n' \
+        "$COMPARISON_PROVIDER_RISK_CEILING_RUB"
+      printf 'runner_projected_stop_limit_rub=%s\n' "$COST_CAP_RUB"
     fi
-    printf 'waived_reservation_sha256=%s\n' "$waived_reservation_sha"
-    printf 'provider_residual_risk_ceiling_rub=%s\n' \
-      "$COMPARISON_PROVIDER_RISK_CEILING_RUB"
-    printf 'runner_projected_stop_limit_rub=%s\n' "$COST_CAP_RUB"
     printf 'cost_cap_rub=%s\n' "$COST_CAP_RUB"
   } >"$RUN_DIR/run.started") 2>/dev/null || fail "candidate_run_replay_refused"
   if ! "${runner[@]}" -m eval.run_ask \
@@ -2031,7 +2140,7 @@ run_mode() {
     --pilot50-candidate-contract "$CANDIDATE_CONTRACT_ID" \
     --expected-runtime-git-sha "$EXPECTED_SHA" \
     --high-cost-approval-id "$approval_id" \
-    --rolling-24h-comparison-waiver-id "$waiver_id" \
+    "${waiver_args[@]}" \
     --kb-seed /workspace/data/knowledge_base_seed.json \
     --bypass-cache \
     --require-complete-traces \
@@ -2047,7 +2156,7 @@ run_mode() {
     --output /evidence/pilot50-safe-result.json \
     --expected-runtime-git-sha "$EXPECTED_SHA" \
     --expected-approval-id "$approval_id" \
-    --rolling-24h-comparison-waiver-id "$waiver_id" \
+    "${waiver_args[@]}" \
     --candidate-contract "$CANDIDATE_CONTRACT_ID" \
     >/dev/null 2>&1; then
     fail "candidate_summarize_failed"
@@ -2097,20 +2206,24 @@ run_mode() {
     printf 'report_sha256=%s\n' "$report_sha"
     printf 'safe_result_sha256=%s\n' "$safe_sha"
     printf 'approval_id=%s\n' "$approval_id"
-    printf 'rolling_24h_waiver_id=%s\n' "$waiver_id"
-    printf 'rolling_24h_waiver_decision_id=%s\n' \
-      "$COMPARISON_WAIVER_DECISION_ID"
-    if [[ -n "$PRIOR_WAIVER_DECISION_ID" ]]; then
-      printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
-      printf 'offline_rescore_sha256=%s\n' \
-        "$(receipt_value offline_rescore_sha256 "$marker")"
-      printf 'governance_precheck_sha256=%s\n' \
-        "$(receipt_value governance_precheck_sha256 "$marker")"
+    if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+      printf 'cost_precheck_status=GO\n'
+    else
+      printf 'rolling_24h_waiver_id=%s\n' "$waiver_id"
+      printf 'rolling_24h_waiver_decision_id=%s\n' \
+        "$COMPARISON_WAIVER_DECISION_ID"
+      if [[ -n "$PRIOR_WAIVER_DECISION_ID" ]]; then
+        printf 'prior_waiver_decision_id=%s\n' "$PRIOR_WAIVER_DECISION_ID"
+        printf 'offline_rescore_sha256=%s\n' \
+          "$(receipt_value offline_rescore_sha256 "$marker")"
+        printf 'governance_precheck_sha256=%s\n' \
+          "$(receipt_value governance_precheck_sha256 "$marker")"
+      fi
+      printf 'waived_reservation_sha256=%s\n' "$waived_reservation_sha"
+      printf 'provider_residual_risk_ceiling_rub=%s\n' \
+        "$COMPARISON_PROVIDER_RISK_CEILING_RUB"
+      printf 'runner_projected_stop_limit_rub=%s\n' "$COST_CAP_RUB"
     fi
-    printf 'waived_reservation_sha256=%s\n' "$waived_reservation_sha"
-    printf 'provider_residual_risk_ceiling_rub=%s\n' \
-      "$COMPARISON_PROVIDER_RISK_CEILING_RUB"
-    printf 'runner_projected_stop_limit_rub=%s\n' "$COST_CAP_RUB"
     printf 'quality_status=%s\n' "$quality_status"
     printf 'production_snapshot_sha256=%s\n' "$pre_prod_sha"
     printf 'qdrant_count=%s\n' "$pre_qdrant_count"
@@ -2157,7 +2270,10 @@ review_mode() {
   approval_id="$(receipt_value approval_id "$completed")"
   waiver_id="$(receipt_value rolling_24h_waiver_id "$completed")"
   waived_reservation_sha="$(receipt_value waived_reservation_sha256 "$completed")"
-  if [[ "$RUNNER_GENERATION" == "v4" ]]; then
+  if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    expected_approval_id="owner-chat-20260816-pilot50-v5-${EXPECTED_SHA}-cap30"
+    expected_waiver_id=""
+  elif [[ "$RUNNER_GENERATION" == "v4" ]]; then
     expected_approval_id="owner-chat-20260814-pilot50-v4-${EXPECTED_SHA}-cap30"
     expected_waiver_id="owner-chat-20260814-waive-v3-to-v4-${EXPECTED_SHA}-cap30"
   else
@@ -2169,41 +2285,59 @@ review_mode() {
     || fail "candidate_completion_marker_invalid"
   [[ "$(receipt_value candidate_sha "$completed")" == "$EXPECTED_SHA" ]] \
     || fail "candidate_completion_marker_invalid"
-  [[ "$approval_id" == "$expected_approval_id" && \
-    "$waiver_id" == "$expected_waiver_id" && \
-    "$waived_reservation_sha" =~ ^[0-9a-f]{64}$ && \
-    "$(receipt_value rolling_24h_waiver_decision_id "$completed")" == \
-      "$COMPARISON_WAIVER_DECISION_ID" && \
-    "$(receipt_value prior_waiver_decision_id "$completed")" == \
-      "$PRIOR_WAIVER_DECISION_ID" && \
-    "$(receipt_value provider_residual_risk_ceiling_rub "$completed")" == \
-      "$COMPARISON_PROVIDER_RISK_CEILING_RUB" && \
-    "$(receipt_value runner_projected_stop_limit_rub "$completed")" == \
-      "$COST_CAP_RUB" ]] || fail "candidate_completion_marker_invalid"
+  if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    [[ "$approval_id" == "$expected_approval_id" && -z "$waiver_id" && \
+      -z "$waived_reservation_sha" && \
+      "$(receipt_value cost_precheck_status "$completed")" == "GO" ]] \
+      || fail "candidate_completion_marker_invalid"
+  else
+    [[ "$approval_id" == "$expected_approval_id" && \
+      "$waiver_id" == "$expected_waiver_id" && \
+      "$waived_reservation_sha" =~ ^[0-9a-f]{64}$ && \
+      "$(receipt_value rolling_24h_waiver_decision_id "$completed")" == \
+        "$COMPARISON_WAIVER_DECISION_ID" && \
+      "$(receipt_value prior_waiver_decision_id "$completed")" == \
+        "$PRIOR_WAIVER_DECISION_ID" && \
+      "$(receipt_value provider_residual_risk_ceiling_rub "$completed")" == \
+        "$COMPARISON_PROVIDER_RISK_CEILING_RUB" && \
+      "$(receipt_value runner_projected_stop_limit_rub "$completed")" == \
+        "$COST_CAP_RUB" ]] || fail "candidate_completion_marker_invalid"
+  fi
   if [[ "$RUNNER_GENERATION" == "v4" ]]; then
     [[ "$(receipt_value offline_rescore_sha256 "$completed")" =~ \
         ^[0-9a-f]{64}$ && \
       "$(receipt_value governance_precheck_sha256 "$completed")" =~ \
         ^[0-9a-f]{64}$ ]] || fail "candidate_completion_marker_invalid"
   fi
-  [[ "$(receipt_value schema_version "$started")" == \
-      "pilot50-candidate-run-started-v1" && \
-    "$(receipt_value candidate_sha "$started")" == "$EXPECTED_SHA" && \
-    "$(receipt_value cases_sha256 "$started")" == "$cases_sha" && \
-    "$(receipt_value approval_id "$started")" == "$approval_id" && \
-    "$(receipt_value rolling_24h_waiver_id "$started")" == "$waiver_id" && \
-    "$(receipt_value rolling_24h_waiver_decision_id "$started")" == \
-      "$COMPARISON_WAIVER_DECISION_ID" && \
-    "$(receipt_value prior_waiver_decision_id "$started")" == \
-      "$PRIOR_WAIVER_DECISION_ID" && \
-    "$(receipt_value waived_reservation_sha256 "$started")" == \
-      "$waived_reservation_sha" && \
-    "$(receipt_value provider_residual_risk_ceiling_rub "$started")" == \
-      "$COMPARISON_PROVIDER_RISK_CEILING_RUB" && \
-    "$(receipt_value runner_projected_stop_limit_rub "$started")" == \
-      "$COST_CAP_RUB" && \
-    "$(receipt_value cost_cap_rub "$started")" == "$COST_CAP_RUB" ]] \
-    || fail "candidate_started_marker_invalid"
+  if [[ "$RUNNER_GENERATION" == "v5" ]]; then
+    [[ "$(receipt_value schema_version "$started")" == \
+        "pilot50-candidate-run-started-v1" && \
+      "$(receipt_value candidate_sha "$started")" == "$EXPECTED_SHA" && \
+      "$(receipt_value cases_sha256 "$started")" == "$cases_sha" && \
+      "$(receipt_value approval_id "$started")" == "$approval_id" && \
+      "$(receipt_value cost_precheck_status "$started")" == "GO" && \
+      "$(receipt_value cost_cap_rub "$started")" == "$COST_CAP_RUB" ]] \
+      || fail "candidate_started_marker_invalid"
+  else
+    [[ "$(receipt_value schema_version "$started")" == \
+        "pilot50-candidate-run-started-v1" && \
+      "$(receipt_value candidate_sha "$started")" == "$EXPECTED_SHA" && \
+      "$(receipt_value cases_sha256 "$started")" == "$cases_sha" && \
+      "$(receipt_value approval_id "$started")" == "$approval_id" && \
+      "$(receipt_value rolling_24h_waiver_id "$started")" == "$waiver_id" && \
+      "$(receipt_value rolling_24h_waiver_decision_id "$started")" == \
+        "$COMPARISON_WAIVER_DECISION_ID" && \
+      "$(receipt_value prior_waiver_decision_id "$started")" == \
+        "$PRIOR_WAIVER_DECISION_ID" && \
+      "$(receipt_value waived_reservation_sha256 "$started")" == \
+        "$waived_reservation_sha" && \
+      "$(receipt_value provider_residual_risk_ceiling_rub "$started")" == \
+        "$COMPARISON_PROVIDER_RISK_CEILING_RUB" && \
+      "$(receipt_value runner_projected_stop_limit_rub "$started")" == \
+        "$COST_CAP_RUB" && \
+      "$(receipt_value cost_cap_rub "$started")" == "$COST_CAP_RUB" ]] \
+      || fail "candidate_started_marker_invalid"
+  fi
   if [[ "$RUNNER_GENERATION" == "v4" ]]; then
     [[ "$(receipt_value offline_rescore_sha256 "$started")" == \
         "$(receipt_value offline_rescore_sha256 "$completed")" && \

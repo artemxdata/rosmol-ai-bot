@@ -23,6 +23,9 @@ V3_MANIFEST_PATH = (
 V4_MANIFEST_PATH = (
     pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v4.json"
 )
+V5_MANIFEST_PATH = (
+    pilot50.PROJECT_ROOT / "eval" / "cases" / "pilot50_balanced_v5.json"
+)
 EVAL_RUN_ID = "ask-eval-11111111-1111-1111-1111-111111111111"
 RUNTIME_GIT_SHA = "a" * 40
 APPROVAL_ID = "PILOT50-OWNER-20260810"
@@ -350,6 +353,36 @@ def _v4_candidate_raw_report(
     return report, trace_rows
 
 
+def _v5_candidate_raw_report(
+    cases: list[dict[str, Any]],
+    *,
+    cases_sha256: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    report, trace_rows = _candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha256,
+    )
+    approval_id = pilot50._v5_expected_approval_id(RUNTIME_GIT_SHA)
+    cost_control = report["cost_control"]
+    cost_control["high_cost_approval_id"] = approval_id
+    cost_control["candidate_contract"].update(
+        {
+            "contract_id": pilot50.V5_CANDIDATE_CONTRACT_ID,
+            "cost_scope": pilot50.V5_CANDIDATE_COST_SCOPE,
+        }
+    )
+    cost_control["reservation"].update(
+        {
+            "scope": pilot50.V5_CANDIDATE_COST_SCOPE,
+            "high_cost_approval_id": approval_id,
+        }
+    )
+    report["pilot50_candidate"]["contract_id"] = (
+        pilot50.V5_CANDIDATE_CONTRACT_ID
+    )
+    return report, trace_rows
+
+
 def _v3_candidate_materialized_workspace(
     tmp_path: Path,
 ) -> tuple[list[dict[str, Any]], Path, str]:
@@ -364,6 +397,15 @@ def _v4_candidate_materialized_workspace(
 ) -> tuple[list[dict[str, Any]], Path, str]:
     cases, receipt = pilot50.build_materialized_cases(V4_MANIFEST_PATH)
     cases_path = tmp_path / "pilot50-v4-cases.json"
+    cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
+    return cases, cases_path, str(receipt["cases_sha256"])
+
+
+def _v5_candidate_materialized_workspace(
+    tmp_path: Path,
+) -> tuple[list[dict[str, Any]], Path, str]:
+    cases, receipt = pilot50.build_materialized_cases(V5_MANIFEST_PATH)
+    cases_path = tmp_path / "pilot50-v5-cases.json"
     cases_path.write_bytes(pilot50._canonical_json_bytes(cases))
     return cases, cases_path, str(receipt["cases_sha256"])
 
@@ -965,6 +1007,86 @@ def test_v4_safe_result_binds_exact_chained_d042_waiver_and_rejects_tampering(
             expected_approval_id=approval_id,
             expected_rolling_24h_comparison_waiver_id=waiver_id,
             candidate_contract=pilot50.V4_CANDIDATE_CONTRACT_ID,
+        )
+
+
+def test_v5_is_an_exact_question_and_source_recheck_of_v4() -> None:
+    v4_cases, _v4_receipt = pilot50.build_materialized_cases(V4_MANIFEST_PATH)
+    v5_cases, v5_receipt = pilot50.build_materialized_cases(V5_MANIFEST_PATH)
+
+    assert v5_receipt["cases_sha256"] == pilot50.V5_CANDIDATE_CASES_SHA256
+    assert len(v5_cases) == 50
+    assert [case["id"] for case in v5_cases] == [case["id"] for case in v4_cases]
+    for v4_case, v5_case in zip(v4_cases, v5_cases, strict=True):
+        for field in (
+            "query",
+            "pilot50_group",
+            "expected_behavior",
+            "expected_escalated",
+            "expected_answer_contains",
+            "expected_chunk_ids",
+            "expected_cited_chunk_ids",
+        ):
+            assert v5_case.get(field) == v4_case.get(field)
+        assert "pilot50:v5" in v5_case["tags"]
+        assert v5_case["user_id"].startswith("pilot50-v5-")
+
+
+def test_v5_safe_result_binds_exact_approval_without_comparison_waiver(
+    tmp_path: Path,
+) -> None:
+    cases, cases_path, cases_sha = _v5_candidate_materialized_workspace(tmp_path)
+    report, trace_rows = _v5_candidate_raw_report(
+        cases,
+        cases_sha256=cases_sha,
+    )
+    report_path = tmp_path / "pilot50-v5-report.json"
+    _write_json(report_path, report)
+    approval_id = pilot50._v5_expected_approval_id(RUNTIME_GIT_SHA)
+
+    safe = pilot50.build_safe_result(
+        manifest_path=V5_MANIFEST_PATH,
+        cases_path=cases_path,
+        report_path=report_path,
+        trace_rows=trace_rows,
+        expected_runtime_git_sha=RUNTIME_GIT_SHA,
+        expected_approval_id=approval_id,
+        candidate_contract=pilot50.V5_CANDIDATE_CONTRACT_ID,
+    )
+
+    assert safe["dataset_id"] == pilot50.V5_DATASET_ID
+    assert safe["approval_id"] == approval_id
+    assert "rolling_24h_waiver" not in safe
+    assert safe["quality_gate"]["schema_version"] == (
+        pilot50.V5_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION
+    )
+    assert pilot50.validate_safe_result(safe) == safe
+
+    with pytest.raises(pilot50.Pilot50Error, match="approval reference"):
+        pilot50.build_safe_result(
+            manifest_path=V5_MANIFEST_PATH,
+            cases_path=cases_path,
+            report_path=report_path,
+            trace_rows=trace_rows,
+            expected_runtime_git_sha=RUNTIME_GIT_SHA,
+            expected_approval_id="owner-wrong-v5-approval",
+            candidate_contract=pilot50.V5_CANDIDATE_CONTRACT_ID,
+        )
+
+    tampered_report = copy.deepcopy(report)
+    tampered_report["cost_control"]["reservation"][
+        "rolling_24h_waiver_id"
+    ] = "owner-forbidden-v5-waiver"
+    _write_json(report_path, tampered_report)
+    with pytest.raises(pilot50.Pilot50Error, match="comparison waiver evidence"):
+        pilot50.build_safe_result(
+            manifest_path=V5_MANIFEST_PATH,
+            cases_path=cases_path,
+            report_path=report_path,
+            trace_rows=trace_rows,
+            expected_runtime_git_sha=RUNTIME_GIT_SHA,
+            expected_approval_id=approval_id,
+            candidate_contract=pilot50.V5_CANDIDATE_CONTRACT_ID,
         )
 
 

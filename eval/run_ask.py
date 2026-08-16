@@ -124,10 +124,16 @@ PILOT50_V4_PRIOR_SCOPE = "pilot50-v3-candidate"
 PILOT50_V4_PRIOR_RUNTIME_SHA = "a5c5539ce2e8487418ed78ba64ae8ed9eab54863"
 PILOT50_V4_PRIOR_CASES_SHA256 = PILOT50_V3_CANDIDATE_CASES_SHA256
 PILOT50_V4_PRIOR_WAIVER_DECISION_ID = "D-041"
+PILOT50_V5_CANDIDATE_CONTRACT_ID = "pilot50-v5-recheck-v1"
+PILOT50_V5_CANDIDATE_CASES_SHA256 = (
+    "9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
+)
+PILOT50_V5_CANDIDATE_COST_SCOPE = "pilot50-v5-recheck"
 PILOT50_CANDIDATE_CONTRACT_IDS = (
     PILOT50_CANDIDATE_CONTRACT_ID,
     PILOT50_V3_CANDIDATE_CONTRACT_ID,
     PILOT50_V4_CANDIDATE_CONTRACT_ID,
+    PILOT50_V5_CANDIDATE_CONTRACT_ID,
 )
 PHASE0_RUNNER_CASE_FIELDS = frozenset(
     {
@@ -2596,6 +2602,13 @@ def _pilot50_candidate_contract_config(contract_id: str) -> dict[str, Any] | Non
             "cost_scope": PILOT50_V4_CANDIDATE_COST_SCOPE,
             "comparison_waiver_required": True,
         }
+    if contract_id == PILOT50_V5_CANDIDATE_CONTRACT_ID:
+        return {
+            "contract_id": PILOT50_V5_CANDIDATE_CONTRACT_ID,
+            "cases_file_sha256": PILOT50_V5_CANDIDATE_CASES_SHA256,
+            "cost_scope": PILOT50_V5_CANDIDATE_COST_SCOPE,
+            "comparison_waiver_required": False,
+        }
     return None
 
 
@@ -2619,6 +2632,10 @@ def _pilot50_v4_expected_waiver_id(runtime_git_sha: str) -> str:
         "owner-chat-20260814-waive-v3-to-v4-"
         f"{runtime_git_sha}-cap30"
     )
+
+
+def _pilot50_v5_expected_approval_id(runtime_git_sha: str) -> str:
+    return f"owner-chat-20260816-pilot50-v5-{runtime_git_sha}-cap30"
 
 
 def _pilot50_candidate_comparison_waiver(
@@ -2828,7 +2845,10 @@ def _validated_pilot50_candidate_contract(
         if waiver_id != expected_waiver_id:
             failures.append("rolling_24h_comparison_waiver")
     else:
-        if SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
+        if contract_id == PILOT50_V5_CANDIDATE_CONTRACT_ID:
+            if approval_id != _pilot50_v5_expected_approval_id(runtime_sha):
+                failures.append("approval")
+        elif SAFE_COST_APPROVAL_ID_RE.fullmatch(approval_id) is None:
             failures.append("approval")
         if waiver_id:
             failures.append("rolling_24h_comparison_waiver")

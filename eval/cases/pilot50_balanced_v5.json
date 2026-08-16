@@ -1,0 +1,88 @@
+{
+  "classification": "calibration_only",
+  "dataset_id": "pilot50_balanced_v5",
+  "disclaimer": "Tracked regression calibration only; not an independent holdout or a human product-conversion verdict.",
+  "expected_contract": {
+    "cases_total": 50,
+    "expected_behavior": "answer",
+    "expected_escalated": false,
+    "type_counts": {
+      "atypical": 25,
+      "typical": 25
+    }
+  },
+  "human_product_verdict": false,
+  "schema_version": "1.0.0",
+  "sources": [
+    {
+      "case_ids": [
+        "yonote_fgais_merge_accounts",
+        "yonote_fgais_delete_account",
+        "yonote_fgais_confirm_participation",
+        "yonote_fgais_application_statuses",
+        "yonote_about_rosmolodezh",
+        "yonote_dobro_registration",
+        "yonote_dobro_volunteer_application",
+        "yonote_ladoga_registration_closed",
+        "yonote_ladoga_food_and_stay",
+        "yonote_ladoga_travel_compensation",
+        "yonote_patriot_registration_deadline",
+        "yonote_patriot_participants",
+        "yonote_territory_shifts",
+        "yonote_grant_report_review",
+        "yonote_grant_agreement_review",
+        "pilot50_v4_grant_nomination_definition",
+        "synthetic_fgais_registration",
+        "synthetic_fgais_event_navigation",
+        "synthetic_fgais_status_meanings",
+        "synthetic_grant_application_steps",
+        "synthetic_grants_overview",
+        "synthetic_fgais_lost_email_access",
+        "synthetic_territory_meanings_overview",
+        "synthetic_ladoga_overview",
+        "synthetic_mashuk_selection_timing"
+      ],
+      "path": "eval/cases/pilot50_typical_v4.json",
+      "selection_rule": "all_cases",
+      "sha256": "5fa5b9a9be77bfe0a76efcecb0f9363a50cfbabfb2fdab66aeafadee47681283",
+      "type": "typical"
+    },
+    {
+      "case_ids": [
+        "pilot50_v2_fgais_registration_navigation",
+        "pilot50_v2_fgais_lost_email_statuses",
+        "pilot50_v2_ladoga_deadline_food_travel",
+        "pilot50_v2_patriot_deadline_participants",
+        "pilot50_v2_territory_overview_shifts",
+        "pilot50_v2_grant_directions_application",
+        "pilot50_v2_grant_review_timelines",
+        "pilot50_v2_dobro_registration_volunteering",
+        "pilot50_v2_mashuk_results_program",
+        "pilot50_v2_mashuk_shift_dates",
+        "pilot50_v2_territory_forum_pravda_dates",
+        "adv_insult_actionable",
+        "adv_answer_rostov_application",
+        "adv_answer_rostov_slang",
+        "adv_answer_grant_application",
+        "adv_answer_fgais_registration",
+        "adv_answer_forum_list",
+        "adv_answer_shum_entry",
+        "adv_answer_tavrida_entry",
+        "adv_answer_profanity_with_request",
+        "pilot50_v3_inactive_fgais_button",
+        "pilot50_v3_youth_day_ticket_after_max_registration",
+        "pilot50_v3_ladoga_application_deadline",
+        "synthetic_pravda_shift_dates_only",
+        "synthetic_mashuk_first_shift_dates_only"
+      ],
+      "path": "eval/cases/pilot50_atypical_v4.json",
+      "selection_rule": "all_cases",
+      "sha256": "07e4d462723663bcc4722df8b79e5c737cb2e45b3462380716a1368a5741ce64",
+      "type": "atypical"
+    }
+  ],
+  "strata_contract": {
+    "atypical": "noisy, slang, profane, precise-aspect or multi-aspect in-scope questions that remain answerable without an operator",
+    "typical": "single-intent frequent in-scope questions answerable from the published knowledge contract"
+  }
+}

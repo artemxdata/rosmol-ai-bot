@@ -741,3 +741,30 @@ Diagnostic `GO` требует минимум `5/10 passed`, минимум `5/1
 `GO` доказывает только работоспособность конкретной recovery-гипотезы на exposed failures. Цель
 `>=50%` production ticket conversion подтверждается отдельно новым human-reviewed multi-turn
 cohort после correction cycle.
+
+## D-044. Новое ядро проходит один прямой Pilot50 v5 recheck с пределом 30 RUB
+
+**Статус:** принято 16 августа 2026; дополняет D-036, D-040 и D-043, не заменяя Blind50.
+
+Чтобы измерить именно скачок нового fact/retrieval/recovery ядра относительно завершённого
+Pilot50 v4, разрешён один широкий server-local повтор на тех же 50 calibration-вопросах. Manifest
+`pilot50_balanced_v5` сохраняет без изменений порядок, тексты запросов, strata, ожидаемое
+поведение, answer checks и retrieval/citation qrels v4; меняются только dataset/tag/user namespace
+и отдельные integrity hashes запуска. Это делает результат прямым сравнением с v4 baseline
+`8/50` (`7/25` typical, `1/25` atypical), но не превращает exposed calibration в независимый
+holdout, human verdict или production conversion.
+
+V5 использует новый одноразовый scope `pilot50-v5-recheck`, exact owner approval вида
+`owner-chat-20260816-pilot50-v5-<runtime_sha>-cap30`, concurrency `1` и hard stop-limit `30 RUB`.
+Ожидаемый расход оценивается примерно в `20 RUB` по фактической стоимости v4
+`19.259396 RUB`; `30 RUB` является верхним пределом, а не планом расхода. Старые approval/waiver
+D-041/D-042 не переиспользуются, новый waiver запрещён. Бесплатный preflight только читает ledger,
+доказывает доступную routine/private-full capacity, exact image/runtime, isolation, `/ready`,
+неизменность production и Qdrant; он не резервирует бюджет и не вызывает `/ask`.
+
+Оплачиваемый `run` разрешён только после `preflight=GO` и повторной проверки тех же связок.
+Неполные trace, cache hit, pricing STOP, изменение cases/runtime, повтор approval, недоступный
+rolling-24h capacity или любой quality criterion означают STOP без выборочного replay. HDE/VK,
+production runtime, KB/Qdrant и Yonote не изменяются. Даже результат выше `25/50` служит только
+широким regression-сигналом; доказательство цели `>=50%` требует отдельного Blind50 full-ticket
+run с независимой human reference-разметкой и последующего release/security gate.

@@ -30,6 +30,7 @@ DATASET_ID = "pilot50_balanced_v1"
 V2_DATASET_ID = "pilot50_balanced_v2"
 V3_DATASET_ID = "pilot50_balanced_v3"
 V4_DATASET_ID = "pilot50_balanced_v4"
+V5_DATASET_ID = "pilot50_balanced_v5"
 CLASSIFICATION = "calibration_only"
 PILOT50_TARGET = "http://app-ml:8000/ask"
 PILOT50_CANDIDATE_TARGET = "http://pilot50-candidate-ml:8000/ask"
@@ -44,6 +45,9 @@ V3_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
 )
 V4_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
     "bfd14ae638da0d65b2c07ff299f8f366a2d8fb8be772223a931e601691125ede"
+)
+V5_EXPECTED_MANIFEST_CANONICAL_SHA256 = (
+    "12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4"
 )
 DISCLAIMER = (
     "Tracked regression calibration only. This is a mechanical first-turn "
@@ -91,12 +95,20 @@ V4_CANDIDATE_COST_SCOPE = "pilot50-v4-candidate"
 V4_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION = "pilot50-v4-quality-gate-v1"
 V4_CANDIDATE_EXPECTED_QREL_CASES = 50
 V4_CANDIDATE_EXPECTED_CRITICAL_CASES = 15
+V5_CANDIDATE_CONTRACT_ID = "pilot50-v5-recheck-v1"
+V5_CANDIDATE_CASES_SHA256 = (
+    "9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
+)
+V5_CANDIDATE_COST_SCOPE = "pilot50-v5-recheck"
+V5_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION = "pilot50-v5-quality-gate-v1"
+V5_CANDIDATE_EXPECTED_QREL_CASES = 50
+V5_CANDIDATE_EXPECTED_CRITICAL_CASES = 15
 V4_COMPARISON_WAIVER_DECISION_ID = "D-042"
 V4_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500
 V3_COMPARISON_WAIVER_DECISION_ID = "D-041"
 V3_COMPARISON_PROVIDER_RISK_CEILING_RUB = 500
 CANDIDATE_DATASET_IDS = frozenset(
-    {V2_DATASET_ID, V3_DATASET_ID, V4_DATASET_ID}
+    {V2_DATASET_ID, V3_DATASET_ID, V4_DATASET_ID, V5_DATASET_ID}
 )
 CANDIDATE_CRITICAL_CASE_TAGS = frozenset({"adversarial", "off_aspect_guard"})
 CANDIDATE_OUTPUT_CONTRACT_ESCALATION_REASONS = frozenset(
@@ -435,6 +447,7 @@ V4_ALLOWED_SOURCE_PATHS = frozenset(
         "eval/cases/pilot50_atypical_v4.json",
     }
 )
+V5_ALLOWED_SOURCE_PATHS = V4_ALLOWED_SOURCE_PATHS
 DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
     DATASET_ID: {
         "manifest_canonical_sha256": EXPECTED_MANIFEST_CANONICAL_SHA256,
@@ -465,6 +478,15 @@ DATASET_CONTRACTS: dict[str, dict[str, Any]] = {
         "tag": "pilot50:v4",
         "user_prefix": "pilot50-v4",
         "version_label": "v4",
+        "requires_published_yonote_qrels": True,
+        "requires_exact_equivalent_chunks": True,
+    },
+    V5_DATASET_ID: {
+        "manifest_canonical_sha256": V5_EXPECTED_MANIFEST_CANONICAL_SHA256,
+        "source_paths": V5_ALLOWED_SOURCE_PATHS,
+        "tag": "pilot50:v5",
+        "user_prefix": "pilot50-v5",
+        "version_label": "v5",
         "requires_published_yonote_qrels": True,
         "requires_exact_equivalent_chunks": True,
     },
@@ -730,6 +752,15 @@ def _candidate_contract_config(dataset_id: str) -> dict[str, Any]:
             "quality_gate_schema_version": V4_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
             "expected_qrel_cases": V4_CANDIDATE_EXPECTED_QREL_CASES,
             "expected_critical_cases": V4_CANDIDATE_EXPECTED_CRITICAL_CASES,
+        }
+    if dataset_id == V5_DATASET_ID:
+        return {
+            "contract_id": V5_CANDIDATE_CONTRACT_ID,
+            "cases_sha256": V5_CANDIDATE_CASES_SHA256,
+            "cost_scope": V5_CANDIDATE_COST_SCOPE,
+            "quality_gate_schema_version": V5_CANDIDATE_QUALITY_GATE_SCHEMA_VERSION,
+            "expected_qrel_cases": V5_CANDIDATE_EXPECTED_QREL_CASES,
+            "expected_critical_cases": V5_CANDIDATE_EXPECTED_CRITICAL_CASES,
         }
     raise Pilot50Error("dataset does not define a candidate evidence contract")
 
@@ -1481,6 +1512,10 @@ def _v4_expected_waiver_id(runtime_git_sha: str) -> str:
     )
 
 
+def _v5_expected_approval_id(runtime_git_sha: str) -> str:
+    return f"owner-chat-20260816-pilot50-v5-{runtime_git_sha}-cap30"
+
+
 def _validated_v3_reservation_waiver(
     reservation: Mapping[str, Any],
     *,
@@ -1946,6 +1981,11 @@ def build_safe_result(
             raise Pilot50Error("Pilot50 v4 approval reference is invalid")
         if expected_waiver_id != _v4_expected_waiver_id(runtime_git_sha):
             raise Pilot50Error("Pilot50 v4 comparison waiver reference is invalid")
+    elif dataset_id == V5_DATASET_ID:
+        if approval_id != _v5_expected_approval_id(runtime_git_sha):
+            raise Pilot50Error("Pilot50 v5 approval reference is invalid")
+        if expected_waiver_id:
+            raise Pilot50Error("Pilot50 v5 does not accept a comparison waiver")
     elif expected_waiver_id:
         raise Pilot50Error("comparison waiver is only valid for Pilot50 v3/v4")
     evidence_contract = _evidence_contract(
@@ -2185,7 +2225,7 @@ def build_safe_result(
                 )
         elif not candidate_waiver_fields.isdisjoint(candidate_evidence):
             raise Pilot50Error(
-                "Pilot50 v2 report contains comparison waiver evidence"
+                "routine Pilot50 report contains comparison waiver evidence"
             )
         candidate_run = report.get("pilot50_candidate")
         if (
@@ -2238,7 +2278,7 @@ def build_safe_result(
             expected_waiver_id=expected_waiver_id,
         )
     elif not V3_RESERVATION_WAIVER_FIELDS.isdisjoint(reservation):
-        raise Pilot50Error("Pilot50 v2 reservation contains comparison waiver evidence")
+        raise Pilot50Error("routine Pilot50 reservation contains comparison waiver evidence")
 
     closure = {
         group: _rate_row(group_closed[group], EXPECTED_TYPE_COUNTS[group])
@@ -2321,7 +2361,7 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
             if dataset_id == V3_DATASET_ID
             else (
                 CANDIDATE_SAFE_FIELDS
-                if dataset_id == V2_DATASET_ID
+                if dataset_id in {V2_DATASET_ID, V5_DATASET_ID}
                 else SAFE_FIELDS
             )
         )
@@ -2350,6 +2390,9 @@ def validate_safe_result(value: Any) -> dict[str, Any]:
             value.get("rolling_24h_waiver"),
             runtime_git_sha=runtime_git_sha,
         )
+    elif dataset_id == V5_DATASET_ID:
+        if approval_id != _v5_expected_approval_id(runtime_git_sha):
+            raise Pilot50Error("safe result approval reference is invalid")
     run_window = value.get("run_window_utc")
     if not isinstance(run_window, dict) or set(run_window) != {
         "started_at",
@@ -4023,6 +4066,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             CANDIDATE_CONTRACT_ID,
             V3_CANDIDATE_CONTRACT_ID,
             V4_CANDIDATE_CONTRACT_ID,
+            V5_CANDIDATE_CONTRACT_ID,
         ),
         default="",
         help=(

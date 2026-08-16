@@ -1426,6 +1426,20 @@ def _pilot50_v4_candidate_contract_kwargs(
     }
 
 
+def _pilot50_v5_candidate_contract_kwargs(
+    runtime_sha: str = "e" * 40,
+) -> dict[str, object]:
+    return {
+        **_pilot50_candidate_contract_kwargs(),
+        "cases_file_sha256": run_ask_module.PILOT50_V5_CANDIDATE_CASES_SHA256,
+        "high_cost_approval_id": (
+            run_ask_module._pilot50_v5_expected_approval_id(runtime_sha)
+        ),
+        "expected_runtime_git_sha": runtime_sha,
+        "rolling_24h_comparison_waiver_id": None,
+    }
+
+
 def test_pilot50_v3_candidate_constructs_exact_bounded_comparison_waiver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1505,6 +1519,43 @@ def test_pilot50_v4_candidate_constructs_exact_chained_d042_waiver(
     assert contract["rolling_24h_comparison_waiver_decision_id"] == "D-042"
     assert contract["prior_waiver_decision_id"] == "D-041"
     assert contract["provider_residual_risk_ceiling_rub"] == 500.0
+
+
+def test_pilot50_v5_candidate_requires_exact_approval_and_forbids_waiver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_sha = "e" * 40
+    monkeypatch.setenv("RELEASE_GIT_SHA", runtime_sha)
+    contract = run_ask_module._validated_pilot50_candidate_contract(
+        run_ask_module.PILOT50_V5_CANDIDATE_CONTRACT_ID,
+        **_pilot50_v5_candidate_contract_kwargs(runtime_sha),
+    )
+
+    assert contract is not None
+    assert contract["contract_id"] == (
+        run_ask_module.PILOT50_V5_CANDIDATE_CONTRACT_ID
+    )
+    assert contract["cost_scope"] == run_ask_module.PILOT50_V5_CANDIDATE_COST_SCOPE
+    assert "rolling_24h_comparison_waiver_id" not in contract
+    assert (
+        run_ask_module._pilot50_candidate_comparison_waiver(
+            contract,
+            rolling_24h_comparison_waiver_id=None,
+        )
+        is None
+    )
+
+    for field, value in (
+        ("high_cost_approval_id", "owner-wrong-v5-approval"),
+        ("rolling_24h_comparison_waiver_id", "owner-forbidden-v5-waiver"),
+    ):
+        kwargs = _pilot50_v5_candidate_contract_kwargs(runtime_sha)
+        kwargs[field] = value
+        with pytest.raises(ValueError, match="candidate contract rejected"):
+            run_ask_module._validated_pilot50_candidate_contract(
+                run_ask_module.PILOT50_V5_CANDIDATE_CONTRACT_ID,
+                **kwargs,
+            )
 
 
 @pytest.mark.parametrize(
