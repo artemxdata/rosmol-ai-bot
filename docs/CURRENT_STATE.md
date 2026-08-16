@@ -1,15 +1,41 @@
 # Текущее состояние проекта
 
-**Обновлено:** 15 августа 2026
+**Обновлено:** 16 августа 2026
 
 **Ветка:** `codex/real-rag`
 
-## 15 августа: exact candidate доставлен на сервер; добавлен бесплатный runtime smoke
+## 16 августа: готов exact широкий Pilot50 v5 recheck нового ядра
 
-Владелец вручную получил через GitHub и checkout в detached HEAD exact candidate
-`0715a17fae2f658008deb291e37fe6bbb5bb7d8f`; server worktree подтвердил
-`candidate_checkout=OK`. Это не перезапуск production: работающий runtime остаётся на
-`c38f0e055630fae2af50720fae81acee20ff4f6a`, HDE/VK выключены.
+Candidate `e3277e88ee3bf46ab3d375beed740f96248d53bc` фиксирует один прямой повтор
+Pilot50 на тех же 50 calibration-вопросах, на которых v4 дал `8/50` закрытий без оператора
+(`7/25` typical и `1/25` atypical). Тексты, порядок, strata, answer checks и retrieval/citation
+qrels совпадают с v4; отдельные dataset/tag/user namespace и integrity hashes исключают смешение
+артефактов. Результат честно покажет изменение относительно `8/50`, но останется exposed
+calibration, а не независимой оценкой production conversion.
+
+Запуск ограничен exact одноразовым approval, concurrency `1` и hard cap `30 RUB`; ожидаемый
+фактический расход — около `20 RUB` по v4 (`19.259396 RUB`). Старые D-041/D-042 approvals и
+waivers не переиспользуются, новый waiver запрещён. Бесплатный `preflight` только читает cost
+ledger и проверяет exact image/runtime, isolation, `/ready`, production/Qdrant invariants и
+доступность routine/private-full capacity; он не резервирует деньги и не вызывает `/ask`.
+Платный `run` разрешается только после его `GO` и повторной проверки связок.
+
+Локальный gate candidate: Ruff — `OK`; полный набор выполнен восемью непересекающимися группами
+из-за известного Windows teardown-hang единого pytest-процесса — `3386 passed`, `1 skipped`,
+`0 failed`; KB validation — `2186 valid / 2152 published`; Bash syntax и `git diff --check` —
+`OK`. Следующий точный шаг: owner выполняет бесплатный server-local `preflight` exact SHA; при
+`GO` — один оплачиваемый `run`, после чего результат сравнивается с `8/50`. Production остаётся
+на `c38f0e055630fae2af50720fae81acee20ff4f6a`, HDE/VK выключены. Независимый Blind50 остаётся
+обязательным доказательством порога `>=25/50` после этого широкого regression-сигнала.
+
+## 15 августа: exact candidate прошёл бесплатный server-local runtime smoke
+
+Владелец вручную получил через GitHub и checkout в detached HEAD exact smoke candidate
+`17bf4abd14f2acce10095663f777f8ad8cf5a2f3`. Изолированный server-local запуск завершился
+`semantic_recovery_candidate_smoke=OK` и `candidate_runtime_smoke=OK`; capacity — `GO`
+(`9072 MiB` available memory, `7110 MiB` free swap, load1 `0.03`, `6` CPU, `19.22 GiB`
+Docker free). Работающий production не перезапускался и остаётся на
+`c38f0e055630fae2af50720fae81acee20ff4f6a`; HDE/VK выключены.
 
 Чтобы проверить новый candidate в тот же день и не упираться в занятый rolling-24h cost ledger,
 server-local runner получил отдельный режим `smoke`. Он создаёт чистый Git-archive snapshot exact
@@ -21,8 +47,9 @@ credentials, проверяет container identity, `/ready`, все readiness c
 
 Полный локальный gate: Ruff — `OK`; все тесты в восьми непересекающихся file shards —
 `3379 passed`, `1 skipped`, `0 failed`; KB validation — `2186 valid / 2152 published`; Bash syntax
-и `git diff --check` — `OK`. Следующий шаг — доставить exact smoke-tooling SHA и выполнить один
-`smoke`; платный semantic test и Blind50 не запускаются до отдельного валидного gate.
+и `git diff --check` — `OK`. Серверная исполнимость exact candidate теперь подтверждена бесплатно;
+следующий продуктовый шаг — завершить независимую reference-разметку Blind50 до просмотра
+ответов runtime и выполнить один ordered full-ticket run. Платный повтор Recovery10 не нужен.
 
 ## 15 августа: semantic recovery закрывает поздний source-coverage тупик
 
