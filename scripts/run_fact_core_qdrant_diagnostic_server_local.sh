@@ -18,6 +18,7 @@ readonly MIN_MEM_AVAILABLE_KIB="$((7 * 1024 * 1024))"
 readonly MIN_SWAP_FREE_KIB="$((6 * 1024 * 1024))"
 
 EXPECTED_SHA="${1:-}"
+OUTPUT_MODE="${2:-aggregate}"
 TOOLING_ROOT=""
 TEMP_ROOT=""
 SOURCE_DIR=""
@@ -117,11 +118,13 @@ require_command() {
 }
 
 validate_invocation() {
-  [[ "$#" -eq 1 ]] || fail "usage"
+  [[ "$#" -ge 1 && "$#" -le 2 ]] || fail "usage"
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "candidate_sha_invalid"
   [[ "$EXPECTED_SHA" != "0000000000000000000000000000000000000000" && \
     "$EXPECTED_SHA" != "$EXPECTED_PRODUCTION_SHA" ]] \
     || fail "candidate_sha_invalid"
+  [[ "$OUTPUT_MODE" == "aggregate" || "$OUTPUT_MODE" == "preview" ]] \
+    || fail "output_mode_invalid"
   local short_sha="${EXPECTED_SHA:0:12}"
   DIAGNOSTIC_NETWORK="rosmol-fact-core-diag-${short_sha}"
   PROXY_CONTAINER="rosmol-qdrant-readonly-${short_sha}"
@@ -513,6 +516,8 @@ create_network_and_proxy() {
 }
 
 create_diagnostic_container() {
+  local python_output_mode="aggregate"
+  [[ "$OUTPUT_MODE" != "preview" ]] || python_output_mode="owner-preview"
   DIAGNOSTIC_ID="$(sudo docker create --name "$DIAGNOSTIC_CONTAINER" --pull never \
     --label com.rosmol.purpose=fact-core-qdrant-diagnostic \
     --label "com.rosmol.candidate-git-sha=$EXPECTED_SHA" \
@@ -545,6 +550,7 @@ create_diagnostic_container() {
     --expected-candidate-sha "$EXPECTED_SHA" \
     --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
     --expected-cases-sha256 "$EXPECTED_CASES_SHA256" \
+    --output-mode "$python_output_mode" \
     --manifest "/workspace/$MANIFEST_REL" 2>/dev/null)" \
     || fail "diagnostic_container_create_failed"
   [[ "$DIAGNOSTIC_ID" =~ ^[0-9a-f]{64}$ ]] \
@@ -649,6 +655,7 @@ assert set(payload) == {
     "dataset_id", "manifest_sha256", "cases_sha256", "minimum_passed",
     "counts", "failures", "status",
 }
+
 assert payload["schema_version"] == (
     "fact-core-qdrant-postprocess-calibration-v1"
 )
@@ -700,6 +707,92 @@ sys.stdout.write(canonical.decode("ascii"))
 PY
 }
 
+validate_preview_stdout() {
+  python3 -E /dev/fd/3 "$1" "$MAX_DIAGNOSTIC_STDOUT_BYTES" \
+    "$EXPECTED_SHA" "$EXPECTED_MANIFEST_SHA256" "$EXPECTED_CASES_SHA256" \
+    3<<'PY' 2>/dev/null
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+maximum = int(sys.argv[2])
+candidate_sha, manifest_sha, cases_sha = sys.argv[3:]
+raw = path.read_bytes()
+assert 0 < len(raw) <= maximum
+assert raw.isascii() and raw.endswith(b"\n") and raw.count(b"\n") == 1
+body = raw[:-1]
+payload = json.loads(body.decode("ascii"))
+canonical = json.dumps(
+    payload,
+    ensure_ascii=True,
+    sort_keys=True,
+    separators=(",", ":"),
+    allow_nan=False,
+).encode("ascii")
+assert body == canonical
+assert type(payload) is dict
+assert set(payload) == {
+    "schema_version", "classification", "disclaimer", "candidate_sha",
+    "dataset_id", "manifest_sha256", "cases_sha256", "counts",
+    "response_shape", "preview_ordinals", "previews",
+}
+assert payload["schema_version"] == "fact-core-qdrant-owner-preview-v1"
+assert payload["classification"] == "calibration_only"
+assert payload["disclaimer"] == (
+    "Five bounded examples from the exposed Pilot50 calibration set; not an "
+    "independent holdout or production traffic conversion."
+)
+assert payload["candidate_sha"] == candidate_sha
+assert payload["dataset_id"] == "pilot50_balanced_v5"
+assert payload["manifest_sha256"] == manifest_sha
+assert payload["cases_sha256"] == cases_sha
+counts = payload["counts"]
+assert type(counts) is dict and set(counts) == {
+    "total", "passed", "no_operator", "llm_calls",
+}
+assert counts["total"] == 50
+assert type(counts["passed"]) is int and 0 <= counts["passed"] <= 50
+assert type(counts["no_operator"]) is int and 0 <= counts["no_operator"] <= 50
+assert counts["llm_calls"] == 0
+shape = payload["response_shape"]
+assert type(shape) is dict and set(shape) == {
+    "min_chars", "median_chars", "p95_chars", "max_chars",
+    "empty_responses", "responses_over_1000_chars", "max_links",
+    "max_paragraphs",
+}
+assert all(type(value) is int and value >= 0 for value in shape.values())
+assert shape["min_chars"] <= shape["median_chars"] <= shape["p95_chars"] <= shape["max_chars"]
+assert shape["max_chars"] <= 4000
+assert shape["empty_responses"] <= 50
+assert shape["responses_over_1000_chars"] <= 50
+assert shape["max_links"] <= 1
+assert shape["max_paragraphs"] <= 20
+expected_ordinals = [1, 9, 26, 44, 48]
+assert payload["preview_ordinals"] == expected_ordinals
+previews = payload["previews"]
+assert type(previews) is list and len(previews) == len(expected_ordinals)
+url_re = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+for ordinal, row in zip(expected_ordinals, previews, strict=True):
+    assert type(row) is dict and set(row) == {
+        "ordinal", "group", "query", "response", "response_chars",
+        "link_count", "passed", "was_escalated",
+    }
+    assert row["ordinal"] == ordinal
+    assert row["group"] in {"typical", "atypical"}
+    assert type(row["query"]) is str and 0 < len(row["query"]) <= 1000
+    assert type(row["response"]) is str and 0 < len(row["response"]) <= 4000
+    assert not any(ord(char) < 32 and char not in "\n\t" for char in row["query"] + row["response"])
+    assert row["response_chars"] == len(row["response"])
+    assert row["link_count"] == len(url_re.findall(row["response"])) <= 1
+    assert type(row["passed"]) is bool
+    assert type(row["was_escalated"]) is bool
+    assert "[src:" not in row["response"].casefold()
+sys.stdout.write(canonical.decode("ascii"))
+PY
+}
+
 main() {
   local capacity
   local post_prod post_qdrant pre_prod pre_prod_sha pre_qdrant
@@ -729,16 +822,25 @@ main() {
   if ! sudo docker start -a "$DIAGNOSTIC_ID" >"$RAW_STDOUT" 2>/dev/null; then
     fail "diagnostic_execution_failed"
   fi
-  validated_stdout="$(validate_diagnostic_stdout "$RAW_STDOUT")" \
-    || fail "diagnostic_output_invalid"
+  if [[ "$OUTPUT_MODE" == "preview" ]]; then
+    validated_stdout="$(validate_preview_stdout "$RAW_STDOUT")" \
+      || fail "preview_output_invalid"
+  else
+    validated_stdout="$(validate_diagnostic_stdout "$RAW_STDOUT")" \
+      || fail "diagnostic_output_invalid"
+  fi
   post_prod="$(production_snapshot)" || fail "production_snapshot_failed"
   [[ "$post_prod" == "$pre_prod" ]] || fail "production_changed"
   post_qdrant="$(qdrant_snapshot)" || fail "qdrant_snapshot_failed"
   [[ "$post_qdrant" == "$pre_qdrant" ]] || fail "qdrant_changed"
-  status="$(python3 -E -c 'import json,sys; print(json.load(sys.stdin)["status"])' \
-    <<<"$validated_stdout")" || fail "diagnostic_output_invalid"
-  printf 'fact_core_qdrant_diagnostic=OK\n'
-  printf 'fact_core_qdrant_calibration_status=%s\n' "$status"
+  if [[ "$OUTPUT_MODE" == "preview" ]]; then
+    printf 'fact_core_qdrant_preview=OK\n'
+  else
+    status="$(python3 -E -c 'import json,sys; print(json.load(sys.stdin)["status"])' \
+      <<<"$validated_stdout")" || fail "diagnostic_output_invalid"
+    printf 'fact_core_qdrant_diagnostic=OK\n'
+    printf 'fact_core_qdrant_calibration_status=%s\n' "$status"
+  fi
   printf 'candidate_sha=%s\n' "$EXPECTED_SHA"
   printf 'production_runtime_sha=%s\n' "$EXPECTED_PRODUCTION_SHA"
   printf 'production_snapshot_sha256=%s\n' "$pre_prod_sha"
@@ -749,7 +851,7 @@ main() {
   printf 'cases_sha256=%s\n' "$EXPECTED_CASES_SHA256"
   printf '%s\n' "$capacity"
   printf '%s\n' "$validated_stdout"
-  [[ "$status" == "GO" ]] || exit 10
+  [[ "$OUTPUT_MODE" == "preview" || "$status" == "GO" ]] || exit 10
 }
 
 main "$@"

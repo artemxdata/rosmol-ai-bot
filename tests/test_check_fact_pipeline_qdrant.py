@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_fact_pipeline_qdrant import ForbiddenLLM, build_summary
+from scripts.check_fact_pipeline_qdrant import (
+    ForbiddenLLM,
+    build_owner_preview,
+    build_summary,
+)
 from scripts.qdrant_readonly_proxy import ALLOWED_POST_PATHS, _upstream_api_key
 
 CANDIDATE_SHA = "a" * 40
@@ -85,6 +89,39 @@ def test_forbidden_llm_fails_closed_and_counts_attempt() -> None:
     with pytest.raises(AssertionError, match="must not call an LLM"):
         asyncio.run(llm.generate(prompt="forbidden"))
     assert llm.calls == 1
+
+
+def test_owner_preview_is_bounded_and_reports_all_response_lengths() -> None:
+    rows = []
+    for ordinal in range(1, 51):
+        rows.append(
+            {
+                **_scored(passed=ordinal != 23),
+                "query": f"Вопрос {ordinal}",
+                "response": "Короткий подтверждённый ответ. " + ("x" * ordinal),
+            }
+        )
+    preview = build_owner_preview(
+        candidate_sha=CANDIDATE_SHA,
+        manifest_sha256=MANIFEST_SHA,
+        cases_sha256=CASES_SHA,
+        scored_cases=rows,
+        groups=["typical"] * 25 + ["atypical"] * 25,
+        llm_calls=0,
+    )
+
+    assert preview["schema_version"] == "fact-core-qdrant-owner-preview-v1"
+    assert preview["counts"] == {
+        "total": 50,
+        "passed": 49,
+        "no_operator": 50,
+        "llm_calls": 0,
+    }
+    assert preview["preview_ordinals"] == [1, 9, 26, 44, 48]
+    assert [row["ordinal"] for row in preview["previews"]] == [1, 9, 26, 44, 48]
+    assert preview["response_shape"]["empty_responses"] == 0
+    assert preview["response_shape"]["max_links"] == 0
+    assert preview["response_shape"]["min_chars"] < preview["response_shape"]["max_chars"]
 
 
 def test_diagnostic_scores_the_post_respond_final_response() -> None:

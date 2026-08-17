@@ -43,9 +43,9 @@ def _run_script(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _validator_python() -> str:
+def _validator_python(function_name: str = "validate_diagnostic_stdout") -> str:
     text = _text()
-    function_start = text.index("validate_diagnostic_stdout() {")
+    function_start = text.index(f"{function_name}() {{")
     marker = "3<<'PY' 2>/dev/null\n"
     start = text.index(marker, function_start) + len(marker)
     end = text.index("\nPY\n}", start)
@@ -82,7 +82,59 @@ def _payload(*, status: str = "GO") -> dict[str, Any]:
     }
 
 
-def _run_validator(tmp_path: Path, payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+def _preview_payload() -> dict[str, Any]:
+    ordinals = [1, 9, 26, 44, 48]
+    previews = [
+        {
+            "ordinal": ordinal,
+            "group": "typical" if ordinal <= 25 else "atypical",
+            "query": f"Вопрос {ordinal}",
+            "response": f"Короткий подтверждённый ответ {ordinal}.",
+            "response_chars": len(f"Короткий подтверждённый ответ {ordinal}."),
+            "link_count": 0,
+            "passed": True,
+            "was_escalated": False,
+        }
+        for ordinal in ordinals
+    ]
+    return {
+        "schema_version": "fact-core-qdrant-owner-preview-v1",
+        "classification": "calibration_only",
+        "disclaimer": (
+            "Five bounded examples from the exposed Pilot50 calibration set; "
+            "not an independent holdout or production traffic conversion."
+        ),
+        "candidate_sha": CANDIDATE_SHA,
+        "dataset_id": "pilot50_balanced_v5",
+        "manifest_sha256": MANIFEST_SHA,
+        "cases_sha256": CASES_SHA,
+        "counts": {
+            "total": 50,
+            "passed": 49,
+            "no_operator": 50,
+            "llm_calls": 0,
+        },
+        "response_shape": {
+            "min_chars": 120,
+            "median_chars": 220,
+            "p95_chars": 480,
+            "max_chars": 650,
+            "empty_responses": 0,
+            "responses_over_1000_chars": 0,
+            "max_links": 1,
+            "max_paragraphs": 2,
+        },
+        "preview_ordinals": ordinals,
+        "previews": previews,
+    }
+
+
+def _run_validator(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    *,
+    function_name: str = "validate_diagnostic_stdout",
+) -> subprocess.CompletedProcess[str]:
     output = tmp_path / "diagnostic.stdout"
     output.write_bytes(
         (
@@ -99,7 +151,7 @@ def _run_validator(tmp_path: Path, payload: dict[str, Any]) -> subprocess.Comple
         [
             sys.executable,
             "-c",
-            _validator_python(),
+            _validator_python(function_name),
             str(output),
             str(64 * 1024 + 1),
             CANDIDATE_SHA,
@@ -133,7 +185,8 @@ def test_launcher_has_valid_bash_syntax() -> None:
         (("bad",), "candidate_sha_invalid"),
         (("0" * 40,), "candidate_sha_invalid"),
         ((PRODUCTION_SHA,), "candidate_sha_invalid"),
-        ((CANDIDATE_SHA, CANDIDATE_SHA), "usage"),
+        ((CANDIDATE_SHA, CANDIDATE_SHA), "output_mode_invalid"),
+        ((CANDIDATE_SHA, "preview", "extra"), "usage"),
     ],
 )
 def test_invalid_invocation_stops_before_sudo_or_docker(
@@ -212,5 +265,31 @@ def test_stdout_validator_accepts_only_canonical_aggregate(tmp_path: Path) -> No
 
 def test_stdout_validator_rejects_forged_status(tmp_path: Path) -> None:
     completed = _run_validator(tmp_path, _payload(status="STOP"))
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+
+
+def test_preview_stdout_validator_accepts_bounded_owner_examples(tmp_path: Path) -> None:
+    payload = _preview_payload()
+    completed = _run_validator(
+        tmp_path,
+        payload,
+        function_name="validate_preview_stdout",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == payload
+
+
+def test_preview_stdout_validator_rejects_internal_source_markers(tmp_path: Path) -> None:
+    payload = _preview_payload()
+    payload["previews"][0]["response"] += " [src:private]"
+    payload["previews"][0]["response_chars"] = len(
+        payload["previews"][0]["response"]
+    )
+    completed = _run_validator(
+        tmp_path,
+        payload,
+        function_name="validate_preview_stdout",
+    )
     assert completed.returncode != 0
     assert completed.stdout == ""

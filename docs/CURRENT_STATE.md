@@ -1,10 +1,55 @@
 # Текущее состояние проекта
 
-**Обновлено:** 16 августа 2026
+**Обновлено:** 17 августа 2026
 
 **Ветка:** `codex/real-rag`
 
-## 16 августа: второй paid Pilot запрещён; готов бесплатный Qdrant end-to-end gate
+## 17 августа: подготовлен owner-preview реальных ответов `49/50`
+
+Агрегированный server-local gate намеренно доказывал прохождение `49/50`, но не показывал
+владельцу тексты ответов. Поэтому к тому же read-only production-Qdrant пути добавлен отдельный
+режим `preview`: он повторно прогоняет все 50 public calibration-кейсов без LLM и выводит только
+пять заранее зафиксированных примеров — типовой короткий, составной, нетипичный, structured-fact
+и ранее критический. Для каждого видны вопрос, финальный ответ после всех guards, длина, число
+ссылок, pass и отсутствие operator escalation.
+
+Одновременно `response_shape` считает по всем 50 ответам minimum/median/p95/maximum длину,
+пустые ответы, ответы длиннее 1000 символов, максимальное число ссылок и абзацев. Выход ограничен
+64 KiB, проверяется как canonical JSON, не допускает internal `[src:...]`, больше одной внешней
+ссылки, control characters или текста свыше 4000 символов. Preview использует тот же изолированный
+read-only Qdrant proxy, не имеет LLM/channel/Yonote/PostgreSQL/Redis credentials, сверяет
+production/Qdrant до и после и ничего не записывает. Следующий шаг — один бесплатный ручной
+server-local `preview`, после чего владелец оценивает фактический tone/объём пяти ответов.
+Локальный gate: Ruff, Bash syntax, KB validation (`2186 valid / 2152 published`) и
+`git diff --check` — `OK`; выполнены все `3409` pytest nodeids (`3408 passed`, известный
+`1 skipped`, `0 failed`) непересекающимися file/nodeid batches из-за известного Windows
+teardown-hang объединённого процесса.
+
+## 16 августа: production Qdrant подтвердил `49/50`; следующий gate — независимый Blind50
+
+Владелец вручную выполнил бесплатный server-local diagnostic exact candidate
+`5b9715295ec1237753e388a78b0255af73d35bc4`. Проверен полный deterministic path
+`analyze -> retrieve -> rerank -> generate -> guards -> respond -> score` на фактическом
+production Qdrant: `49/50` passed, typical `24/25`, atypical `25/25`, без оператора `50/50`,
+retrieval complete `50/50`, citation complete `50/50`, `0` LLM calls. Status — `GO`.
+
+Server evidence привязано к неизменному production runtime
+`c38f0e055630fae2af50720fae81acee20ff4f6a`, Qdrant count `2152`, fingerprint
+`f753b69665f216039b944546886f611410107e1344e52b159ab3f221b60aefa5`, seed
+`aead5e930c513d9d5aeaacd3f3d4b8ce99fab536434343e7fcd6e9917de93e8a`, manifest
+`12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4` и cases
+`9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529`.
+Единственный ordinal `23` сохранил известный `answer_contains_mismatch`: опубликованный ответ
+содержит корректную полную фразу, а frozen calibration label — усечённый stem. Scorer и ответ
+под ошибочную метку не ослаблялись.
+
+Это сильное server-side подтверждение скачка относительно `8/50` и `45/50`, но всё ещё exposed
+calibration, а не независимая production conversion. Повторный paid Pilot не нужен. Точный
+следующий шаг — завершить human reference для приватного Blind50 до просмотра ответов runtime,
+запечатать `50` полных тикетов и выполнить один ordered full-ticket gate с прямым порогом
+`>=25/50` закрытых без оператора и `0` unscored. HDE/VK остаются выключенными.
+
+## 16 августа: второй paid Pilot запрещён; подготовлен бесплатный Qdrant end-to-end gate
 
 Server-local preflight exact candidate `ec01e64a36ef57451d3b161d2a64dc648f2fa169` завершился
 `cost_capacity_check_failed` до `/ask`, cost reservation и любых LLM-вызовов. Это не результат
@@ -34,7 +79,7 @@ proper names сохраняются. Regression покрывает `3.1`, коо
 повтор зависшего Windows teardown-пакета меньшими группами; KB validation —
 `2186 valid / 2152 published`; Bash syntax и `git diff --check` — `OK`. Следующий шаг после push
 exact candidate — один бесплатный server-local Qdrant diagnostic. Ожидаемый результат `49/50`,
-`llm_calls=0`, `status=GO`; затем остаётся завершить независимую human-разметку Blind50, которая
+`llm_calls=0`, `status=GO`; этот результат подтверждён в разделе выше. Затем остаётся завершить независимую human-разметку Blind50, которая
 сейчас фактически пуста (`0/50` reviewed), и выполнить её full-ticket gate `>=25/50`.
 
 ## 16 августа: локализованы и исправлены четыре реальных провала Pilot50 v5
