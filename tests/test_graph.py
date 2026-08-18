@@ -1140,6 +1140,18 @@ def test_fallback_questions_keep_transport_ticket_payment_as_travel() -> None:
     assert [question.text for question in questions] == ["Кто оплачивает проезд?"]
 
 
+def test_fallback_questions_do_not_invent_travel_for_food_and_stay_payment() -> None:
+    questions = build_effective_questions(
+        QueryAnalysis(category="форумы", forum_normalized="Ладога"),
+        "На форуме «Ладога» питание и проживание оплачивают организаторы?",
+    )
+
+    texts = [question.text for question in questions]
+    assert "Есть ли питание?" in texts
+    assert "Какие условия проживания?" in texts
+    assert "Кто оплачивает проезд?" not in texts
+
+
 def test_fallback_questions_keep_age_word_as_age() -> None:
     questions = build_effective_questions(
         QueryAnalysis(category="форумы", forum_normalized="Ростов"),

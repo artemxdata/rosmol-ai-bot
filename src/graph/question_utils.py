@@ -2956,6 +2956,21 @@ def _should_skip_fallback_question(
     if question == "Кто оплачивает проезд?":
         if "возмещ" in normalized_message:
             return True
+        has_travel_context = any(
+            marker in normalized_message
+            for marker in (
+                "проезд",
+                "дорог",
+                "билет",
+                "чартер",
+                "доезд",
+                "доехать",
+                "добраться",
+                "поездк",
+            )
+        )
+        if not has_travel_context:
+            return True
         if _has_decline_participation_context(normalized_message):
             has_explicit_travel_cost_context = any(
                 marker in normalized_message
@@ -2973,19 +2988,6 @@ def _should_skip_fallback_question(
             )
             if not has_explicit_travel_cost_context:
                 return True
-        has_travel_context = any(
-            marker in normalized_message
-            for marker in (
-                "проезд",
-                "дорог",
-                "билет",
-                "чартер",
-                "доезд",
-                "доехать",
-                "добраться",
-                "поездк",
-            )
-        )
         return category == "гранты" and "расход" in normalized_message and not has_travel_context
 
     if question == "Как подать заявку или зарегистрироваться?":

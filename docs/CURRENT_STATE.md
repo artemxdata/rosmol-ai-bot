@@ -4,6 +4,30 @@
 
 **Ветка:** `codex/real-rag`
 
+## 18 августа: candidate развернут в test runtime; smoke нашёл и закрыл ложный вопрос о проезде
+
+Владелец вручную развернул exact candidate
+`008167de97fe67d9d2616f13d853a794a3e1fae1` из clean source. Оба application images имеют
+совпадающий OCI revision и прошли `pip check`; migration и offline ML check завершились `OK`.
+Оба runtime вернули `ready` с exact SHA, Qdrant сохранил `2152` knowledge points, а `36` старых
+semantic-cache responses были удалены. Итог server block — `candidate_deploy=OK`; HDE/VK rules
+во время deployment оставались выключены.
+
+Два server-local smoke подтвердили исправленные ответы «Ладоги» и «Тавриды.Арт». При этом первый
+smoke выявил отдельный presentation/planning defect: слово `оплачивают` в вопросе о питании и
+проживании ошибочно создавало дополнительный вопрос `Кто оплачивает проезд?`, поэтому к
+правильному ответу добавлялся нерелевантный missing-data disclaimer. Причина локализована в
+слишком широком fallback marker, а не в retrieval, Qdrant или KB.
+
+Текущий локальный кандидат требует явного travel context (`проезд`, дорога, билет, чартер,
+доезд или поездка) перед созданием вопроса об оплате проезда. Regression сохраняет настоящий
+вопрос `Кто оплачивает билеты до мероприятия?`, но запрещает ложный travel-aspect для фактической
+формулировки «Ладоги». Локальный gate: Ruff — `OK`; все `3412` pytest items выполнены
+изолированными пакетами (`3411 passed`, `1 skipped`, `0 failed`); KB validation —
+`2186 valid / 2152 published`; `git diff --check` — `OK`. Следующий шаг — commit/push, короткий
+SHA-bound rebuild двух application images, очистка только response cache и повтор этих двух
+server-local smoke. До нового `candidate_deploy=OK` тестовые HDE/VK rules остаются выключены.
+
 ## 18 августа: исправлена читаемость owner-preview; кандидат готов к test-runtime deploy
 
 Owner-preview exact candidate `938ae48e984364d67e8fe43f04ea9319d6268f30` подтвердил
