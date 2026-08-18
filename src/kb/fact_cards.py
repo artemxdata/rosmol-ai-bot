@@ -20,6 +20,7 @@ from src.models import ScoredChunk
 
 _URL_RE = re.compile(r"https?://\S+", flags=re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_STEP_ARROW_RE = re.compile(r"\s*[➡➜→]+\s*")
 _EMOJI_RE = re.compile(
     "["
     "\U0001f1e6-\U0001f1ff"
@@ -1054,7 +1055,7 @@ def _render_stay(
     if len(aspects & {KnowledgeAspect.ACCOMMODATION, KnowledgeAspect.FOOD}) == 2:
         wanted = [
             re.sub(
-                r"за\s+счет\s+организаторов\b",
+                r"за\s+счет\s+организаторов(?:\s+форума)?\b",
                 "за счёт организаторов форума",
                 value,
                 flags=re.IGNORECASE,
@@ -1087,9 +1088,20 @@ def _fit_claims(values: list[str], *, max_chars: int) -> list[str]:
     return result
 
 
+def _normalize_source_step_chain(value: str) -> str:
+    parts = [
+        part.strip(" .;:")
+        for part in _STEP_ARROW_RE.split(value)
+        if part.strip(" .;:")
+    ]
+    if len(parts) < 2:
+        return value
+    return ". Затем ".join(parts)
+
+
 def _clean_claim(value: str) -> str:
-    claim = _EMOJI_RE.sub("", str(value or "")).replace("\u00a0", " ")
-    claim = claim.replace("➡", "; затем ")
+    claim = _normalize_source_step_chain(str(value or ""))
+    claim = _EMOJI_RE.sub("", claim).replace("\u00a0", " ")
     claim = claim.replace("Дирекция.Всероссийские", "Дирекция. Всероссийские")
     claim = re.sub(r"\bпо адресу\s+ТП\s+", "по адресу ", claim, flags=re.IGNORECASE)
     claim = re.sub(r"\bпри помощи Госуслуг\b", "с помощью Госуслуг", claim)

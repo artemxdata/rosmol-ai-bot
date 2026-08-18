@@ -597,6 +597,35 @@ def test_fact_cards_choose_registration_deadline_over_later_workflow_date() -> N
     assert "30 июня 2026 года" in draft.response
 
 
+def test_fact_cards_do_not_duplicate_forum_in_stay_answer() -> None:
+    draft = compose_fact_cards(
+        "На форуме «Ладога» питание и проживание оплачивают организаторы?",
+        [_chunk("yonote_api_irwwd4t2v8_s0008_pitanie_i_prozhivanie")],
+        category="форумы",
+        forum_normalized="Ладога",
+    )
+
+    assert draft is not None
+    assert "за счёт организаторов форума." in draft.response
+    assert "форума форума" not in draft.response
+
+
+def test_fact_cards_preserve_tavrida_registration_steps() -> None:
+    draft = compose_fact_cards(
+        "Как попасть на Тавриду.Арт и подать заявку?",
+        [_chunk("yonote_api_cljqo2rlvk_s0003_registraciya")],
+        category="форумы",
+        forum_normalized="Таврида",
+    )
+
+    assert draft is not None
+    assert "Таврида.Арт. Затем выбрать" in draft.response
+    assert ". Затем выполнить" in draft.response
+    assert ". Затем дождаться" in draft.response
+    assert "➡" not in draft.response
+    assert "Таврида.Арт выбрать" not in draft.response
+
+
 def test_fact_cards_fail_closed_for_indistinguishable_duplicate_sources() -> None:
     source = _chunk("yonote_api_u7b5sscrri_s0016_statusy_zayavok")
     duplicate = source.model_copy(update={"chunk_id": "duplicate_status_source"})
