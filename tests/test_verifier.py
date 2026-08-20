@@ -1028,6 +1028,64 @@ async def test_verifier_adds_missing_note_for_cited_partial_source_answer() -> N
 
 
 @pytest.mark.asyncio
+async def test_verifier_does_not_invent_travel_for_food_and_stay_payment() -> None:
+    response = (
+        "Будет обеспечено 3-разовое питание и питьевой режим. "
+        "Проживание и питание за счёт организаторов форума. [src:ladoga_stay]"
+    )
+    result = await verify(
+        {
+            "message_masked": (
+                "На форуме «Ладога» питание и проживание оплачивают организаторы?"
+            ),
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Ладога",
+                questions=[
+                    Question(
+                        text="Какие условия проживания?",
+                        topic="usloviya_prozhivaniya",
+                        category="форумы",
+                        forum_normalized="Ладога",
+                    ),
+                    Question(
+                        text="Как организовано питание?",
+                        topic="informaciya_o_ploschadke_pitanie_pite",
+                        category="форумы",
+                        forum_normalized="Ладога",
+                    ),
+                ],
+            ),
+            "generated_response": response,
+            "generator_model": "source_chunk",
+            "cited_sources": ["ladoga_stay"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="ladoga_stay",
+                    text=(
+                        "Будет обеспечено 3-разовое питание и питьевой режим. "
+                        "Проживание и питание за счёт организаторов форума."
+                    ),
+                    metadata={
+                        "forum_normalized": "Ладога",
+                        "topic": "pitanie_i_prozhivanie",
+                    },
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result.get("should_escalate", False) is False
+    assert result.get("partial_source_missing_coverage", []) == []
+    final_response = str(result.get("generated_response") or response)
+    assert "проезд" not in final_response.casefold()
+    assert "в базе нет подтверждённых данных" not in final_response.casefold()
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_multi_aspect_answer_when_sources_cover_each_aspect() -> None:
     result = await verify(
         {
