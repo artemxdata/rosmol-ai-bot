@@ -4,6 +4,7 @@ import re
 from time import perf_counter
 
 from src.config import get_settings
+from src.graph.answer_plan import answer_plan_for_state
 from src.graph.provenance import (
     MAX_PROVENANCE_SOURCE_IDS,
     PROVENANCE_SCHEMA_VERSION,
@@ -876,7 +877,7 @@ def _missing_aspect_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
     message = _state_message_for_search(state)
     if _is_feedback_coverage_exempt(message):
         return []
-    questions = _aspect_questions_for_coverage(analysis, message)
+    questions = _aspect_questions_for_coverage(state, analysis, message)
     if len(questions) < 2:
         return []
 
@@ -890,17 +891,22 @@ def _missing_aspect_coverage(state: BotState, chunks: list[ScoredChunk]) -> list
 
 
 def _aspect_questions_for_coverage(
+    state: BotState,
     analysis: object,
     message: str,
 ) -> list[Question]:
-    questions = [
-        question
-        for question in build_effective_questions(analysis, message)
-        if _required_marker_groups(question.text)
-    ]
-    marker_questions = _marker_questions_from_message(analysis, message)
-    if len(marker_questions) > len(questions):
-        questions = marker_questions
+    current_plan = answer_plan_for_state(state, analysis, message)
+    if current_plan.questions:
+        questions = list(current_plan.questions)
+    else:
+        questions = [
+            question
+            for question in build_effective_questions(analysis, message)
+            if _required_marker_groups(question.text)
+        ]
+        marker_questions = _marker_questions_from_message(analysis, message)
+        if len(marker_questions) > len(questions):
+            questions = marker_questions
 
     unique: list[Question] = []
     seen: set[tuple[str, str | None]] = set()

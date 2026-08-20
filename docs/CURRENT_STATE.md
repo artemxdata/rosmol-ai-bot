@@ -4,6 +4,31 @@
 
 **Ветка:** `codex/real-rag`
 
+## 20 августа: runtime `ca2d9f0` healthy; preview закрыл 4/5 и выявил последний duplicate-plan defect
+
+Владелец вручную развернул exact candidate
+`ca2d9f0026f364d7d6dca278865a27266f934d2d`. Оба runtime вернули `ready` с exact SHA,
+candidate deployment завершился `OK`, HDE/VK rules остались выключены. Server-local preview
+показал пять полных ответов. Ответы по питанию/проживанию «Ладоги», заявке на «Тавриду.Арт»,
+переносу данных ФГАИС и регистрации/региональным фильтрам читаемые, grounded и без ложных
+дописок; ранее найденный вопрос о проезде исчез.
+
+Пятый ответ правильно сообщил deadline «Ладоги», но verifier после готового ответа снова
+разобрал исходную фразу собственными raw markers: число `14` в дате стало ложным возрастом, а
+уже отвеченный application deadline — отдельным якобы непокрытым вопросом о датах. Это не
+retrieval/KB defect: query-proven answer plan корректно содержал единственный аспект
+`application_deadline`, а ошибка возникала в независимом повторном планировании verifier.
+
+Verifier coverage теперь использует тот же frozen/query-proven answer plan, что retrieve,
+rerank и generate. Legacy marker fallback сохраняется только для запросов, для которых единый
+план не построен. Regression воспроизводит фактический server query и запрещает ложные
+`Возрастные ограничения`, `Какие даты и сроки` и missing-data disclaimer после уже данного
+deadline. Полный локальный gate: все `3414` pytest items учтены (`3413 passed`, известный
+`1 skipped`, `0 failed`); Ruff — `OK`; KB validation — `2186 valid / 2152 published`;
+`git diff --check` — `OK`. Следующий шаг — commit/push, короткий SHA-bound rebuild и повтор
+пятого server-local ответа. До чистого ответа и одного ограниченного ручного channel smoke
+HDE/VK rules не включать.
+
 ## 20 августа: закрыт второй путь ложного travel-aspect; кандидат готов к повторному deploy
 
 Владелец вручную развернул `c60ff1a7dbedb50ca1cf40d0217bbf0364beb120`: оба runtime

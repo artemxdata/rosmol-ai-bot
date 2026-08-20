@@ -1086,6 +1086,60 @@ async def test_verifier_does_not_invent_travel_for_food_and_stay_payment() -> No
 
 
 @pytest.mark.asyncio
+async def test_verifier_uses_query_plan_for_application_deadline_coverage() -> None:
+    response = (
+        "Регистрация на форум «Ладога» закрыта: приём заявок завершился "
+        "30 июня 2026 года в 23:59 (мск). [src:ladoga_registration]"
+    )
+    result = await verify(
+        {
+            "message_masked": (
+                "До какого срока принимали заявки на «Ладогу» и был ли приём уже "
+                "закрыт по состоянию на 14 августа 2026 года?"
+            ),
+            "analysis": QueryAnalysis(
+                category="форумы",
+                forum_normalized="Ладога",
+                questions=[
+                    Question(
+                        text="Когда начинается мероприятие?",
+                        topic="daty_nachala_meropriyatiya",
+                        category="форумы",
+                        forum_normalized="Ладога",
+                    )
+                ],
+            ),
+            "generated_response": response,
+            "generator_model": "source_chunk",
+            "cited_sources": ["ladoga_registration"],
+            "reranked_chunks": [
+                ScoredChunk(
+                    chunk_id="ladoga_registration",
+                    text=(
+                        "Регистрация на форум «Ладога» закрыта: приём заявок "
+                        "завершился 30 июня 2026 года в 23:59 (мск)."
+                    ),
+                    metadata={
+                        "forum_normalized": "Ладога",
+                        "topic": "registraciya",
+                    },
+                    reranker_score=0.9,
+                )
+            ],
+            "max_confidence": 0.9,
+        }
+    )
+
+    assert result["verification"].has_hallucination is False
+    assert result.get("should_escalate", False) is False
+    assert result.get("partial_source_missing_coverage", []) == []
+    final_response = str(result.get("generated_response") or response)
+    assert "возрастные ограничения" not in final_response.casefold()
+    assert "какие даты и сроки" not in final_response.casefold()
+    assert "в базе нет подтверждённых данных" not in final_response.casefold()
+
+
+@pytest.mark.asyncio
 async def test_verifier_allows_multi_aspect_answer_when_sources_cover_each_aspect() -> None:
     result = await verify(
         {
