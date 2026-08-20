@@ -7647,8 +7647,9 @@ async def test_generate_uses_max_for_single_covered_complex_question(
         }
     )
 
-    assert llm.calls == 0
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert llm.kwargs[0]["model"] == "GigaChat/GigaChat-2-Max"
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["travel"]
 
 
@@ -7673,7 +7674,10 @@ async def test_generate_uses_source_chunk_for_single_official_complex_forum_ques
         score=0.8,
         reranker_score=0.72,
     )
-    llm = FailingLLM()
+    llm = CapturingLLM(
+        "Список всего необходимого будет перечислен в памятке участника форума. "
+        "[src:ivolga_memo]"
+    )
 
     result = await generate(
         {
@@ -7689,7 +7693,8 @@ async def test_generate_uses_source_chunk_for_single_official_complex_forum_ques
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["ivolga_memo"]
     assert "памятке участника" in result["generated_response"]
 
@@ -7716,6 +7721,11 @@ async def test_generate_treats_event_documents_as_program_source(
         reranker_score=0.72,
     )
 
+    llm = CapturingLLM(
+        "The forum program is published in the official participant channel every day. "
+        "[src:ivolga_program_document]"
+    )
+
     result = await generate(
         {
             "analysis": QueryAnalysis(
@@ -7734,11 +7744,12 @@ async def test_generate_treats_event_documents_as_program_source(
             "reranked_chunks": [chunk],
             "max_confidence": 0.72,
             "message_masked": "Ivolga: where can I find the forum program?",
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["ivolga_program_document"]
     assert "official participant channel" in result["generated_response"]
 
@@ -7767,6 +7778,11 @@ async def test_generate_accepts_travel_source_when_it_explicitly_covers_housing(
         reranker_score=0.72,
     )
 
+    llm = CapturingLLM(
+        "Travel is paid separately. Transfer, проживание and food are fully covered "
+        "by organizers. [src:ivolga_travel_housing]"
+    )
+
     result = await generate(
         {
             "analysis": QueryAnalysis(
@@ -7785,11 +7801,12 @@ async def test_generate_accepts_travel_source_when_it_explicitly_covers_housing(
             "reranked_chunks": [chunk],
             "max_confidence": 0.72,
             "message_masked": "Ivolga: where will participants live?",
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["ivolga_travel_housing"]
     assert "fully covered" in result["generated_response"]
 
@@ -7936,6 +7953,11 @@ async def test_generate_uses_source_chunk_for_single_official_complex_topic_matc
         reranker_score=0.74,
     )
 
+    llm = CapturingLLM(
+        "Проезд до места проведения слёта и обратно оплачивает направляющая "
+        "сторона или участник самостоятельно. [src:student_special_forces_travel]"
+    )
+
     result = await generate(
         {
             "analysis": QueryAnalysis(
@@ -7953,11 +7975,12 @@ async def test_generate_uses_source_chunk_for_single_official_complex_topic_matc
             ),
             "reranked_chunks": [chunk],
             "max_confidence": 0.74,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["student_special_forces_travel"]
 
 
@@ -8199,6 +8222,11 @@ async def test_generate_prefers_event_overview_source_for_forum_summary_question
         score=0.88,
         reranker_score=0.9,
     )
+    llm = CapturingLLM(
+        "Форум «Российский Север» — межнациональная площадка для активной молодежи. "
+        "Главная тема — креативные индустрии и сохранение культурного наследия. "
+        "[src:russian_north_overview]"
+    )
 
     result = await generate(
         {
@@ -8217,11 +8245,12 @@ async def test_generate_prefers_event_overview_source_for_forum_summary_question
             ),
             "reranked_chunks": [programme, overview],
             "max_confidence": 0.91,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["russian_north_overview"]
 
 
@@ -8714,6 +8743,10 @@ async def test_generate_prefers_grant_project_change_over_grant_terms(
         score=0.9,
         reranker_score=0.7,
     )
+    llm = CapturingLLM(
+        "Чтобы изменить смету, напиши на почту grant2024@fadm.gov.ru. "
+        "[src:generic_grant_change]"
+    )
 
     result = await generate(
         {
@@ -8725,11 +8758,12 @@ async def test_generate_prefers_grant_project_change_over_grant_terms(
             "message_masked": "Гранты для физических лиц Внести изменения в проект",
             "reranked_chunks": [grant_change, grant_terms],
             "max_confidence": 0.7,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["generic_grant_change"]
     assert "grant2024@fadm.gov.ru" in result["generated_response"]
 
@@ -8749,6 +8783,10 @@ async def test_generate_uses_source_chunk_for_complex_single_official_source(
         score=0.9,
         reranker_score=0.85,
     )
+    llm = CapturingLLM(
+        "По вопросам грантового соглашения нужно обратиться к куратору конкурса. "
+        "[src:grant_agreement]"
+    )
 
     result = await generate(
         {
@@ -8764,11 +8802,12 @@ async def test_generate_uses_source_chunk_for_complex_single_official_source(
             ),
             "reranked_chunks": [grant_agreement],
             "max_confidence": 0.85,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["grant_agreement"]
 
 
@@ -8861,7 +8900,7 @@ async def test_generate_prefers_sport_recommendation_over_generic_recommendation
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_official_catalog_without_contextual_llm_synthesis(
+async def test_generate_routes_contextual_official_catalog_through_grounded_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -8878,6 +8917,11 @@ async def test_generate_uses_official_catalog_without_contextual_llm_synthesis(
         },
         score=0.5,
         reranker_score=0.3,
+    )
+
+    llm = CapturingLLM(
+        "Посмотри все доступные форумы на "
+        "https://events.myrosmol.ru/forumy/. [src:recommendation_catalog]"
     )
 
     result = await generate(
@@ -8897,13 +8941,76 @@ async def test_generate_uses_official_catalog_without_contextual_llm_synthesis(
             ),
             "reranked_chunks": [catalog],
             "max_confidence": 0.3,
-            "llm_client": FailingLLM(),
+            "llm_client": llm,
         }
     )
 
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["recommendation_catalog"]
     assert "events.myrosmol.ru/forumy" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_generate_routes_complex_single_official_source_through_grounded_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(reranker_threshold_low=0.4, reranker_threshold_high=0.7),
+    )
+    monkeypatch.setattr(
+        "src.graph.nodes.generate._fact_card_source_result",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.graph.nodes.generate._request_bound_published_source_result",
+        lambda **_kwargs: None,
+    )
+    source = ScoredChunk(
+        chunk_id="novel_official_accommodation",
+        text="Участников нового мероприятия размещают в гостинице.",
+        metadata={
+            "source_type": "yonote",
+            "category": "форумы",
+            "forum_normalized": "Новое мероприятие",
+            "topic": "novel_accommodation",
+        },
+        score=0.95,
+        reranker_score=0.95,
+    )
+    llm = CapturingLLM(
+        "Участников нового мероприятия размещают в гостинице. "
+        "[src:novel_official_accommodation]"
+    )
+
+    result = await generate(
+        {
+            "message": "Расскажи, где разместят участников нового мероприятия?",
+            "message_masked": "Расскажи, где разместят участников нового мероприятия?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized="Новое мероприятие",
+                questions=[
+                    Question(
+                        text="Где разместят участников?",
+                        category="форумы",
+                        forum_normalized="Новое мероприятие",
+                        topic="novel_accommodation",
+                    )
+                ],
+            ),
+            "reranked_chunks": [source],
+            "max_confidence": 0.95,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result.get("should_escalate") is not True
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert result["cited_sources"] == ["novel_official_accommodation"]
 
 
 @pytest.mark.asyncio
@@ -9174,7 +9281,10 @@ async def test_generate_returns_partial_source_chunk_for_uncovered_multi_aspect(
         score=0.75,
         reranker_score=0.63,
     )
-    llm = CapturingLLM()
+    llm = CapturingLLM(
+        "Проезд до места проведения форума и обратно оплачивает направляющая "
+        "сторона. [src:travel]"
+    )
 
     result = await generate(
         {
@@ -9192,11 +9302,11 @@ async def test_generate_returns_partial_source_chunk_for_uncovered_multi_aspect(
         }
     )
 
-    assert llm.calls == 0
-    assert result["generator_model"] == "source_chunk"
-    assert result["cited_sources"] == ["travel"]
-    assert result["partial_source_missing_coverage"]
-    assert "в базе нет подтверждённых данных" in result["generated_response"]
+    assert llm.calls == 2
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_response_profile_failed"
+    assert result["cited_sources"] == []
 
 
 @pytest.mark.asyncio
@@ -9837,10 +9947,10 @@ async def test_generate_uses_decline_chunk_for_cannot_go_followup_with_context(
         }
     )
 
-    assert llm.calls == 0
-    assert result["generator_model"] == "source_chunk"
+    assert llm.calls == 1
+    assert result["generator_model"] == "GigaChat/GigaChat-2-Max"
     assert result["cited_sources"] == ["amur_decline"]
-    assert "отказаться от участия" in result["generated_response"]
+    assert "сообщи нам" in result["generated_response"]
     assert "amur_travel" not in result["cited_sources"]
 
 

@@ -768,3 +768,28 @@ rolling-24h capacity или любой quality criterion означают STOP �
 production runtime, KB/Qdrant и Yonote не изменяются. Даже результат выше `25/50` служит только
 широким regression-сигналом; доказательство цели `>=50%` требует отдельного Blind50 full-ticket
 run с независимой human reference-разметкой и последующего release/security gate.
+
+## D-045. Обновление знаний проверяется как sealed Yonote -> RAG цикл без Chatme/NLU импорта
+
+**Статус:** принято владельцем 20 августа 2026; уточняет D-038 и следующий release cycle после
+D-044.
+
+Chatme остаётся только внешним продуктовым baseline. Его слоты, intent tree, готовые ответы и
+операторские формулировки не импортируются в routing, seed или Qdrant и не являются источником
+фактов. Published Yonote остаётся приоритетным read-only source truth. Простые однозначные вопросы
+могут обслуживаться точным source-bound ответом, а составные, новые и диалоговые вопросы проходят
+через grounded LLM synthesis с retrieval/rerank, verifier и citations.
+
+Первый этап обновления двухфазный: админка выполняет полный Preview и Apply только по одноразовому
+receipt, связанному с current/snapshot/merged SHA-256; массовая индексация остаётся отдельной
+server-controlled операцией владельца с backup/fingerprint, `--prune-stale`, очисткой semantic
+cache, restart и rollback path. Автоматическая синхронизация и полный Qdrant publish через HTTP в
+эту редакцию не входят. После доказанного end-to-end цикла запуск и прогресс publish могут быть
+вынесены в отдельный durable admin job.
+
+Гибкость считается доказанной только на новых опубликованных данных и заранее зафиксированных
+формулировках, которые начинают работать без добавления intent, slot, alias или готового ответа в
+код. До exact Seed/Qdrant `GO`, novel-query server-local smoke и security/runtime acceptance HDE/VK
+остаются выключенными. Calibration `49/50` сохраняется как regression, но не заменяет независимый
+full-ticket Blind50 с порогом не ниже `25/50`, нулём critical unsupported facts и всеми оценёнными
+кейсами.

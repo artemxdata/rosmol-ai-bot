@@ -25,14 +25,9 @@ from scripts.build_yonote_kb_seed import (
 from scripts.index_kb import validate_seed_items
 from src.config import get_settings
 from src.kb.source_extractors import (
-    extract_dates,
-    extract_emails,
-    extract_links,
-    extract_phones,
-    has_conditional_logic,
+    refresh_text_derived_metadata,
     slugify,
 )
-from src.kb.temporal import registration_deadline_iso
 
 DEFAULT_BASE_KB = Path("data/knowledge_base_seed.json")
 DEFAULT_OUTPUT = Path("data/knowledge_base_seed.json")
@@ -650,12 +645,12 @@ def build_record(
         "forum_normalized": forum,
         "topic": topic,
         "is_generic": forum is None,
-        "has_conditional_logic": has_conditional_logic(text_clean),
+        "has_conditional_logic": False,
         "conditions_summary": None,
-        "links": extract_links(text_clean),
-        "emails": extract_emails(text_clean),
-        "phones": extract_phones(text_clean),
-        "dates_mentioned": extract_dates(text_clean),
+        "links": [],
+        "emails": [],
+        "phones": [],
+        "dates_mentioned": [],
         "valid_from": None,
         "valid_to": None,
         "source_type": "yonote",
@@ -665,7 +660,7 @@ def build_record(
         "version": "yonote-api-v1",
         "extraction_date": extraction_date.isoformat(),
         "updated_at": document.updated_at or extraction_date.isoformat(),
-        "char_count": len(text_clean),
+        "char_count": 0,
         "parent_chunk_id": None,
         "intent_name": title,
         "intent_examples": build_intent_examples(event_name, title, document.title),
@@ -680,9 +675,7 @@ def build_record(
         "source_heading_path": list(document.path_titles) + [title],
         "source_document_updated_at": document.updated_at,
     }
-    registration_deadline = registration_deadline_iso(text_clean)
-    if registration_deadline:
-        record["registration_deadline"] = registration_deadline
+    refresh_text_derived_metadata(record, text_clean)
     return record
 
 

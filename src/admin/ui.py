@@ -334,6 +334,7 @@ _HTML_TEMPLATE = """
     .ops-meta { color: var(--muted); font-size: 11px; line-height: 1.4; }
     .ops-preview { color: var(--text); font-size: 12px; line-height: 1.45; }
     .quality-note { border-left: 3px solid var(--cyan); background: #edf8fa; padding: 10px 12px; color: var(--text); line-height: 1.45; }
+    .quality-note.danger { border-left-color: var(--danger); background: #fff1f0; }
     .sync-guide { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
     .sync-step { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
     .sync-step-number { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-bottom: 7px; border-radius: 50%; background: var(--shell); color: #fff; font-size: 11px; font-weight: 800; }
@@ -555,6 +556,10 @@ _HTML_TEMPLATE = """
           <svg class="icon"><use href="#icon-shield"></use></svg>
           <span>Проверка базы</span>
         </button>
+        <button id="runtimeStatusButton" class="nav-item" type="button" title="Seed и индекс">
+          <svg class="icon"><use href="#icon-database"></use></svg>
+          <span>Seed и индекс</span>
+        </button>
         <button id="qualityButton" class="nav-item" type="button" title="Отчёт качества">
           <svg class="icon"><use href="#icon-flask"></use></svg>
           <span>Отчёт качества</span>
@@ -622,6 +627,10 @@ _HTML_TEMPLATE = """
             <div class="metric">
               <span id="metricOps" class="metric-value">-</span>
               <span class="metric-label">запросов за 7 дней</span>
+            </div>
+            <div class="metric">
+              <span id="metricIndex" class="metric-value">-</span>
+              <span class="metric-label">seed ↔ Qdrant</span>
             </div>
           </div>
           <div class="table-wrap">
@@ -833,6 +842,13 @@ _HTML_TEMPLATE = """
     function adminErrorMessage(status, detail) {
       const raw = String(detail || "").trim();
       const normalized = raw.toLowerCase();
+      if (status === 409 && normalized === "receipt_recovery_required") {
+        return (
+          "Предыдущее применение Preview нужно безопасно завершить. " +
+          "Не запускай новый Preview: повтори Apply с тем же проверенным receipt. " +
+          "Если receipt больше не показан, остановись и выполни server-local recovery."
+        );
+      }
       const isYonoteRead = normalized.includes("yonote");
       if (status === 409 && isYonoteRead) {
         return (
@@ -1172,6 +1188,8 @@ _HTML_TEMPLATE = """
     function renderValidationDashboard(data) {
       const dashboard = document.getElementById("qualityDashboard");
       const statuses = Object.entries(data.status_counts || {});
+      const semanticFindings = data.semantic_findings || [];
+      const warningCount = data.semantic_warning_count || 0;
       const categories = Object.entries(data.category_counts || {})
         .sort((left, right) => Number(right[1]) - Number(left[1]))
         .slice(0, 10);
@@ -1181,6 +1199,12 @@ _HTML_TEMPLATE = """
         '<span>' + escapeHtml(count) + '</span></div>',
         "</div>",
       ].join("")).join("");
+      const findingRows = semanticFindings.map((finding) => `
+        <div class="ops-item">
+          <div class="ops-line"><span>${escapeHtml(finding.code || "semantic_warning")}</span><span>${escapeHtml(finding.count || 1)}</span></div>
+          <div class="ops-meta">${escapeHtml(finding.message || "Требуется проверка")}</div>
+        </div>
+      `).join("");
       dashboard.classList.remove("hidden");
       dashboard.innerHTML = [
         '<div class="ops-kpis">',
@@ -1190,15 +1214,56 @@ _HTML_TEMPLATE = """
         '<span class="metric-label">статусов</span></div>',
         '<div class="metric"><span class="metric-value">' + escapeHtml(Object.keys(data.category_counts || {}).length) + '</span>',
         '<span class="metric-label">категорий</span></div>',
-        '<div class="metric"><span class="metric-value quality-ok">OK</span>',
-        '<span class="metric-label">структура seed</span></div>',
+        '<div class="metric"><span class="metric-value ' + (warningCount ? 'quality-warn' : 'quality-ok') + '">' + escapeHtml(warningCount) + '</span>',
+        '<span class="metric-label">semantic warnings</span></div>',
         "</div>",
-        '<div class="quality-note"><b>База прошла структурную проверку.</b> ',
-        "Все записи имеют обязательные поля и могут быть использованы для индексации.</div>",
+        '<div class="quality-note"><b>База прошла структурную и смысловую проверку.</b> ',
+        warningCount
+          ? "Критических ошибок нет, но предупреждения нужно изучить до индексации.</div>"
+          : "Критических ошибок и semantic warnings нет.</div>",
+        '<div class="ops-section"><h3>Смысловые предупреждения</h3><div class="ops-list">',
+        findingRows || '<div class="ops-item"><span class="ops-meta">Предупреждений нет</span></div>',
+        "</div></div>",
         '<div class="ops-section"><h3>Крупнейшие категории</h3><div class="ops-list">',
         categoryRows || '<div class="ops-item"><span class="ops-meta">Нет данных</span></div>',
         "</div></div>",
       ].join("");
+    }
+    function renderRuntimeStatusDashboard(data) {
+      const dashboard = document.getElementById("qualityDashboard");
+      const runtime = data.runtime || {};
+      const seed = data.seed || {};
+      const qdrant = data.qdrant || {};
+      const cache = data.response_cache || {};
+      const isReady = data.status === "GO" && qdrant.exact_payload_match === true;
+      dashboard.classList.remove("hidden");
+      dashboard.innerHTML = `
+        <div class="ops-kpis">
+          <div class="metric"><span class="metric-value ${isReady ? "quality-ok" : "quality-bad"}">${escapeHtml(data.status || "STOP")}</span><span class="metric-label">готовность индекса</span></div>
+          <div class="metric"><span class="metric-value">${escapeHtml(seed.published || 0)}</span><span class="metric-label">published в seed</span></div>
+          <div class="metric"><span class="metric-value">${escapeHtml(qdrant.points || 0)}</span><span class="metric-label">points в Qdrant</span></div>
+          <div class="metric"><span class="metric-value">${escapeHtml(cache.points || 0)}</span><span class="metric-label">ответов в cache</span></div>
+        </div>
+        <div class="quality-note">
+          <b>${isReady ? "Seed и payload Qdrant совпадают." : "Seed и Qdrant расходятся — ответы по новой базе пока нельзя считать принятыми."}</b>
+          Проверяется весь сохранённый payload каждого опубликованного чанка; vectors не пересчитываются этой read-only проверкой.
+        </div>
+        <div class="ops-list">
+          <div class="ops-item">
+            <div class="ops-line"><span>Runtime</span><span>${escapeHtml(runtime.role || "—")} · ${runtime.admin_read_only ? "read-only" : "editor"}</span></div>
+            <div class="ops-meta mono">SHA: ${escapeHtml(runtime.release_git_sha || "—")}</div>
+          </div>
+          <div class="ops-item">
+            <div class="ops-line"><span>Расхождения</span><span>${escapeHtml((qdrant.missing || 0) + (qdrant.stale || 0) + (qdrant.changed || 0) + (qdrant.invalid_or_duplicate_points || 0))}</span></div>
+            <div class="ops-meta">missing: ${escapeHtml(qdrant.missing || 0)} · stale: ${escapeHtml(qdrant.stale || 0)} · changed: ${escapeHtml(qdrant.changed || 0)} · invalid/duplicate: ${escapeHtml(qdrant.invalid_or_duplicate_points || 0)}</div>
+          </div>
+          <div class="ops-item">
+            <div class="ops-line"><span>Fingerprint</span><span>${qdrant.exact_payload_match ? "совпадает" : "не совпадает"}</span></div>
+            <div class="ops-meta mono">seed: ${escapeHtml(seed.payload_fingerprint_sha256 || "—")}</div>
+            <div class="ops-meta mono">Qdrant: ${escapeHtml(qdrant.payload_fingerprint_sha256 || "—")}</div>
+          </div>
+        </div>
+      `;
     }
     function renderQualityDashboard(data) {
       const validation = data.validation || {};
@@ -1277,8 +1342,17 @@ _HTML_TEMPLATE = """
         forum_normalized: "форум или мероприятие",
         topic: "тема",
         intent_name: "название вопроса",
+        intent_examples: "примеры формулировок",
+        source_category: "раздел источника",
         source_url: "ссылка на источник",
+        source_document_id: "документ-источник",
+        source_collection_id: "коллекция-источник",
+        source_collection_name: "название коллекции",
+        source_heading_path: "путь заголовков",
         source_document_updated_at: "дата обновления документа",
+        registration_deadline: "срок регистрации",
+        valid_from: "начало действия",
+        valid_to: "окончание действия",
       };
       return labels[field] || field;
     }
@@ -1367,6 +1441,7 @@ _HTML_TEMPLATE = """
         `Обновится существующих чанков: ${data.changed || 0}`,
         `Исчезнет из локального Yonote-слоя: ${data.removed || 0}`,
         `Всего чанков в базе после применения: ${data.merged_records || 0}`,
+        `Безопасность snapshot: ${(data.snapshot_safety || {}).status || "не проверена"}`,
       ];
       const collections = Object.entries(data.collection_counts || {});
       if (collections.length) {
@@ -1428,7 +1503,18 @@ _HTML_TEMPLATE = """
       lastYonoteReport = data;
       const dashboard = document.getElementById("yonoteDashboard");
       dashboard.classList.remove("hidden");
-      const shouldShowApply = !adminReadOnly && !data.applied;
+      const receipt = data.receipt || {};
+      const hashes = data.hashes || {};
+      const chunkAudit = data.chunk_audit || {};
+      const findings = chunkAudit.findings || {};
+      const documentAudit = chunkAudit.documents || {};
+      const freshLengths = chunkAudit.fresh_lengths || {};
+      const projection = data.index_projection || {};
+      const snapshotSafety = data.snapshot_safety || {};
+      const snapshotSafetyStopped = snapshotSafety.status === "STOP";
+      const shouldShowApply = (
+        !adminReadOnly && !data.applied && receipt.apply_ready === true
+      );
       dashboard.innerHTML = `
         <div class="sync-guide">
           <div class="sync-step"><span class="sync-step-number">1</span><b>Проверить Yonote</b><span>Читаем документы и считаем разницу. База бота не меняется.</span></div>
@@ -1449,6 +1535,35 @@ _HTML_TEMPLATE = """
             : "Сейчас ничего не изменено ни в базе бота, ни в Yonote. Сначала изучи список ниже или скачай отчёт."}
           После применения в базе будет ${escapeHtml(data.merged_records || 0)} чанков.
         </div>
+        ${snapshotSafetyStopped
+          ? `<div class="quality-note danger"><b>Apply заблокирован:</b> Yonote вернул пустой или аномально уменьшившийся snapshot. Ничего не применяй, пока владелец отдельно не проверит источник и не разрешит массовое удаление.</div>`
+          : ""}
+        <div class="ops-list">
+          <div class="ops-item">
+            <div class="ops-line"><span>Проверяемый snapshot</span><span>${receipt.apply_ready ? "готов к Apply" : "только просмотр"}</span></div>
+            <div class="ops-meta mono">current: ${escapeHtml(hashes.current_seed_sha256 || "—")}</div>
+            <div class="ops-meta mono">Yonote: ${escapeHtml(hashes.yonote_snapshot_sha256 || "—")}</div>
+            <div class="ops-meta mono">merged: ${escapeHtml(hashes.merged_seed_sha256 || "—")}</div>
+          </div>
+          <div class="ops-item">
+            <div class="ops-line"><span>Контроль чанков</span><span>предупреждений: ${escapeHtml(chunkAudit.warnings_total || 0)}</span></div>
+            <div class="ops-meta">
+              пустых: ${escapeHtml(findings.empty_text || 0)} ·
+              короче 20: ${escapeHtml(findings.too_short_under_20_chars || 0)} ·
+              длиннее лимита: ${escapeHtml(findings.oversized_over_max_chars || 0)} ·
+              групп дублей: ${escapeHtml(findings.duplicate_text_groups || 0)}
+            </div>
+            <div class="ops-meta">
+              документов без чанков: ${escapeHtml(documentAudit.without_chunks || 0)} ·
+              длина p50/p95/max: ${escapeHtml(freshLengths.p50 || 0)}/
+              ${escapeHtml(freshLengths.p95 || 0)}/${escapeHtml(freshLengths.maximum || 0)}
+            </div>
+            <div class="ops-meta">
+              ожидается published points: ${escapeHtml(projection.expected_published_points || 0)} ·
+              удаление stale: ${projection.stale_prune_required ? "да" : "нет"}
+            </div>
+          </div>
+        </div>
         ${renderYonoteCollections(data.collection_counts)}
         ${renderYonoteChangeGroup("Новые знания", data.added_items, data.added, "added")}
         ${renderYonoteChangeGroup("Обновлённые знания", data.changed_items, data.changed, "changed")}
@@ -1459,7 +1574,7 @@ _HTML_TEMPLATE = """
             ? '<button class="secondary" type="button" disabled>Production: только просмотр</button>'
             : (shouldShowApply
               ? '<button id="applyYonoteButton" class="primary" type="button">Записать изменения в базу бота</button>'
-              : '<button class="secondary" type="button" disabled>Изменения записаны</button>')}
+              : `<button class="secondary" type="button" disabled>${data.applied ? "Изменения записаны" : (snapshotSafetyStopped ? "Apply заблокирован проверкой" : "Сначала нужен полный Preview")}</button>`)}
           <span class="action-note">${adminReadOnly
             ? "Применение изменений к базе бота отключено. Предпросмотр Yonote остаётся доступен."
             : "Yonote работает только на чтение. Кнопка не меняет документы коллег."}</span>
@@ -1982,6 +2097,26 @@ _HTML_TEMPLATE = """
         setStatus("detailStatus", error.message, "error");
       }
     }
+    async function showRuntimeStatus() {
+      try {
+        setActiveNav("runtimeStatusButton");
+        setWorkspaceMode("runtime-status", "Seed и индекс Qdrant");
+        hideReportDashboards();
+        setStatus("detailStatus", "Сверяю каждый published chunk с payload Qdrant...");
+        const data = await requestJson("/admin/kb/runtime-status", {method: "GET"});
+        document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
+        renderRuntimeStatusDashboard(data);
+        setMetric("metricIndex", data.status || "STOP");
+        setStatus(
+          "detailStatus",
+          data.status === "GO" ? "Seed и Qdrant совпадают" : "Seed и Qdrant расходятся",
+          data.status === "GO" ? "ok" : "error"
+        );
+      } catch (error) {
+        setMetric("metricIndex", "ошибка");
+        setStatus("detailStatus", error.message, "error");
+      }
+    }
     async function showQualityCheck() {
       try {
         setActiveNav("qualityButton");
@@ -2035,13 +2170,17 @@ _HTML_TEMPLATE = """
           method: "POST",
           body: "{}",
           timeoutMs: 300000,
+          errorContext: "yonote-read",
         });
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         renderYonoteDashboard(data);
+        const snapshotStopped = (data.snapshot_safety || {}).status === "STOP";
         setStatus(
           "detailStatus",
-          `Yonote проверен: +${data.added}, изменится ${data.changed}, удалится ${data.removed}`,
-          "ok"
+          snapshotStopped
+            ? `Yonote проверен, но Apply заблокирован: удалится ${data.removed}`
+            : `Yonote проверен: +${data.added}, изменится ${data.changed}, удалится ${data.removed}`,
+          snapshotStopped ? "warn" : "ok"
         );
       } catch (error) {
         setStatus("detailStatus", error.message, "error");
@@ -2052,8 +2191,15 @@ _HTML_TEMPLATE = """
     }
     async function applyYonoteSync() {
       if (!requireWritableAdmin()) return;
+      const receipt = (lastYonoteReport || {}).receipt || {};
+      if (!receipt.apply_ready || !receipt.id || !receipt.sha256) {
+        const message = "Нет полного проверенного Preview. Сначала заново прочитай Yonote.";
+        setStatus("detailStatus", message, "warn");
+        showToast(message, "warn");
+        return;
+      }
       const confirmed = window.confirm(
-        "Записать показанные изменения в локальную базу знаний бота? " +
+        "Записать именно показанный и проверенный snapshot в локальную базу знаний бота? " +
         "Документы Yonote не изменятся. После записи потребуется полная индексация Qdrant."
       );
       if (!confirmed) return;
@@ -2064,7 +2210,10 @@ _HTML_TEMPLATE = """
         );
         const data = await requestJson("/admin/kb/yonote/apply", {
           method: "POST",
-          body: "{}",
+          body: JSON.stringify({
+            receipt_id: receipt.id,
+            receipt_sha256: receipt.sha256,
+          }),
           timeoutMs: 300000,
         });
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
@@ -2147,6 +2296,7 @@ _HTML_TEMPLATE = """
     document.getElementById("reindexButton").addEventListener("click", reindexChunk);
     document.getElementById("relatedCasesButton").addEventListener("click", showRelatedCases);
     document.getElementById("validateButton").addEventListener("click", showValidation);
+    document.getElementById("runtimeStatusButton").addEventListener("click", showRuntimeStatus);
     document.getElementById("qualityButton").addEventListener("click", showQualityCheck);
     document.getElementById("opsButton").addEventListener("click", showOpsReport);
     document.getElementById("yonoteButton").addEventListener("click", previewYonoteSync);

@@ -30,6 +30,7 @@ from src.graph.question_utils import (
     query_proven_clause_matches_source_aspects,
     query_proven_shift_ordinals,
     source_aspect_matches_topic,
+    split_explicit_request_clauses,
     unmapped_explicit_request_clauses,
 )
 from src.graph.response_profiles import (
@@ -298,6 +299,7 @@ async def _generate_core(state: BotState) -> dict:
             questions=questions,
         ),
     )
+    fact_card_result: dict | None = None
     if not unmapped_clauses or _fact_card_can_cover_unmapped_clauses(
         unmapped_clauses,
     ):
@@ -308,6 +310,64 @@ async def _generate_core(state: BotState) -> dict:
             chunks=chunks,
             max_confidence=max_confidence,
         )
+    request_bound_result = _request_bound_published_source_result(
+        state=state,
+        analysis=analysis,
+        chunks=chunks,
+        max_confidence=max_confidence,
+    )
+    bounded_result = fact_card_result or request_bound_result
+    if bounded_result is not None:
+        bounded_source_ids = list(
+            bounded_result.get("cited_sources") or []
+        )
+        chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        source_chunks = [
+            chunks_by_id[chunk_id]
+            for chunk_id in bounded_source_ids
+            if chunk_id in chunks_by_id
+        ]
+        if not source_chunks:
+            source_chunks = _select_llm_source_chunks(
+                analysis,
+                questions,
+                chunks,
+                max_confidence,
+            )
+        synthesis_questions = (
+            list(current_plan.questions)
+            if current_plan.questions and not current_plan.incomplete
+            else questions
+        )
+        requires_grounded_synthesis = _should_synthesize_with_llm(
+            state,
+            analysis,
+            synthesis_questions,
+            source_chunks,
+            bounded_response=str(bounded_result.get("generated_response") or ""),
+        )
+        if requires_grounded_synthesis and source_chunks:
+            synthesis_analysis = analysis.model_copy(
+                update={
+                    "complexity": Complexity.COMPLEX,
+                    "questions": synthesis_questions,
+                }
+            )
+            if tracer:
+                tracer.add(
+                    "generate",
+                    int((perf_counter() - started_at) * 1000),
+                    mode="grounded_llm_required",
+                    chunks=len(source_chunks),
+                )
+            return await _generate_with_llm_or_source_fallback(
+                state=state,
+                analysis=synthesis_analysis,
+                questions=synthesis_questions,
+                source_chunks=source_chunks,
+                started_at=started_at,
+                allow_bounded_source=False,
+            )
         if fact_card_result is not None:
             if tracer:
                 tracer.add(
@@ -317,14 +377,6 @@ async def _generate_core(state: BotState) -> dict:
                     chunks=len(fact_card_result.get("cited_sources") or []),
                 )
             return fact_card_result
-
-    request_bound_result = _request_bound_published_source_result(
-        state=state,
-        analysis=analysis,
-        chunks=chunks,
-        max_confidence=max_confidence,
-    )
-    if request_bound_result is not None:
         if tracer:
             tracer.add(
                 "generate",
@@ -383,10 +435,25 @@ async def _generate_core(state: BotState) -> dict:
             "cited_sources": [],
         }
 
-    catalog_source = _general_catalog_source(analysis.questions or questions, chunks)
+    catalog_questions = analysis.questions or questions
+    catalog_source = _general_catalog_source(catalog_questions, chunks)
     if catalog_source is not None:
         source_response = build_deterministic_source_response([catalog_source])
         if source_response:
+            if _should_synthesize_with_llm(
+                state,
+                analysis,
+                catalog_questions,
+                [catalog_source],
+                bounded_response=source_response,
+            ):
+                return await _generate_with_llm_or_source_fallback(
+                    state=state,
+                    analysis=analysis,
+                    questions=catalog_questions,
+                    source_chunks=[catalog_source],
+                    started_at=started_at,
+                )
             if tracer:
                 tracer.add(
                     "generate",
@@ -482,6 +549,20 @@ async def _generate_core(state: BotState) -> dict:
         if single_official_source is not None:
             source_response = build_deterministic_source_response(single_official_source)
             if source_response:
+                if _should_synthesize_with_llm(
+                    state,
+                    analysis,
+                    questions,
+                    [single_official_source],
+                    bounded_response=source_response,
+                ):
+                    return await _generate_with_llm_or_source_fallback(
+                        state=state,
+                        analysis=analysis,
+                        questions=questions,
+                        source_chunks=[single_official_source],
+                        started_at=started_at,
+                    )
                 if tracer:
                     tracer.add(
                         "generate",
@@ -502,6 +583,20 @@ async def _generate_core(state: BotState) -> dict:
         )
         partial_response = build_partial_source_response(partial_chunks, missing_questions)
         if partial_response:
+            if partial_chunks and _should_synthesize_with_llm(
+                state,
+                analysis,
+                questions,
+                partial_chunks,
+                bounded_response=partial_response,
+            ):
+                return await _generate_with_llm_or_source_fallback(
+                    state=state,
+                    analysis=analysis,
+                    questions=questions,
+                    source_chunks=partial_chunks,
+                    started_at=started_at,
+                )
             if tracer:
                 tracer.add(
                     "generate",
@@ -581,6 +676,20 @@ async def _generate_core(state: BotState) -> dict:
     )
     partial_response = build_partial_source_response(partial_chunks, missing_questions)
     if partial_response:
+        if partial_chunks and _should_synthesize_with_llm(
+            state,
+            analysis,
+            questions,
+            partial_chunks,
+            bounded_response=partial_response,
+        ):
+            return await _generate_with_llm_or_source_fallback(
+                state=state,
+                analysis=analysis,
+                questions=questions,
+                source_chunks=partial_chunks,
+                started_at=started_at,
+            )
         if tracer:
             tracer.add(
                 "generate",
@@ -654,10 +763,22 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
                 response_limit=response_limit,
             )
             cited_ids = list(result.get("cited_sources") or [])
+            chunks_by_id = {chunk.chunk_id: chunk for chunk in factual_chunks}
+            selected_chunks = [
+                chunks_by_id[chunk_id]
+                for chunk_id in cited_ids
+                if chunk_id in chunks_by_id
+            ]
             if (
                 recomposed is None
                 or recomposed.response != sanitized
                 or list(recomposed.cited_sources) != cited_ids
+                or len(selected_chunks) != len(cited_ids)
+                or not _llm_claims_have_bound_source_facts(
+                    sanitized,
+                    selected_chunks,
+                    questions,
+                )
                 or _visible_response_length(sanitized) > response_limit
                 or _response_url_count(sanitized) > 1
             ):
@@ -828,7 +949,7 @@ async def _generate_with_llm_or_source_fallback(
     source_chunks: list[ScoredChunk],
     started_at: float,
     response_limit: int | None = None,
-    allow_bounded_source: bool = True,
+    allow_bounded_source: bool = False,
 ) -> dict:
     tracer = state.get("trace")
     bounded_source_result = (
@@ -1656,6 +1777,12 @@ def _critical_nonnumeric_fact_keys(text: str) -> set[str]:
             f"eligible:{audience.partition(':')[2]}"
             for audience in _audience_condition_keys(normalized)
         )
+    if re.search(r"\bпалат(?:к|оч)\w*", normalized):
+        keys.add("accommodation:tent")
+    if "гостиниц" in normalized or re.search(r"\bотел\w*", normalized):
+        keys.add("accommodation:hotel")
+    if "общежит" in normalized:
+        keys.add("accommodation:dormitory")
     return keys
 
 
@@ -1866,6 +1993,7 @@ def _condition_keys(text: str) -> set[str]:
                 "даты",
                 "участник",
                 "участники",
+                "результаты отбора",
             }:
                 keys.add(f"label:{label}")
     return keys
@@ -1938,17 +2066,37 @@ def _should_synthesize_with_llm(
     analysis: QueryAnalysis,
     questions: list[Question],
     source_chunks: list[ScoredChunk],
+    *,
+    bounded_response: str | None = None,
 ) -> bool:
     if not source_chunks:
         return False
+    if _is_contextual_synthesis_case(state):
+        return True
     if len(source_chunks) > 1:
         return True
-    if (
-        bool((source_chunks[0].metadata or {}).get("has_conditional_logic"))
-        and len(_conditional_fact_groups(source_chunks[0].text)) > 1
-    ):
+    if len(
+        split_explicit_request_clauses(
+            analysis,
+            _state_current_user_message(state),
+        )
+    ) > 1:
         return True
-    source_response = build_deterministic_source_response(source_chunks)
+    current_plan = answer_plan_for_state(
+        state,
+        analysis,
+        _state_current_user_message(state),
+    )
+    if len(current_plan.source_aspects) > 1:
+        return True
+    response_candidate = bounded_response or build_deterministic_source_response(
+        source_chunks
+    )
+    if bool((source_chunks[0].metadata or {}).get("has_conditional_logic")) and len(
+        _conditional_fact_groups(response_candidate or "")
+    ) > 1:
+        return True
+    source_response = response_candidate
     if not source_response:
         return True
     if _visible_response_length(source_response) > _response_char_limit(
@@ -1962,17 +2110,10 @@ def _should_synthesize_with_llm(
         return True
     if _has_multiple_answer_aspects(questions):
         return True
-    if _is_contextual_synthesis_case(state) and _single_source_has_unrequested_clauses(
-        questions,
-        source_chunks,
-    ):
+    if analysis.complexity == Complexity.COMPLEX:
         return True
     if _can_answer_from_single_official_source(questions, source_chunks):
         return False
-    if _is_contextual_synthesis_case(state):
-        return True
-    if analysis.complexity == Complexity.COMPLEX:
-        return True
     return False
 
 
@@ -5474,7 +5615,10 @@ def _is_generic_chunk(chunk: ScoredChunk) -> bool:
 def _asks_housing_conditions(question_normalized: str) -> bool:
     return "условия проживан" in question_normalized or (
         "проживан" in question_normalized
-        and not any(marker in question_normalized for marker in ("оплат", "стоимост"))
+        and not any(
+            marker in question_normalized
+            for marker in ("оплат", "оплач", "стоимост", "за счет", "за счёт")
+        )
     )
 
 

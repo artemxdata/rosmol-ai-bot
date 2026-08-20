@@ -44,17 +44,28 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run -
 Индексация базы знаний в Qdrant:
 
 ```bash
+readonly REVIEWED_KB_SEED_SHA256='<reviewed-lowercase-64-character-seed-sha256>'
+[[ "$REVIEWED_KB_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+test "$(sha256sum data/knowledge_base_seed.json | cut -d ' ' -f 1)" \
+  = "$REVIEWED_KB_SEED_SHA256"
 docker compose up -d qdrant
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm \
+  -e "EXPECTED_KB_SEED_SHA256=$REVIEWED_KB_SEED_SHA256" index-kb
 ```
 
 Обычная команда делает upsert и не удаляет существующие точки. Для release-замены seed сначала
 выполни validation и сохрани контрольное количество точек, затем явно добавь `--prune-stale`:
 
 ```bash
+readonly REVIEWED_RELEASE_SEED_SHA256='<reviewed-lowercase-64-character-seed-sha256>'
+[[ "$REVIEWED_RELEASE_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+test "$(sha256sum data/knowledge_base_seed.json | cut -d ' ' -f 1)" \
+  = "$REVIEWED_RELEASE_SEED_SHA256"
 python scripts/index_kb.py --validate-only --forums-registry data/forums_registry.json
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb \
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm \
+  -e "EXPECTED_KB_SEED_SHA256=$REVIEWED_RELEASE_SEED_SHA256" index-kb \
   python scripts/index_kb.py --path data/knowledge_base_seed.json \
+    --expected-seed-sha256 "$REVIEWED_RELEASE_SEED_SHA256" \
     --forums-registry data/forums_registry.json --prune-stale
 ```
 
@@ -62,7 +73,9 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run -
 seed; `draft` и `archived` никогда не индексируются. Любое успешное изменение полной KB очищает
 semantic response cache. После live-индексации перезапусти `app/app-ml`, чтобы сбросить также
 process-local keyword snapshot. Не используй `--prune-stale` для частичной индексации или до
-проверки кандидата.
+проверки кандидата. Любой реальный index run без reviewed exact SHA-256 или с изменившимися bytes
+останавливается до Qdrant либо перед объявлением успеха. `EXPECTED_KB_SEED_SHA256` передаётся
+только one-shot index-контейнеру и не является постоянной runtime-настройкой.
 
 Для поиска индексируется расширенный `embedding_text`: исходный ответ плюс intent/topic/forum
 и примеры пользовательских формулировок. В ответах пользователю сохраняется исходный `text_clean`.
@@ -302,10 +315,15 @@ python scripts/promote_answer_bank_to_kb.py \
   --limit 300 \
   --output data/private/tickets/curation/kb_sandbox_answer_bank.json \
   --merged-output data/private/tickets/curation/knowledge_base_seed_answer_bank_sandbox.json
+readonly REVIEWED_SANDBOX_SEED_SHA256='<reviewed-lowercase-64-character-seed-sha256>'
+[[ "$REVIEWED_SANDBOX_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+test "$(sha256sum data/private/tickets/curation/knowledge_base_seed_answer_bank_sandbox.json | cut -d ' ' -f 1)" \
+  = "$REVIEWED_SANDBOX_SEED_SHA256"
 python scripts/init_qdrant.py --knowledge-collection knowledge_base_answer_bank_sandbox
 python scripts/index_kb.py \
   --collection knowledge_base_answer_bank_sandbox \
-  --path data/private/tickets/curation/knowledge_base_seed_answer_bank_sandbox.json
+  --path data/private/tickets/curation/knowledge_base_seed_answer_bank_sandbox.json \
+  --expected-seed-sha256 "$REVIEWED_SANDBOX_SEED_SHA256"
 ```
 
 Подготовка приватных eval-наборов из ticket analysis:
@@ -352,7 +370,14 @@ Get-Content data\private\tickets\analysis\reranker_calibration_pairs.jsonl -Tota
 Для короткого smoke-теста индексации можно временно переопределить команду:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb sh -c "python scripts/init_qdrant.py && python scripts/index_kb.py --limit 20"
+readonly REVIEWED_SMOKE_SEED_SHA256='<reviewed-lowercase-64-character-seed-sha256>'
+[[ "$REVIEWED_SMOKE_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+test "$(sha256sum data/knowledge_base_seed.json | cut -d ' ' -f 1)" \
+  = "$REVIEWED_SMOKE_SEED_SHA256"
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm \
+  -e "EXPECTED_KB_SEED_SHA256=$REVIEWED_SMOKE_SEED_SHA256" index-kb sh -eu -c \
+  'python scripts/init_qdrant.py && python scripts/index_kb.py \
+   --expected-seed-sha256 "$EXPECTED_KB_SEED_SHA256" --limit 20'
 ```
 
 Если в уже существующую Qdrant-коллекцию нужно добавить ASCII filter keys без полного пересчёта embeddings:

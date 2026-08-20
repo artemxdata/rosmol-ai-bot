@@ -187,7 +187,16 @@ async def test_body_discovered_forum_facts_survive_the_full_offline_pipeline(
     retriever = AsyncSeedRetriever(SEED)
     reranker = LexicalReranker()
     for query, aspect, body_only_ids in cases:
-        llm = ForbiddenLLM()
+        class CapturingForbiddenLLM(ForbiddenLLM):
+            def __init__(self) -> None:
+                super().__init__()
+                self.kwargs: list[dict[str, object]] = []
+
+            async def generate(self, **kwargs: object) -> str:
+                self.kwargs.append(dict(kwargs))
+                return await super().generate(**kwargs)
+
+        llm = CapturingForbiddenLLM()
         analyzed = await analyze_query(
             {
                 "message": query,
@@ -208,21 +217,28 @@ async def test_body_discovered_forum_facts_survive_the_full_offline_pipeline(
         state.update(plan_answer(state))
         state.update(await retrieve(state))
         state.update(await rerank(state))
+        reranked_ids = {
+            str(chunk.chunk_id) for chunk in state.get("reranked_chunks") or []
+        }
+        assert body_only_ids.intersection(reranked_ids), aspect.value
         calls_before_generation = llm.calls
         generated = await generate(state)
         guarded = await apply_response_guards({**state, **generated})
         result = {**generated, **guarded}
         cited = [str(chunk_id) for chunk_id in result.get("cited_sources") or []]
 
-        assert llm.calls == calls_before_generation, aspect.value
-        assert result.get("generator_model") == "source_chunk", aspect.value
-        assert body_only_ids.intersection(cited), aspect.value
-        assert cited, aspect.value
-        assert all(
-            seed_by_id[chunk_id].get("source_type") == "yonote"
-            and seed_by_id[chunk_id].get("source") == "yonote_api"
-            and seed_by_id[chunk_id].get("version") == "yonote-api-v1"
-            and seed_by_id[chunk_id].get("status") == "published"
-            for chunk_id in cited
-        )
+        if llm.calls > calls_before_generation:
+            rendered_prompts = json.dumps(llm.kwargs, ensure_ascii=False)
+            assert any(chunk_id in rendered_prompts for chunk_id in body_only_ids)
+        else:
+            assert result.get("generator_model") == "source_chunk", aspect.value
+            assert body_only_ids.intersection(cited), aspect.value
+            assert cited, aspect.value
+            assert all(
+                seed_by_id[chunk_id].get("source_type") == "yonote"
+                and seed_by_id[chunk_id].get("source") == "yonote_api"
+                and seed_by_id[chunk_id].get("version") == "yonote-api-v1"
+                and seed_by_id[chunk_id].get("status") == "published"
+                for chunk_id in cited
+            )
     assert plan_builds == len(cases)

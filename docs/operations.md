@@ -18,10 +18,11 @@
 - Keep private ticket datasets only under `data/private/`; this path is ignored by Git.
 - Keep local XLSX/PDF source materials under `data/private/source_materials/`, never in the
   repository root. `scripts/build_kb_seed.py` uses that private path by default.
-- Application containers mount `data/` so the admin flow can atomically replace the versioned
-  seed. A nested `data/private/runtime/` mount masks the host `data/private/` tree inside the
-  container: raw source materials, ticket exports and operator datasets remain inaccessible.
-  The one-shot indexer receives only `data/knowledge_base_seed.json` read-only.
+- Production `app`, `app-ml` and the one-shot `index-kb` resolve one internal `KB_SEED_PATH`
+  from the same `ADMIN_KB_SEED_PATH` Compose input. The tracked seed and isolated
+  `data/private/admin-kb/` directory are mounted explicitly; `app` and `index-kb` see the selected
+  working seed read-only, while only test-editor `app-ml` may write it. Raw source materials,
+  ticket exports and operator datasets outside that isolated directory remain inaccessible.
 - Set a stable, dedicated `USER_HASH_SECRET` in production. User and ticket identifiers are then
   pseudonymized with HMAC-SHA256. Rotating this secret intentionally starts a new pseudonym space;
   existing Redis sessions expire normally and old memory rows are removed by the retention job.
@@ -38,10 +39,11 @@
   Единственное исключение — exact D-041 v2 -> v3 comparison: оно не отключает ledger, а
   записывает отдельный globally-one-use waiver и canonical binding prior reservation под тем же
   fixed lock. Никакой следующий run это исключение не наследует.
-- Run KB validation before indexing:
-  `python scripts/index_kb.py --validate-only`.
-- For production indexing, require a passed quality gate:
-  `python scripts/index_kb.py --require-quality-gate --quality-gate reports/quality_suite/quality_gate.json`.
+- Bind validation to the reviewed exact seed bytes before indexing:
+  `python scripts/index_kb.py --validate-only --expected-seed-sha256 "<reviewed-lowercase-seed-sha256>"`.
+- Every real index invocation requires the same reviewed hash and fails before Qdrant access if it
+  is absent or mismatched; the exact bytes are checked again before success. For example:
+  `python scripts/index_kb.py --expected-seed-sha256 "<reviewed-lowercase-seed-sha256>" --require-quality-gate --quality-gate reports/quality_suite/quality_gate.json`.
 
 ## Preflight Before Pilot
 
@@ -149,9 +151,11 @@ bash scripts/run_phase0_server_local.sh
 предварительным и не снимает STOP по billing.
 
 ```powershell
+$EXPECTED_KB_SEED_SHA256 = (Get-FileHash data\knowledge_base_seed.json -Algorithm SHA256).Hash.ToLowerInvariant()
 .venv\Scripts\ruff.exe check .
 .venv\Scripts\python.exe -m pytest
-.venv\Scripts\python.exe scripts\index_kb.py --validate-only
+.venv\Scripts\python.exe scripts\index_kb.py --validate-only `
+  --expected-seed-sha256 $EXPECTED_KB_SEED_SHA256
 docker compose ps
 Invoke-RestMethod -Uri http://localhost:8080/ready
 ```
@@ -375,7 +379,9 @@ Fallback ZIP import:
 Validate before indexing:
 
 ```powershell
-.venv\Scripts\python.exe scripts\index_kb.py --validate-only
+$EXPECTED_KB_SEED_SHA256 = (Get-FileHash data\knowledge_base_seed.json -Algorithm SHA256).Hash.ToLowerInvariant()
+.venv\Scripts\python.exe scripts\index_kb.py --validate-only `
+  --expected-seed-sha256 $EXPECTED_KB_SEED_SHA256
 ```
 
 Production admin panel flow:
@@ -385,8 +391,10 @@ Production admin panel flow:
 3. Wait for the full pull of both configured collections.
 4. Review or download `documents`, `fresh_yonote_records`, `added`, `changed` and `removed`.
 
-The default production operation is preview-only. It computes a diff in memory and changes neither
-Yonote, the tracked seed, Qdrant, semantic cache nor bot answers. `Apply to KB`, `Save` and
+The default production operation is preview-only. It computes a diff and writes only a private,
+time-limited receipt bound to the current seed hash, the full Yonote snapshot hash and the merged
+seed hash; it changes neither Yonote, the tracked seed, Qdrant, semantic cache nor bot answers.
+Partial previews never produce an applyable receipt. `Apply to KB`, `Save` and
 `Reindex` are hidden in the default read-only UI and remain blocked by backend `403`. The
 downloaded report can contain internal KB text; keep it only as private evidence, never in Git,
 chat or public logs.
@@ -405,21 +413,34 @@ ADMIN_MUTATIONS_ENABLED=true
 ADMIN_KB_SEED_PATH=/app/data/private/admin-kb/knowledge_base_seed.json
 ```
 
+`ADMIN_KB_SEED_PATH` is the single Compose input for the selected seed. The production overlay
+passes that same path as `KB_SEED_PATH` to `app`, `app-ml` and `index-kb`; do not configure three
+independent paths. `EXPECTED_KB_SEED_SHA256` is not a long-lived runtime setting: supply the
+reviewed Preview `merged_seed_sha256` (or the separately reviewed current-seed SHA) only to the
+explicit index run.
+
 Before enabling it, create the server-only working file from the exact deployed tracked seed,
 verify equal SHA-256, owner `10001:10001` and mode `0600`, and keep a private backup. The directory
 is writable only in `app-ml`; `app` sees it read-only. Never point writable admin at
 `/app/data/knowledge_base_seed.json` or at the Git checkout.
 
-In this mode Save and per-chunk Reindex may be used for a deliberate test. Yonote Apply writes only
-the private working seed and never calls a Yonote write endpoint. It does not automatically run a
-full index. Keep HDE off and do not Apply until the Preview diff is reviewed and the operator is
-ready to execute the server-controlled full indexing gate. The public admin must not expose a raw
-SQL or Qdrant console.
+In this mode Save and per-chunk Reindex may be used for a deliberate test. Yonote Apply accepts
+only the exact one-time receipt returned by a full Preview, refuses if the working seed changed
+after Preview, writes the sealed merged snapshot to the private working seed and does not fetch
+Yonote again. It never calls a Yonote write endpoint and does not automatically run a full index.
+Keep HDE off and do not Apply until the Preview diff and chunk audit are reviewed and the operator
+is ready to execute the server-controlled full indexing gate. The public admin must not expose a
+raw SQL or Qdrant console.
 
 After an Apply that changes the published count, both runtime processes must be restarted after
 the controlled full index so their seed manifests match Qdrant. Full indexing remains a server
 operation with pre-backup/hash, `--prune-stale`, semantic-cache clear, readiness/security checks and
-RAG smoke. The working copy is test evidence; it is not promoted to the canonical Git seed without
+RAG smoke. After restart, the admin section `Seed и индекс` must return `GO` with exact payload
+fingerprint match and zero missing/stale/changed/invalid-or-duplicate chunks. Runtime-status
+compares the complete canonical payload used by the indexer, including IDs, text, embedding input,
+source metadata and filter keys, then re-reads the seed hash after the Qdrant scan. A seed change
+during the scan produces `STOP`; vector values are not recomputed, so novel-query RAG smoke remains
+mandatory. The working copy is test evidence; it is not promoted to the canonical Git seed without
 separate content review, regression and a versioned commit.
 
 The local/disposable Apply flow below remains useful for development after explicit content review.
@@ -427,9 +448,16 @@ The local/disposable Apply flow below remains useful for development after expli
 Rebuild the local Docker services and reindex Qdrant:
 
 ```powershell
+$EXPECTED_KB_SEED_SHA256 = "<reviewed-lowercase-64-character-seed-sha256>"
+$ACTUAL_KB_SEED_SHA256 = (Get-FileHash data\knowledge_base_seed.json -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ACTUAL_KB_SEED_SHA256 -ne $EXPECTED_KB_SEED_SHA256) {
+  throw "STOP: the selected seed does not match the reviewed SHA-256"
+}
 docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml up -d --build app app-ml nginx
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb `
+docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm `
+  -e EXPECTED_KB_SEED_SHA256=$EXPECTED_KB_SEED_SHA256 index-kb `
   python scripts/index_kb.py --path data/knowledge_base_seed.json `
+    --expected-seed-sha256 $EXPECTED_KB_SEED_SHA256 `
     --forums-registry data/forums_registry.json --embedding-batch-size 32 --prune-stale
 ```
 
@@ -437,6 +465,21 @@ The indexer validates the registry, selects only `status=published`, removes sta
 explicitly requested, and clears all semantic responses after a successful KB mutation. Restart
 `app`/`app-ml` after a live full index so process-local keyword snapshots cannot survive the
 release. Then run smoke checks against `http://127.0.0.1:8001/ask` with `X-Bypass-Cache: true`.
+Semantic cache schema, point ID, lookup filter and payload are revision-bound to the runtime seed
+SHA-256. Therefore a physical cache point from an older seed cannot hit after a seed change even
+if cleanup did not remove it; cleanup remains operational hygiene rather than a correctness
+boundary.
+
+The server-local admin gate is `scripts/run_admin_kb_acceptance_server_local.sh`. It is strictly
+read-only with respect to Yonote, the seed, Qdrant, cache and channels: it does not call Apply,
+PATCH, Reindex, `/ask`, an HDE webhook or `index-kb`, and it never forwards
+`EXPECTED_KB_SEED_SHA256`. The only created state is the private one-time Preview receipt. It
+verifies exact runtime identity, authentication, Validate, runtime-status before/after and a full
+Yonote Preview while emitting only safe aggregates and hashes. It also requires delete-cookie
+semantics and proves Redis-backed logout revocation by replaying the captured old cookie and
+requiring `401`. Because provider-side HDE/VK dispatcher
+rules are not observable from the server, their disabled state is an explicit owner attestation;
+keep both channels off until this server-local gate is complete.
 
 ## Secure Admin Access
 
@@ -452,7 +495,9 @@ On the new clean VM:
 
 1. provision a new HTTPS endpoint with a new certificate and new admin token;
 2. keep plaintext admin login/API disabled and rate-limit login attempts;
-3. verify `Secure`, `HttpOnly`, `SameSite=Lax` session cookies and security headers;
+3. verify `Secure`, `HttpOnly`, `SameSite=Lax` session cookies and security headers; login must
+   create a TTL-bound Redis session, and logout must delete it so replaying the old cookie returns
+   `401`;
 4. store certificate state only on the new host and verify automatic renewal;
 5. record a temporary route as provisional; publish the permanent corporate team URL only after
    external HTTPS, `/ready` and manual UI checks;
@@ -467,8 +512,9 @@ image, compare the exact three hostnames, and only then install it atomically. R
 `runtime-egress-proxy` and the explicitly affected runtime services; do not reindex Qdrant merely
 to enable Preview. In default read-only mode verify `Apply=403`. In test-editor mode verify the
 isolated working path/mount directions and explicit capability flags without printing secrets.
-Always verify `/ready`, exact egress allow/deny, unchanged tracked-seed hash and expected Qdrant
-counts before reenabling the test dispatchers.
+Always verify `/ready`, exact egress allow/deny, unchanged tracked-seed hash and runtime-status
+`GO` with an exact Qdrant payload match before reenabling the test dispatchers. Point counts alone
+are not a content-integrity check.
 
 Do not reuse any ACME directory, TLS private key, `.env` or tunnel command from the old host.
 

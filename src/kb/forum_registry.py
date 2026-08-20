@@ -6,8 +6,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from src.config import get_settings
+
 REGISTRY_PATH = Path(__file__).resolve().parents[2] / "data" / "forums_registry.json"
 KB_SEED_PATH = Path(__file__).resolve().parents[2] / "data" / "knowledge_base_seed.json"
+_RESOLVED_REGISTRY_PATH = REGISTRY_PATH.resolve()
 NON_WORD_PATTERN = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
 
 # Yonote contains a few navigation headings in ``forum_normalized``. Treating them as
@@ -93,8 +96,18 @@ def forums_are_equivalent(
     return bool(left_canonical and left_canonical == right_canonical)
 
 
-@lru_cache(maxsize=8)
 def _forum_aliases(registry_path: Path) -> tuple[tuple[str, str], ...]:
+    return _cached_forum_aliases(
+        _resolved_registry_path(registry_path),
+        _runtime_seed_path(),
+    )
+
+
+@lru_cache(maxsize=16)
+def _cached_forum_aliases(
+    registry_path: Path,
+    seed_path: Path,
+) -> tuple[tuple[str, str], ...]:
     aliases: dict[str, str] = {}
     for item in _raw_registry(registry_path):
         normalized_forum = str(item.get("normalized") or item.get("name") or "").strip()
@@ -106,7 +119,7 @@ def _forum_aliases(registry_path: Path) -> tuple[tuple[str, str], ...]:
                 aliases[alias] = normalized_forum
 
     if registry_path.resolve() == REGISTRY_PATH.resolve():
-        for source_forum in _seed_forum_names(KB_SEED_PATH):
+        for source_forum in _seed_forum_names(seed_path):
             alias = _normalize_for_match(source_forum)
             if not _is_distinct_source_label(alias):
                 continue
@@ -114,9 +127,19 @@ def _forum_aliases(registry_path: Path) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True))
 
 
-@lru_cache(maxsize=8)
 def _forum_source_values(registry_path: Path) -> dict[str, tuple[str, ...]]:
-    alias_map = dict(_forum_aliases(registry_path))
+    return _cached_forum_source_values(
+        _resolved_registry_path(registry_path),
+        _runtime_seed_path(),
+    )
+
+
+@lru_cache(maxsize=16)
+def _cached_forum_source_values(
+    registry_path: Path,
+    seed_path: Path,
+) -> dict[str, tuple[str, ...]]:
+    alias_map = dict(_cached_forum_aliases(registry_path, seed_path))
     values: dict[str, set[str]] = {}
 
     for item in _raw_registry(registry_path):
@@ -128,7 +151,7 @@ def _forum_source_values(registry_path: Path) -> dict[str, tuple[str, ...]]:
         )
 
     if registry_path.resolve() == REGISTRY_PATH.resolve():
-        for source_forum in _seed_forum_names(KB_SEED_PATH):
+        for source_forum in _seed_forum_names(seed_path):
             normalized = _normalize_for_match(source_forum)
             if not _is_distinct_source_label(normalized):
                 continue
@@ -162,6 +185,29 @@ def _seed_forum_names(seed_path: Path) -> tuple[str, ...]:
                 and str(item.get("forum_normalized") or "").strip()
             }
         )
+    )
+
+
+@lru_cache(maxsize=1)
+def _runtime_seed_path() -> Path:
+    configured = str(getattr(get_settings(), "kb_seed_path", "") or "").strip()
+    return (Path(configured) if configured else KB_SEED_PATH).resolve()
+
+
+def invalidate_runtime_forum_registry() -> None:
+    """Forget seed-derived aliases after the runtime seed changes in place."""
+
+    _cached_forum_aliases.cache_clear()
+    _cached_forum_source_values.cache_clear()
+    _seed_forum_names.cache_clear()
+    _runtime_seed_path.cache_clear()
+
+
+def _resolved_registry_path(registry_path: Path) -> Path:
+    return (
+        _RESOLVED_REGISTRY_PATH
+        if registry_path == REGISTRY_PATH
+        else registry_path.resolve()
     )
 
 

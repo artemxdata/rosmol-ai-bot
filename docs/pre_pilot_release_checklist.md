@@ -6,9 +6,9 @@
 > HDE снова выключен на время Yonote/admin-KB цикла. Yonote egress proxy уже переключён на
 > проверенные три destination, но `app-ml` capability ещё не активирована. Новый explicit
 > test-editor candidate проходит локальный gate. Серверные команды в разделах 2 и 5
-> сохранены только как исторический
-> pre-incident checklist и **не должны выполняться**: они используют старый порядок, старый Compose
-> stack и migration baseline. Разделы 3–4 задают только критерии, а не standalone-команды.
+> сохранены только как исторический pre-incident checklist и **не являются разрешением на
+> выполнение**. Добавленные fail-closed guards отражают текущий код, но не превращают эти разделы
+> в standalone-runbook. Разделы 3–4 задают только критерии, а не standalone-команды.
 > Единственная актуальная исполнимая инструкция для нового HDE/VK test-production:
 > `docs/recovery_test_production_runbook_20260720.md`. Старая VM, IP, webhook, admin URL и любые
 > её artifacts запрещены.
@@ -17,9 +17,11 @@
 
 ```powershell
 cd D:\projects\rosmol-ai-bot
+$EXPECTED_KB_SEED_SHA256 = (Get-FileHash data\knowledge_base_seed.json -Algorithm SHA256).Hash.ToLowerInvariant()
 .venv\Scripts\ruff.exe check .
 .venv\Scripts\python.exe -m pytest
 .venv\Scripts\python.exe scripts\index_kb.py --validate-only `
+  --expected-seed-sha256 $EXPECTED_KB_SEED_SHA256 `
   --forums-registry data\forums_registry.json
 .venv\Scripts\python.exe scripts\audit_kb_seed.py `
   --forums-registry data\forums_registry.json --fail-on error
@@ -99,23 +101,34 @@ handoff. Точные provider identifiers проверяются по private i
 актуальном tracked tree.
 
 Indexer берёт только `published` records, удаляет stale points и очищает semantic cache после
-успешной KB mutation. Команды выполняются из clean checkout:
+успешной KB mutation. Production `app`, `app-ml` и `index-kb` получают один и тот же внутренний
+`KB_SEED_PATH` из `ADMIN_KB_SEED_PATH`; отдельные пути для сервисов запрещены. Каждая реальная
+индексация требует заранее reviewed SHA-256 выбранного seed, сверяет exact bytes до доступа к
+Qdrant и повторно перед успешным завершением. Команды ниже остаются историческим контекстом и
+выполняются только из clean checkout по актуальному recovery-runbook:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
-  build app app-ml index-kb
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
-  stop nginx app app-ml
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
-  run --rm migrate
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
-  run --rm index-kb python scripts/init_qdrant.py
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml run --rm index-kb \
-  python scripts/index_kb.py --path data/knowledge_base_seed.json \
-    --forums-registry data/forums_registry.json --embedding-batch-size 32 --prune-stale
-docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
-  up -d app app-ml nginx
+readonly EXPECTED_KB_SEED_SHA256="<reviewed-lowercase-64-character-seed-sha256>"
+[[ "$EXPECTED_KB_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+  printf 'index_kb=STOP reason=expected_seed_sha256_invalid\n'
+  exit 1
+}
+
+dc=(docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.ml.yml -f docker-compose.prod.yml \
+  --profile ml)
+
+"${dc[@]}" build app app-ml index-kb
+"${dc[@]}" stop nginx app app-ml
+"${dc[@]}" run --rm migrate
+EXPECTED_KB_SEED_SHA256="$EXPECTED_KB_SEED_SHA256" "${dc[@]}" run --rm index-kb
+"${dc[@]}" up -d app app-ml nginx
 ```
+
+The production `index-kb` service itself performs revision-bound Validate, initializes the
+collection and runs the full `--prune-stale` index. `EXPECTED_KB_SEED_SHA256` is supplied only to
+that one-shot command; it is not persisted in `.env.production` or forwarded to ordinary runtime
+or read-only acceptance.
 
 Проверить migration и оба Qdrant count:
 
@@ -127,7 +140,7 @@ from qdrant_client import QdrantClient
 from src.config import get_settings
 
 s = get_settings()
-client = QdrantClient(url=s.qdrant_url)
+client = QdrantClient(url=s.qdrant_url, api_key=s.qdrant_api_key or None)
 for collection in (s.qdrant_knowledge_collection, 'response_cache'):
     print(collection, client.count(collection_name=collection, exact=True).count)
 PY
@@ -135,7 +148,9 @@ PY
 
 Для code RC `8bca860` историческая baseline: Alembic head `007_hde_delivery_telemetry`,
 `knowledge_base = 2152`, `response_cache = 0`. Новый count сверяется также с текущим trusted seed;
-если migration, validation, index или count не совпали, runtime не отдавать операторам.
+это только aggregate sanity check. Содержимое доказывает отдельный runtime-status: полный payload
+match, повторный seed hash после scan и нули divergence. Если migration, validation, index, count
+или runtime-status не совпали, runtime не отдавать операторам.
 
 ## 3. Серверные критерии acceptance
 
@@ -147,16 +162,28 @@ PY
 - Полный quality suite выполняется отдельным server-local `quality-acceptance` контейнером по
   internal `data` к `http://app-ml:8000/ask`; наружу production token и PostgreSQL не выносятся.
 - После suite exact-HTTPS gate повторно сканирует runtime/Nginx/relay logs за всё окно quality.
-- HDE/VK не используются для batch/eval-трафика.
+- HDE/VK не используются для batch/eval-трафика и остаются выключенными до успешного
+  server-local gate. Внешние provider-side rules недоступны для наблюдения с сервера, поэтому их
+  выключение подтверждает владелец отдельной attestation, а не значение transport env.
+- Admin login создаёт TTL-bound запись сессии в Redis. Logout обязан удалить её и выставить
+  delete-cookie; повтор старой захваченной cookie после logout должен получить `401`.
 - Yonote capability по умолчанию выключена. При отдельном enable новый read-only token получает
   только `app-ml`, а generated egress policy добавляет только exact `rossmol.yonote.ru:443`.
 - В default read-only режиме аутентифицированный Preview читает полный configured collection set,
-  но Apply возвращает `403`; до и после Preview совпадают tracked-seed hash и Qdrant counts,
-  reindex не запускается.
+  создаёт только приватный receipt с current/snapshot/merged SHA-256, но Apply возвращает `403`;
+  до и после Preview совпадают tracked-seed hash и Qdrant payload fingerprint, reindex не запускается.
 - Explicit test-editor mode требует согласованную пару capability flags и exact private working
   seed path. `app` монтирует working seed read-only, `app-ml` writable; tracked seed остаётся
   неизменным. Full index не публикуется admin HTTP endpoint, HDE остаётся выключен до backup,
   controlled `--prune-stale`, restart, readiness/security и RAG smoke.
+- Apply принимает только одноразовый receipt полного Preview, не выполняет второй Yonote fetch и
+  отказывается при любом изменении working seed. После full index и restart раздел `Seed и индекс`
+  обязан показать `GO`, одинаковые payload fingerprints и
+  `missing=stale=changed=invalid_or_duplicate_points=0`. Runtime-status сравнивает весь
+  канонический Qdrant payload и повторно хеширует seed после scan; изменение seed во время scan
+  даёт `STOP`. Векторы этим endpoint не пересчитываются и остаются отдельно непроверенными.
+- Semantic cache schema, point ID, lookup filter и payload привязаны к SHA-256 runtime seed;
+  физически оставшийся point старой ревизии не может стать cache hit после смены базы.
 
 Точные fail-closed команды, SHA/provenance checks и output paths находятся только в Gate 4B и
 «Финальный acceptance, привязанный к commit» файла
@@ -164,7 +191,8 @@ PY
 
 ## 4. HDE/VK test contour
 
-Перед тестами проверить:
+К этому разделу переходить только после успешного read-only server-local acceptance exact
+candidate. Перед тестами проверить:
 
 - webhook URL указывает на новый согласованный HTTPS endpoint, а не на старый IP;
 - заголовок `X-Webhook-Secret` совпадает с серверным `WEBHOOK_AUTH_TOKEN`;
@@ -231,7 +259,7 @@ if ([string]::IsNullOrWhiteSpace($HIGH_COST_APPROVAL_ID)) {
 
 - `ruff check .`;
 - `pytest`;
-- `scripts/index_kb.py --validate-only`;
+- read-only `scripts/index_kb.py --validate-only` (это validation, не index run);
 - `/ready` для обычного и ML-контура;
 - pre-pilot quality suite без массовых запросов в HDE.
 

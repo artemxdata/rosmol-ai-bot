@@ -311,17 +311,10 @@ def apply_source_corrections(
         updates = override.get("set") or {}
         record.update(updates)
         if "text_clean" in updates:
-            text_clean = str(record.get("text_clean") or "")
-            record["links"] = extract_links(text_clean)
-            record["emails"] = extract_emails(text_clean)
-            record["phones"] = extract_phones(text_clean)
-            record["dates"] = extract_dates(text_clean)
-            record["char_count"] = len(text_clean)
-            registration_deadline = registration_deadline_iso(text_clean)
-            if registration_deadline:
-                record["registration_deadline"] = registration_deadline
-            else:
-                record.pop("registration_deadline", None)
+            refresh_text_derived_metadata(
+                record,
+                str(record.get("text_clean") or ""),
+            )
         if "forum" in updates:
             record["is_generic"] = not bool(record.get("forum"))
 
@@ -464,11 +457,6 @@ def base_record(
     extraction_date: date,
     extra: dict[str, Any],
 ) -> dict[str, Any]:
-    emails = extract_emails(text_clean)
-    phones = extract_phones(text_clean)
-    links = extract_links(text_clean)
-    dates_mentioned = extract_dates(text_clean)
-    has_conditions = has_conditional_logic(text_clean)
     record: dict[str, Any] = {
         "chunk_id": chunk_id,
         "text_raw": text_raw,
@@ -479,12 +467,12 @@ def base_record(
         "forum_normalized": forum,
         "topic": topic,
         "is_generic": forum is None,
-        "has_conditional_logic": has_conditions,
+        "has_conditional_logic": False,
         "conditions_summary": None,
-        "links": links,
-        "emails": emails,
-        "phones": phones,
-        "dates_mentioned": dates_mentioned,
+        "links": [],
+        "emails": [],
+        "phones": [],
+        "dates_mentioned": [],
         "valid_from": None,
         "valid_to": None,
         "source_type": source_type,
@@ -494,14 +482,43 @@ def base_record(
         "version": 1,
         "extraction_date": extraction_date.isoformat(),
         "updated_at": extraction_date.isoformat(),
-        "char_count": len(text_clean),
+        "char_count": 0,
         "parent_chunk_id": None,
     }
     record.update(extra)
+    refresh_text_derived_metadata(record, text_clean)
+    return record
+
+
+def refresh_text_derived_metadata(
+    record: dict[str, Any],
+    text_clean: str,
+) -> None:
+    """Refresh every deterministic field derived from ``text_clean``.
+
+    The function is shared by source ingestion and admin edits so a saved text
+    cannot retain links, dates or temporal facts extracted from its old value.
+    ``conditions_summary`` is intentionally not touched because there is no
+    deterministic extractor for a curated summary; callers changing an
+    existing record must reject such edits before invoking this function.
+    """
+
+    dates_mentioned = extract_dates(text_clean)
+    record["has_conditional_logic"] = has_conditional_logic(text_clean)
+    record["links"] = extract_links(text_clean)
+    record["emails"] = extract_emails(text_clean)
+    record["phones"] = extract_phones(text_clean)
+    record["dates_mentioned"] = dates_mentioned
+    # A small number of historical records carry the deprecated alias. Keep
+    # it coherent without adding that field to every new record.
+    if "dates" in record:
+        record["dates"] = list(dates_mentioned)
+    record["char_count"] = len(text_clean)
     registration_deadline = registration_deadline_iso(text_clean)
     if registration_deadline:
         record["registration_deadline"] = registration_deadline
-    return record
+    else:
+        record.pop("registration_deadline", None)
 
 
 def clean_bot_text(value: str) -> str:

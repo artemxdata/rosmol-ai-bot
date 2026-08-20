@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -23,6 +25,11 @@ from src.rag.filter_keys import build_filter_key_payload
 DEFAULT_FORUM_REGISTRY_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "forums_registry.json"
 )
+SEED_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class SeedRevisionMismatch(RuntimeError):
+    """The exact seed bytes no longer match the reviewed publication revision."""
 
 
 class KBSeedRecord(BaseModel):
@@ -133,11 +140,28 @@ def build_embedding_text(record: KBSeedRecord) -> str:
     return "\n\n".join(parts)
 
 
+def build_qdrant_payload(record: KBSeedRecord) -> dict[str, Any]:
+    """Build the canonical payload shared by every KB indexing path."""
+    record_payload = record.model_dump()
+    return {
+        **record_payload,
+        **build_filter_key_payload(record_payload),
+        "text": record.content,
+        "embedding_text": build_embedding_text(record),
+        "status": record.status,
+    }
+
+
+def qdrant_point_id(chunk_id: str) -> str:
+    return str(uuid5(NAMESPACE_URL, chunk_id))
+
+
 async def index_kb(
     path: Path,
     collection: str,
     limit: int | None = None,
     *,
+    expected_seed_sha256: str,
     embedding_batch_size: int = 16,
     prune_stale: bool = False,
     only_missing: bool = False,
@@ -147,6 +171,20 @@ async def index_kb(
         raise ValueError("--prune-stale cannot be used with --limit")
     if embedding_batch_size < 1:
         raise ValueError("--embedding-batch-size must be positive")
+
+    expected_seed_sha256 = _validated_expected_seed_sha256(expected_seed_sha256)
+    raw_seed_bytes = await asyncio.to_thread(path.read_bytes)
+    _require_seed_revision(
+        raw_seed_bytes,
+        expected_seed_sha256,
+        stage="before_index",
+    )
+    raw_items = json.loads(raw_seed_bytes.decode("utf-8"))
+    records = validate_seed_items(raw_items)
+    validate_semantic_seed_items(
+        raw_items,
+        forum_registry=load_forum_registry(path, forum_registry_path),
+    )
 
     settings = get_settings()
     client = AsyncQdrantClient(
@@ -160,13 +198,6 @@ async def index_kb(
                 "Run: python scripts/init_qdrant.py"
             )
 
-        raw_records = await asyncio.to_thread(path.read_text, encoding="utf-8")
-        raw_items = json.loads(raw_records)
-        records = validate_seed_items(raw_items)
-        validate_semantic_seed_items(
-            raw_items,
-            forum_registry=load_forum_registry(path, forum_registry_path),
-        )
         existing_chunk_ids: set[str] = set()
         if only_missing:
             existing_chunk_ids = await collect_existing_chunk_ids(client, collection)
@@ -214,24 +245,17 @@ async def index_kb(
                 flush=True,
             )
 
-            for record, embedding_text, (dense, sparse) in zip(
+            for record, _embedding_text, (dense, sparse) in zip(
                 batch,
                 embedding_texts,
                 encoded_batch,
                 strict=True,
             ):
-                text = record.content
                 indices, values = sparse_to_indices_values(sparse)
-                payload = {
-                    **record.model_dump(),
-                    **build_filter_key_payload(record.model_dump()),
-                    "text": text,
-                    "embedding_text": embedding_text,
-                    "status": record.status,
-                }
+                payload = build_qdrant_payload(record)
                 points.append(
                     models.PointStruct(
-                        id=str(uuid5(NAMESPACE_URL, record.chunk_id)),
+                        id=qdrant_point_id(record.chunk_id),
                         vector={
                             "dense": dense.tolist(),
                             "sparse": models.SparseVector(indices=indices, values=values),
@@ -272,6 +296,13 @@ async def index_kb(
         cleared_response_cache = 0
         if indexed or pruned_stale:
             cleared_response_cache = await clear_response_cache(client)
+
+        final_seed_bytes = await asyncio.to_thread(path.read_bytes)
+        _require_seed_revision(
+            final_seed_bytes,
+            expected_seed_sha256,
+            stage="before_completion",
+        )
 
         elapsed = perf_counter() - started_at
         print(
@@ -406,8 +437,20 @@ async def clear_response_cache(
     return len(point_ids)
 
 
-def validate_only(path: Path, forum_registry_path: Path | None = None) -> None:
-    raw_items = _read_json(path)
+def validate_only(
+    path: Path,
+    forum_registry_path: Path | None = None,
+    *,
+    expected_seed_sha256: str | None = None,
+) -> None:
+    rendered = path.read_bytes()
+    if expected_seed_sha256 is not None:
+        _require_seed_revision(
+            rendered,
+            _validated_expected_seed_sha256(expected_seed_sha256),
+            stage="validation",
+        )
+    raw_items = json.loads(rendered.decode("utf-8"))
     records = validate_seed_items(raw_items)
     validate_semantic_seed_items(
         raw_items,
@@ -438,6 +481,25 @@ def _read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _validated_expected_seed_sha256(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if SEED_SHA256_RE.fullmatch(normalized) is None:
+        raise ValueError(
+            "--expected-seed-sha256 must be a 64-character lowercase SHA-256"
+        )
+    return normalized
+
+
+def _require_seed_revision(
+    rendered: bytes,
+    expected_seed_sha256: str,
+    *,
+    stage: str,
+) -> None:
+    if sha256(rendered).hexdigest() != expected_seed_sha256:
+        raise SeedRevisionMismatch(f"knowledge base seed changed: stage={stage}")
+
+
 def load_forum_registry(
     seed_path: Path,
     forum_registry_path: Path | None = None,
@@ -463,7 +525,7 @@ def load_forum_registry(
 def parse_args() -> argparse.Namespace:
     settings = get_settings()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", default="data/knowledge_base_seed.json")
+    parser.add_argument("--path", default=settings.kb_seed_path)
     parser.add_argument(
         "--forums-registry",
         type=Path,
@@ -474,6 +536,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--collection", default=settings.qdrant_knowledge_collection)
+    parser.add_argument(
+        "--expected-seed-sha256",
+        default=None,
+        help=(
+            "Required for indexing. Exact SHA-256 of the reviewed seed bytes; "
+            "the file is checked before Qdrant access and again before success."
+        ),
+    )
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument(
         "--quality-gate",
@@ -516,8 +586,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.validate_only:
-        validate_only(Path(args.path), args.forums_registry)
+        validate_only(
+            Path(args.path),
+            args.forums_registry,
+            expected_seed_sha256=args.expected_seed_sha256,
+        )
     else:
+        expected_seed_sha256 = _validated_expected_seed_sha256(
+            args.expected_seed_sha256
+        )
         if args.require_quality_gate:
             quality_gate_path = (
                 Path(args.quality_gate)
@@ -531,6 +608,7 @@ def main() -> None:
                     Path(args.path),
                     args.collection,
                     args.limit,
+                    expected_seed_sha256=expected_seed_sha256,
                     embedding_batch_size=args.embedding_batch_size,
                     prune_stale=args.prune_stale,
                     only_missing=args.only_missing,

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +18,89 @@ from scripts.sync_yonote_kb import (
     YonoteDataTooLarge,
     YonoteOperationTimeout,
 )
-from src.admin import ui
+from src.admin import kb_store, ui
 from src.admin.yonote_database import YonoteDatabaseExportTooLarge
+from src.admin.yonote_sync import YonoteReceiptConflict
 from src.main import _admin_reindex_record
 from src.main import app as fastapi_app
+
+
+class FakeAdminSessionRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, **_kwargs) -> bool:
+        self.values[key] = value
+        return True
+
+    async def exists(self, key: str) -> int:
+        return int(key in self.values)
+
+    async def delete(self, key: str) -> int:
+        return int(self.values.pop(key, None) is not None)
+
+
+@pytest.fixture(autouse=True)
+def admin_session_store(monkeypatch: pytest.MonkeyPatch) -> FakeAdminSessionRedis:
+    store = FakeAdminSessionRedis()
+    monkeypatch.setattr(fastapi_app.state, "redis", store, raising=False)
+    return store
+
+
+def test_admin_ui_embedded_javascript_has_valid_syntax() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    html = ui.render_admin_kb_html(
+        admin_read_only=False,
+        yonote_sync_enabled=True,
+    )
+    match = re.search(r"<script>(?P<script>.*)</script>", html, flags=re.DOTALL)
+    assert match is not None
+
+    result = subprocess.run(
+        [node, "--check", "-"],
+        input=match.group("script"),
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_seed_write_does_not_report_failure_after_atomic_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    seed_path.write_text("[]\n", encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def fail_missing_temporary_cleanup(path: Path, *args, **kwargs) -> None:
+        if path.name.startswith(".kb.json.") and not path.exists():
+            raise OSError("simulated cleanup failure after replace")
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_missing_temporary_cleanup)
+
+    kb_store.write_seed_records(
+        seed_path,
+        [
+            {
+                "chunk_id": "committed",
+                "text_clean": "Новая опубликованная запись.",
+                "status": "published",
+                "category": "general",
+                "source_type": "yonote",
+            }
+        ],
+    )
+
+    assert json.loads(seed_path.read_text(encoding="utf-8"))[0]["chunk_id"] == (
+        "committed"
+    )
 
 
 def _write_seed(path: Path) -> None:
@@ -165,6 +247,58 @@ async def test_admin_reindex_invalidates_keyword_and_semantic_caches(
 
 
 @pytest.mark.asyncio
+async def test_admin_reindex_archived_chunk_deletes_point_and_invalidates_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalidated_keyword_sources: list[str | None] = []
+    invalidated_forums: list[str | None] = []
+
+    async def fake_delete(*_args, **kwargs):
+        assert kwargs["record_payload"]["status"] == "archived"
+        return {"ok": True, "action": "deleted", "chunk_id": "travel"}
+
+    class FakeRetriever:
+        def invalidate_keyword_cache(self, source_type: str | None = None) -> None:
+            invalidated_keyword_sources.append(source_type)
+
+    class FakeCache:
+        async def invalidate_forum(self, forum: str | None) -> None:
+            invalidated_forums.append(forum)
+
+    monkeypatch.setattr("src.main.kb_index.upsert_chunk", fake_delete)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(qdrant_knowledge_collection="knowledge_base"),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                qdrant=object(),
+                embedder=object(),
+                retriever=FakeRetriever(),
+                semantic_cache=FakeCache(),
+            )
+        )
+    )
+
+    result = await _admin_reindex_record(
+        request,  # type: ignore[arg-type]
+        {
+            "chunk_id": "travel",
+            "status": "archived",
+            "source_type": "xlsx",
+            "forum_normalized": "Машук",
+        },
+    )
+
+    assert result["action"] == "deleted"
+    assert invalidated_keyword_sources == ["xlsx"]
+    assert invalidated_forums == ["Машук"]
+    assert result["keyword_cache_invalidated_source"] == "xlsx"
+    assert result["cache_invalidated_forum"] == "Машук"
+
+
+@pytest.mark.asyncio
 async def test_admin_reindex_invalidates_global_cache_for_unscoped_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -289,11 +423,15 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert 'id="opsButton"' in enabled.text
     assert 'id="opsDashboard"' in enabled.text
     assert 'id="qualityDashboard"' in enabled.text
+    assert 'id="runtimeStatusButton"' in enabled.text
     assert 'id="yonoteButton"' in enabled.text
     assert 'id="yonoteDashboard"' in enabled.text
     assert 'id="yonoteDatabaseButton"' in enabled.text
     assert 'id="yonoteDatabaseDashboard"' in enabled.text
     assert "/admin/kb/ops-report?days=7" in enabled.text
+    assert "/admin/kb/runtime-status" in enabled.text
+    assert "receipt_recovery_required" in enabled.text
+    assert "повтори Apply с тем же проверенным receipt" in enabled.text
     assert "/admin/kb/yonote/preview" in enabled.text
     assert "/admin/kb/yonote/apply" in enabled.text
     assert "/admin/kb/yonote/database-statistics" in enabled.text
@@ -309,6 +447,11 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert "Текст сохранён, но RAG-индекс не обновлён" in enabled.text
     assert "Операция не завершилась за" in enabled.text
     assert "текстовых секций (оценка)" in enabled.text
+    assert "Seed и индекс" in enabled.text
+    assert "exact_payload_match" in enabled.text
+    assert "receipt_id: receipt.id" in enabled.text
+    assert "Apply заблокирован проверкой" in enabled.text
+    assert "snapshot_safety" in enabled.text
     assert "может включать чувствительные данные" in enabled.text
     assert "не добавляй в Git" in enabled.text
     assert 'let activeWorkspace = "knowledge";' in enabled.text
@@ -667,10 +810,21 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
         ),
     )
 
-    def fake_preview(path: Path, settings: object, *, limit_documents: int | None = None):
+    receipt_id = "a" * 32
+    receipt_sha256 = "b" * 64
+    invalidated_metadata_caches: list[str] = []
+
+    def fake_preview(
+        path: Path,
+        settings: object,
+        *,
+        limit_documents: int | None = None,
+        receipt_dir: Path,
+    ):
         assert path == seed_path
         assert settings.admin_auth_token == "admin-secret"
         assert limit_documents == 3
+        assert receipt_dir == seed_path.parent / ".yonote-sync-receipts"
         return {
             "ok": True,
             "applied": False,
@@ -679,11 +833,20 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
             "added": 2,
             "changed": 1,
             "removed": 0,
+            "receipt": {"apply_ready": False},
         }
 
-    def fake_apply(path: Path, _settings: object, *, limit_documents: int | None = None):
+    def fake_apply(
+        path: Path,
+        *,
+        receipt_dir: Path,
+        receipt_id: str,
+        receipt_sha256: str,
+    ):
         assert path == seed_path
-        assert limit_documents is None
+        assert receipt_dir == seed_path.parent / ".yonote-sync-receipts"
+        assert receipt_id == "a" * 32
+        assert receipt_sha256 == "b" * 64
         return {
             "ok": True,
             "applied": True,
@@ -695,6 +858,14 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
 
     monkeypatch.setattr("src.main.preview_yonote_sync", fake_preview)
     monkeypatch.setattr("src.main.apply_yonote_sync", fake_apply)
+    monkeypatch.setattr(
+        "src.main.invalidate_runtime_aspect_catalog",
+        lambda: invalidated_metadata_caches.append("aspects"),
+    )
+    monkeypatch.setattr(
+        "src.main.invalidate_runtime_forum_registry",
+        lambda: invalidated_metadata_caches.append("forums"),
+    )
     transport = httpx.ASGITransport(app=fastapi_app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -706,7 +877,7 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
         )
         applied = await client.post(
             "/admin/kb/yonote/apply",
-            json={},
+            json={"receipt_id": receipt_id, "receipt_sha256": receipt_sha256},
             headers={"X-Admin-Token": "admin-secret"},
         )
 
@@ -717,6 +888,152 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
     assert applied.status_code == 200
     assert applied.json()["applied"] is True
     assert applied.json()["index_required"] is True
+    assert invalidated_metadata_caches == ["aspects", "forums"]
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_apply_requires_exact_preview_receipt_and_maps_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            admin_read_only=False,
+            admin_mutations_enabled=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+
+    def conflicting_apply(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise YonoteReceiptConflict("provider details must not leak")
+
+    monkeypatch.setattr("src.main.apply_yonote_sync", conflicting_apply)
+    transport = httpx.ASGITransport(app=fastapi_app)
+    headers = {"X-Admin-Token": "admin-secret"}
+    receipt = {"receipt_id": "a" * 32, "receipt_sha256": "b" * 64}
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        missing = await client.post("/admin/kb/yonote/apply", json={}, headers=headers)
+        partial = await client.post(
+            "/admin/kb/yonote/apply",
+            json={**receipt, "limit_documents": 1},
+            headers=headers,
+        )
+        conflict = await client.post(
+            "/admin/kb/yonote/apply",
+            json=receipt,
+            headers=headers,
+        )
+
+    assert missing.status_code == 422
+    assert missing.json()["detail"] == "preview receipt id and hash are required"
+    assert partial.status_code == 422
+    assert partial.json()["detail"] == "partial Yonote previews cannot be applied"
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == (
+        "Knowledge base changed after Preview; run Preview again"
+    )
+    assert "provider details" not in conflict.text
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_preview_maps_concurrent_seed_change_to_safe_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+
+    def conflicting_preview(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise YonoteReceiptConflict("private seed path must not leak")
+
+    monkeypatch.setattr("src.main.preview_yonote_sync", conflicting_preview)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.post(
+            "/admin/kb/yonote/preview",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Knowledge base changed during Preview; run Preview again"
+    )
+    assert "private seed path" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_maps_unresolved_receipt_to_safe_recovery_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            app_env="local",
+            admin_auth_token="admin-secret",
+            admin_read_only=False,
+            admin_mutations_enabled=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+
+    class PrivateRecoveryConflict(YonoteReceiptConflict):
+        def __str__(self) -> str:
+            return "D:/private/receipts/provider-secret.applying"
+
+    def recovery_preview(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise PrivateRecoveryConflict(
+            "unfinished Yonote Apply requires exact receipt recovery"
+        )
+
+    def recovery_apply(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise PrivateRecoveryConflict("preview receipt apply is already in progress")
+
+    monkeypatch.setattr("src.main.preview_yonote_sync", recovery_preview)
+    monkeypatch.setattr("src.main.apply_yonote_sync", recovery_apply)
+    transport = httpx.ASGITransport(app=fastapi_app)
+    headers = {"X-Admin-Token": "admin-secret"}
+    receipt = {"receipt_id": "a" * 32, "receipt_sha256": "b" * 64}
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        preview = await client.post(
+            "/admin/kb/yonote/preview",
+            json={},
+            headers=headers,
+        )
+        apply = await client.post(
+            "/admin/kb/yonote/apply",
+            json=receipt,
+            headers=headers,
+        )
+
+    for response in (preview, apply):
+        assert response.status_code == 409
+        assert response.json()["detail"] == "receipt_recovery_required"
+        assert "private" not in response.text
+        assert "provider-secret" not in response.text
 
 
 @pytest.mark.asyncio
@@ -845,6 +1162,8 @@ async def test_read_only_admin_yonote_preview_is_full_and_does_not_mutate_seed(
     assert response.status_code == 200
     assert response.json()["applied"] is False
     assert response.json()["index_required"] is False
+    assert response.json()["snapshot_safety"]["status"] == "GO"
+    assert response.json()["receipt"]["apply_ready"] is True
     assert seed_path.read_bytes() == original_seed
 
 
@@ -901,6 +1220,146 @@ async def test_admin_yonote_preview_rejects_concurrent_pull(
     assert second.status_code == 409
     assert second.json()["detail"] == "Yonote sync is already running"
     assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_admin_apply_holds_locks_until_worker_and_invalidation_finish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    started = threading.Event()
+    release = threading.Event()
+    invalidated_metadata_caches: list[str] = []
+
+    def slow_apply(*_args: object, **_kwargs: object) -> dict[str, object]:
+        started.set()
+        assert release.wait(timeout=5)
+        return {"ok": True, "applied": True}
+
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            app_env="local",
+            admin_auth_token="admin-secret",
+            admin_read_only=False,
+            admin_mutations_enabled=True,
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    monkeypatch.setattr("src.main.apply_yonote_sync", slow_apply)
+    monkeypatch.setattr(
+        "src.main.invalidate_runtime_aspect_catalog",
+        lambda: invalidated_metadata_caches.append("aspects"),
+    )
+    monkeypatch.setattr(
+        "src.main.invalidate_runtime_forum_registry",
+        lambda: invalidated_metadata_caches.append("forums"),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+    headers = {"X-Admin-Token": "admin-secret"}
+    receipt = {"receipt_id": "a" * 32, "receipt_sha256": "b" * 64}
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        first_task = asyncio.create_task(
+            client.post(
+                "/admin/kb/yonote/apply",
+                json=receipt,
+                headers=headers,
+            )
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        first_task.cancel()
+        await asyncio.sleep(0)
+        try:
+            second = await client.post(
+                "/admin/kb/yonote/apply",
+                json=receipt,
+                headers=headers,
+            )
+            assert second.status_code == 409
+            assert second.json()["detail"] == "Yonote sync is already running"
+            assert invalidated_metadata_caches == []
+            assert not first_task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first_task
+
+    assert invalidated_metadata_caches == ["aspects", "forums"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_admin_patch_holds_lock_until_worker_and_invalidation_finish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    started = threading.Event()
+    release = threading.Event()
+    invalidated_metadata_caches: list[str] = []
+
+    def slow_update(
+        _path: Path,
+        chunk_id: str,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        started.set()
+        assert release.wait(timeout=5)
+        return {"chunk_id": chunk_id, "text_clean": "Обновлено", "status": "published"}
+
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            admin_read_only=False,
+            admin_mutations_enabled=True,
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    monkeypatch.setattr("src.main.kb_store.update_chunk", slow_update)
+    monkeypatch.setattr(
+        "src.main.invalidate_runtime_aspect_catalog",
+        lambda: invalidated_metadata_caches.append("aspects"),
+    )
+    monkeypatch.setattr(
+        "src.main.invalidate_runtime_forum_registry",
+        lambda: invalidated_metadata_caches.append("forums"),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+    headers = {"X-Admin-Token": "admin-secret"}
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        first_task = asyncio.create_task(
+            client.patch(
+                "/admin/kb/chunks/travel",
+                json={"text_clean": "Обновлено", "reindex": False},
+                headers=headers,
+            )
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        first_task.cancel()
+        await asyncio.sleep(0)
+        try:
+            second = await client.patch(
+                "/admin/kb/chunks/travel",
+                json={"text_clean": "Второе изменение", "reindex": False},
+                headers=headers,
+            )
+            assert second.status_code == 409
+            assert second.json()["detail"] == "Admin mutation is already running"
+            assert invalidated_metadata_caches == []
+            assert not first_task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first_task
+
+    assert invalidated_metadata_caches == ["aspects", "forums"]
 
 
 @pytest.mark.asyncio
@@ -1034,6 +1493,37 @@ async def test_admin_kb_login_marks_session_cookie_secure_behind_https_proxy(
     assert "Secure" in cookie
     assert "SameSite=lax" in cookie
     assert "Path=/admin/kb" in cookie
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_logout_revokes_replayed_session_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(admin_auth_token="admin-secret", kb_seed_path=str(seed_path)),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        login = await client.post("/admin/kb/login", json={"token": "admin-secret"})
+        issued_cookie = client.cookies.get("rosmol_admin_session")
+        logout = await client.post("/admin/kb/logout", json={})
+        replay = await client.get(
+            "/admin/kb/chunks",
+            headers={"Cookie": f"rosmol_admin_session={issued_cookie}"},
+        )
+
+    assert login.status_code == 200
+    assert issued_cookie
+    assert logout.status_code == 200
+    cleared_cookie = logout.headers["set-cookie"].casefold()
+    assert "rosmol_admin_session=" in cleared_cookie
+    assert "max-age=0" in cleared_cookie
+    assert replay.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -1268,6 +1758,40 @@ async def test_admin_kb_api_rejects_invalid_status(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_api_rejects_semantically_conflicting_chunk_edit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    original = seed_path.read_bytes()
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            admin_read_only=False,
+            admin_mutations_enabled=True,
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.patch(
+            "/admin/kb/chunks/travel",
+            json={
+                "text_clean": "Регистрация на форуме «Ростов» уже закрыта.",
+                "reindex": False,
+            },
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 422
+    assert "forum_text_conflict=1" in response.json()["detail"]
+    assert seed_path.read_bytes() == original
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_api_validates_seed_and_runs_quality_check(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1304,6 +1828,102 @@ async def test_admin_kb_api_validates_seed_and_runs_quality_check(
     assert quality_check.json()["validation"]["ok"] is True
     assert quality_check.json()["latest_eval_report_exists"] is True
     assert quality_check.json()["latest_eval_report"]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_api_reports_runtime_seed_qdrant_alignment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    settings = SimpleNamespace(
+        admin_auth_token="admin-secret",
+        kb_seed_path=str(seed_path),
+        qdrant_knowledge_collection="knowledge_base",
+        release_git_sha="a" * 40,
+        runtime_role="ml",
+        admin_read_only=True,
+        admin_mutations_enabled=False,
+        yonote_sync_enabled=True,
+    )
+    qdrant = object()
+    captured: dict[str, object] = {}
+
+    async def fake_status(received_qdrant: object, **kwargs: object) -> dict[str, object]:
+        captured["qdrant"] = received_qdrant
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "status": "GO",
+            "seed": {"published": 1},
+            "qdrant": {"points": 1, "exact_payload_match": True},
+            "response_cache": {"points": 0},
+        }
+
+    monkeypatch.setattr("src.main.get_settings", lambda: settings)
+    monkeypatch.setattr("src.main.kb_status.build_runtime_kb_status", fake_status)
+    monkeypatch.setattr(fastapi_app.state, "qdrant", qdrant, raising=False)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        unauthorized = await client.get("/admin/kb/runtime-status")
+        response = await client.get(
+            "/admin/kb/runtime-status",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["status"] == "GO"
+    assert response.json()["runtime"] == {
+        "release_git_sha": "a" * 40,
+        "role": "ml",
+        "admin_read_only": True,
+        "admin_mutations_enabled": False,
+        "yonote_sync_enabled": True,
+    }
+    assert captured == {
+        "qdrant": qdrant,
+        "seed_path": seed_path,
+        "knowledge_collection": "knowledge_base",
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_kb_runtime_status_sanitizes_qdrant_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            admin_auth_token="admin-secret",
+            kb_seed_path=str(seed_path),
+            qdrant_knowledge_collection="knowledge_base",
+        ),
+    )
+
+    async def fail_status(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("private qdrant connection details")
+
+    monkeypatch.setattr("src.main.kb_status.build_runtime_kb_status", fail_status)
+    monkeypatch.setattr(fastapi_app.state, "qdrant", object(), raising=False)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get(
+            "/admin/kb/runtime-status",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Qdrant runtime status is temporarily unavailable"
+    )
+    assert "private qdrant" not in response.text
 
 
 @pytest.mark.asyncio

@@ -4,10 +4,19 @@ import json
 import os
 import secrets
 from collections import Counter
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from scripts.index_kb import validate_seed_items
+from loguru import logger
+
+from scripts.index_kb import (
+    load_forum_registry,
+    validate_seed_items,
+    validate_semantic_seed_items,
+)
+from src.kb.audit import semantic_integrity_findings
+from src.kb.source_extractors import refresh_text_derived_metadata
 
 VALID_STATUSES = {"draft", "published", "archived"}
 
@@ -76,9 +85,17 @@ def update_chunk(
         normalized_text = text_clean.strip()
         if not normalized_text:
             raise ValueError("text_clean must not be empty")
+        previous_text = str(target.get("text_clean") or target.get("text") or "").strip()
+        if normalized_text != previous_text and str(
+            target.get("conditions_summary") or ""
+        ).strip():
+            raise ValueError(
+                "text_clean cannot be edited while conditions_summary is curated"
+            )
         target["text_clean"] = normalized_text
+        refresh_text_derived_metadata(target, normalized_text)
 
-    validate_seed_items(records)
+    _validate_records(path, records)
     write_seed_records(path, records)
     return target
 
@@ -91,6 +108,8 @@ def write_seed_records(path: Path, records: list[dict[str, Any]]) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    directory_fd: int | None = None
+    committed = False
     try:
         fd = os.open(temporary, flags, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
@@ -98,31 +117,80 @@ def write_seed_records(path: Path, records: list[dict[str, Any]]) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
         if os.name == "posix":
-            os.chmod(path, 0o600)
+            os.chmod(temporary, 0o600)
             directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
             directory_fd = os.open(path.parent, directory_flags)
+        os.replace(temporary, path)
+        committed = True
+        if directory_fd is not None:
             try:
                 os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            except OSError as exc:
+                logger.warning(
+                    "kb_seed_directory_fsync_failed",
+                    error=type(exc).__name__,
+                )
     finally:
-        temporary.unlink(missing_ok=True)
+        if directory_fd is not None:
+            try:
+                os.close(directory_fd)
+            except OSError as exc:
+                logger.warning(
+                    "kb_seed_directory_close_failed",
+                    error=type(exc).__name__,
+                )
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as exc:
+            if not committed:
+                raise
+            logger.warning(
+                "kb_seed_temporary_cleanup_failed",
+                error=type(exc).__name__,
+            )
 
 
 def validate_seed(path: Path) -> dict[str, Any]:
-    records = load_seed_records(path)
-    validate_seed_items(records)
-    return {
+    validation, _records = load_validated_seed_snapshot(path)
+    return validation
+
+
+def load_validated_seed_snapshot(
+    path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rendered = path.read_bytes()
+    records = _parse_seed_records(rendered)
+    semantic_findings = _validate_records(path, records)
+    warning_count = sum(
+        int(finding.get("count") or 1)
+        for finding in semantic_findings
+        if finding.get("severity") == "warning"
+    )
+    validation = {
         "ok": True,
         "path": str(path),
+        "seed_sha256": sha256(rendered).hexdigest(),
         "valid_records": len(records),
         "status_counts": _count_field(records, "status", default="published"),
         "category_counts": _count_field(records, "category"),
         "forum_counts": _count_field(records, "forum_normalized"),
         "source_type_counts": _count_field(records, "source_type"),
+        "semantic_findings": semantic_findings,
+        "semantic_warning_count": warning_count,
+        "semantic_error_count": 0,
     }
+    return validation, records
+
+
+def _validate_records(path: Path, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    forum_registry = load_forum_registry(path)
+    validate_seed_items(records)
+    validate_semantic_seed_items(
+        records,
+        forum_registry=forum_registry,
+    )
+    return semantic_integrity_findings(records, forum_registry=forum_registry)
 
 
 def find_related_eval_cases(
@@ -173,7 +241,11 @@ def build_quality_check(
 
 
 def load_seed_records(path: Path) -> list[dict[str, Any]]:
-    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    return _parse_seed_records(path.read_bytes())
+
+
+def _parse_seed_records(rendered: bytes) -> list[dict[str, Any]]:
+    payload = json.loads(rendered.decode("utf-8-sig"))
     if not isinstance(payload, list):
         raise ValueError("knowledge base seed must contain a JSON array")
     if not all(isinstance(item, dict) for item in payload):

@@ -340,8 +340,32 @@ services:
         <<: *production-build-args
         INSTALL_ML: "true"
     user: app
+    command:
+      - sh
+      - -eu
+      - -c
+      - >-
+        python scripts/index_kb.py
+        --path "$${KB_SEED_PATH}"
+        --expected-seed-sha256 "$${EXPECTED_KB_SEED_SHA256}"
+        --validate-only &&
+        python scripts/init_qdrant.py &&
+        python scripts/index_kb.py
+        --path "$${KB_SEED_PATH}"
+        --expected-seed-sha256 "$${EXPECTED_KB_SEED_SHA256}"
+        --prune-stale
     environment:
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+      KB_SEED_PATH: ${ADMIN_KB_SEED_PATH:-/app/data/knowledge_base_seed.json}
+      # Kept empty for normal runtime/acceptance compose operations. The index CLI
+      # rejects an empty value, so the reviewed hash is supplied only to an actual run.
+      EXPECTED_KB_SEED_SHA256: ${EXPECTED_KB_SEED_SHA256:-}
+    volumes: !override
+      - ./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro
+      - ./data/private/admin-kb:/app/data/private/admin-kb:ro
+      - hf_cache:/home/app/.cache/huggingface
+      - torch_cache:/home/app/.cache/torch
+      - model_cache:/opt/models:ro
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [data]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,6 +11,7 @@ from src.rag.cache import (
     CACHE_SCHEMA_VERSION,
     CachedResponse,
     SemanticCache,
+    _file_sha256,
     _query_fingerprint,
 )
 
@@ -25,9 +27,12 @@ class FakeQdrant:
         self.query_kwargs = None
         self.upsert_kwargs = None
         self.delete_kwargs = None
+        self.on_query = None
 
     async def query_points(self, **kwargs):
         self.query_kwargs = kwargs
+        if self.on_query is not None:
+            self.on_query()
         points = (
             []
             if self.payload is None
@@ -77,6 +82,9 @@ async def test_semantic_cache_round_trips_structured_grounded_response(
     assert payload["query_fingerprint"] == _query_fingerprint(
         "Кто платит за проезд на Амур?"
     )
+    assert payload["kb_seed_sha256"] == _file_sha256(
+        Path("data/knowledge_base_seed.json")
+    )
     assert payload["cited_sources"] == ["yonote_amur_travel"]
     assert payload["factual_source_type"] == "yonote"
     assert payload["analysis"]["topics"] == ["oplata_proezda"]
@@ -85,6 +93,12 @@ async def test_semantic_cache_round_trips_structured_grounded_response(
     actual = await cache.check("Кто платит за проезд на Амур?", "Амур")
 
     assert actual == expected
+    revision_condition = next(
+        condition
+        for condition in qdrant.query_kwargs["query_filter"].must
+        if getattr(condition, "key", None) == "kb_seed_sha256"
+    )
+    assert revision_condition.match.value == payload["kb_seed_sha256"]
 
 
 @pytest.mark.asyncio
@@ -239,12 +253,12 @@ async def test_semantic_cache_ignores_pre_correction_schema(
         for condition in qdrant.query_kwargs["query_filter"].must
         if getattr(condition, "key", None) == "cache_schema_version"
     )
-    assert CACHE_SCHEMA_VERSION == 5
-    assert version_condition.match.value == 5
+    assert CACHE_SCHEMA_VERSION == 6
+    assert version_condition.match.value == 6
 
 
 @pytest.mark.asyncio
-async def test_semantic_cache_ignores_schema_v4_payload(
+async def test_semantic_cache_ignores_schema_v5_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -257,10 +271,113 @@ async def test_semantic_cache_ignores_schema_v4_payload(
 
     await cache.save(query, _entry(forum=None))
     payload = dict(qdrant.upsert_kwargs["points"][0].payload)
-    payload["cache_schema_version"] = 4
+    payload["cache_schema_version"] = 5
     qdrant.payload = payload
 
     assert await cache.check(query, None) is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_misses_old_physical_entry_after_seed_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    seed_path.write_text('[{"chunk_id":"before"}]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "src.rag.cache.get_settings",
+        lambda: SimpleNamespace(
+            cache_ttl_hours=24,
+            cache_similarity_threshold=0.95,
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    qdrant = FakeQdrant()
+    cache = SemanticCache(qdrant, FakeEmbedder())  # type: ignore[arg-type]
+    query = "Когда опубликуют результаты?"
+
+    await cache.save(query, _entry(forum=None))
+    old_point = qdrant.upsert_kwargs["points"][0]
+    old_payload = dict(old_point.payload)
+    old_revision = old_payload["kb_seed_sha256"]
+    seed_path.write_text('[{"chunk_id":"after"}]\n', encoding="utf-8")
+    new_revision = _file_sha256(seed_path)
+    assert new_revision != old_revision
+
+    # Simulate Qdrant physically retaining and returning the old point even though
+    # the new filter should normally exclude it. The payload guard must still miss.
+    qdrant.payload = old_payload
+    assert await cache.check(query, None) is None
+    revision_condition = next(
+        condition
+        for condition in qdrant.query_kwargs["query_filter"].must
+        if getattr(condition, "key", None) == "kb_seed_sha256"
+    )
+    assert revision_condition.match.value == new_revision
+
+    await cache.save(query, _entry(forum=None))
+    new_point = qdrant.upsert_kwargs["points"][0]
+    assert new_point.payload["kb_seed_sha256"] == new_revision
+    assert new_point.id != old_point.id
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_rechecks_seed_revision_before_returning_hit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    seed_path.write_text('[{"chunk_id":"before"}]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "src.rag.cache.get_settings",
+        lambda: SimpleNamespace(
+            cache_ttl_hours=24,
+            cache_similarity_threshold=0.95,
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    qdrant = FakeQdrant()
+    cache = SemanticCache(qdrant, FakeEmbedder())  # type: ignore[arg-type]
+    query = "Когда опубликуют результаты?"
+
+    await cache.save(query, _entry(forum=None))
+    qdrant.payload = dict(qdrant.upsert_kwargs["points"][0].payload)
+    qdrant.on_query = lambda: seed_path.write_text(
+        '[{"chunk_id":"changed-during-lookup"}]\n',
+        encoding="utf-8",
+    )
+
+    assert await cache.check(query, None) is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_does_not_store_response_after_seed_revision_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    seed_path.write_text('[{"chunk_id":"before"}]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "src.rag.cache.get_settings",
+        lambda: SimpleNamespace(
+            cache_ttl_hours=24,
+            cache_similarity_threshold=0.95,
+            kb_seed_path=str(seed_path),
+        ),
+    )
+    qdrant = FakeQdrant()
+    cache = SemanticCache(qdrant, FakeEmbedder())  # type: ignore[arg-type]
+    expected_revision = await cache.current_kb_revision()
+    seed_path.write_text('[{"chunk_id":"after"}]\n', encoding="utf-8")
+
+    stored = await cache.save(
+        "Когда опубликуют результаты?",
+        _entry(forum=None),
+        expected_kb_seed_sha256=expected_revision,
+    )
+
+    assert stored is False
+    assert qdrant.upsert_kwargs is None
 
 
 @pytest.mark.asyncio

@@ -271,7 +271,9 @@ sudo -u "$DEPLOY_USER" git log -1 --format='commit=%H time=%cI subject=%s'
 
 PostgreSQL, Redis и Qdrant создаются пустыми. Qdrant индексируется только из
 `data/knowledge_base_seed.json` с `--prune-stale`; expected baseline — `2152` published points и
-нулевой semantic response cache. Любое расхождение блокирует ingress.
+нулевой semantic response cache. До любого index run владелец отдельно фиксирует reviewed exact
+SHA-256 seed; indexer сверяет bytes до доступа к Qdrant и повторно перед успешным завершением.
+Любое расхождение блокирует ingress.
 
 ### Secretless build gate — до выпуска provider credentials
 
@@ -521,6 +523,13 @@ dc=(sudo docker compose --env-file .env.production \
   -f docker-compose.yml \
   -f docker-compose.ml.yml \
   -f docker-compose.prod.yml)
+readonly REVIEWED_INITIAL_KB_SEED_SHA256='<REVIEWED_LOWERCASE_64_CHARACTER_SEED_SHA256>'
+[[ "$REVIEWED_INITIAL_KB_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+  printf 'STOP=reviewed_initial_kb_seed_sha256_invalid\n' >&2
+  exit 1
+}
+test "$(sha256sum data/knowledge_base_seed.json | cut -d ' ' -f 1)" \
+  = "$REVIEWED_INITIAL_KB_SEED_SHA256"
 
 "${dc[@]}" --profile ml config --quiet
 "${dc[@]}" --profile ml up -d --no-build postgres redis qdrant runtime-egress-proxy
@@ -556,9 +565,8 @@ async def main() -> None:
 asyncio.run(main())
 print("hde_transport_sql_prepare=passed")
 PY
-"${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
-  'python scripts/init_qdrant.py && python scripts/index_kb.py \
-   --path data/knowledge_base_seed.json --prune-stale'
+"${dc[@]}" --profile ml run --rm --pull never \
+  -e "EXPECTED_KB_SEED_SHA256=$REVIEWED_INITIAL_KB_SEED_SHA256" index-kb
 RUNTIME_STARTED_AT_FILE="data/private/runtime/runtime-started-at-${TRUSTED_GIT_SHA}.txt"
 test ! -e "$RUNTIME_STARTED_AT_FILE"
 umask 077
@@ -1360,9 +1368,15 @@ case "$index_diff_rc" in
     echo 'index_inputs_unchanged=PASS reindex=SKIPPED'
     ;;
   1)
-    "${dc[@]}" --profile ml run --rm --pull never index-kb sh -c \
-      'python scripts/init_qdrant.py && python scripts/index_kb.py \
-       --path data/knowledge_base_seed.json --prune-stale'
+    readonly REVIEWED_CORRECTION_KB_SEED_SHA256='<REVIEWED_LOWERCASE_64_CHARACTER_CORRECTION_SEED_SHA256>'
+    [[ "$REVIEWED_CORRECTION_KB_SEED_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+      printf 'STOP=reviewed_correction_kb_seed_sha256_invalid\n' >&2
+      exit 1
+    }
+    test "$(sha256sum data/knowledge_base_seed.json | cut -d ' ' -f 1)" \
+      = "$REVIEWED_CORRECTION_KB_SEED_SHA256"
+    "${dc[@]}" --profile ml run --rm --pull never \
+      -e "EXPECTED_KB_SEED_SHA256=$REVIEWED_CORRECTION_KB_SEED_SHA256" index-kb
     echo 'index_inputs_changed=PASS reindex=COMPLETED'
     ;;
   *)

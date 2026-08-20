@@ -5,7 +5,7 @@ import gc
 import hashlib
 import hmac
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from hmac import compare_digest
@@ -30,7 +30,7 @@ from scripts.sync_yonote_kb import (
     YonoteDataTooLarge,
     YonoteOperationTimeout,
 )
-from src.admin import kb_index, kb_store, ui
+from src.admin import kb_index, kb_status, kb_store, ui
 from src.admin.yonote_database import (
     YonoteDatabaseExportTooLarge,
 )
@@ -41,6 +41,9 @@ from src.admin.yonote_database import (
     export_database as export_yonote_database,
 )
 from src.admin.yonote_sync import (
+    YonoteReceiptConflict,
+    YonoteReceiptExpired,
+    YonoteReceiptNotFound,
     YonoteSyncConfigError,
 )
 from src.admin.yonote_sync import (
@@ -62,7 +65,12 @@ from src.config import get_settings
 from src.graph.context import NON_FORUM_CONTEXT_CATEGORIES, is_context_dependent_followup
 from src.graph.graph import build_graph
 from src.graph.nodes.analyze import is_safe_offtopic_message
-from src.kb.forum_registry import detect_forum_from_text, detect_forums_from_text
+from src.kb.aspect_catalog import invalidate_runtime_aspect_catalog
+from src.kb.forum_registry import (
+    detect_forum_from_text,
+    detect_forums_from_text,
+    invalidate_runtime_forum_registry,
+)
 from src.kb.temporal import is_registration_query
 from src.llm.client import CloudRuLLMClient
 from src.llm.routing import estimate_routing_hint
@@ -196,11 +204,55 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Rosmol AI Bot", version="0.1.0", lifespan=lifespan)
 _YONOTE_SYNC_LOCK = Lock()
 _ADMIN_MUTATION_LOCK = Lock()
+_RECEIPT_RECOVERY_REQUIRED_DETAIL = "receipt_recovery_required"
+_YONOTE_RECEIPT_RECOVERY_CONFLICT_MESSAGES = frozenset(
+    {
+        "unfinished Yonote Apply requires exact receipt recovery",
+        "preview receipt apply is already in progress",
+        "knowledge base changed while preview receipt was being applied",
+        "preview receipt has conflicting durable states",
+        "active receipt already exists during rollback",
+    }
+)
 
 PRODUCTION_ADMIN_KB_SEED_PATH = (
     "/app/data/private/admin-kb/knowledge_base_seed.json"
 )
+PRODUCTION_ADMIN_YONOTE_RECEIPT_DIR = (
+    "/app/data/private/admin-kb/yonote-receipts"
+)
 _T = TypeVar("_T")
+
+
+def _is_yonote_receipt_recovery_required(exc: YonoteReceiptConflict) -> bool:
+    message = exc.args[0] if len(exc.args) == 1 else None
+    return (
+        isinstance(message, str)
+        and message in _YONOTE_RECEIPT_RECOVERY_CONFLICT_MESSAGES
+    )
+
+
+async def _await_cancellation_safe_mutation(operation: Awaitable[_T]) -> _T:
+    task = asyncio.ensure_future(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # A cancelled HTTP request must not release the process-wide mutation lock
+        # while its worker thread can still commit the seed. Keep waiting under a
+        # shield, including through repeated cancellation during shutdown.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.error(
+                    "cancelled_admin_mutation_failed_after_request_disconnect",
+                    error_type=type(error).__name__,
+                )
+        raise
 
 
 def _run_with_yonote_sync_lock(
@@ -219,6 +271,7 @@ hde_adapter = HDEAdapter()
 
 ADMIN_SESSION_COOKIE = "rosmol_admin_session"
 ADMIN_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+ADMIN_SESSION_KEY_PREFIX = "admin-session:v1:"
 
 
 def _validate_runtime_security(settings: Any) -> None:
@@ -617,6 +670,18 @@ class AdminQualityCheckPayload(BaseModel):
 
 class AdminYonoteSyncPayload(BaseModel):
     limit_documents: int | None = Field(default=None, ge=1, le=500)
+    receipt_id: str | None = Field(
+        default=None,
+        min_length=32,
+        max_length=32,
+        pattern=r"^[0-9a-f]{32}$",
+    )
+    receipt_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 @app.get("/health")
@@ -837,9 +902,11 @@ async def admin_kb_login(
     if not compare_digest(payload.token.strip(), expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    session_cookie = _make_admin_session_cookie(expected)
+    await _store_admin_session(request, session_cookie)
     response.set_cookie(
         ADMIN_SESSION_COOKIE,
-        _make_admin_session_cookie(expected),
+        session_cookie,
         max_age=ADMIN_SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
@@ -850,8 +917,11 @@ async def admin_kb_login(
 
 
 @app.post("/admin/kb/logout")
-async def admin_kb_logout(response: Response) -> dict[str, bool]:
+async def admin_kb_logout(request: Request, response: Response) -> dict[str, bool]:
     _require_admin_enabled()
+    raw_cookie = (request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+    if raw_cookie:
+        await _delete_admin_session(request, raw_cookie)
     response.delete_cookie(ADMIN_SESSION_COOKIE, path="/admin/kb")
     return {"ok": True}
 
@@ -867,7 +937,7 @@ async def admin_list_kb_chunks(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     if status and status not in kb_store.VALID_STATUSES:
         raise HTTPException(status_code=422, detail="Invalid status")
     return await asyncio.to_thread(
@@ -885,16 +955,53 @@ async def admin_list_kb_chunks(
 
 @app.post("/admin/kb/validate")
 async def admin_validate_kb_seed(request: Request) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     try:
         return await asyncio.to_thread(kb_store.validate_seed, _kb_seed_path())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.get("/admin/kb/runtime-status")
+async def admin_get_kb_runtime_status(request: Request) -> dict[str, Any]:
+    await _require_admin_secret(request)
+    settings = get_settings()
+    qdrant = getattr(request.app.state, "qdrant", None)
+    if qdrant is None:
+        raise HTTPException(status_code=503, detail="Qdrant is not initialized")
+    try:
+        report = await kb_status.build_runtime_kb_status(
+            qdrant,
+            seed_path=_kb_seed_path(),
+            knowledge_collection=str(
+                getattr(settings, "qdrant_knowledge_collection", "knowledge_base")
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("admin_kb_runtime_status_failed", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Qdrant runtime status is temporarily unavailable",
+        ) from exc
+    report["runtime"] = {
+        "release_git_sha": _setting_text(settings, "release_git_sha"),
+        "role": _setting_text(settings, "runtime_role") or "api",
+        "admin_read_only": bool(getattr(settings, "admin_read_only", False)),
+        "admin_mutations_enabled": bool(
+            getattr(settings, "admin_mutations_enabled", False)
+        ),
+        "yonote_sync_enabled": bool(
+            getattr(settings, "yonote_sync_enabled", False)
+        ),
+    }
+    return report
+
+
 @app.get("/admin/kb/eval-report")
 async def admin_get_kb_eval_report(request: Request) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     report_path = _admin_quality_report_path()
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Quality report not found")
@@ -909,7 +1016,7 @@ async def admin_get_ops_report(
     request: Request,
     days: int = Query(default=7, ge=1, le=90),
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     pool = getattr(request.app.state, "pg_pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="Postgres pool is not initialized")
@@ -922,7 +1029,7 @@ async def admin_run_kb_quality_check(
     payload: AdminQualityCheckPayload,
     request: Request,
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     report_path = _admin_quality_report_path()
     if not payload.include_latest_eval_report:
         return {"validation": await asyncio.to_thread(kb_store.validate_seed, _kb_seed_path())}
@@ -941,7 +1048,7 @@ async def admin_preview_yonote_sync(
     payload: AdminYonoteSyncPayload,
     request: Request,
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     _require_yonote_sync_enabled()
     settings = get_settings()
     if (
@@ -961,7 +1068,18 @@ async def admin_preview_yonote_sync(
             _kb_seed_path(),
             settings,
             limit_documents=payload.limit_documents,
+            receipt_dir=_yonote_receipt_dir(),
         )
+    except YonoteReceiptConflict as exc:
+        detail = (
+            _RECEIPT_RECOVERY_REQUIRED_DETAIL
+            if _is_yonote_receipt_recovery_required(exc)
+            else "Knowledge base changed during Preview; run Preview again"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=detail,
+        ) from exc
     except YonoteSyncConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except YonoteOperationTimeout as exc:
@@ -997,21 +1115,58 @@ async def admin_apply_yonote_sync(
     payload: AdminYonoteSyncPayload,
     request: Request,
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     _require_yonote_sync_enabled()
     _require_admin_writable()
+    if payload.limit_documents is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="partial Yonote previews cannot be applied",
+        )
+    if not payload.receipt_id or not payload.receipt_sha256:
+        raise HTTPException(
+            status_code=422,
+            detail="preview receipt id and hash are required",
+        )
     if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Yonote sync is already running")
     if not _ADMIN_MUTATION_LOCK.acquire(blocking=False):
         _YONOTE_SYNC_LOCK.release()
         raise HTTPException(status_code=409, detail="Admin mutation is already running")
-    try:
-        return await asyncio.to_thread(
+
+    async def apply_receipt() -> dict[str, Any]:
+        report = await asyncio.to_thread(
             apply_yonote_sync,
             _kb_seed_path(),
-            get_settings(),
-            limit_documents=payload.limit_documents,
+            receipt_dir=_yonote_receipt_dir(),
+            receipt_id=payload.receipt_id,
+            receipt_sha256=payload.receipt_sha256,
         )
+        _invalidate_runtime_kb_metadata_caches()
+        return report
+
+    try:
+        return await _await_cancellation_safe_mutation(apply_receipt())
+    except YonoteReceiptNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Yonote preview receipt was not found or was already applied",
+        ) from exc
+    except YonoteReceiptExpired as exc:
+        raise HTTPException(
+            status_code=410,
+            detail="Yonote preview expired; run Preview again",
+        ) from exc
+    except YonoteReceiptConflict as exc:
+        detail = (
+            _RECEIPT_RECOVERY_REQUIRED_DETAIL
+            if _is_yonote_receipt_recovery_required(exc)
+            else "Knowledge base changed after Preview; run Preview again"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=detail,
+        ) from exc
     except YonoteSyncConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except YonoteOperationTimeout as exc:
@@ -1047,7 +1202,7 @@ async def admin_apply_yonote_sync(
 
 @app.post("/admin/kb/yonote/database-statistics")
 async def admin_count_yonote_database(request: Request) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     _require_yonote_sync_enabled()
     if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Yonote sync is already running")
@@ -1087,7 +1242,7 @@ async def admin_count_yonote_database(request: Request) -> dict[str, Any]:
 
 @app.post("/admin/kb/yonote/database-export")
 async def admin_export_yonote_database(request: Request) -> Response:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     _require_yonote_sync_enabled()
     if not _YONOTE_SYNC_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Yonote sync is already running")
@@ -1149,7 +1304,7 @@ async def admin_export_yonote_database(request: Request) -> Response:
 
 @app.get("/admin/kb/chunks/{chunk_id}")
 async def admin_get_kb_chunk(chunk_id: str, request: Request) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Chunk not found")
@@ -1162,11 +1317,12 @@ async def admin_update_kb_chunk(
     payload: AdminChunkUpdate,
     request: Request,
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     _require_admin_writable()
     if not _ADMIN_MUTATION_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Admin mutation is already running")
-    try:
+
+    async def update_chunk() -> dict[str, Any]:
         updated = await asyncio.to_thread(
             kb_store.update_chunk,
             _kb_seed_path(),
@@ -1174,6 +1330,7 @@ async def admin_update_kb_chunk(
             status=payload.status,
             text_clean=payload.text_clean,
         )
+        _invalidate_runtime_kb_metadata_caches()
         reindex_result = None
         if payload.reindex:
             try:
@@ -1183,6 +1340,9 @@ async def admin_update_kb_chunk(
             except Exception as exc:
                 reindex_result = _admin_reindex_unexpected_error(updated, exc)
         return {"record": updated, "reindex": reindex_result}
+
+    try:
+        return await _await_cancellation_safe_mutation(update_chunk())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Chunk not found") from exc
     except ValueError as exc:
@@ -1193,15 +1353,23 @@ async def admin_update_kb_chunk(
 
 @app.post("/admin/kb/chunks/{chunk_id}/reindex")
 async def admin_reindex_kb_chunk(chunk_id: str, request: Request) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     _require_admin_writable()
     if not _ADMIN_MUTATION_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Admin mutation is already running")
-    try:
-        record = await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id)
+
+    async def reindex_chunk() -> dict[str, Any]:
+        record = await asyncio.to_thread(
+            kb_store.get_chunk,
+            _kb_seed_path(),
+            chunk_id,
+        )
         if record is None:
             raise HTTPException(status_code=404, detail="Chunk not found")
         return await _admin_reindex_record(request, record)
+
+    try:
+        return await _await_cancellation_safe_mutation(reindex_chunk())
     finally:
         _ADMIN_MUTATION_LOCK.release()
 
@@ -1212,7 +1380,7 @@ async def admin_get_kb_chunk_eval_cases(
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
-    _require_admin_secret(request)
+    await _require_admin_secret(request)
     if await asyncio.to_thread(kb_store.get_chunk, _kb_seed_path(), chunk_id) is None:
         raise HTTPException(status_code=404, detail="Chunk not found")
     return await asyncio.to_thread(
@@ -1497,11 +1665,18 @@ def _require_direct_channel_webhook_enabled() -> None:
         raise HTTPException(status_code=404, detail="Not Found")
 
 
-def _require_admin_secret(request: Request) -> None:
+async def _require_admin_secret(request: Request) -> None:
     expected = _require_admin_enabled()
-    if _has_valid_admin_session(request, expected):
+    provided = (request.headers.get("x-admin-token") or "").strip()
+    if not provided:
+        authorization = (request.headers.get("authorization") or "").strip()
+        if authorization.lower().startswith("bearer "):
+            provided = authorization[7:].strip()
+    if provided and compare_digest(provided, expected):
         return
-    _require_optional_secret(request, expected, "x-admin-token")
+    if await _has_valid_admin_session(request, expected):
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _require_admin_enabled() -> str:
@@ -1536,32 +1711,101 @@ def _require_yonote_sync_enabled() -> None:
 
 def _make_admin_session_cookie(secret: str) -> str:
     issued_at = str(int(time()))
-    signature = _admin_session_signature(secret, issued_at)
-    return f"{issued_at}.{signature}"
+    nonce = uuid4().hex
+    signed_value = f"{issued_at}.{nonce}"
+    signature = _admin_session_signature(secret, signed_value)
+    return f"{signed_value}.{signature}"
 
 
-def _has_valid_admin_session(request: Request, secret: str) -> bool:
+async def _has_valid_admin_session(request: Request, secret: str) -> bool:
     raw_cookie = (request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
-    if not raw_cookie or "." not in raw_cookie:
+    parts = raw_cookie.split(".")
+    if len(parts) != 3:
         return False
 
-    issued_at, provided_signature = raw_cookie.split(".", 1)
+    issued_at, nonce, provided_signature = parts
+    if not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        return False
     try:
         issued_at_int = int(issued_at)
     except ValueError:
         return False
 
-    if issued_at_int < int(time()) - ADMIN_SESSION_TTL_SECONDS:
+    now = int(time())
+    if (
+        issued_at_int < now - ADMIN_SESSION_TTL_SECONDS
+        or issued_at_int > now + 60
+    ):
         return False
 
-    expected_signature = _admin_session_signature(secret, issued_at)
-    return compare_digest(provided_signature, expected_signature)
+    expected_signature = _admin_session_signature(secret, f"{issued_at}.{nonce}")
+    if not compare_digest(provided_signature, expected_signature):
+        return False
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        return False
+    try:
+        return bool(await redis.exists(_admin_session_key(raw_cookie)))
+    except Exception as exc:
+        logger.warning("admin_session_lookup_failed", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin session store is unavailable",
+        ) from exc
 
 
-def _admin_session_signature(secret: str, issued_at: str) -> str:
+async def _store_admin_session(request: Request, raw_cookie: str) -> None:
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin session store is unavailable",
+        )
+    try:
+        stored = await redis.set(
+            _admin_session_key(raw_cookie),
+            "1",
+            ex=ADMIN_SESSION_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("admin_session_store_failed", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin session store is unavailable",
+        ) from exc
+    if stored is False:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin session store rejected the session",
+        )
+
+
+async def _delete_admin_session(request: Request, raw_cookie: str) -> None:
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin session store is unavailable",
+        )
+    try:
+        await redis.delete(_admin_session_key(raw_cookie))
+    except Exception as exc:
+        logger.warning("admin_session_delete_failed", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Admin session store is unavailable",
+        ) from exc
+
+
+def _admin_session_key(raw_cookie: str) -> str:
+    fingerprint = hashlib.sha256(raw_cookie.encode("utf-8")).hexdigest()
+    return f"{ADMIN_SESSION_KEY_PREFIX}{fingerprint}"
+
+
+def _admin_session_signature(secret: str, signed_value: str) -> str:
     return hmac.new(
         key=secret.encode("utf-8"),
-        msg=issued_at.encode("utf-8"),
+        msg=signed_value.encode("utf-8"),
         digestmod=hashlib.sha256,
     ).hexdigest()
 
@@ -1573,6 +1817,22 @@ def _is_https_request(request: Request) -> bool:
 
 def _kb_seed_path() -> Path:
     return Path(getattr(get_settings(), "kb_seed_path", "data/knowledge_base_seed.json"))
+
+
+def _yonote_receipt_dir() -> Path:
+    settings = get_settings()
+    seed_path = _kb_seed_path()
+    if (
+        _setting_text(settings, "app_env").casefold() == "production"
+        and seed_path.as_posix().startswith("/app/")
+    ):
+        return Path(PRODUCTION_ADMIN_YONOTE_RECEIPT_DIR)
+    return seed_path.parent / ".yonote-sync-receipts"
+
+
+def _invalidate_runtime_kb_metadata_caches() -> None:
+    invalidate_runtime_aspect_catalog()
+    invalidate_runtime_forum_registry()
 
 
 def _admin_eval_cases_dir() -> Path:
@@ -1899,6 +2159,19 @@ async def _process_message_unlocked(
         graph_masked_text
     )
     cache_allowed = cache_allowed and cache_operator_review_reason is None
+    cache_kb_revision: str | None = None
+    if not bypass_cache and cache_allowed:
+        revision_reader = getattr(
+            fastapi_app.state.semantic_cache,
+            "current_kb_revision",
+            None,
+        )
+        if callable(revision_reader):
+            try:
+                cache_kb_revision = await revision_reader()
+            except Exception as exc:
+                logger.warning("semantic_cache_revision_failed", error=str(exc))
+                cache_allowed = False
 
     tracer = Tracer()
     state = {
@@ -1927,6 +2200,7 @@ async def _process_message_unlocked(
             graph_masked_text,
             detected_forum or session.forum_context,
             query_identity=graph_message,
+            expected_kb_seed_sha256=cache_kb_revision,
         )
     if cached_response:
         response = cached_response.response
@@ -2017,6 +2291,7 @@ async def _process_message_unlocked(
             response,
             result,
             query_identity=graph_message,
+            expected_kb_seed_sha256=cache_kb_revision,
         )
     await _safe_log(fastapi_app, result)
     return response
@@ -2296,12 +2571,14 @@ async def _check_cache(
     forum: str | None,
     *,
     query_identity: str | None = None,
+    expected_kb_seed_sha256: str | None = None,
 ) -> CachedResponse | None:
     try:
         return await fastapi_app.state.semantic_cache.check(
             query,
             forum,
             query_identity=query_identity,
+            expected_kb_seed_sha256=expected_kb_seed_sha256,
         )
     except Exception as exc:
         logger.warning("semantic_cache_check_failed", error=str(exc))
@@ -2345,6 +2622,7 @@ async def _save_cache(
     state: dict[str, Any],
     *,
     query_identity: str | None = None,
+    expected_kb_seed_sha256: str | None = None,
 ) -> None:
     if (
         state.get("should_escalate")
@@ -2381,6 +2659,7 @@ async def _save_cache(
             query,
             cached_response,
             query_identity=query_identity,
+            expected_kb_seed_sha256=expected_kb_seed_sha256,
         )
     except Exception as exc:
         logger.warning("semantic_cache_save_failed", error=str(exc))

@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from src.config import get_settings
 from src.kb.fact_extractor import (
     KnowledgeAspect,
     infer_query_aspects,
@@ -36,7 +37,7 @@ def topic_candidates_for_request(
     *,
     category: str | None = None,
     forum_normalized: str | None = None,
-    seed_path: Path = KB_SEED_PATH,
+    seed_path: Path | None = None,
     limit: int = 24,
 ) -> tuple[str, ...]:
     """Resolve mutable Yonote topics through the stable aspect ontology.
@@ -57,7 +58,7 @@ def topic_candidates_for_request(
         requested=requested,
         category=category,
         forum_normalized=forum_normalized,
-        seed_path=seed_path,
+        seed_path=_runtime_seed_path(seed_path),
         limit=limit,
     )
 
@@ -68,7 +69,7 @@ def topic_candidates_for_aspect(
     *,
     category: str | None = None,
     forum_normalized: str | None = None,
-    seed_path: Path = KB_SEED_PATH,
+    seed_path: Path | None = None,
     limit: int = 12,
 ) -> tuple[str, ...]:
     return _topic_candidates(
@@ -76,7 +77,7 @@ def topic_candidates_for_aspect(
         requested=frozenset({aspect}),
         category=category,
         forum_normalized=forum_normalized,
-        seed_path=seed_path,
+        seed_path=_runtime_seed_path(seed_path),
         limit=limit,
     )
 
@@ -148,6 +149,25 @@ def _topic_candidates(
         if len(topics) >= limit:
             break
     return tuple(topics)
+
+
+def _runtime_seed_path(seed_path: Path | None) -> Path:
+    if seed_path is not None:
+        return Path(seed_path)
+    return _configured_seed_path()
+
+
+@lru_cache(maxsize=1)
+def _configured_seed_path() -> Path:
+    configured = str(getattr(get_settings(), "kb_seed_path", "") or "").strip()
+    return (Path(configured) if configured else KB_SEED_PATH).resolve()
+
+
+def invalidate_runtime_aspect_catalog() -> None:
+    """Forget process-local views after the runtime seed changes in place."""
+
+    _source_aspect_catalog.cache_clear()
+    _configured_seed_path.cache_clear()
 
 
 def _entry_constraints_match(

@@ -72,7 +72,7 @@ def _state(
     category: str,
     forum: str | None = None,
     profile: ResponseProfileName = ResponseProfileName.GENERIC,
-    complexity: Complexity = Complexity.COMPLEX,
+    complexity: Complexity = Complexity.SIMPLE,
 ) -> tuple[dict[str, object], ForbiddenLLM]:
     llm = ForbiddenLLM()
     return (
@@ -93,6 +93,33 @@ def _state(
     )
 
 
+def _grounded_response_for_state(state: dict[str, object]) -> str:
+    analysis = state["analysis"]
+    assert isinstance(analysis, QueryAnalysis)
+    chunks = state["reranked_chunks"]
+    assert isinstance(chunks, list)
+    max_confidence = float(state.get("max_confidence") or 0)
+    request_bound = _request_bound_published_source_result(
+        state=state,
+        analysis=analysis,
+        chunks=chunks,
+        max_confidence=max_confidence,
+    )
+    if request_bound is not None:
+        response = str(request_bound["generated_response"])
+    else:
+        fact_card = generate_node._fact_card_source_result(
+            state=state,
+            analysis=analysis,
+            questions=generate_node.effective_questions(state, analysis),
+            chunks=chunks,
+            max_confidence=max_confidence,
+        )
+        assert fact_card is not None
+        response = str(fact_card["generated_response"])
+    return response
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("query", "chunk_id", "question", "category", "forum", "profile", "expected"),
@@ -110,39 +137,6 @@ def _state(
             "Национальная премия «Патриот»",
             ResponseProfileName.APPLICATION,
             ("12.09.2026",),
-        ),
-        (
-            "Кто может участвовать в Национальной премии «Патриот»?",
-            "yonote_api_tnorqqrmvg_s0003_uchastniki",
-            Question(
-                text="Кто может участвовать?",
-                category="форумы",
-                forum_normalized="Национальная премия «Патриот»",
-                topic="uchastniki",
-            ),
-            "форумы",
-            "Национальная премия «Патриот»",
-            ResponseProfileName.ELIGIBILITY,
-            (
-                "гражданин Российской Федерации",
-                "18 до 35 лет",
-                "юридическое лицо",
-                "иностранного государства",
-                "18 до 55 лет",
-            ),
-        ),
-        (
-            "Я потерял доступ к почте от профиля ФГАИС. Как восстановить доступ к данным?",
-            "yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov",
-            Question(
-                text="Как перенести данные после потери доступа к почте профиля ФГАИС?",
-                category="платформа_фгаис",
-                topic="obedinenie_akkauntov",
-            ),
-            "платформа_фгаис",
-            None,
-            ResponseProfileName.TECHNICAL,
-            ("создать аккаунт", "Госуслуг", "ID этого аккаунта", "support@myrosmol.ru"),
         ),
         (
             "Когда будут известны результаты отбора на форум «Машук»?",
@@ -174,7 +168,7 @@ def _state(
         ),
     ],
 )
-async def test_pilot50_single_published_source_uses_bounded_extractive_fast_path(
+async def test_pilot50_atomic_single_published_source_uses_bounded_extractive_fast_path(
     query: str,
     chunk_id: str,
     question: Question,
@@ -203,13 +197,81 @@ async def test_pilot50_single_published_source_uses_bounded_extractive_fast_path
 
 
 @pytest.mark.asyncio
+async def test_single_source_multi_fact_overview_uses_grounded_llm() -> None:
+    query = "Что такое гранты для физических лиц?"
+    chunk_id = "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya"
+    analyzed = await analyze_query(
+        {
+            "message": query,
+            "message_masked": query,
+            "routing_hint": {},
+            "llm_client": None,
+        }
+    )
+    state: dict[str, object] = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analyzed["analysis"],
+        "reranked_chunks": [_chunk(chunk_id)],
+        "max_confidence": 0.98,
+    }
+    llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = llm
+
+    result = await generate(state)
+
+    assert llm.calls == 1
+    assert result.get("should_escalate") is not True
+    assert result["generator_model"] != "source_chunk"
+    assert result["cited_sources"] == [chunk_id]
+    assert "Цель конкурса" in result["generated_response"]
+    assert "Участники конкурса" in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_single_source_compound_workflow_uses_grounded_llm() -> None:
+    query = "Как найти волонтёрское мероприятие и подать заявку на Добро.РФ?"
+    chunk_id = "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch"
+    analyzed = await analyze_query(
+        {
+            "message": query,
+            "message_masked": query,
+            "routing_hint": {},
+            "llm_client": None,
+        }
+    )
+    state: dict[str, object] = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analyzed["analysis"],
+        "reranked_chunks": [_chunk(chunk_id)],
+        "max_confidence": 0.98,
+    }
+    llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = llm
+
+    result = await generate(state)
+
+    assert llm.calls == 1
+    assert result.get("should_escalate") is not True
+    assert result["generator_model"] != "source_chunk"
+    assert result["cited_sources"] == [chunk_id]
+    assert "фильтров поиска" in result["generated_response"]
+    assert "подачи заявки" in result["generated_response"]
+    assert "заполнить анкету" in result["generated_response"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("query", "chunk_id", "expected"),
+    ("query", "chunk_id", "expected", "requires_llm"),
     [
         (
             "Где во ФГАИС найти доступные мероприятия?",
             "yonote_api_u7b5sscrri_s0010_poisk_i_navigaciya_po_meropriyatiyam",
             ("разделение мероприятий", "Фильтры универсальные", "подраздела"),
+            False,
         ),
         (
             "Что означают статусы заявки во ФГАИС?",
@@ -220,28 +282,18 @@ async def test_pilot50_single_published_source_uses_bounded_extractive_fast_path
                 "Подтверждено участие",
                 "Резерв",
             ),
-        ),
-        (
-            "Как найти волонтёрское мероприятие и подать заявку на Добро.РФ?",
-            "yonote_api_jw4tdtr1pc_s0008_volonterskaya_pomosch",
-            ("фильтров поиска", "подачи заявки", "заполнить анкету"),
-        ),
-        (
-            "Что такое гранты для физических лиц?",
-            "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya",
-            ("Цель конкурса", "Участники конкурса"),
+            False,
         ),
         (
             "Хочу поучаствовать в гранте: как подать заявку?",
             "yonote_api_g4yfzssrsd_s0001_obschaya_informaciya",
             ("верификацию учетной записи", "Мои проекты", "Мои мероприятия"),
+            True,
         ),
     ],
     ids=(
         "event-navigation",
         "generic-status-glossary",
-        "dobro-location-filter",
-        "physical-grants-overview",
         "personal-grant-application",
     ),
 )
@@ -249,6 +301,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
     query: str,
     chunk_id: str,
     expected: tuple[str, ...],
+    requires_llm: bool,
 ) -> None:
     llm = ForbiddenLLM()
     analyzed = await analyze_query(
@@ -260,28 +313,32 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
         }
     )
 
-    result = await generate(
-        {
-            "message": query,
-            "message_masked": query,
-            "contextual_message": analyzed["contextual_message"],
-            "analysis": analyzed["analysis"],
-            "reranked_chunks": [_chunk(chunk_id)],
-            "max_confidence": 0.98,
-            "llm_client": llm,
-        }
-    )
+    state: dict[str, object] = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analyzed["analysis"],
+        "reranked_chunks": [_chunk(chunk_id)],
+        "max_confidence": 0.98,
+        "llm_client": llm,
+    }
+    generation_llm: ForbiddenLLM | ReturningLLM = llm
+    if requires_llm:
+        generation_llm = ReturningLLM(_grounded_response_for_state(state))
+        state["llm_client"] = generation_llm
 
-    assert llm.calls == 0
+    result = await generate(state)
+
+    assert generation_llm.calls == int(requires_llm)
     assert result.get("should_escalate") is not True
-    assert result["generator_model"] == "source_chunk"
+    assert (result["generator_model"] != "source_chunk") is requires_llm
     assert result["cited_sources"] == [chunk_id]
     assert all(fragment in result["generated_response"] for fragment in expected)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("query", "chunk_ids", "expected", "absent"),
+    ("query", "chunk_ids", "expected", "absent", "requires_llm"),
     [
         (
             "Кто и сколько времени проверяет проект грантового соглашения?",
@@ -290,6 +347,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
             ),
             ("проверяет куратор", "до 30 дней"),
             (),
+            True,
         ),
         (
             "Я потерял доступ к почте от профиля ФГАИС. "
@@ -297,6 +355,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
             ("yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov",),
             ("создать аккаунт", "новый аккаунт", "перенесут"),
             ("активная заявка на грантовый конкурс",),
+            True,
         ),
         (
             "По «Ладоге» сразу три вещи: до какого числа заявка, кто платит "
@@ -312,6 +371,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
                 "могут быть компенсированы",
             ),
             (),
+            True,
         ),
         (
             "Премия «Патриот»: кто вообще может участвовать и когда крайний "
@@ -322,6 +382,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
             ),
             ("12.09.2026", "18 до 35 лет", "18 до 55 лет"),
             (),
+            True,
         ),
         (
             "Не смешивай этапы: сколько проверяют проект грантового соглашения "
@@ -332,6 +393,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
             ),
             ("до 30 дней", "до 30 рабочих дней"),
             (),
+            True,
         ),
         (
             "Сверь календарь «Машука»: какие даты у первой и второй смен и "
@@ -342,6 +404,7 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
             ),
             ("8 августа", "15 августа", "22 августа", "разъезд", "отъезд"),
             (),
+            True,
         ),
         (
             "Блин, как получить билет на День молодёжи после регистрации через МАХ?",
@@ -351,12 +414,14 @@ async def test_observed_typical_queries_use_grounded_bounded_source_path(
             ),
             ("код билета", "диалоге", "почту"),
             ("фамилию", "телефон"),
+            False,
         ),
         (
             "Назови период проведения первой смены форума «Машук».",
             ("yonote_api_pmbmqm6lug_s0002_1_smena_8_15_avgusta",),
             ("8 августа", "15 августа"),
             (),
+            True,
         ),
     ],
     ids=(
@@ -375,6 +440,7 @@ async def test_stage_v2_supported_queries_use_request_bound_published_sources(
     chunk_ids: tuple[str, ...],
     expected: tuple[str, ...],
     absent: tuple[str, ...],
+    requires_llm: bool,
 ) -> None:
     llm = ForbiddenLLM()
     analyzed = await analyze_query(
@@ -385,28 +451,30 @@ async def test_stage_v2_supported_queries_use_request_bound_published_sources(
             "llm_client": llm,
         }
     )
-    generation_calls_before = llm.calls
     tracer = Tracer()
+    state: dict[str, object] = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analyzed["analysis"],
+        "reranked_chunks": [
+            _chunk(chunk_id, 0.99 - index / 100)
+            for index, chunk_id in enumerate(chunk_ids)
+        ],
+        "max_confidence": 0.99,
+        "llm_client": llm,
+        "trace": tracer,
+    }
+    generation_llm: ForbiddenLLM | ReturningLLM = llm
+    if requires_llm:
+        generation_llm = ReturningLLM(_grounded_response_for_state(state))
+        state["llm_client"] = generation_llm
 
-    result = await generate(
-        {
-            "message": query,
-            "message_masked": query,
-            "contextual_message": analyzed["contextual_message"],
-            "analysis": analyzed["analysis"],
-            "reranked_chunks": [
-                _chunk(chunk_id, 0.99 - index / 100)
-                for index, chunk_id in enumerate(chunk_ids)
-            ],
-            "max_confidence": 0.99,
-            "llm_client": llm,
-            "trace": tracer,
-        }
-    )
+    result = await generate(state)
 
-    assert llm.calls == generation_calls_before
+    assert generation_llm.calls == int(requires_llm)
     assert result.get("should_escalate") is not True
-    assert result["generator_model"] == "source_chunk"
+    assert (result["generator_model"] != "source_chunk") is requires_llm
     assert result["cited_sources"] == list(chunk_ids)
     final_response = normalize_final_response(result["generated_response"])
     assert all(fragment in final_response for fragment in expected)
@@ -437,24 +505,60 @@ async def test_request_bound_aspects_support_novel_ladoga_recombination() -> Non
         }
     )
 
-    result = await generate(
-        {
-            "message": query,
-            "message_masked": query,
-            "contextual_message": analyzed["contextual_message"],
-            "analysis": analyzed["analysis"],
-            "reranked_chunks": [_chunk(chunk_id) for chunk_id in chunk_ids],
-            "max_confidence": 0.99,
-            "llm_client": llm,
-        }
-    )
+    state: dict[str, object] = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analyzed["analysis"],
+        "reranked_chunks": [_chunk(chunk_id) for chunk_id in chunk_ids],
+        "max_confidence": 0.99,
+        "llm_client": llm,
+    }
+    grounded_llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = grounded_llm
 
-    assert llm.calls == 0
+    result = await generate(state)
+
+    assert grounded_llm.calls == 1
     assert result.get("should_escalate") is not True
+    assert result["generator_model"] != "source_chunk"
     assert result["cited_sources"] == list(chunk_ids)
     assert "30 июня 2026" in result["generated_response"]
     assert "могут быть компенсированы" in result["generated_response"]
     assert "Проживание и питание" not in result["generated_response"]
+
+
+@pytest.mark.asyncio
+async def test_ladoga_compensation_uses_current_exact_yonote_fact() -> None:
+    chunk_id = "yonote_api_irwwd4t2v8_s0012_kompensaciya"
+    state, llm = _state(
+        query="По «Ладоге» могут ли компенсировать дорогу?",
+        chunks=[_chunk(chunk_id)],
+        questions=[
+            Question(
+                text="Могут ли компенсировать дорогу?",
+                category="форумы",
+                forum_normalized="Ладога",
+                topic="kompensaciya",
+            )
+        ],
+        category="форумы",
+        forum="Ладога",
+        profile=ResponseProfileName.TRAVEL,
+        complexity=Complexity.SIMPLE,
+    )
+
+    result = await generate(state)
+
+    assert llm.calls == 0
+    assert result.get("should_escalate") is not True
+    assert result["generator_model"] == "source_chunk"
+    assert result["cited_sources"] == [chunk_id]
+    normalized = result["generated_response"].casefold()
+    assert "органами исполнительной власти" in normalized
+    assert "направляющ" not in normalized
+    assert "по месту учебы" not in normalized
+    assert "по месту работы" not in normalized
 
 
 @pytest.mark.asyncio
@@ -486,6 +590,8 @@ async def test_expired_ladoga_deadline_is_closed_without_dropping_other_aspects(
         "max_confidence": 0.99,
         "llm_client": llm,
     }
+    grounded_llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = grounded_llm
 
     generated = await generate(state)
     guarded = await apply_response_guards({**state, **generated})
@@ -498,6 +604,7 @@ async def test_expired_ladoga_deadline_is_closed_without_dropping_other_aspects(
     assert "Проживание и питание за счет организаторов" in guarded["generated_response"]
     assert "могут быть компенсированы" in guarded["generated_response"]
     assert guarded["cited_sources"] == list(chunk_ids)
+    assert grounded_llm.calls == 1
     assert verified.get("should_escalate") is not True
     assert verified["verification"].has_hallucination is False
 
@@ -539,12 +646,15 @@ async def test_future_patriot_deadline_remains_open_through_guard_and_verify(
         "max_confidence": 0.99,
         "llm_client": llm,
     }
+    grounded_llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = grounded_llm
 
     generated = await generate(state)
     guarded = await apply_response_guards({**state, **generated})
     verified = await verify({**state, **generated, **guarded})
 
     assert guarded == {}
+    assert grounded_llm.calls == 1
     assert "12.09.2026" in generated["generated_response"]
     assert generated["cited_sources"] == list(chunk_ids)
     assert verified.get("should_escalate") is not True
@@ -575,10 +685,13 @@ async def test_guard_does_not_borrow_deadline_from_an_uncited_registration_flow(
         "max_confidence": 0.99,
         "llm_client": llm,
     }
+    grounded_llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = grounded_llm
 
     generated = await generate(state)
     guarded = await apply_response_guards({**state, **generated})
 
+    assert grounded_llm.calls == 1
     assert generated["cited_sources"] == [
         "yonote_api_zhjxnhwbyi_s0002_registraciya"
     ]
@@ -800,7 +913,7 @@ async def test_generation_cannot_bypass_operator_decision() -> None:
 
 
 @pytest.mark.asyncio
-async def test_source_answerable_nonregistry_clause_uses_generic_composition() -> None:
+async def test_source_answerable_nonregistry_compound_uses_grounded_llm() -> None:
     query = (
         "Почта от старого профиля ФГАИС потеряна: как перенести данные и "
         "заодно что значит статус «Одобрена»?"
@@ -821,13 +934,22 @@ async def test_source_answerable_nonregistry_clause_uses_generic_composition() -
             topic="statusy_zayavok",
         ),
     ]
-    state, llm = _state(
+    state, _forbidden_llm = _state(
         query=query,
         chunks=[_chunk(chunk_id) for chunk_id in chunk_ids],
         questions=questions,
         category="платформа_фгаис",
         profile=ResponseProfileName.TECHNICAL,
     )
+    llm = ReturningLLM(
+        "Нужно создать новый аккаунт и прислать ID этого аккаунта на почту "
+        "support@myrosmol.ru. "
+        "[src:yonote_api_u7b5sscrri_s0006_obedinenie_akkauntov]\n\n"
+        "Статус «Одобрена» означает, что организаторы одобрили участие "
+        "в мероприятии. "
+        "[src:yonote_api_u7b5sscrri_s0016_statusy_zayavok]"
+    )
+    state["llm_client"] = llm
     analysis = state["analysis"]
     assert isinstance(analysis, QueryAnalysis)
 
@@ -843,7 +965,8 @@ async def test_source_answerable_nonregistry_clause_uses_generic_composition() -
 
     result = await generate(state)
 
-    assert llm.calls == 0
+    assert llm.calls == 1
+    assert result["generator_model"] != "source_chunk"
     assert result["cited_sources"] == list(chunk_ids)
     assert "support@myrosmol.ru" in result["generated_response"]
     assert "Одобрена" in result["generated_response"]
@@ -1106,7 +1229,7 @@ def test_grant_application_selected_source_has_bounded_grounded_answer() -> None
 
 
 @pytest.mark.asyncio
-async def test_first_season_grant_application_deterministic_path_skips_llm() -> None:
+async def test_first_season_grant_application_complex_path_uses_grounded_llm() -> None:
     query = "Как подать заявку на первый сезон Росмолодёжь.Гранты?"
     chunk_id = "yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"
     llm = ForbiddenLLM()
@@ -1129,21 +1252,23 @@ async def test_first_season_grant_application_deterministic_path_skips_llm() -> 
         "podacha_zayavki_na_proekt"
     ]
 
-    result = await generate(
-        {
-            "message": query,
-            "message_masked": query,
-            "contextual_message": analyzed["contextual_message"],
-            "analysis": analysis,
-            "reranked_chunks": [_chunk(chunk_id)],
-            "max_confidence": 0.98,
-            "llm_client": llm,
-        }
-    )
+    state: dict[str, object] = {
+        "message": query,
+        "message_masked": query,
+        "contextual_message": analyzed["contextual_message"],
+        "analysis": analysis,
+        "reranked_chunks": [_chunk(chunk_id)],
+        "max_confidence": 0.98,
+        "llm_client": llm,
+    }
+    grounded_llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = grounded_llm
 
-    assert llm.calls == 0
+    result = await generate(state)
+
+    assert grounded_llm.calls == 1
     assert result.get("should_escalate") is not True
-    assert result["generator_model"] == "source_chunk"
+    assert result["generator_model"] != "source_chunk"
     assert result["cited_sources"] == [chunk_id]
     assert "Госуслуг" in result["generated_response"]
     assert "ФГАИС" in result["generated_response"]
@@ -1294,6 +1419,20 @@ async def test_first_season_fast_path_uses_current_message_not_contextual_histor
         response_profile=ResponseProfileName.APPLICATION,
         questions=[question],
     )
+    source = ScoredChunk(
+        chunk_id="yonote_grants_second_season",
+        text=(
+            "Для второго сезона заявку подают в личном кабинете "
+            "Росмолодёжь.Гранты."
+        ),
+        metadata={
+            "source_type": "yonote",
+            "category": "гранты",
+            "topic": "podacha_zayavki_na_proekt",
+        },
+        score=0.98,
+        reranker_score=0.98,
+    )
     observed_request_texts: list[str] = []
 
     def capture_bounded_request(**kwargs: object) -> dict[str, object]:
@@ -1301,7 +1440,7 @@ async def test_first_season_fast_path_uses_current_message_not_contextual_histor
         return {
             "generated_response": "Проверочный ответ.",
             "generator_model": "source_chunk",
-            "cited_sources": ["yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm"],
+            "cited_sources": [source.chunk_id],
         }
 
     monkeypatch.setattr(
@@ -1310,26 +1449,30 @@ async def test_first_season_fast_path_uses_current_message_not_contextual_histor
         capture_bounded_request,
     )
 
+    llm = ReturningLLM(
+        "Для второго сезона заявку подают в личном кабинете "
+        "Росмолодёжь.Гранты. [src:yonote_grants_second_season]"
+    )
     result = await _generate_with_llm_or_source_fallback(
         state={
             "message": current_message,
             "message_masked": current_message,
             "contextual_message": contextual_message,
             "analysis": analysis,
-            "reranked_chunks": [
-                _chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")
-            ],
+            "reranked_chunks": [source],
             "max_confidence": 0.98,
-            "llm_client": ForbiddenLLM(),
+            "llm_client": llm,
         },
         analysis=analysis,
         questions=[question],
-        source_chunks=[_chunk("yonote_api_fyxcuinesz_s0006_poshagovyy_algoritm")],
+        source_chunks=[source],
         started_at=perf_counter(),
     )
 
-    assert result["generator_model"] == "source_chunk"
-    assert observed_request_texts == [current_message]
+    assert llm.calls == 1
+    assert result["generator_model"] != "source_chunk"
+    assert result["cited_sources"] == [source.chunk_id]
+    assert observed_request_texts == []
 
 
 @pytest.mark.asyncio
@@ -1461,12 +1604,26 @@ async def test_pilot50_multi_published_sources_use_one_exact_claim_per_source(
     )
     tracer = Tracer()
     state["trace"] = tracer
+    llm_response = _grounded_response_for_state(state)
+    if chunk_ids == (
+        "yonote_api_pmbmqm6lug_s0009_rezultaty",
+        "yonote_api_pmbmqm6lug_s0013_programma_foruma",
+    ):
+        llm_response = (
+            "Результаты отбора будут известны не позднее чем за 14 "
+            "календарных дней до начала смены. "
+            "[src:yonote_api_pmbmqm6lug_s0009_rezultaty]\n\n"
+            "Программа форума будет доступна за сутки до начала форума. "
+            "[src:yonote_api_pmbmqm6lug_s0013_programma_foruma]"
+        )
+    llm = ReturningLLM(llm_response)
+    state["llm_client"] = llm
 
     result = await generate(state)
 
-    assert llm.calls == 0
+    assert llm.calls == 1
     assert result.get("should_escalate") is not True
-    assert result["generator_model"] == "source_chunk"
+    assert result["generator_model"] != "source_chunk"
     assert set(result["cited_sources"]) == set(chunk_ids)
     assert all(fragment in result["generated_response"] for fragment in expected)
     assert result["generated_response"].count("[src:") >= len(chunk_ids)
@@ -1527,7 +1684,7 @@ async def test_dobro_two_source_answer_binds_and_cites_both_published_sources() 
     )
     questions = [
         Question(
-            text="Как создать кабинет на Добро.РФ?",
+            text="Регистрация с помощью создания кабинета на Добро.РФ",
             category="форумы",
             forum_normalized="Добро.РФ",
             topic="registraciya_s_pomoschyu_sozdaniya_kabineta",
@@ -1546,30 +1703,32 @@ async def test_dobro_two_source_answer_binds_and_cites_both_published_sources() 
         response_profile=ResponseProfileName.APPLICATION,
         questions=questions,
     )
-    llm = ForbiddenLLM()
     tracer = Tracer()
+    source_chunks = [_chunk(chunk_id) for chunk_id in chunk_ids]
+    state = {
+        "message_masked": (
+            "На Добро.РФ хочу с нуля: как создать кабинет, а потом "
+            "отфильтровать мероприятие и подать заявку волонтёром?"
+        ),
+        "analysis": analysis,
+        "reranked_chunks": source_chunks,
+        "max_confidence": 0.98,
+        "trace": tracer,
+    }
+    llm = ReturningLLM(_grounded_response_for_state(state))
+    state["llm_client"] = llm
 
     result = await _generate_with_llm_or_source_fallback(
-        state={
-            "message_masked": (
-                "На Добро.РФ хочу с нуля: как создать кабинет, а потом "
-                "отфильтровать мероприятие и подать заявку волонтёром?"
-            ),
-            "analysis": analysis,
-            "reranked_chunks": [_chunk(chunk_id) for chunk_id in chunk_ids],
-            "max_confidence": 0.98,
-            "llm_client": llm,
-            "trace": tracer,
-        },
+        state=state,
         analysis=analysis,
         questions=questions,
-        source_chunks=[_chunk(chunk_id) for chunk_id in chunk_ids],
+        source_chunks=source_chunks,
         started_at=perf_counter(),
     )
 
-    assert llm.calls == 0
+    assert llm.calls == 1
     assert result.get("should_escalate") is not True
-    assert result["generator_model"] == "source_chunk"
+    assert result["generator_model"] != "source_chunk"
     assert result["cited_sources"] == list(chunk_ids)
     assert all(
         fragment in result["generated_response"]
@@ -1581,7 +1740,10 @@ async def test_dobro_two_source_answer_binds_and_cites_both_published_sources() 
             "заявк",
         )
     )
-    assert tracer.events[-1].metadata["mode"] == "bounded_published_source_chunk"
+    assert all(
+        event.metadata.get("mode") != "bounded_published_source_chunk"
+        for event in tracer.events
+    )
 
 
 def test_yearless_published_date_claim_remains_bound_when_heading_contains_year() -> None:

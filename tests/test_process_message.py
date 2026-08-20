@@ -90,10 +90,14 @@ class FakeSessions:
 class FakeSemanticCache:
     def __init__(self, response: str | CachedResponse | None = None) -> None:
         self.response = response
+        self.kb_revision = "a" * 64
         self.check_calls: list[tuple[str, str | None]] = []
         self.save_calls: list[tuple[str, CachedResponse]] = []
         self.check_identity_calls: list[str | None] = []
         self.save_identity_calls: list[str | None] = []
+
+    async def current_kb_revision(self) -> str:
+        return self.kb_revision
 
     async def check(
         self,
@@ -101,9 +105,15 @@ class FakeSemanticCache:
         forum: str | None,
         *,
         query_identity: str | None = None,
+        expected_kb_seed_sha256: str | None = None,
     ) -> CachedResponse | None:
         self.check_calls.append((query, forum))
         self.check_identity_calls.append(query_identity)
+        if (
+            expected_kb_seed_sha256 is not None
+            and expected_kb_seed_sha256 != self.kb_revision
+        ):
+            return None
         if isinstance(self.response, str):
             return CachedResponse(
                 response=self.response,
@@ -125,10 +135,16 @@ class FakeSemanticCache:
         cached_response: CachedResponse,
         *,
         query_identity: str | None = None,
-    ) -> None:
+        expected_kb_seed_sha256: str | None = None,
+    ) -> bool:
+        if (
+            expected_kb_seed_sha256 is not None
+            and expected_kb_seed_sha256 != self.kb_revision
+        ):
+            return False
         self.save_calls.append((query, cached_response))
         self.save_identity_calls.append(query_identity)
-        return None
+        return True
 
 
 class FakeMemory:
@@ -530,6 +546,41 @@ async def test_process_message_cache_hit_restores_forum_and_topic_context(
         "oplata_proezda"
     ]
     assert captured_logs[0]["cited_sources"] == ["yonote_amur_travel"]
+
+
+@pytest.mark.asyncio
+async def test_process_message_does_not_save_old_answer_under_new_kb_revision(
+    configured_llm_settings: None,
+) -> None:
+    cache = FakeSemanticCache()
+    chunk = ScoredChunk(
+        chunk_id="yonote_source",
+        text="Подтверждённый ответ из исходной редакции базы.",
+        metadata={"source_type": "yonote"},
+        reranker_score=0.99,
+    )
+
+    class RevisionChangingGraph:
+        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+            cache.kb_revision = "b" * 64
+            return {
+                **state,
+                "final_response": "Ответ из исходной редакции базы.",
+                "analysis": QueryAnalysis(category="форумы"),
+                "cited_sources": [chunk.chunk_id],
+                "reranked_chunks": [chunk],
+                "generator_model": "source_chunk",
+            }
+
+    app = _app(graph=RevisionChangingGraph())
+    app.state.semantic_cache = cache
+    message = IncomingMessage(user_id="u1", channel=Channel.API, text="Вопрос")
+
+    response = await process_message(message, app)  # type: ignore[arg-type]
+
+    assert response == "Ответ из исходной редакции базы."
+    assert cache.check_calls == [("Вопрос", None)]
+    assert cache.save_calls == []
 
 
 @pytest.mark.asyncio
@@ -1424,9 +1475,21 @@ async def test_process_message_resolves_ticket_after_forum_clarification(
     configured_llm_settings: None,
     captured_logs: list[dict[str, Any]],
 ) -> None:
+    class TicketDialogLLM(FakeAnalyzerLLM):
+        async def generate(self, **kwargs: Any) -> str:
+            if kwargs.get("response_format") == "text":
+                return (
+                    "Если билет на День молодёжи не пришёл, проверь папки «Спам» "
+                    "и «Рассылки». Билет также доступен в разделе «Мои билеты» "
+                    "чат-бота MAX. [src:ticket_missing]"
+                )
+            if "has_hallucination" in str(kwargs.get("system") or ""):
+                return '{"has_hallucination":false,"confidence":1.0}'
+            return await super().generate(**kwargs)
+
     app = _app(
         graph=build_graph(),
-        llm_client=FakeAnalyzerLLM(),
+        llm_client=TicketDialogLLM(),
         retriever=TicketRetriever(),
         reranker=HighConfidenceReranker(),
     )

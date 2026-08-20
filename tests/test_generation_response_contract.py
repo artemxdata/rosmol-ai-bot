@@ -572,6 +572,39 @@ async def test_date_range_with_po_is_accepted_as_date_first(
 
 
 @pytest.mark.asyncio
+async def test_contextual_follow_up_requires_grounded_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    llm = StubLLM(
+        "С 10 по 14 августа 2026 года пройдёт Машук. [src:yonote_dates]"
+    )
+    state = _date_state("Машук", llm)
+    state.update(
+        {
+            "message": "А когда он пройдёт?",
+            "message_masked": "А когда он пройдёт?",
+            "contextual_message": (
+                "Пользователь: Расскажи про Машук.\n"
+                "Пользователь: А когда он пройдёт?"
+            ),
+        }
+    )
+
+    result = await generate(state)
+
+    assert llm.calls == 1
+    assert result["generator_model"] != "source_chunk"
+    assert result["cited_sources"] == ["yonote_dates"]
+
+
+@pytest.mark.asyncio
 async def test_date_answer_rejects_unasked_registration_curator_and_chat_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -775,6 +808,75 @@ async def test_multi_source_answer_requires_grounded_synthesis(
     assert llm.calls == 1
     assert result["generator_model"] != "source_chunk"
     assert result["cited_sources"] == ["yonote_application", "yonote_travel"]
+
+
+@pytest.mark.asyncio
+async def test_single_source_multi_aspect_requires_grounded_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    forum = "Машук"
+    source = ScoredChunk(
+        chunk_id="yonote_combined",
+        text=(
+            "Регистрация: заявку подают на платформе. "
+            "Проезд участник оплачивает самостоятельно."
+        ),
+        metadata={
+            "source_type": "yonote",
+            "category": "форумы",
+            "forum_normalized": forum,
+            "topic": "application_and_travel",
+            "intent_examples": ["Как подать заявку?", "Кто оплачивает проезд?"],
+        },
+        score=0.95,
+        reranker_score=0.95,
+    )
+    questions = [
+        Question(
+            text="Как подать заявку?",
+            category="форумы",
+            forum_normalized=forum,
+            topic="podacha_zayavki_na_proekt",
+        ),
+        Question(
+            text="Кто оплачивает проезд?",
+            category="форумы",
+            forum_normalized=forum,
+            topic="oplata_proezda",
+        ),
+    ]
+    llm = StubLLM(
+        "Регистрация: заявку подают на платформе. [src:yonote_combined]\n\n"
+        "Проезд участник оплачивает самостоятельно. [src:yonote_combined]"
+    )
+
+    result = await generate(
+        {
+            "message_masked": (
+                "Как подать заявку на Машук и кто оплачивает проезд?"
+            ),
+            "analysis": QueryAnalysis(
+                complexity=Complexity.COMPLEX,
+                category="форумы",
+                forum_normalized=forum,
+                questions=questions,
+            ),
+            "reranked_chunks": [source],
+            "max_confidence": 0.95,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 1
+    assert result["generator_model"] != "source_chunk"
+    assert result["cited_sources"] == ["yonote_combined"]
 
 
 @pytest.mark.asyncio
@@ -1888,6 +1990,81 @@ def test_single_source_binding_rejects_contradicted_travel_payer() -> None:
         "Проезд участник оплачивает самостоятельно [src:yonote_travel]",
         [source],
     )
+
+
+def test_single_source_binding_rejects_contradicted_accommodation_type() -> None:
+    source = ScoredChunk(
+        chunk_id="yonote_accommodation",
+        text="Участников размещают в гостинице.",
+        metadata={"source_type": "yonote"},
+        reranker_score=0.95,
+    )
+
+    assert not _llm_claims_have_bound_source_facts(
+        "Участники будут жить в палатках [src:yonote_accommodation]",
+        [source],
+    )
+    assert _llm_claims_have_bound_source_facts(
+        "Участников разместят в отеле [src:yonote_accommodation]",
+        [source],
+    )
+
+
+@pytest.mark.asyncio
+async def test_fact_card_contract_rejects_reproducible_source_contradiction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ScoredChunk(
+        chunk_id="yonote_accommodation",
+        text="Участников размещают в гостинице.",
+        metadata={
+            "source_type": "yonote",
+            "category": "форумы",
+            "forum_normalized": "Машук",
+            "topic": "usloviya_prozhivaniya",
+            "intent_examples": ["Где живут участники Машука?"],
+        },
+        score=0.95,
+        reranker_score=0.95,
+    )
+    corrupt_draft = SimpleNamespace(
+        response=(
+            "Участников размещают в палатках. [src:yonote_accommodation]"
+        ),
+        cited_sources=("yonote_accommodation",),
+    )
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.compose_fact_cards",
+        lambda *_args, **_kwargs: corrupt_draft,
+    )
+    llm = RaisingLLM()
+
+    result = await generate(
+        {
+            "message_masked": "Где живут участники Машука?",
+            "analysis": QueryAnalysis(
+                complexity=Complexity.SIMPLE,
+                category="форумы",
+                forum_normalized="Машук",
+                questions=[
+                    Question(
+                        text="Где живут участники Машука?",
+                        category="форумы",
+                        forum_normalized="Машук",
+                        topic="usloviya_prozhivaniya",
+                    )
+                ],
+            ),
+            "reranked_chunks": [source],
+            "max_confidence": 0.95,
+            "llm_client": llm,
+        }
+    )
+
+    assert llm.calls == 0
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "source_response_contract_failed"
+    assert result["generated_response"] == ""
 
 
 def test_single_source_binding_rejects_reversed_permission() -> None:

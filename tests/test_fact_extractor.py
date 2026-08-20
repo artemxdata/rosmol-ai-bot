@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from src.graph.nodes.generate import _bounded_published_source_result
 from src.graph.nodes.retrieve import _retrieve_attempt
+from src.kb import aspect_catalog
 from src.kb.aspect_catalog import topic_candidates_for_request
 from src.kb.fact_cards import compose_fact_cards
 from src.kb.fact_extractor import (
@@ -356,6 +358,103 @@ def test_catalog_links_named_shift_to_its_following_date_card() -> None:
     )
 
     assert topics[0] == "daty_26_30_iyulya_2026_goda"
+
+
+def test_catalog_uses_runtime_seed_for_new_published_knowledge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_seed = tmp_path / "runtime-seed.json"
+    runtime_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "yonote_api_new_s0001_kak_podat_zayavku",
+                    "text_clean": (
+                        "Как подать заявку\n\nЗарегистрируйся на платформе и заполни форму."
+                    ),
+                    "status": "published",
+                    "category": "форумы",
+                    "forum_normalized": "Горизонт будущего 2027",
+                    "source_type": "yonote",
+                    "topic": "kak_podat_zayavku",
+                    "intent_name": "Как подать заявку",
+                    "source_document_id": "new-document",
+                    "source_heading_path": [
+                        "Горизонт будущего 2027",
+                        "Как подать заявку",
+                    ],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        aspect_catalog,
+        "get_settings",
+        lambda: SimpleNamespace(kb_seed_path=str(runtime_seed)),
+    )
+    aspect_catalog._configured_seed_path.cache_clear()
+
+    try:
+        assert topic_candidates_for_request(
+            "Как зарегистрироваться на Горизонт будущего 2027?",
+            category="форумы",
+            forum_normalized="Горизонт будущего 2027",
+        ) == ("kak_podat_zayavku",)
+    finally:
+        aspect_catalog._configured_seed_path.cache_clear()
+
+
+def test_catalog_refreshes_same_runtime_seed_after_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_seed = tmp_path / "runtime-seed.json"
+    runtime_seed.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        aspect_catalog,
+        "get_settings",
+        lambda: SimpleNamespace(kb_seed_path=str(runtime_seed)),
+    )
+    aspect_catalog.invalidate_runtime_aspect_catalog()
+
+    assert topic_candidates_for_request(
+        "Как подать заявку на Северный импульс 2028?",
+        category="форумы",
+        forum_normalized="Северный импульс 2028",
+    ) == ()
+    runtime_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "yonote-new-application",
+                    "text_clean": "Подай заявку на платформе и заполни анкету.",
+                    "status": "published",
+                    "category": "форумы",
+                    "forum_normalized": "Северный импульс 2028",
+                    "source_type": "yonote",
+                    "topic": "novaya_podacha_zayavki",
+                    "intent_name": "Подача заявки",
+                    "source_heading_path": [
+                        "Северный импульс 2028",
+                        "Подача заявки",
+                    ],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    aspect_catalog.invalidate_runtime_aspect_catalog()
+
+    assert topic_candidates_for_request(
+        "Как подать заявку на Северный импульс 2028?",
+        category="форумы",
+        forum_normalized="Северный импульс 2028",
+    ) == ("novaya_podacha_zayavki",)
+    aspect_catalog.invalidate_runtime_aspect_catalog()
 
 
 class _CatalogMetadataRetriever:

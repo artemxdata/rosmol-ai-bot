@@ -105,10 +105,10 @@ def test_production_overlay_is_fail_closed_and_uses_minimal_app_mounts() -> None
     ):
         assert f"${{{name}:?" in compose
 
-    assert compose.count("volumes: !override") == 2
+    assert compose.count("volumes: !override") == 3
     assert compose.count(
         "./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro"
-    ) == 2
+    ) == 3
     assert (
         "./data/private/admin-kb:/app/data/private/admin-kb:ro"
         in _compose_service_block(compose, "app")
@@ -138,6 +138,20 @@ def test_production_overlay_is_fail_closed_and_uses_minimal_app_mounts() -> None
     assert (
         "KB_SEED_PATH: ${ADMIN_KB_SEED_PATH:-/app/data/knowledge_base_seed.json}"
         in compose
+    )
+    index_kb = _compose_service_block(compose, "index-kb")
+    assert (
+        "KB_SEED_PATH: ${ADMIN_KB_SEED_PATH:-/app/data/knowledge_base_seed.json}"
+        in index_kb
+    )
+    assert "EXPECTED_KB_SEED_SHA256: ${EXPECTED_KB_SEED_SHA256:-}" in index_kb
+    assert index_kb.count('--expected-seed-sha256 "$${EXPECTED_KB_SEED_SHA256}"') == 2
+    assert "--validate-only" in index_kb
+    assert "--prune-stale" in index_kb
+    assert "./data/private/admin-kb:/app/data/private/admin-kb:ro" in index_kb
+    assert (
+        "./data/knowledge_base_seed.json:/app/data/knowledge_base_seed.json:ro"
+        in index_kb
     )
     assert "QDRANT__SERVICE__API_KEY:" in compose
     assert 'QDRANT__TELEMETRY_DISABLED: "true"' in compose
@@ -292,6 +306,48 @@ def test_runtime_compose_masks_private_data_while_allowing_atomic_seed_updates()
     assert "scripts/index_kb.py --path data/knowledge_base_seed.json --prune-stale" not in (
         ROOT / "docker-compose.ml.yml"
     ).read_text(encoding="utf-8")
+
+
+def test_canonical_documented_index_runs_are_seed_revision_bound() -> None:
+    documents = {
+        name: re.sub(
+            r"\\\r?\n[ \t]*",
+            " ",
+            (ROOT / name).read_text(encoding="utf-8"),
+        )
+        for name in (
+            "README.md",
+            "docs/recovery_test_production_runbook_20260720.md",
+        )
+    }
+
+    documented_python_index_commands: list[str] = []
+    for name, rendered in documents.items():
+        python_index_commands = [
+            command.strip()
+            for line in rendered.splitlines()
+            for command in re.split(r"\s*(?:&&|;)\s*", line)
+            if "python scripts/index_kb.py" in command
+            and "--validate-only" not in command
+        ]
+        compose_index_commands = [
+            line.strip()
+            for line in rendered.splitlines()
+            if "run --rm" in line and "index-kb" in line
+        ]
+
+        assert compose_index_commands, name
+        assert all(
+            "--expected-seed-sha256" in command
+            for command in python_index_commands
+        ), (name, python_index_commands)
+        assert all(
+            "EXPECTED_KB_SEED_SHA256" in command
+            for command in compose_index_commands
+        ), (name, compose_index_commands)
+        documented_python_index_commands.extend(python_index_commands)
+
+    assert documented_python_index_commands
 
 
 def test_admin_report_contains_aggregate_fields_only() -> None:

@@ -5,6 +5,7 @@ import hashlib
 import re
 import unicodedata
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
@@ -15,7 +16,7 @@ from src.config import get_settings
 from src.models import QueryAnalysis
 from src.rag.embedder import Embedder
 
-CACHE_SCHEMA_VERSION = 5
+CACHE_SCHEMA_VERSION = 6
 GLOBAL_CACHE_SCOPE = "__global__"
 
 
@@ -36,13 +37,27 @@ class SemanticCache:
         self.embedder = embedder
         self.settings = get_settings()
 
+    async def current_kb_revision(self) -> str:
+        return await asyncio.to_thread(
+            _file_sha256,
+            Path(getattr(self.settings, "kb_seed_path", "data/knowledge_base_seed.json")),
+        )
+
     async def check(
         self,
         query: str,
         forum: str | None,
         *,
         query_identity: str | None = None,
+        expected_kb_seed_sha256: str | None = None,
     ) -> CachedResponse | None:
+        current_kb_seed_sha256 = await self.current_kb_revision()
+        if (
+            expected_kb_seed_sha256 is not None
+            and current_kb_seed_sha256 != expected_kb_seed_sha256
+        ):
+            return None
+        kb_seed_sha256 = expected_kb_seed_sha256 or current_kb_seed_sha256
         dense, _ = await asyncio.to_thread(self.embedder.encode, query)
         scope_key = _scope_key(forum)
         query_fingerprint = _query_fingerprint(
@@ -60,6 +75,10 @@ class SemanticCache:
             models.FieldCondition(
                 key="query_fingerprint",
                 match=models.MatchValue(value=query_fingerprint),
+            ),
+            models.FieldCondition(
+                key="kb_seed_sha256",
+                match=models.MatchValue(value=kb_seed_sha256),
             ),
         ]
 
@@ -87,7 +106,11 @@ class SemanticCache:
             payload.get("cache_schema_version") != CACHE_SCHEMA_VERSION
             or payload.get("scope_key") != scope_key
             or payload.get("query_fingerprint") != query_fingerprint
+            or payload.get("kb_seed_sha256") != kb_seed_sha256
         ):
+            return None
+        current_kb_seed_sha256 = await self.current_kb_revision()
+        if current_kb_seed_sha256 != kb_seed_sha256:
             return None
         try:
             return CachedResponse.model_validate(payload)
@@ -100,15 +123,29 @@ class SemanticCache:
         cached_response: CachedResponse,
         *,
         query_identity: str | None = None,
-    ) -> None:
+        expected_kb_seed_sha256: str | None = None,
+    ) -> bool:
         dense, _ = await asyncio.to_thread(self.embedder.encode, query)
+        current_kb_seed_sha256 = await self.current_kb_revision()
+        if (
+            expected_kb_seed_sha256 is not None
+            and current_kb_seed_sha256 != expected_kb_seed_sha256
+        ):
+            return False
+        kb_seed_sha256 = expected_kb_seed_sha256 or current_kb_seed_sha256
         forum = cached_response.forum_normalized
         scope_key = _scope_key(forum)
         query_fingerprint = _query_fingerprint(
             query if query_identity is None else query_identity
         )
         point_id = str(
-            uuid5(NAMESPACE_URL, f"{scope_key}:{query_fingerprint}")
+            uuid5(
+                NAMESPACE_URL,
+                (
+                    f"v{CACHE_SCHEMA_VERSION}:{kb_seed_sha256}:"
+                    f"{scope_key}:{query_fingerprint}"
+                ),
+            )
         )
         payload = cached_response.model_dump(mode="json")
         payload.update(
@@ -116,6 +153,7 @@ class SemanticCache:
                 "cache_schema_version": CACHE_SCHEMA_VERSION,
                 "scope_key": scope_key,
                 "query_fingerprint": query_fingerprint,
+                "kb_seed_sha256": kb_seed_sha256,
                 "cached_at": datetime.now(UTC).isoformat(),
                 "query_text": query,
             }
@@ -130,6 +168,7 @@ class SemanticCache:
                 )
             ],
         )
+        return True
 
     async def invalidate_forum(self, forum: str | None) -> None:
         await self.qdrant.delete(
@@ -156,3 +195,11 @@ def _query_fingerprint(query: str) -> str:
     normalized = normalized.casefold().replace("ё", "е")
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

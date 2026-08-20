@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
 
 from qdrant_client import AsyncQdrantClient, models
 
-from scripts.index_kb import KBSeedRecord, build_embedding_text
+from scripts.index_kb import (
+    KBSeedRecord,
+    build_qdrant_payload,
+    qdrant_point_id,
+)
 from src.rag.embedder import Embedder, sparse_to_indices_values
-from src.rag.filter_keys import build_filter_key_payload
 
 
 async def upsert_chunk(
@@ -19,23 +21,33 @@ async def upsert_chunk(
     record_payload: dict[str, Any],
 ) -> dict[str, Any]:
     record = KBSeedRecord.model_validate(record_payload)
-    embedding_text = build_embedding_text(record)
+    if record.status != "published":
+        await qdrant.delete(
+            collection_name=collection_name,
+            points_selector=models.PointIdsList(
+                points=[qdrant_point_id(record.chunk_id)]
+            ),
+            wait=True,
+        )
+        return {
+            "ok": True,
+            "action": "deleted",
+            "chunk_id": record.chunk_id,
+            "collection": collection_name,
+            "status": record.status,
+            "forum_normalized": record.forum_normalized,
+        }
+
+    payload = build_qdrant_payload(record)
+    embedding_text = str(payload["embedding_text"])
     dense, sparse = await asyncio.to_thread(embedder.encode, embedding_text)
     indices, values = sparse_to_indices_values(sparse)
-    text = record.content
-    payload = {
-        **record.model_dump(),
-        **build_filter_key_payload(record.model_dump()),
-        "text": text,
-        "embedding_text": embedding_text,
-        "status": record.status,
-    }
 
     await qdrant.upsert(
         collection_name=collection_name,
         points=[
             models.PointStruct(
-                id=str(uuid5(NAMESPACE_URL, record.chunk_id)),
+                id=qdrant_point_id(record.chunk_id),
                 vector={
                     "dense": dense.tolist(),
                     "sparse": models.SparseVector(indices=indices, values=values),
@@ -46,6 +58,7 @@ async def upsert_chunk(
     )
     return {
         "ok": True,
+        "action": "upserted",
         "chunk_id": record.chunk_id,
         "collection": collection_name,
         "status": record.status,

@@ -230,13 +230,15 @@ services:
     command:
       [
         "sh",
+        "-eu",
         "-c",
-        "python scripts/init_qdrant.py && python scripts/index_kb.py --path data/knowledge_base_seed.json",
+        "python scripts/index_kb.py --path data/knowledge_base_seed.json --expected-seed-sha256 \"$${EXPECTED_KB_SEED_SHA256}\" --validate-only && python scripts/init_qdrant.py && python scripts/index_kb.py --path data/knowledge_base_seed.json --expected-seed-sha256 \"$${EXPECTED_KB_SEED_SHA256}\"",
       ]
     environment:
       <<: *offline-model-environment
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_KNOWLEDGE_COLLECTION: ${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_base}
+      EXPECTED_KB_SEED_SHA256: ${EXPECTED_KB_SEED_SHA256:-}
       HF_HOME: /home/app/.cache/huggingface
       TORCH_HOME: /home/app/.cache/torch
     volumes:

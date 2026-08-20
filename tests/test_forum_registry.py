@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from src.kb import forum_registry
 from src.kb.forum_registry import (
     canonicalize_forum_name,
     detect_forum_from_text,
@@ -112,3 +119,75 @@ def test_detect_forums_keeps_short_alias_when_mentioned_separately() -> None:
         "Истоки Школа",
         "Истоки",
     ]
+
+
+def test_default_forum_detection_reads_runtime_kb_seed_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_seed = tmp_path / "runtime-seed.json"
+    runtime_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "new-event",
+                    "text_clean": "Описание нового мероприятия.",
+                    "status": "published",
+                    "forum_normalized": "Горизонт будущего 2027",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        forum_registry,
+        "get_settings",
+        lambda: SimpleNamespace(kb_seed_path=str(runtime_seed)),
+    )
+    forum_registry._runtime_seed_path.cache_clear()
+
+    try:
+        assert (
+            detect_forum_from_text("Как попасть на Горизонт будущего 2027?")
+            == "Горизонт будущего 2027"
+        )
+    finally:
+        forum_registry._runtime_seed_path.cache_clear()
+
+
+def test_forum_detection_refreshes_same_runtime_seed_after_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_seed = tmp_path / "runtime-seed.json"
+    runtime_seed.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        forum_registry,
+        "get_settings",
+        lambda: SimpleNamespace(kb_seed_path=str(runtime_seed)),
+    )
+    forum_registry.invalidate_runtime_forum_registry()
+
+    assert detect_forum_from_text("Когда начнётся Северный импульс 2028?") is None
+    runtime_seed.write_text(
+        json.dumps(
+            [
+                {
+                    "chunk_id": "new-event",
+                    "text_clean": "Описание нового мероприятия.",
+                    "status": "published",
+                    "forum_normalized": "Северный импульс 2028",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    forum_registry.invalidate_runtime_forum_registry()
+
+    assert (
+        detect_forum_from_text("Когда начнётся Северный импульс 2028?")
+        == "Северный импульс 2028"
+    )
+    forum_registry.invalidate_runtime_forum_registry()
