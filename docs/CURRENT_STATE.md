@@ -4,6 +4,54 @@
 
 **Ветка:** `codex/real-rag`
 
+## 20 августа: локальный кандидат гибкого RAG-ядра готов к read-only server acceptance
+
+Реализация выполнена поверх trusted commit
+`8366995879c426c64f22205e935133e8f0c4dc25`; implementation commit —
+`cf9176822516c68aa4391697eda05ffa224da856`. Финальный handoff является его docs-only потомком,
+exact deployment SHA передаётся владельцу после push. На сервер эта редакция ещё не
+устанавливалась, реальный Yonote Preview не выполнялся, seed/Qdrant не менялись, HDE/VK остаются
+выключенными.
+
+Chatme остаётся только внешним ориентиром: его `117` слотов, дерево интентов и готовые ответы не
+импортируются. Runtime теперь читает новые мероприятия и темы из фактического `KB_SEED_PATH`, а не
+из зашитого tracked seed. Один точный атомарный факт по-прежнему может отвечаться прямо из
+опубликованного источника; составной запрос, несколько источников или продолжение диалога проходят
+через grounded Max LLM. Generation contract связывает утверждения с реально процитированными
+чанками и отдельно отклоняет известные смысловые противоречия, включая тип проживания.
+
+Yonote Preview стал sealed и проверяемым: один полный read-only snapshot, лимиты времени/объёма,
+аудит пустых/дублирующихся/слишком коротких чанков, add/change/remove и SHA-256 current/snapshot/
+merged seed. Неизменная дата выгрузки больше не создаёт ложные массовые изменения. Apply принимает
+только exact одноразовый receipt, повторно Yonote не читает, использует durable
+`active -> applying -> applied` lifecycle и безопасно восстанавливается после прерванного запроса.
+Ручной Save переизвлекает производные даты, ссылки, контакты, дедлайн и conditional metadata.
+
+`app`, `app-ml` и `index-kb` связаны одним seed path. Любой реальный index требует заранее
+проверенный SHA-256 exact seed bytes и сверяет его до доступа к Qdrant и перед успешным завершением.
+Runtime-status сравнивает полный канонический payload, ловит missing/stale/changed/invalid points и
+повторно проверяет seed после scan; векторы явно остаются отдельным novel-query gate. Semantic
+cache revision-bound к seed SHA, поэтому старый ответ не становится hit после обновления. Admin
+session теперь отзывается через Redis, logout блокирует replay старой cookie; безопасный
+server-local acceptance не печатает секреты, тексты базы или receipt credentials.
+
+Полный локальный gate выполнен по всем `3488` тестам непересекающимися пакетами из-за известного
+Windows teardown-hang: `3487 passed`, известный `1 skipped`, `0 failed`. Ruff — `OK`; KB validation
+— `2186 valid / 2152 published`; JavaScript админки, Bash syntax, merged Compose config и
+`git diff --check` — `OK`. Матрица аудита и честные ограничения зафиксированы в
+`docs/admin_panel_acceptance_20260820.md`.
+
+Точный следующий шаг: владелец вручную получает exact SHA из GitHub, разворачивает его detached на
+тестовом сервере при выключенных HDE/VK и запускает только
+`run_admin_kb_acceptance_server_local.sh <SHA> HDE_VK_DISABLED`. Этот gate делает полный read-only
+Yonote Preview, но не вызывает Apply, index, `/ask` или channel webhook. Только после review
+агрегатов и хешей заранее запечатываются три новых вопроса; затем отдельным этапом выполняются
+receipt Apply, backup/fingerprint, полный `--prune-stale` index, restart, runtime-status и
+novel-query regression. Риски до этого этапа: server acceptance ещё не выполнен, векторы не
+пересчитаны, массовый index публикуется в active collection и поэтому требует выключенных каналов,
+backup и проверенного rollback. HDE/VK smoke и независимый Blind50 (`>=25/50`, critical unsupported
+facts `0`) разрешены только после полного server-local `GO`.
+
 ## 20 августа: runtime `ca2d9f0` healthy; preview закрыл 4/5 и выявил последний duplicate-plan defect
 
 Владелец вручную развернул exact candidate
