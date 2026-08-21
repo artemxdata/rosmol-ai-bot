@@ -4,6 +4,10 @@
 
 **Ветка:** `codex/real-rag`
 
+**Implementation commit текущей коррекции:**
+`29e88355aafec7121b838d0ac8dbdd8d4aac501e`. Exact deployment SHA — его docs-only
+handoff-потомок после commit/push; на сервер эта коррекция ещё не устанавливалась.
+
 ## 21 августа: реальный Yonote Preview дошёл до данных; исправляется один semantic conflict
 
 Владелец вручную развернул exact runtime
