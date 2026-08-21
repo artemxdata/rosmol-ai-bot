@@ -2185,6 +2185,7 @@ async def _process_message_unlocked(
         "routing_hint": routing_hint.model_dump(),
         "session": session,
         "trace": tracer,
+        "pii_masker": fastapi_app.state.pii_masker,
         "llm_client": fastapi_app.state.llm_client,
         "embedder": getattr(fastapi_app.state, "embedder", None),
         "retriever": fastapi_app.state.retriever,

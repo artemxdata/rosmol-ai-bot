@@ -921,6 +921,12 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
 
     sanitized = _strip_dynamic_emoji(response)
     if not sanitized:
+        _trace_generation_contract_failure(
+            state,
+            reason="llm_response_contract_failed",
+            subreason=_llm_response_contract_subreason(sanitized),
+            rejected_candidate=response,
+        )
         return _generation_contract_failure(
             result,
             reason="llm_response_contract_failed",
@@ -931,6 +937,12 @@ async def _enforce_generation_contract(state: BotState, result: dict) -> dict:
             reason="llm_response_too_long",
         )
     if _response_url_count(sanitized) > 1:
+        _trace_generation_contract_failure(
+            state,
+            reason="llm_response_contract_failed",
+            subreason=_llm_response_contract_subreason(sanitized),
+            rejected_candidate=sanitized,
+        )
         return _generation_contract_failure(
             result,
             reason="llm_response_contract_failed",
@@ -1014,6 +1026,23 @@ async def _generate_with_llm_or_source_fallback(
         )
         if invalid_coverage:
             rejected_draft = str(result.get("generated_response") or "").strip()
+            coverage_subreason = _llm_source_coverage_subreason(
+                result,
+                questions,
+                source_chunks,
+                explicit_questions=list(analysis.questions or []),
+            )
+            if coverage_subreason is None and _response_signals_insufficient_sources(
+                str(result.get("generated_response") or ""),
+            ):
+                coverage_subreason = "response_signals_insufficient_sources"
+            _trace_generation_contract_failure(
+                state,
+                reason="llm_source_coverage_failed",
+                subreason=coverage_subreason,
+                rejected_candidate=rejected_draft,
+                contract_attempt=attempt + 1,
+            )
         if not result.get("should_escalate") and not invalid_coverage:
             return _with_selected_source_ids(result, source_chunks)
         retry_reason = (
@@ -1091,6 +1120,65 @@ def _generation_contract_failure(result: dict, *, reason: str) -> dict:
     if rejected_candidate := str(result.get("_rejected_candidate") or "").strip():
         failed["_rejected_candidate"] = rejected_candidate
     return failed
+
+
+def _trace_generation_contract_failure(
+    state: BotState,
+    *,
+    reason: str,
+    subreason: str | None,
+    rejected_candidate: str,
+    contract_attempt: int | None = None,
+) -> None:
+    tracer = state.get("trace")
+    resolved_reason = str(reason).strip()
+    resolved_subreason = str(subreason or "").strip()
+    if (
+        not tracer
+        or not resolved_subreason
+        or resolved_reason
+        not in {
+            "llm_source_fact_binding_failed",
+            "llm_response_contract_failed",
+            "llm_source_coverage_failed",
+        }
+    ):
+        return
+
+    masked_candidate, masking_status, pii_types = (
+        _mask_rejected_candidate_for_trace(state, rejected_candidate)
+    )
+    tracer.add(
+        "generate_contract_failure",
+        0,
+        contract_reason=resolved_reason,
+        contract_subreason=resolved_subreason,
+        contract_attempt=contract_attempt,
+        rejected_candidate_masked=masked_candidate,
+        rejected_candidate_masking_status=masking_status,
+        rejected_candidate_pii_types=pii_types,
+    )
+
+
+def _mask_rejected_candidate_for_trace(
+    state: BotState,
+    candidate: str,
+) -> tuple[str | None, str, list[str]]:
+    if not candidate:
+        return "", "empty", []
+    masker = state.get("pii_masker")
+    if masker is None:
+        return None, "unavailable", []
+    try:
+        masked_candidate, mapping = masker.mask(candidate)
+    except Exception:
+        return None, "failed", []
+    pii_types = (
+        sorted(str(key) for key, values in mapping.items() if values)
+        if isinstance(mapping, dict)
+        else []
+    )
+    return str(masked_candidate), "masked", pii_types
 
 
 def _without_internal_generation_markers(result: dict) -> dict:
@@ -1244,6 +1332,16 @@ def _response_signals_insufficient_sources(response: str) -> bool:
     )
 
 
+def _llm_response_contract_subreason(response: str) -> str | None:
+    if not response:
+        return "empty_after_emoji_strip"
+    if _response_url_count(response) > 1:
+        return "multiple_urls"
+    if _response_signals_insufficient_sources(response):
+        return "insufficient_source_signal"
+    return None
+
+
 def _llm_result_misses_source_coverage(
     result: dict,
     questions: list[Question],
@@ -1282,6 +1380,50 @@ def _llm_result_misses_source_coverage(
         )
 
     return any(chunk.chunk_id not in cited_ids for chunk in source_chunks)
+
+
+def _llm_source_coverage_subreason(
+    result: dict,
+    questions: list[Question],
+    source_chunks: list[ScoredChunk],
+    *,
+    explicit_questions: list[Question] | None = None,
+) -> str | None:
+    if result.get("should_escalate"):
+        return None
+    response = str(result.get("generated_response") or "")
+    if len(source_chunks) == 1 and _response_misses_explicit_answer_aspect(
+        response,
+        explicit_questions or [],
+    ):
+        return "single_source_explicit_aspect_missing"
+    if len(source_chunks) <= 1:
+        return None
+
+    cited_ids = set(result.get("cited_sources") or [])
+    if not cited_ids:
+        return "no_cited_sources"
+
+    cited_chunks = [chunk for chunk in source_chunks if chunk.chunk_id in cited_ids]
+    if not cited_chunks:
+        return "cited_sources_not_selected"
+
+    distinct_questions = [
+        question
+        for question in questions
+        if str(question.text or "").strip()
+    ]
+    if _has_multiple_distinct_questions(distinct_questions):
+        if any(
+            not any(_source_chunk_covers_question(question, chunk) for chunk in cited_chunks)
+            for question in distinct_questions
+        ):
+            return "distinct_question_not_covered"
+        return None
+
+    if any(chunk.chunk_id not in cited_ids for chunk in source_chunks):
+        return "selected_source_not_cited"
+    return None
 
 
 def _response_misses_explicit_answer_aspect(
@@ -1431,6 +1573,13 @@ async def _generate_with_llm(
     content = _repair_source_refs(content, source_chunks)
     content = _strip_dynamic_emoji(content)
     if not content:
+        _trace_generation_contract_failure(
+            state,
+            reason="llm_response_contract_failed",
+            subreason=_llm_response_contract_subreason(content),
+            rejected_candidate=content,
+            contract_attempt=2 if retry_reason else 1,
+        )
         return _generation_contract_failure(
             {"generator_model": model},
             reason="llm_response_contract_failed",
@@ -1441,11 +1590,25 @@ async def _generate_with_llm(
             reason="llm_response_too_long",
         )
     if _response_url_count(content) > 1:
+        _trace_generation_contract_failure(
+            state,
+            reason="llm_response_contract_failed",
+            subreason=_llm_response_contract_subreason(content),
+            rejected_candidate=content,
+            contract_attempt=2 if retry_reason else 1,
+        )
         return _generation_contract_failure(
             {"generator_model": model, "_rejected_candidate": content},
             reason="llm_response_contract_failed",
         )
     if _response_signals_insufficient_sources(content):
+        _trace_generation_contract_failure(
+            state,
+            reason="llm_response_contract_failed",
+            subreason=_llm_response_contract_subreason(content),
+            rejected_candidate=content,
+            contract_attempt=2 if retry_reason else 1,
+        )
         return _generation_contract_failure(
             {"generator_model": model, "_rejected_candidate": content},
             reason="llm_response_contract_failed",
@@ -1473,6 +1636,18 @@ async def _generate_with_llm(
         source_chunks,
         questions,
     ):
+        binding_subreason = _llm_source_fact_binding_subreason(
+            content,
+            source_chunks,
+            questions,
+        )
+        _trace_generation_contract_failure(
+            state,
+            reason="llm_source_fact_binding_failed",
+            subreason=binding_subreason,
+            rejected_candidate=content,
+            contract_attempt=2 if retry_reason else 1,
+        )
         return _generation_contract_failure(
             {"generator_model": model, "_rejected_candidate": content},
             reason="llm_source_fact_binding_failed",
@@ -1588,6 +1763,55 @@ def _llm_claims_have_bound_source_facts(
     if re.sub(r"[\s.!?…,:;—–-]+", "", SOURCE_RE.sub("", trailing_claim)):
         return False
     return found_claim
+
+
+def _llm_source_fact_binding_subreason(
+    response: str,
+    source_chunks: list[ScoredChunk],
+    questions: list[Question] | None = None,
+) -> str | None:
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in source_chunks}
+    previous_end = 0
+    found_claim = False
+    for marker_group in SOURCE_GROUP_RE.finditer(response):
+        claim = response[previous_end : marker_group.start()]
+        previous_end = marker_group.end()
+        if not SOURCE_RE.sub("", claim).strip():
+            return "claim_before_source_marker_missing"
+        found_claim = True
+        cited_ids = list(dict.fromkeys(SOURCE_RE.findall(marker_group.group(0))))
+        if len(cited_ids) != 1:
+            return "claim_source_marker_count_not_one"
+        cited_chunk = chunks_by_id.get(cited_ids[0])
+        if cited_chunk is None:
+            return "cited_source_not_selected"
+        relevant_questions = (
+            _questions_for_cited_claim(claim, questions) if questions else []
+        )
+        fact_subreason = _source_fact_binding_subreason(
+            cited_chunk,
+            claim,
+            relevant_questions,
+        )
+        if fact_subreason:
+            return fact_subreason
+        coverage_questions = relevant_questions or list(questions or [])
+        if (
+            coverage_questions
+            and len(source_chunks) > 1
+            and not any(
+                _source_chunk_covers_question(question, cited_chunk)
+                for question in coverage_questions
+            )
+        ):
+            return "cited_source_does_not_cover_question"
+
+    trailing_claim = response[previous_end:]
+    if re.sub(r"[\s.!?…,:;—–-]+", "", SOURCE_RE.sub("", trailing_claim)):
+        return "trailing_claim_without_source_marker"
+    if not found_claim:
+        return "no_bound_claims"
+    return None
 
 
 def _questions_for_cited_claim(
@@ -1718,6 +1942,93 @@ def _chunk_supports_claim_facts(
         )
         for group in groups
     )
+
+
+def _source_fact_binding_subreason(
+    chunk: ScoredChunk,
+    claim: str,
+    questions: list[Question] | None = None,
+) -> str | None:
+    claim_numbers = _claim_fact_numbers(claim)
+    metadata = chunk.metadata or {}
+    conditions_summary = metadata.get("conditions_summary")
+    summary_text = (
+        "\n".join(str(item) for item in conditions_summary)
+        if isinstance(conditions_summary, list)
+        else str(conditions_summary or "")
+    )
+    metadata_fact_text = "\n".join(
+        (
+            "\n".join(str(item) for item in value)
+            if isinstance(value, list)
+            else str(value)
+        )
+        for key in (
+            "forum_normalized",
+            "topic",
+            "source_category",
+            "intent_name",
+            "dates_mentioned",
+            "parent_chunk_id",
+            "source_heading_path",
+            "linked_section_names",
+        )
+        if (value := metadata.get(key)) not in (None, "", [], {})
+    )
+    source_text = f"{chunk.text}\n{summary_text}\n{metadata_fact_text}".strip()
+    source_numbers = _claim_fact_numbers(source_text)
+    if not claim_numbers.issubset(source_numbers):
+        return "claim_numeric_or_date_fact_not_supported"
+    if not set(_date_signatures(claim)).issubset(_date_signatures(source_text)):
+        return "claim_numeric_or_date_fact_not_supported"
+    if not _typed_fact_dimensions_match(
+        _critical_nonnumeric_fact_keys(claim),
+        _critical_nonnumeric_fact_keys(source_text),
+    ):
+        return "claim_typed_fact_not_supported"
+    if not bool(metadata.get("has_conditional_logic")):
+        return None
+
+    groups = _conditional_fact_groups(source_text)
+    if len(groups) <= 1:
+        return None
+    required_condition_keys = _condition_keys(claim)
+    claim_dimensions = {
+        _condition_dimension(key) for key in required_condition_keys
+    }
+    for question in questions or []:
+        required_condition_keys.update(
+            key
+            for key in _condition_keys(question.text)
+            if _condition_dimension(key) not in claim_dimensions
+        )
+    explicit_age_text = claim
+    if not _explicit_age_values(explicit_age_text):
+        explicit_age_text = " ".join(
+            question.text
+            for question in questions or []
+            if _explicit_age_values(question.text)
+        )
+    claim_typed_facts = _critical_nonnumeric_fact_keys(claim)
+    if any(
+        claim_numbers.issubset(_claim_fact_numbers(group))
+        and set(_date_signatures(claim)).issubset(_date_signatures(group))
+        and _condition_dimensions_match(
+            required_condition_keys,
+            _condition_keys(group),
+        )
+        and (
+            not explicit_age_text
+            or _source_matches_explicit_age_constraints(explicit_age_text, group)
+        )
+        and _typed_fact_dimensions_match(
+            claim_typed_facts,
+            _critical_nonnumeric_fact_keys(group),
+        )
+        for group in groups
+    ):
+        return None
+    return "claim_conditional_branch_mismatch"
 
 
 def _critical_nonnumeric_fact_keys(text: str) -> set[str]:

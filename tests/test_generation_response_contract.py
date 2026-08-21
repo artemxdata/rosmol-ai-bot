@@ -23,6 +23,7 @@ from src.graph.nodes.generate import (
 from src.graph.nodes.verify import verify
 from src.graph.question_utils import build_effective_questions
 from src.llm.prompts import RESPONSE_GENERATOR_SYSTEM, build_generator_user
+from src.logging.tracer import Tracer
 from src.models import Chunk, Complexity, QueryAnalysis, Question, ScoredChunk
 from src.response_contract import ResponseProfileName
 
@@ -1689,6 +1690,64 @@ async def test_dynamic_llm_response_rejects_multiple_user_links(
     assert result["should_escalate"] is True
     assert result["escalation_reason"] == "llm_response_contract_failed"
     assert result["generated_response"] == ""
+
+
+@pytest.mark.asyncio
+async def test_binding_failure_traces_subreason_and_masked_rejected_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.graph.nodes.generate.get_settings",
+        lambda: SimpleNamespace(
+            reranker_threshold_low=0.4,
+            reranker_threshold_high=0.7,
+        ),
+    )
+    raw_email = "private@example.ru"
+    llm = StubLLM(
+        "Программа длится 99 дней. "
+        f"Контакт: {raw_email} [src:yonote_program]"
+    )
+    tracer = Tracer()
+    state = _state(
+        _source("Источник " * 100),
+        llm,
+        complexity=Complexity.SIMPLE,
+    )
+    state.update(
+        trace=tracer,
+        pii_masker=SimpleNamespace(
+            mask=lambda text: (
+                text.replace(raw_email, "[EMAIL]"),
+                {"email": [raw_email]},
+            )
+        ),
+    )
+
+    result = await generate(state)
+
+    assert llm.calls == 2
+    assert result["should_escalate"] is True
+    assert result["escalation_reason"] == "llm_source_fact_binding_failed"
+    assert "_contract_subreason" not in result
+    assert "_rejected_candidate" not in result
+    events = [
+        event
+        for event in tracer.as_list()
+        if event["node"] == "generate_contract_failure"
+    ]
+    assert len(events) == 2
+    assert [event["metadata"]["contract_attempt"] for event in events] == [1, 2]
+    metadata = events[-1]["metadata"]
+    assert metadata["contract_reason"] == "llm_source_fact_binding_failed"
+    assert (
+        metadata["contract_subreason"]
+        == "claim_numeric_or_date_fact_not_supported"
+    )
+    assert "[EMAIL]" in metadata["rejected_candidate_masked"]
+    assert metadata["rejected_candidate_masking_status"] == "masked"
+    assert metadata["rejected_candidate_pii_types"] == ["email"]
+    assert raw_email not in json.dumps(tracer.as_list(), ensure_ascii=False)
 
 
 @pytest.mark.asyncio

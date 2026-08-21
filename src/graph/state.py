@@ -50,6 +50,7 @@ class BotState(TypedDict, total=False):
     total_latency_ms: int
     error: str
     trace: Tracer
+    pii_masker: Any
     llm_client: Any
     embedder: Any
     retriever: Any
