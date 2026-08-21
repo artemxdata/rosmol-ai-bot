@@ -391,9 +391,11 @@ Production admin panel flow:
 3. Wait for the full pull of both configured collections.
 4. Review or download `documents`, `fresh_yonote_records`, `added`, `changed` and `removed`.
 
-The default production operation is preview-only. It computes a diff and writes only a private,
-time-limited receipt bound to the current seed hash, the full Yonote snapshot hash and the merged
-seed hash; it changes neither Yonote, the tracked seed, Qdrant, semantic cache nor bot answers.
+The default production operation is preview-only. It computes a diff and, only when snapshot
+safety, semantic integrity and the chunk audit all return `GO`, writes a private, time-limited
+receipt bound to the current seed hash, the full Yonote snapshot hash and the merged seed hash.
+A quality `STOP` returns safe diagnostics without a receipt and invalidates any older active
+receipt. Preview changes neither Yonote, the tracked seed, Qdrant, semantic cache nor bot answers.
 Partial previews never produce an applyable receipt. `Apply to KB`, `Save` and
 `Reindex` are hidden in the default read-only UI and remain blocked by backend `403`. The
 downloaded report can contain internal KB text; keep it only as private evidence, never in Git,
@@ -473,9 +475,12 @@ boundary.
 The server-local admin gate is `scripts/run_admin_kb_acceptance_server_local.sh`. It is strictly
 read-only with respect to Yonote, the seed, Qdrant, cache and channels: it does not call Apply,
 PATCH, Reindex, `/ask`, an HDE webhook or `index-kb`, and it never forwards
-`EXPECTED_KB_SEED_SHA256`. The only created state is the private one-time Preview receipt. It
-verifies exact runtime identity, authentication, Validate, runtime-status before/after and a full
-Yonote Preview while emitting only safe aggregates and hashes. It also requires delete-cookie
+`EXPECTED_KB_SEED_SHA256`. On a full quality `GO`, the only created state is the private one-time
+Preview receipt; a snapshot/semantic/chunk-audit `STOP` creates no receipt and invalidates an
+older active one. The gate verifies exact runtime identity, authentication, Validate,
+runtime-status before/after and a full Yonote Preview while emitting only safe aggregates and
+hashes. Safe quality `STOP` uses exit `2`; runtime or non-mutation invariant failure uses exit
+`1`. It also requires delete-cookie
 semantics and proves Redis-backed logout revocation by replaying the captured old cookie and
 requiring `401`. Because provider-side HDE/VK dispatcher
 rules are not observable from the server, their disabled state is an explicit owner attestation;

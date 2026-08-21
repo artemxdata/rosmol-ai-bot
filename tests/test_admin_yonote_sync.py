@@ -124,6 +124,9 @@ def _seal_fresh_receipt(
                     "status": "published",
                     "category": "general",
                     "source_type": "yonote",
+                    "source_url": "https://rossmol.yonote.ru/doc/fresh",
+                    "source_document_id": "doc-fresh",
+                    "source_document_updated_at": "2026-08-20T12:00:00Z",
                 }
             ],
         ),
@@ -367,11 +370,14 @@ def test_apply_sync_writes_seed_and_keeps_non_yonote_records(
         return [object()], [
             {
                 "chunk_id": "yonote_added",
-                "text_clean": "Added Yonote answer",
+                "text_clean": "Added grounded Yonote answer",
                 "status": "published",
                 "category": "forums",
                 "forum_normalized": "Amur",
                 "source_type": "yonote",
+                "source_url": "https://rossmol.yonote.ru/doc/added",
+                "source_document_id": "doc-added",
+                "source_document_updated_at": "2026-08-20T12:00:00Z",
             }
         ]
 
@@ -403,6 +409,45 @@ def test_apply_sync_writes_seed_and_keeps_non_yonote_records(
     assert [record["chunk_id"] for record in stored] == ["xlsx_base", "yonote_added"]
     assert not list(receipt_dir.glob("*.json"))
     assert len(list(receipt_dir.glob("*.applied"))) == 1
+
+
+def test_apply_sync_rejects_receipt_from_pre_audit_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    original_seed = seed_path.read_bytes()
+    preview = _seal_fresh_receipt(
+        monkeypatch,
+        seed_path=seed_path,
+        receipt_dir=receipt_dir,
+    )
+    receipt = preview["receipt"]
+    assert isinstance(receipt, dict)
+    active_path = next(receipt_dir.glob("*.json"))
+    payload = json.loads(active_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "yonote-sync-receipt-v1"
+    rendered = yonote_sync._canonical_json_bytes(payload)
+    legacy_sha256 = sha256(rendered).hexdigest()
+    legacy_path = receipt_dir / f"{receipt['id']}.{legacy_sha256}.json"
+    active_path.unlink()
+    legacy_path.write_bytes(rendered)
+
+    with pytest.raises(
+        yonote_sync.YonoteReceiptError,
+        match="unsupported preview receipt schema",
+    ):
+        yonote_sync.apply_sync(
+            seed_path,
+            receipt_dir=receipt_dir,
+            receipt_id=str(receipt["id"]),
+            receipt_sha256=legacy_sha256,
+        )
+
+    assert seed_path.read_bytes() == original_seed
+    assert legacy_path.is_file()
 
 
 def test_apply_sync_treats_post_replace_write_exception_as_committed(
@@ -507,6 +552,16 @@ def test_apply_sync_recovers_after_finalize_rename_failure_without_rewrite(
     assert applied["receipt"]["state"] == "applying"
     assert applied["receipt"]["finalization_pending"] is True
     assert len(list(receipt_dir.glob("*.applying"))) == 1
+
+    monkeypatch.setattr(
+        yonote_sync,
+        "_validate_merged_seed",
+        lambda *_args, **_kwargs: {
+            "status": "STOP",
+            "codes": {"forum_text_conflict": 1},
+            "errors_total": 1,
+        },
+    )
 
     recovered = yonote_sync.apply_sync(
         seed_path,
@@ -669,7 +724,7 @@ def test_apply_sync_rejects_mismatched_id_in_durable_receipt(
     assert seed_path.read_bytes() == original_seed
 
 
-def test_preview_sync_rejects_semantic_conflict_without_changing_seed(
+def test_preview_sync_reports_semantic_stop_without_receipt_or_seed_change(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -703,16 +758,211 @@ def test_preview_sync_rejects_semantic_conflict_without_changing_seed(
 
     monkeypatch.setattr(yonote_sync, "_load_fresh_yonote_records", fake_load)
 
-    with pytest.raises(ValueError, match="forum_text_conflict=1"):
+    receipt_dir = tmp_path / "receipts"
+    report = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert report["snapshot_scope"] == "full"
+    assert report["semantic_integrity"] == {
+        "status": "STOP",
+        "codes": {"forum_text_conflict": 1},
+        "errors_total": 1,
+        "affected_chunk_ids": {"forum_text_conflict": ["yonote_wrong_event"]},
+    }
+    assert report["snapshot_safety"]["status"] == "GO"
+    assert report["snapshot_safety"]["reasons"] == []
+    assert report["receipt"] == {
+        "apply_ready": False,
+        "reason": "semantic_integrity_failed",
+    }
+    assert set(report["hashes"]) == {
+        "current_seed_sha256",
+        "yonote_snapshot_sha256",
+        "merged_seed_sha256",
+    }
+    assert seed_path.read_text(encoding="utf-8") == original
+    assert not seed_path.with_name(f"{seed_path.name}.tmp").exists()
+    assert not receipt_dir.exists()
+
+
+def test_full_semantic_stop_invalidates_older_active_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    first = _seal_fresh_receipt(
+        monkeypatch,
+        seed_path=seed_path,
+        receipt_dir=receipt_dir,
+    )
+    first_receipt = first["receipt"]
+    assert isinstance(first_receipt, dict)
+    assert len(list(receipt_dir.glob("*.json"))) == 1
+
+    monkeypatch.setattr(
+        yonote_sync,
+        "_validate_merged_seed",
+        lambda *_args, **_kwargs: {
+            "status": "STOP",
+            "codes": {"forum_text_conflict": 1},
+            "errors_total": 1,
+        },
+    )
+    stopped = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert stopped["receipt"] == {
+        "apply_ready": False,
+        "reason": "semantic_integrity_failed",
+    }
+    assert not list(receipt_dir.glob("*.json"))
+    with pytest.raises(yonote_sync.YonoteReceiptNotFound):
+        yonote_sync.apply_sync(
+            seed_path,
+            receipt_dir=receipt_dir,
+            receipt_id=str(first_receipt["id"]),
+            receipt_sha256=str(first_receipt["sha256"]),
+        )
+
+
+def test_full_chunk_audit_stop_invalidates_older_active_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    first = _seal_fresh_receipt(
+        monkeypatch,
+        seed_path=seed_path,
+        receipt_dir=receipt_dir,
+    )
+    first_receipt = first["receipt"]
+    assert isinstance(first_receipt, dict)
+
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: (
+            [object()],
+            [
+                {
+                    "chunk_id": "yonote_incomplete",
+                    "text_clean": "Опубликованный, но неполный чанк Yonote.",
+                    "status": "published",
+                    "category": "general",
+                    "source_type": "yonote",
+                    "source_document_id": "doc-incomplete",
+                    "source_document_updated_at": "2026-08-20T12:00:00Z",
+                }
+            ],
+        ),
+    )
+    stopped = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert stopped["semantic_integrity"]["status"] == "GO"
+    assert stopped["snapshot_safety"]["status"] == "GO"
+    assert stopped["chunk_audit"]["findings"]["missing_source_url"] == 1
+    assert stopped["receipt"] == {
+        "apply_ready": False,
+        "reason": "chunk_audit_failed",
+    }
+    assert not list(receipt_dir.glob("*.json"))
+    with pytest.raises(yonote_sync.YonoteReceiptNotFound):
+        yonote_sync.apply_sync(
+            seed_path,
+            receipt_dir=receipt_dir,
+            receipt_id=str(first_receipt["id"]),
+            receipt_sha256=str(first_receipt["sha256"]),
+        )
+
+
+def test_preview_sync_keeps_structural_validation_as_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    original = seed_path.read_bytes()
+    duplicate = {
+        "chunk_id": "yonote_duplicate",
+        "text_clean": "Опубликованный подтверждённый факт.",
+        "status": "published",
+        "category": "general",
+        "source_type": "yonote",
+    }
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: (
+            [object(), object()],
+            [duplicate, dict(duplicate)],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="duplicate_chunk_id"):
         yonote_sync.preview_sync(
             seed_path,
             SimpleNamespace(),
-            receipt_dir=tmp_path / "receipts",
+            receipt_dir=receipt_dir,
         )
 
-    assert seed_path.read_text(encoding="utf-8") == original
-    assert not seed_path.with_name(f"{seed_path.name}.tmp").exists()
-    assert not (tmp_path / "receipts").exists()
+    assert seed_path.read_bytes() == original
+    assert not receipt_dir.exists()
+
+
+def test_apply_sync_rechecks_semantic_integrity_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    original = seed_path.read_bytes()
+    preview = _seal_fresh_receipt(
+        monkeypatch,
+        seed_path=seed_path,
+        receipt_dir=receipt_dir,
+    )
+    receipt = preview["receipt"]
+    assert isinstance(receipt, dict)
+    monkeypatch.setattr(
+        yonote_sync,
+        "_validate_merged_seed",
+        lambda *_args, **_kwargs: {
+            "status": "STOP",
+            "codes": {"forum_text_conflict": 1},
+            "errors_total": 1,
+        },
+    )
+
+    with pytest.raises(
+        yonote_sync.YonoteReceiptError,
+        match="failed semantic integrity",
+    ):
+        yonote_sync.apply_sync(
+            seed_path,
+            receipt_dir=receipt_dir,
+            receipt_id=str(receipt["id"]),
+            receipt_sha256=str(receipt["sha256"]),
+        )
+
+    assert seed_path.read_bytes() == original
+    assert len(list(receipt_dir.glob("*.json"))) == 1
+    assert not list(receipt_dir.glob("*.applying"))
 
 
 def test_preview_rejects_concurrent_seed_change_without_sealing_receipt(
@@ -745,6 +995,49 @@ def test_preview_rejects_concurrent_seed_change_without_sealing_receipt(
 
     assert json.loads(seed_path.read_text(encoding="utf-8"))[0]["text_clean"] == (
         "Manual editor change"
+    )
+    assert not receipt_dir.exists()
+
+
+def test_semantic_stop_rechecks_concurrent_seed_change_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+
+    def change_seed_during_pull(_settings, *, limit_documents):
+        assert limit_documents is None
+        records = json.loads(seed_path.read_text(encoding="utf-8"))
+        records[0]["text_clean"] = "Concurrent editor change"
+        seed_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+        return [object()], [records[1]]
+
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        change_seed_during_pull,
+    )
+    monkeypatch.setattr(
+        yonote_sync,
+        "_validate_merged_seed",
+        lambda *_args, **_kwargs: {
+            "status": "STOP",
+            "codes": {"forum_text_conflict": 1},
+            "errors_total": 1,
+        },
+    )
+
+    with pytest.raises(yonote_sync.YonoteReceiptConflict, match="during preview"):
+        yonote_sync.preview_sync(
+            seed_path,
+            SimpleNamespace(),
+            receipt_dir=receipt_dir,
+        )
+
+    assert json.loads(seed_path.read_text(encoding="utf-8"))[0]["text_clean"] == (
+        "Concurrent editor change"
     )
     assert not receipt_dir.exists()
 
@@ -873,6 +1166,9 @@ def test_apply_sync_rejects_seed_changed_after_preview(
                     "status": "published",
                     "category": "general",
                     "source_type": "yonote",
+                    "source_url": "https://rossmol.yonote.ru/doc/fresh",
+                    "source_document_id": "doc-fresh",
+                    "source_document_updated_at": "2026-08-20T12:00:00Z",
                 }
             ],
         ),
@@ -969,6 +1265,9 @@ def test_full_preview_replaces_superseded_active_receipt(
                     "status": "published",
                     "category": "general",
                     "source_type": "yonote",
+                    "source_url": "https://rossmol.yonote.ru/doc/fresh",
+                    "source_document_id": "doc-fresh",
+                    "source_document_updated_at": "2026-08-20T12:00:00Z",
                 }
             ],
         ),
@@ -1019,6 +1318,9 @@ def test_apply_sync_rejects_expired_receipt_without_changing_seed(
                     "status": "published",
                     "category": "general",
                     "source_type": "yonote",
+                    "source_url": "https://rossmol.yonote.ru/doc/fresh",
+                    "source_document_id": "doc-fresh",
+                    "source_document_updated_at": "2026-08-20T12:00:00Z",
                 }
             ],
         ),
@@ -1169,14 +1471,12 @@ def test_next_day_preview_preserves_unchanged_yonote_record_and_hash(
     assert first["hashes"]["merged_seed_sha256"] == second["hashes"][
         "merged_seed_sha256"
     ]
-    active_receipt = json.loads(next(receipt_dir.glob("*.json")).read_text("utf-8"))
-    stored_yonote = next(
-        record
-        for record in active_receipt["merged_records"]
-        if record["chunk_id"] == current_yonote["chunk_id"]
-    )
-    assert stored_yonote["extraction_date"] == "2026-08-19"
-    assert stored_yonote["updated_at"] == "2026-08-19"
+    assert first["chunk_audit"]["findings"]["missing_source_updated_at"] == 1
+    assert first["receipt"] == {
+        "apply_ready": False,
+        "reason": "chunk_audit_failed",
+    }
+    assert not list(receipt_dir.glob("*.json"))
 
 
 def test_next_day_preview_keeps_real_content_and_source_change(

@@ -111,21 +111,32 @@ def _find_forum_text_conflicts(
         forum = str(record.get("forum_normalized") or record.get("forum") or "").strip()
         if not forum:
             continue
-        record_forum = alias_to_canonical.get(_normalize_for_match(forum), forum)
-        text = _normalize_for_match(str(record.get("text_clean") or record.get("text") or ""))
+        record_forum = alias_to_canonical.get(_normalize_for_match(forum))
+        if record_forum is None:
+            record_forum = forum
+        raw_text = str(record.get("text_clean") or record.get("text") or "")
+        text = _normalize_for_match(raw_text)
+        clause_text = _normalize_for_clause(raw_text)
         for mentioned_forum, names in detectable_names.items():
             if mentioned_forum == record_forum:
                 continue
             if _event_names_are_nested(record_forum, mentioned_forum):
                 continue
-            if any(_explicit_event_reference(text, name) for name in names):
-                conflicts.append(
-                    {
-                        "chunk_id": chunk_id,
-                        "record_forum": forum,
-                        "mentioned_forum": mentioned_forum,
-                    }
-                )
+            matching_name = next(
+                (name for name in names if _explicit_event_reference(text, name)),
+                None,
+            )
+            if matching_name is None:
+                continue
+            if _looks_like_secondary_event_reference(clause_text, matching_name):
+                continue
+            conflicts.append(
+                {
+                    "chunk_id": chunk_id,
+                    "record_forum": forum,
+                    "mentioned_forum": mentioned_forum,
+                }
+            )
 
     if not conflicts:
         return []
@@ -138,6 +149,37 @@ def _find_forum_text_conflicts(
             "records": conflicts[:50],
         }
     ]
+
+
+def _looks_like_secondary_event_reference(text: str, event_name: str) -> bool:
+    """Recognize an explicit cross-reference without trusting arbitrary new scope.
+
+    A new event is allowed to mention a reviewed event as a partner/example. A
+    chunk whose main assertion is simply about another reviewed event remains a
+    blocking mismatch even while the new event awaits registry review.
+    """
+
+    event_reference = (
+        rf"(?:форум\w*|фестивал\w*|мероприят\w*|слет\w*)\s+"
+        rf"{re.escape(event_name)}(?:\b|$)"
+    )
+    secondary_marker = (
+        r"(?:(?:в\s+программе\s+)?также\s+(?:расскаж\w*|упомина\w*)|"
+        r"сравн\w*|партнер\w*|совмест\w*|"
+        r"в\s+том\s+числе|например|среди\s+(?:форум\w*|мероприят\w*)|"
+        r"одн(?:о|им)\s+из\s+(?:форум\w*|мероприят\w*))"
+    )
+    clause = r"[^.!?\n]{0,120}"
+    return bool(re.search(rf"{secondary_marker}{clause}{event_reference}", text))
+
+
+def _normalize_for_clause(value: str) -> str:
+    normalized = value.casefold().replace("ё", "е")
+    normalized = "".join(
+        char if char.isalnum() or char in ".!?\n" else " " for char in normalized
+    )
+    normalized = re.sub(r"[ \t\r\f\v]+", " ", normalized)
+    return re.sub(r" *\n *", "\n", normalized).strip()
 
 
 def _explicit_event_reference(text: str, event_name: str) -> bool:

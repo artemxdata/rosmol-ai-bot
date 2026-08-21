@@ -1,8 +1,53 @@
 # Текущее состояние проекта
 
-**Обновлено:** 20 августа 2026
+**Обновлено:** 21 августа 2026
 
 **Ветка:** `codex/real-rag`
+
+## 21 августа: реальный Yonote Preview дошёл до данных; исправляется один semantic conflict
+
+Владелец вручную развернул exact runtime
+`3e185a70995c4c1cba42d5f33e9e8b8c47f2fa40`. Оба application-контейнера вернули `ready` с
+этим SHA. Server-local acceptance успешно прошёл runtime identity, admin auth/session/logout,
+Validate, Seed ↔ Qdrant status и проверки выключенных каналов, но полный Yonote Preview вернул
+HTTP `422`. Отдельная безопасная диагностика доказала: receipt storage доступен, активных/
+`applying`/`applied` receipts нет, egress allowlist и CONNECT работают, read-only API видит обе
+настроенные коллекции и `116` документов. Точная стадия — `merged_semantic_integrity`, единственная
+причина — `forum_text_conflict:1`. Это не сбой сети, токена, Docker или индекса.
+
+Ни seed, ни Qdrant, ни cache этим запуском не менялись; receipt не создан, Apply/index не
+запускались, HDE/VK остаются выключенными. Локальная коррекция не подгоняет ответ под конкретный
+форум: semantic gate теперь отличает явную вторичную ссылку на другое мероприятие от подмены
+основного события. Настоящее несовпадение по-прежнему блокирует публикацию. Semantic STOP
+возвращается как HTTP `200` с безопасными кодами, количеством и ID затронутых чанков в
+аутентифицированной админке, но без applyable receipt; server-local stdout вырезает ID и тексты.
+
+Дополнительно закрыты общие дефекты импорта: документы без стабильного `urlId` и усечённые
+идентификаторы привязаны к immutable document scope, одинаковые названия не создают одинаковые
+chunk IDs, а части длинного раздела получают уникальные стабильные суффиксы. Любой новый полный
+STOP инвалидирует старый активный Preview receipt. Уже записанный seed можно идемпотентно
+финализировать после прерванного Apply даже при последующем ужесточении semantic rule, тогда как
+ещё не применённый receipt повторно проходит semantic gate и остаётся fail-closed.
+
+Applyable receipt переведён на `yonote-sync-receipt-v2` и создаётся только при одновременном
+`GO` snapshot safety, semantic integrity и chunk audit. Receipt старой pre-audit schema
+отклоняется до захвата и записи seed, поэтому обновление runtime не оставляет обход новой
+проверки через ранее созданную квитанцию.
+
+Server-local acceptance переведён на schema `v2`: валидный Preview quality STOP имеет отдельный
+exit `2` и строку `yonote_preview_quality_stopped`; изменение seed/Qdrant/HDE остаётся техническим
+`FAIL` с exit `1`. В UI для semantic причин есть русские пояснения и затронутые chunk IDs, полный
+add/change/remove отчёт сохраняется, Apply виден только при одновременно `snapshot=GO`,
+`semantic=GO`, чистом chunk audit и точном receipt. Полный локальный gate выполнен по всем `157`
+test files: `3516 passed`, известный `1 skipped`, `0 failed`. Ruff — `OK`; KB validation —
+`2186 valid / 2152 published`; JavaScript админки, Bash syntax и `git diff --check` — `OK`.
+
+Точный следующий шаг: завершить полный локальный gate, сделать commit/push и передать владельцу
+новый exact 40-character SHA. Владелец снова разворачивает его detached при выключенных HDE/VK и
+повторяет только read-only admin acceptance. При `GO` сначала проверяются hashes/diff и заранее
+запечатываются три novel-вопроса; при semantic `STOP` исправляется показанный источник/metadata,
+но Apply/index не выполняются. Полная индексация, restart и RAG-тесты разрешены только после
+отдельного owner review успешного Preview.
 
 ## 20 августа: локальный кандидат гибкого RAG-ядра готов к read-only server acceptance
 

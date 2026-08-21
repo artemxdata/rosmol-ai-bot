@@ -1,11 +1,14 @@
-# Аудит админ-панели и цикла обновления RAG — 20 августа 2026
+# Аудит админ-панели и цикла обновления RAG — 20–21 августа 2026
 
 ## Граница проверки
 
-Проверена локальная редакция тестового контура. Yonote использовался только через моки; реальный
-read-only API, production TLS, Qdrant и внешние правила HDE/VK проверяются владельцем отдельно
-после exact-SHA deployment. Описанный ниже server-local acceptance ещё не выдаётся за выполненный
-server run. Chatme, его слоты и готовые ответы в проект не импортируются.
+Проверена локальная редакция и первый реальный read-only запуск exact runtime
+`3e185a70995c4c1cba42d5f33e9e8b8c47f2fa40`. Runtime/admin/Qdrant gates прошли, Yonote API
+успешно прочитал 2 коллекции и 116 документов, но merged semantic gate вернул единственный
+`forum_text_conflict`. Seed/Qdrant не менялись и receipt не создавался. Локальный successor
+исправляет generic cross-reference classification и делает STOP диагностируемым; его повторный
+server run ещё не выполнен. Внешние правила HDE/VK остаются owner-attested и выключенными.
+Chatme, его слоты и готовые ответы в проект не импортируются.
 
 Статусы: `РАБОТАЕТ` — подтверждено локальным тестом; `ЧАСТИЧНО` — основной путь есть, но остаётся
 ограничение; `НЕБЕЗОПАСНО` — действие запрещено до исправления; `ОТСУТСТВУЕТ` — следующий уровень
@@ -19,11 +22,11 @@ server run. Chatme, его слоты и готовые ответы в прое
 | Редактирование и точечный reindex | ЧАСТИЧНО | Published upsert использует канонический payload; draft/archived удаляют point; cache сбрасывается | Нет ETag/optimistic concurrency, истории изменений и rollback одной записи |
 | Validate | РАБОТАЕТ | Structural и semantic gate читают один snapshot и возвращают SHA именно проверенных bytes | Registry остаётся отдельным versioned файлом |
 | Quality/ops/eval-cases | ЧАСТИЧНО | API/UI и mock-тесты есть | Старый quality report ещё не связан обязательными runtime/seed SHA; ops UI фиксирован на 7 дней |
-| Yonote statistics/export | ЧАСТИЧНО | Таймауты, общий объём и безопасные ошибки реализованы | Нужен первый реальный read-only server run; экспорт содержит приватный текст и не должен попадать в Git/чат |
-| Полный Yonote Preview | РАБОТАЕТ локально | Один snapshot, 240-секундный/32-MiB предел, empty pages в аудите, hashes current/Yonote/merged, add/change/remove и chunk audit | Реальный Yonote snapshot ещё не получен |
+| Yonote statistics/export | ЧАСТИЧНО | Реальный read-only API probe подтвердил 2 настроенные коллекции и 116 документов; таймауты, общий объём и безопасные ошибки реализованы | Полный приватный экспорт не выполнялся и не должен попадать в Git/чат |
+| Полный Yonote Preview | ЧАСТИЧНО | Реальный API/egress/storage подтверждены на 116 документах; один snapshot, пределы, hashes, add/change/remove и chunk audit реализованы | Первый server run остановился на `forum_text_conflict:1`; successor должен вернуть полный `GO` либо безопасный semantic `STOP` с затронутыми chunk IDs |
 | Preview против параллельного PATCH | РАБОТАЕТ | Изменение seed во время чтения даёт `409`, receipt не создаётся, ручная правка сохраняется | Межпроцессные editor jobs появятся только в durable publish job |
 | Защита от массового удаления | РАБОТАЕТ | Пустой или аномально уменьшившийся Yonote snapshot получает `STOP` без applyable receipt | Осознанное массовое удаление потребует отдельного owner-waiver, которого в текущем API нет |
-| Receipt-bound Apply | РАБОТАЕТ локально | Exact id+SHA, 24 часа, single-use, conflict при изменении seed, без второго Yonote fetch | Apply остаётся выключенным в read-only runtime и не запускает Qdrant |
+| Receipt-bound Apply | РАБОТАЕТ локально | Exact id+SHA, schema v2, 24 часа, single-use, conflict при изменении seed, без второго Yonote fetch; pre-audit receipts отклоняются | Apply остаётся выключенным в read-only runtime и не запускает Qdrant |
 | Seed ↔ Qdrant runtime-status | РАБОТАЕТ локально | Сравнивается полный канонический payload, включая filter keys, text, embedding input и source metadata; seed повторно хешируется после scan, а изменение во время scan даёт `STOP` | Векторы не пересчитываются; после `GO` обязателен novel-query retrieval smoke |
 | Semantic response cache | РАБОТАЕТ локально | Cache schema, point ID, lookup filter и payload привязаны к SHA runtime seed; старый физический point после Apply не становится hit | Старые points удаляются отдельной controlled cleanup, но ответить уже не могут |
 | Полная индексация | ЧАСТИЧНО | Production `app`, `app-ml` и `index-kb` используют один `KB_SEED_PATH`; index требует reviewed SHA-256, проверяет bytes до Qdrant и перед success и выполняет `--prune-stale` | Backup/fingerprint/index/restart/rollback выполняет только владелец server-local после review Preview |
@@ -47,11 +50,18 @@ chunks, Validate, runtime-status до/после,
 нулевую активность HDE, отсутствие прямого VK webhook и полный Yonote Preview. Он не вызывает
 Apply, PATCH, Reindex, `/ask`, channel webhook или `index-kb`, не передаёт
 `EXPECTED_KB_SEED_SHA256` и не печатает токены, тексты базы, document/chunk IDs и receipt
-credentials. Единственное созданное состояние — приватный одноразовый Preview receipt; seed,
-Qdrant, cache, Yonote и каналы не меняются. Внешнее выключение правил HDE/VK подтверждается
+credentials. При полном `GO` единственное созданное состояние — приватный одноразовый Preview
+receipt; semantic/snapshot/chunk-audit `STOP` не создаёт новый receipt и инвалидирует старый
+активный receipt. Seed, Qdrant, cache, Yonote и каналы не меняются. Внешнее выключение правил HDE/VK подтверждается
 владельцем отдельным аргументом `HDE_VK_DISABLED`, поскольку сервер сам не может наблюдать
-provider-side rules. До его `GO`
-каналы остаются выключенными; сам server-local запуск в этой локальной проверке не выполнялся.
+provider-side rules. Schema `v2` возвращает exit `2` для безопасного Preview quality STOP и
+exit `1` для технического/invariant FAIL. До `GO` каналы остаются выключенными.
+
+Первый реальный запуск 21 августа прошёл все проверки до Yonote Preview и остановился на HTTP
+`422`. Безопасная диагностика исключила сеть, token/scope, proxy и filesystem: точная причина —
+один `forum_text_conflict` в merged semantic integrity. Следующая редакция переводит такой исход
+в проверяемый HTTP `200`/quality `STOP` без receipt и показывает владельцу понятную причину и
+затронутый chunk ID; настоящий конфликт при этом не ослабляется.
 
 После exact-SHA deployment владелец запускает в shell сервера только:
 

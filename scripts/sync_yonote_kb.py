@@ -10,6 +10,7 @@ import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ DEFAULT_COLLECTION_NAMES = (
 TRANSIENT_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 DEFAULT_MAX_YONOTE_RESPONSE_BYTES = 32 * 1024 * 1024
 _UTF8_SIZE_CHUNK_CHARACTERS = 64 * 1024
+_DOCUMENT_SCOPE_HASH_LENGTH = 12
 ROOT_TITLES = {
     "росмолодёжь: общее, структура, направления",
     "росмолодёжь: мероприятия",
@@ -540,6 +542,7 @@ def build_records_from_api_documents(
     extraction_date: date,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    document_slugs = _document_scope_slugs(documents)
     for document in documents:
         event_name = infer_event_name(document)
         category = infer_category(document, event_name)
@@ -564,9 +567,58 @@ def build_records_from_api_documents(
                         category=category,
                         base_url=base_url,
                         extraction_date=extraction_date,
+                        document_slug=document_slugs[_document_scope(document)],
+                        part_index=part_index,
                     )
                 )
     return records
+
+
+def _document_scope_slugs(
+    documents: list[YonoteDocument],
+) -> dict[tuple[str, str], str]:
+    """Keep legacy slugs unless distinct source documents collide.
+
+    ``urlId`` is normally unique and existing chunk IDs depend on its exact
+    slug. The title fallback and truncated URL IDs are not unique, however.
+    Resolve only real cross-document collisions so an unrelated new document
+    cannot silently reuse another document's chunk IDs, while ordinary
+    snapshots retain their existing IDs byte-for-byte.
+    """
+
+    base_slug_by_scope: dict[tuple[str, str], str] = {}
+    scopes_by_base_slug: dict[str, set[tuple[str, str]]] = {}
+    for document in documents:
+        scope = _document_scope(document)
+        identity = document.url_id or document.title or document.id
+        base_slug = slugify(identity, max_length=48)
+        full_slug = slugify(identity, max_length=4096)
+        # A provider urlId is the existing stable identity and stays byte-for-byte
+        # compatible. Title/id fallbacks and truncated identities are ambiguous by
+        # construction, so bind them to the immutable document scope immediately;
+        # their IDs then stay stable when a similarly named document appears later.
+        if not document.url_id or full_slug != base_slug:
+            base_slug = f"doc_{_document_scope_hash(scope)}"
+        base_slug_by_scope[scope] = base_slug
+        scopes_by_base_slug.setdefault(base_slug, set()).add(scope)
+
+    resolved: dict[tuple[str, str], str] = {}
+    for scope, base_slug in base_slug_by_scope.items():
+        if len(scopes_by_base_slug[base_slug]) == 1:
+            resolved[scope] = base_slug
+            continue
+        resolved[scope] = f"{base_slug}_{_document_scope_hash(scope)}"
+    return resolved
+
+
+def _document_scope(document: YonoteDocument) -> tuple[str, str]:
+    return document.collection_id, document.id
+
+
+def _document_scope_hash(scope: tuple[str, str]) -> str:
+    collection_id, document_id = scope
+    payload = f"{collection_id}\0{document_id}".encode()
+    return sha256(payload).hexdigest()[:_DOCUMENT_SCOPE_HASH_LENGTH]
 
 
 def parse_text_sections(document_title: str, text: str) -> list[TextSection]:
@@ -628,10 +680,14 @@ def build_record(
     category: str,
     base_url: str,
     extraction_date: date,
+    document_slug: str,
+    part_index: int,
 ) -> dict[str, Any]:
+    full_topic = slugify(title, max_length=4096)
     topic = slugify(title, max_length=60)
-    doc_slug = slugify(document.url_id or document.title or document.id, max_length=48)
-    chunk_id = f"yonote_api_{doc_slug}_s{section.index:04d}_{topic}"
+    if part_index > 1 and len(full_topic) > 60:
+        topic = f"{topic}_p{part_index:04d}"
+    chunk_id = f"yonote_api_{document_slug}_s{section.index:04d}_{topic}"
     source_url = f"{base_url.rstrip('/')}{document.url}" if document.url else None
     forum = event_name if category in {"форумы", "гранты"} else None
 

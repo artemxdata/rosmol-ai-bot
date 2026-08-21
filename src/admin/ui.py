@@ -1428,7 +1428,35 @@ _HTML_TEMPLATE = """
         </section>
       `;
     }
+    const yonoteSemanticLabels = Object.freeze({
+      forum_text_conflict: "Текст относится к другому мероприятию",
+      malformed_link: "Некорректная ссылка или разметка ссылки",
+      suspicious_link_domain: "Подозрительный адрес сайта",
+      unresolved_social_link_placeholder: "Вместо ссылки осталась служебная метка соцсети",
+      unclassified_semantic_error: "Не классифицированная ошибка содержания",
+    });
+    function yonoteSemanticEntries(data) {
+      return Object.entries((data.semantic_integrity || {}).codes || {});
+    }
+    function yonoteSemanticLabel(code) {
+      return yonoteSemanticLabels[code] || "Ошибка проверки содержания";
+    }
+    function yonoteSemanticChunkIds(data, code) {
+      const mapping = (data.semantic_integrity || {}).affected_chunk_ids || {};
+      return Array.isArray(mapping[code]) ? mapping[code].slice(0, 50) : [];
+    }
     function buildYonoteTextReport(data) {
+      const snapshotSafety = data.snapshot_safety || {};
+      const semanticIntegrity = data.semantic_integrity || {};
+      const semanticEntries = yonoteSemanticEntries(data);
+      const snapshotStopped = snapshotSafety.status === "STOP";
+      const semanticStopped = semanticIntegrity.status === "STOP";
+      const chunkAudit = data.chunk_audit || {};
+      const chunkDocuments = chunkAudit.documents || {};
+      const chunkAuditStopped = (
+        Number(chunkAudit.warnings_total || 0) > 0 ||
+        Number(chunkDocuments.without_chunks || 0) > 0
+      );
       const lines = [
         "ОТЧЁТ О СИНХРОНИЗАЦИИ YONOTE",
         `Сформирован: ${new Date().toLocaleString("ru-RU")}`,
@@ -1441,8 +1469,24 @@ _HTML_TEMPLATE = """
         `Обновится существующих чанков: ${data.changed || 0}`,
         `Исчезнет из локального Yonote-слоя: ${data.removed || 0}`,
         `Всего чанков в базе после применения: ${data.merged_records || 0}`,
-        `Безопасность snapshot: ${(data.snapshot_safety || {}).status || "не проверена"}`,
+        `Безопасность snapshot: ${snapshotSafety.status || "не проверена"}`,
+        `Семантическая целостность: ${semanticIntegrity.status || "не проверена"}`,
+        `Семантических ошибок: ${semanticIntegrity.errors_total || 0}`,
+        `Контроль чанков: ${chunkAuditStopped ? "STOP" : "GO"}`,
       ];
+      if ((snapshotSafety.reasons || []).length) {
+        lines.push(
+          `Причины STOP snapshot: ${(snapshotSafety.reasons || []).join(", ")}`
+        );
+      }
+      if (semanticEntries.length) {
+        lines.push("", "КОДЫ СЕМАНТИЧЕСКОЙ ПРОВЕРКИ");
+        semanticEntries.forEach(([code, count]) => {
+          lines.push(`- ${yonoteSemanticLabel(code)} (${code}): ${count}`);
+          const chunkIds = yonoteSemanticChunkIds(data, code);
+          if (chunkIds.length) lines.push(`  Чанки: ${chunkIds.join(", ")}`);
+        });
+      }
       const collections = Object.entries(data.collection_counts || {});
       if (collections.length) {
         lines.push("", "КОЛЛЕКЦИИ YONOTE");
@@ -1478,7 +1522,15 @@ _HTML_TEMPLATE = """
       lines.push(
         "",
         "ВАЖНО",
-        data.applied
+        [snapshotStopped, semanticStopped, chunkAuditStopped].filter(Boolean).length > 1
+          ? "Apply заблокирован несколькими проверками Preview. Исправь все причины STOP и запусти новый полный Preview."
+          : semanticStopped
+          ? "Apply заблокирован семантической проверкой. Исправь причины STOP и запусти новый полный Preview."
+          : snapshotStopped
+          ? "Apply заблокирован проверкой snapshot. Проверь источник и причины возможного массового удаления."
+          : chunkAuditStopped
+          ? "Apply заблокирован проверкой чанков. Исправь пустые, слишком короткие, дублирующиеся или неполные записи."
+          : data.applied
           ? "Изменения записаны в knowledge_base_seed.json. Для ответов бота нужна переиндексация Qdrant."
           : "Это только предпросмотр. Ничего не записано в базу бота."
       );
@@ -1508,13 +1560,49 @@ _HTML_TEMPLATE = """
       const chunkAudit = data.chunk_audit || {};
       const findings = chunkAudit.findings || {};
       const documentAudit = chunkAudit.documents || {};
+      const chunkAuditStopped = (
+        Number(chunkAudit.warnings_total || 0) > 0 ||
+        Number(documentAudit.without_chunks || 0) > 0
+      );
       const freshLengths = chunkAudit.fresh_lengths || {};
       const projection = data.index_projection || {};
       const snapshotSafety = data.snapshot_safety || {};
       const snapshotSafetyStopped = snapshotSafety.status === "STOP";
-      const shouldShowApply = (
-        !adminReadOnly && !data.applied && receipt.apply_ready === true
+      const semanticIntegrity = data.semantic_integrity || {};
+      const semanticIntegrityStopped = semanticIntegrity.status === "STOP";
+      const semanticEntries = yonoteSemanticEntries(data);
+      const semanticCodeRows = semanticEntries.map(([code, count]) => {
+        const chunkIds = yonoteSemanticChunkIds(data, code);
+        return `
+          <div class="ops-item">
+            <div class="ops-line">
+              <span>${escapeHtml(yonoteSemanticLabel(code))}</span>
+              <span>${escapeHtml(count)}</span>
+            </div>
+            <div class="ops-meta mono">${escapeHtml(code)}</div>
+            ${chunkIds.length
+              ? `<div class="ops-meta mono">Затронутые чанки: ${escapeHtml(chunkIds.join(", "))}</div>`
+              : '<div class="ops-meta">Идентификаторы не переданы.</div>'}
+          </div>
+        `;
+      }).join("");
+      const previewApplyReady = (
+        receipt.apply_ready === true &&
+        snapshotSafety.status === "GO" && semanticIntegrity.status === "GO" &&
+        !chunkAuditStopped
       );
+      const shouldShowApply = !adminReadOnly && !data.applied && previewApplyReady;
+      const blockedButtonLabel = data.applied
+        ? "Изменения записаны"
+        : [snapshotSafetyStopped, semanticIntegrityStopped, chunkAuditStopped].filter(Boolean).length > 1
+          ? "Apply заблокирован несколькими проверками"
+          : semanticIntegrityStopped
+            ? "Apply заблокирован проверкой содержания"
+            : snapshotSafetyStopped
+              ? "Apply заблокирован проверкой snapshot"
+              : chunkAuditStopped
+                ? "Apply заблокирован проверкой чанков"
+              : "Сначала нужен полный Preview";
       dashboard.innerHTML = `
         <div class="sync-guide">
           <div class="sync-step"><span class="sync-step-number">1</span><b>Проверить Yonote</b><span>Читаем документы и считаем разницу. База бота не меняется.</span></div>
@@ -1538,9 +1626,27 @@ _HTML_TEMPLATE = """
         ${snapshotSafetyStopped
           ? `<div class="quality-note danger"><b>Apply заблокирован:</b> Yonote вернул пустой или аномально уменьшившийся snapshot. Ничего не применяй, пока владелец отдельно не проверит источник и не разрешит массовое удаление.</div>`
           : ""}
+        ${semanticIntegrityStopped
+          ? `
+              <div class="quality-note danger">
+                <b>Apply заблокирован проверкой содержания:</b>
+                найдено ${escapeHtml(semanticIntegrity.errors_total || 0)} семантических ошибок.
+                Ниже показаны понятные причины, коды, количества и затронутые чанки; подробности изменений оставлены для проверки владельцем.
+              </div>
+              <section class="ops-section">
+                <h3>Коды семантической проверки</h3>
+                <div class="ops-list">
+                  ${semanticCodeRows || '<div class="ops-item"><span class="ops-meta">Коды не переданы — требуется server-local диагностика.</span></div>'}
+                </div>
+              </section>
+            `
+          : ""}
+        ${chunkAuditStopped
+          ? `<div class="quality-note danger"><b>Apply заблокирован проверкой чанков:</b> предупреждений — ${escapeHtml(chunkAudit.warnings_total || 0)}, документов без чанков — ${escapeHtml(documentAudit.without_chunks || 0)}. Проверь подробный отчёт перед новым Preview.</div>`
+          : ""}
         <div class="ops-list">
           <div class="ops-item">
-            <div class="ops-line"><span>Проверяемый snapshot</span><span>${receipt.apply_ready ? "готов к Apply" : "только просмотр"}</span></div>
+            <div class="ops-line"><span>Проверяемый snapshot</span><span>${previewApplyReady ? "готов к Apply" : "только просмотр"}</span></div>
             <div class="ops-meta mono">current: ${escapeHtml(hashes.current_seed_sha256 || "—")}</div>
             <div class="ops-meta mono">Yonote: ${escapeHtml(hashes.yonote_snapshot_sha256 || "—")}</div>
             <div class="ops-meta mono">merged: ${escapeHtml(hashes.merged_seed_sha256 || "—")}</div>
@@ -1574,7 +1680,7 @@ _HTML_TEMPLATE = """
             ? '<button class="secondary" type="button" disabled>Production: только просмотр</button>'
             : (shouldShowApply
               ? '<button id="applyYonoteButton" class="primary" type="button">Записать изменения в базу бота</button>'
-              : `<button class="secondary" type="button" disabled>${data.applied ? "Изменения записаны" : (snapshotSafetyStopped ? "Apply заблокирован проверкой" : "Сначала нужен полный Preview")}</button>`)}
+              : `<button class="secondary" type="button" disabled>${blockedButtonLabel}</button>`)}
           <span class="action-note">${adminReadOnly
             ? "Применение изменений к базе бота отключено. Предпросмотр Yonote остаётся доступен."
             : "Yonote работает только на чтение. Кнопка не меняет документы коллег."}</span>
@@ -2175,12 +2281,30 @@ _HTML_TEMPLATE = """
         document.getElementById("reportOutput").textContent = JSON.stringify(data, null, 2);
         renderYonoteDashboard(data);
         const snapshotStopped = (data.snapshot_safety || {}).status === "STOP";
+        const semanticIntegrity = data.semantic_integrity || {};
+        const semanticStopped = semanticIntegrity.status === "STOP";
+        const chunkAudit = data.chunk_audit || {};
+        const chunkAuditStopped = (
+          Number(chunkAudit.warnings_total || 0) > 0 ||
+          Number((chunkAudit.documents || {}).without_chunks || 0) > 0
+        );
+        const previewStopped = snapshotStopped || semanticStopped || chunkAuditStopped;
+        const stopReasons = [];
+        if (snapshotStopped) stopReasons.push(`snapshot: удалится ${data.removed || 0}`);
+        if (semanticStopped) {
+          stopReasons.push(
+            `содержание: ${semanticIntegrity.errors_total || 0} ошибок`
+          );
+        }
+        if (chunkAuditStopped) {
+          stopReasons.push(`чанки: ${chunkAudit.warnings_total || 0} предупреждений`);
+        }
         setStatus(
           "detailStatus",
-          snapshotStopped
-            ? `Yonote проверен, но Apply заблокирован: удалится ${data.removed}`
+          previewStopped
+            ? `Yonote проверен, но Apply заблокирован (${stopReasons.join("; ")})`
             : `Yonote проверен: +${data.added}, изменится ${data.changed}, удалится ${data.removed}`,
-          snapshotStopped ? "warn" : "ok"
+          previewStopped ? "warn" : "ok"
         );
       } catch (error) {
         setStatus("detailStatus", error.message, "error");

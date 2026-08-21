@@ -14,7 +14,6 @@ from scripts.build_yonote_kb_seed import MAX_CHUNK_CHARS, merge_records
 from scripts.index_kb import (
     load_forum_registry,
     validate_seed_items,
-    validate_semantic_seed_items,
 )
 from scripts.sync_yonote_kb import (
     DEFAULT_COLLECTION_NAMES,
@@ -25,6 +24,7 @@ from scripts.sync_yonote_kb import (
     split_collection_selectors,
 )
 from src.admin.kb_store import write_seed_records
+from src.kb.audit import semantic_integrity_findings
 
 COMPARE_FIELDS = (
     "text_clean",
@@ -45,7 +45,7 @@ COMPARE_FIELDS = (
     "valid_from",
     "valid_to",
 )
-RECEIPT_SCHEMA_VERSION = "yonote-sync-receipt-v1"
+RECEIPT_SCHEMA_VERSION = "yonote-sync-receipt-v2"
 RECEIPT_TTL = timedelta(hours=24)
 MAX_RECEIPT_BYTES = 64 * 1024 * 1024
 MAX_PREVIEW_TEXT_BYTES = 32 * 1024 * 1024
@@ -58,6 +58,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _RECEIPT_STATE_FILE_RE = re.compile(
     r"^[0-9a-f]{32}\.[0-9a-f]{64}\.(?P<state>json|applying|applied)$"
 )
+_SEMANTIC_FINDING_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class YonoteSyncConfigError(RuntimeError):
@@ -105,7 +106,7 @@ def preview_sync(
         fresh_yonote_records,
         replace_existing_yonote=True,
     )
-    _validate_merged_seed(seed_path, merged_records)
+    semantic_integrity = _validate_merged_seed(seed_path, merged_records)
     report = _build_sync_report(
         current_records=current_records,
         fresh_yonote_records=fresh_yonote_records,
@@ -114,6 +115,12 @@ def preview_sync(
         applied=False,
         seed_path=seed_path,
     )
+    report["semantic_integrity"] = semantic_integrity
+    report["hashes"] = {
+        "current_seed_sha256": current_seed_sha256,
+        "yonote_snapshot_sha256": _canonical_sha256(fresh_yonote_records),
+        "merged_seed_sha256": _seed_sha256(merged_records),
+    }
     if limit_documents is not None:
         report["snapshot_scope"] = "partial"
         report["receipt"] = {
@@ -124,18 +131,33 @@ def preview_sync(
 
     snapshot_safety = _snapshot_safety(report)
     report["snapshot_safety"] = snapshot_safety
-    if snapshot_safety["status"] != "GO":
-        report["snapshot_scope"] = "full"
-        report["receipt"] = {
-            "apply_ready": False,
-            "reason": "destructive_snapshot_requires_owner_waiver",
-        }
-        return report
-
+    chunk_audit_stopped = not _chunk_audit_allows_apply(report)
     if _file_sha256(seed_path) != current_seed_sha256:
         raise YonoteReceiptConflict(
             "knowledge base changed during preview; run preview again"
         )
+    if (
+        snapshot_safety["status"] != "GO"
+        or semantic_integrity["status"] != "GO"
+        or chunk_audit_stopped
+    ):
+        _invalidate_active_receipts(resolved_receipt_dir)
+        report["snapshot_scope"] = "full"
+        receipt_reason = (
+            "semantic_integrity_failed"
+            if semantic_integrity["status"] == "STOP"
+            else (
+                "destructive_snapshot_requires_owner_waiver"
+                if snapshot_safety["status"] == "STOP"
+                else "chunk_audit_failed"
+            )
+        )
+        report["receipt"] = {
+            "apply_ready": False,
+            "reason": receipt_reason,
+        }
+        return report
+
     report["snapshot_scope"] = "full"
     return _seal_preview_receipt(
         seed_path=seed_path,
@@ -167,7 +189,10 @@ def apply_sync(
     expected_seed_path = str(bindings.get("seed_path") or "")
     if expected_seed_path != str(seed_path.resolve(strict=True)):
         raise YonoteReceiptConflict("receipt is bound to another knowledge base")
-    _validate_merged_seed(seed_path, merged_records)
+    # Structural corruption is never recoverable, including for a receipt whose
+    # seed write already committed. Semantic rules may legitimately evolve after
+    # that commit, so they must not strand an `.applying` receipt forever.
+    validate_seed_items(merged_records)
 
     current_seed_sha256 = _file_sha256(seed_path)
     expected_current_sha256 = str(bindings["current_seed_sha256"])
@@ -233,6 +258,10 @@ def apply_sync(
         raise YonoteReceiptConflict(
             "knowledge base changed after preview; run preview again"
         )
+
+    semantic_integrity = _validate_merged_seed(seed_path, merged_records)
+    if semantic_integrity["status"] != "GO":
+        raise YonoteReceiptError("preview receipt failed semantic integrity")
 
     applying_path = receipt_path.with_suffix(".applying")
     try:
@@ -584,6 +613,19 @@ def _remove_superseded_receipts(
         candidate.unlink()
 
 
+def _invalidate_active_receipts(directory: Path) -> None:
+    """Invalidate older GO receipts when the newest full Preview is STOP."""
+
+    if not directory.exists():
+        return
+    _remove_superseded_receipts(
+        directory,
+        keep="",
+        removable_states=frozenset({"json"}),
+    )
+    _sync_directory(directory)
+
+
 def _receipt_object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise YonoteReceiptError(f"{label} must be an object")
@@ -690,12 +732,56 @@ def load_yonote_documents_from_settings(
         )
 
 
-def _validate_merged_seed(seed_path: Path, records: list[dict[str, Any]]) -> None:
+def _validate_merged_seed(
+    seed_path: Path,
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
     validate_seed_items(records)
-    validate_semantic_seed_items(
+    findings = semantic_integrity_findings(
         records,
         forum_registry=load_forum_registry(seed_path),
     )
+    counts: Counter[str] = Counter()
+    affected_chunk_ids: dict[str, set[str]] = {}
+    for finding in findings:
+        if finding.get("severity") != "error":
+            continue
+        raw_code = str(finding.get("code") or "").strip()
+        code = (
+            raw_code
+            if _SEMANTIC_FINDING_CODE_RE.fullmatch(raw_code)
+            else "unclassified_semantic_error"
+        )
+        raw_count = finding.get("count")
+        count = (
+            raw_count
+            if isinstance(raw_count, int)
+            and not isinstance(raw_count, bool)
+            and raw_count > 0
+            else 1
+        )
+        counts[code] += count
+        code_chunk_ids = affected_chunk_ids.setdefault(code, set())
+        for item in finding.get("records") or []:
+            if isinstance(item, dict):
+                chunk_id = str(item.get("chunk_id") or "").strip()
+                if chunk_id:
+                    code_chunk_ids.add(chunk_id)
+        for item in finding.get("chunk_ids") or []:
+            chunk_id = str(item or "").strip()
+            if chunk_id:
+                code_chunk_ids.add(chunk_id)
+    safe_counts = dict(sorted(counts.items()))
+    return {
+        "status": "STOP" if safe_counts else "GO",
+        "codes": safe_counts,
+        "errors_total": sum(safe_counts.values()),
+        "affected_chunk_ids": {
+            code: sorted(chunk_ids)[:50]
+            for code, chunk_ids in sorted(affected_chunk_ids.items())
+            if chunk_ids
+        },
+    }
 
 
 def _build_sync_report(
@@ -805,6 +891,18 @@ def _snapshot_safety(report: dict[str, Any]) -> dict[str, Any]:
         "maximum_removal_ratio_without_waiver": MAX_REMOVAL_RATIO_WITHOUT_WAIVER,
         "maximum_removals_without_waiver": MAX_REMOVALS_WITHOUT_WAIVER,
     }
+
+
+def _chunk_audit_allows_apply(report: dict[str, Any]) -> bool:
+    audit = report.get("chunk_audit")
+    if not isinstance(audit, dict):
+        return False
+    documents = audit.get("documents")
+    return (
+        isinstance(documents, dict)
+        and audit.get("warnings_total") == 0
+        and documents.get("without_chunks") == 0
+    )
 
 
 def _chunk_audit(

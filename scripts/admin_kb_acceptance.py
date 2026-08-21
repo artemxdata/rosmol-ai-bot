@@ -19,6 +19,14 @@ CHANNELS_DISABLED_ATTESTATION = "HDE_VK_DISABLED"
 FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 RECEIPT_ID = re.compile(r"^[0-9a-f]{32}$")
+SEMANTIC_FINDING_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+SNAPSHOT_SAFETY_REASONS = frozenset(
+    {
+        "yonote_snapshot_empty",
+        "absolute_removal_limit_exceeded",
+        "removal_ratio_limit_exceeded",
+    }
+)
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 READY_CHECKS = (
     "config",
@@ -295,9 +303,17 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     audit = payload.get("chunk_audit")
     projection = payload.get("index_projection")
     snapshot_safety = payload.get("snapshot_safety")
+    semantic_integrity = payload.get("semantic_integrity")
     if not all(
         isinstance(item, dict)
-        for item in (receipt, hashes, audit, projection, snapshot_safety)
+        for item in (
+            receipt,
+            hashes,
+            audit,
+            projection,
+            snapshot_safety,
+            semantic_integrity,
+        )
     ):
         raise AcceptanceError("yonote_preview_invalid")
     assert isinstance(receipt, dict)
@@ -305,19 +321,61 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     assert isinstance(audit, dict)
     assert isinstance(projection, dict)
     assert isinstance(snapshot_safety, dict)
-    if snapshot_safety.get("status") != "GO" or snapshot_safety.get("reasons") != []:
-        raise AcceptanceError("yonote_snapshot_safety_stopped")
-    receipt_id = str(receipt.get("id") or "")
-    receipt_sha256 = str(receipt.get("sha256") or "")
+    assert isinstance(semantic_integrity, dict)
     if (
         payload.get("ok") is not True
         or payload.get("applied") is not False
         or payload.get("snapshot_scope") != "full"
-        or receipt.get("apply_ready") is not True
-        or RECEIPT_ID.fullmatch(receipt_id) is None
-        or SHA256.fullmatch(receipt_sha256) is None
     ):
-        raise AcceptanceError("yonote_preview_not_sealed")
+        raise AcceptanceError("yonote_preview_invalid")
+
+    semantic_status = semantic_integrity.get("status")
+    raw_semantic_codes = semantic_integrity.get("codes")
+    if (
+        semantic_status not in {"GO", "STOP"}
+        or not isinstance(raw_semantic_codes, dict)
+        or len(raw_semantic_codes) > 64
+    ):
+        raise AcceptanceError("yonote_semantic_integrity_invalid")
+    safe_semantic_codes: dict[str, int] = {}
+    for raw_code, raw_count in raw_semantic_codes.items():
+        if (
+            not isinstance(raw_code, str)
+            or SEMANTIC_FINDING_CODE.fullmatch(raw_code) is None
+        ):
+            raise AcceptanceError("yonote_semantic_integrity_invalid")
+        count = _require_non_negative_int(
+            raw_count,
+            "yonote_semantic_integrity_invalid",
+        )
+        if count == 0:
+            raise AcceptanceError("yonote_semantic_integrity_invalid")
+        safe_semantic_codes[raw_code] = count
+    semantic_errors_total = _require_non_negative_int(
+        semantic_integrity.get("errors_total"),
+        "yonote_semantic_integrity_invalid",
+    )
+    if (
+        semantic_errors_total != sum(safe_semantic_codes.values())
+        or (semantic_status == "GO" and semantic_errors_total != 0)
+        or (semantic_status == "STOP" and semantic_errors_total == 0)
+    ):
+        raise AcceptanceError("yonote_semantic_integrity_invalid")
+
+    snapshot_status = snapshot_safety.get("status")
+    snapshot_reasons = snapshot_safety.get("reasons")
+    if (
+        snapshot_status not in {"GO", "STOP"}
+        or not isinstance(snapshot_reasons, list)
+        or not all(isinstance(reason, str) for reason in snapshot_reasons)
+        or len(snapshot_reasons) != len(set(snapshot_reasons))
+        or any(reason not in SNAPSHOT_SAFETY_REASONS for reason in snapshot_reasons)
+        or (snapshot_status == "GO" and snapshot_reasons)
+        or (snapshot_status == "STOP" and not snapshot_reasons)
+    ):
+        raise AcceptanceError("yonote_snapshot_safety_invalid")
+    semantic_stopped = semantic_status == "STOP"
+    snapshot_stopped = snapshot_status == "STOP"
 
     findings = audit.get("findings")
     documents = audit.get("documents")
@@ -345,6 +403,34 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     if warnings_total != sum(safe_findings.values()):
         raise AcceptanceError("yonote_chunk_audit_invalid")
     audit_clean = warnings_total == 0 and safe_documents["without_chunks"] == 0
+    audit_stopped = not audit_clean
+    preview_stopped = semantic_stopped or snapshot_stopped or audit_stopped
+    if preview_stopped:
+        expected_receipt_reason = (
+            "semantic_integrity_failed"
+            if semantic_stopped
+            else (
+                "destructive_snapshot_requires_owner_waiver"
+                if snapshot_stopped
+                else "chunk_audit_failed"
+            )
+        )
+        if receipt != {
+            "apply_ready": False,
+            "reason": expected_receipt_reason,
+        }:
+            raise AcceptanceError("yonote_stopped_preview_receipt_invalid")
+        receipt_created = False
+    else:
+        receipt_id = str(receipt.get("id") or "")
+        receipt_sha256 = str(receipt.get("sha256") or "")
+        if (
+            receipt.get("apply_ready") is not True
+            or RECEIPT_ID.fullmatch(receipt_id) is None
+            or SHA256.fullmatch(receipt_sha256) is None
+        ):
+            raise AcceptanceError("yonote_preview_not_sealed")
+        receipt_created = True
 
     safe_projection = {
         "current_published_points": _require_non_negative_int(
@@ -362,8 +448,16 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
 
     safe = {
         "snapshot_scope": "full",
-        "snapshot_safety": "GO",
-        "receipt_created": True,
+        "snapshot_safety": {
+            "status": snapshot_status,
+            "reasons": list(snapshot_reasons),
+        },
+        "receipt_created": receipt_created,
+        "semantic_integrity": {
+            "status": semantic_status,
+            "codes": dict(sorted(safe_semantic_codes.items())),
+            "errors_total": semantic_errors_total,
+        },
         "hashes": {
             "current_seed_sha256": _require_sha256(
                 hashes.get("current_seed_sha256"), "yonote_preview_hash_invalid"
@@ -401,9 +495,9 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
             "warnings_total": warnings_total,
         },
         "index_projection": safe_projection,
-        "quality_status": "GO" if audit_clean else "STOP",
+        "quality_status": "GO" if audit_clean and not preview_stopped else "STOP",
     }
-    return safe, audit_clean
+    return safe, audit_clean and not preview_stopped
 
 
 def _same_runtime_status(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
@@ -647,7 +741,7 @@ def run_acceptance(
     passed = preview_clean and seed_unchanged and runtime_unchanged and queue_unchanged
 
     return {
-        "schema_version": "admin-kb-server-local-acceptance-v1",
+        "schema_version": "admin-kb-server-local-acceptance-v2",
         "status": "GO" if passed else "STOP",
         "candidate_sha": expected_git_sha,
         "channels": {
@@ -672,7 +766,7 @@ def run_acceptance(
             "seed_unchanged": seed_unchanged,
             "qdrant_and_cache_unchanged": runtime_unchanged,
             "hde_queue_unchanged": queue_unchanged,
-            "only_private_preview_receipt_created": True,
+            "only_private_preview_receipt_created": preview["receipt_created"],
         },
         "limitations": [
             "HDE/VK provider-side dispatcher rules are not observable from the server; "
@@ -710,7 +804,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-    return 0 if report["status"] == "GO" else 1
+    if report["status"] == "GO":
+        return 0
+    preview = report.get("yonote_preview")
+    non_mutation = report.get("non_mutation")
+    if (
+        isinstance(preview, dict)
+        and preview.get("quality_status") == "STOP"
+        and isinstance(non_mutation, dict)
+        and non_mutation.get("seed_unchanged") is True
+        and non_mutation.get("qdrant_and_cache_unchanged") is True
+        and non_mutation.get("hde_queue_unchanged") is True
+    ):
+        return 2
+    return 1
 
 
 if __name__ == "__main__":

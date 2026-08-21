@@ -787,6 +787,13 @@ cache, restart и rollback path. Автоматическая синхрониз
 эту редакцию не входят. После доказанного end-to-end цикла запуск и прогресс publish могут быть
 вынесены в отдельный durable admin job.
 
+Applyable receipt создаётся только при одновременном `GO` snapshot safety, semantic integrity и
+chunk audit. Любой полный quality `STOP` не создаёт receipt и инвалидирует предыдущий active
+receipt; receipt старой pre-audit schema отклоняется. Явная вторичная ссылка на другое мероприятие
+может оставаться в источнике, но подмена основного события блокирует публикацию. В server-local
+acceptance безопасный quality `STOP` отделён exit `2` от технического/invariant `FAIL` с exit `1`;
+stdout содержит только агрегаты и хеши, без текстов, chunk IDs и receipt credentials.
+
 Гибкость считается доказанной только на новых опубликованных данных и заранее зафиксированных
 формулировках, которые начинают работать без добавления intent, slot, alias или готового ответа в
 код. До exact Seed/Qdrant `GO`, novel-query server-local smoke и security/runtime acceptance HDE/VK

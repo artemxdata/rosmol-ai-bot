@@ -82,7 +82,18 @@ def _runtime_status(
     }
 
 
-def _preview(*, too_short: int = 0) -> dict[str, Any]:
+def _preview(
+    *,
+    too_short: int = 0,
+    semantic_codes: dict[str, int] | None = None,
+    snapshot_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    semantic_codes = dict(semantic_codes or {})
+    snapshot_reasons = list(snapshot_reasons or [])
+    semantic_stopped = bool(semantic_codes)
+    snapshot_stopped = bool(snapshot_reasons)
+    audit_stopped = too_short > 0
+    preview_stopped = semantic_stopped or snapshot_stopped or audit_stopped
     findings = {
         "empty_text": 0,
         "too_short_under_20_chars": too_short,
@@ -98,14 +109,43 @@ def _preview(*, too_short: int = 0) -> dict[str, Any]:
         "applied": False,
         "snapshot_scope": "full",
         "snapshot_safety": {
-            "status": "GO",
-            "reasons": [],
+            "status": "STOP" if snapshot_stopped else "GO",
+            "reasons": snapshot_reasons,
         },
-        "receipt": {
-            "apply_ready": True,
-            "id": RECEIPT_ID,
-            "sha256": RECEIPT_SHA,
+        "semantic_integrity": {
+            "status": "STOP" if semantic_stopped else "GO",
+            "codes": semantic_codes,
+            "errors_total": sum(semantic_codes.values()),
+            "affected_chunk_ids": {
+                code: ["semantic-private-id"] for code in semantic_codes
+            },
+            "records": [
+                {
+                    "chunk_id": "semantic-private-id",
+                    "text": "semantic source text must never be printed",
+                }
+            ],
         },
+        "receipt": (
+            {
+                "apply_ready": False,
+                "reason": (
+                    "semantic_integrity_failed"
+                    if semantic_stopped
+                    else (
+                        "destructive_snapshot_requires_owner_waiver"
+                        if snapshot_stopped
+                        else "chunk_audit_failed"
+                    )
+                ),
+            }
+            if preview_stopped
+            else {
+                "apply_ready": True,
+                "id": RECEIPT_ID,
+                "sha256": RECEIPT_SHA,
+            }
+        ),
         "hashes": {
             "current_seed_sha256": "c" * 64,
             "yonote_snapshot_sha256": "d" * 64,
@@ -162,11 +202,15 @@ class FakeRequester:
         self,
         *,
         too_short: int = 0,
+        semantic_codes: dict[str, int] | None = None,
+        snapshot_reasons: list[str] | None = None,
         change_runtime_after_preview: bool = False,
         admin_read_only: bool = True,
         revoke_session_on_logout: bool = True,
     ) -> None:
         self.too_short = too_short
+        self.semantic_codes = dict(semantic_codes or {})
+        self.snapshot_reasons = list(snapshot_reasons or [])
         self.change_runtime_after_preview = change_runtime_after_preview
         self.admin_read_only = admin_read_only
         self.revoke_session_on_logout = revoke_session_on_logout
@@ -273,7 +317,14 @@ class FakeRequester:
             assert method == "POST"
             assert payload == {}
             self._assert_admin_header(request_headers)
-            return self._json(200, _preview(too_short=self.too_short))
+            return self._json(
+                200,
+                _preview(
+                    too_short=self.too_short,
+                    semantic_codes=self.semantic_codes,
+                    snapshot_reasons=self.snapshot_reasons,
+                ),
+            )
         if path == "/webhook/vk":
             assert method == "POST"
             return self._json(404, {"detail": "Not Found"})
@@ -298,6 +349,7 @@ def test_acceptance_returns_only_safe_aggregates_and_hashes() -> None:
         requester=requester,
     )
 
+    assert report["schema_version"] == "admin-kb-server-local-acceptance-v2"
     assert report["status"] == "GO"
     assert report["channels"] == {
         "status": "HDE_VK_DISABLED",
@@ -318,6 +370,8 @@ def test_acceptance_returns_only_safe_aggregates_and_hashes() -> None:
         "private-source-id",
         "private-document-id",
         "must not be printed",
+        "semantic-private-id",
+        "semantic source text",
     ):
         assert forbidden not in serialized
     assert not any("/admin/kb/yonote/apply" in path for _method, path in requester.paths)
@@ -337,17 +391,77 @@ def test_acceptance_stops_on_chunk_audit_findings_without_losing_safe_report() -
     assert report["status"] == "STOP"
     assert report["yonote_preview"]["quality_status"] == "STOP"
     assert report["yonote_preview"]["chunk_audit"]["warnings_total"] == 1
+    assert report["yonote_preview"]["receipt_created"] is False
 
 
-def test_preview_parser_rejects_destructive_snapshot_stop() -> None:
-    payload = _preview()
-    payload["snapshot_safety"] = {
+def test_preview_parser_returns_safe_destructive_snapshot_stop() -> None:
+    preview, clean = gate._safe_preview(
+        _preview(snapshot_reasons=["yonote_snapshot_empty"])
+    )
+
+    assert clean is False
+    assert preview["quality_status"] == "STOP"
+    assert preview["snapshot_safety"] == {
         "status": "STOP",
         "reasons": ["yonote_snapshot_empty"],
     }
+    assert preview["semantic_integrity"]["status"] == "GO"
+    assert preview["receipt_created"] is False
 
-    with pytest.raises(gate.AcceptanceError, match="yonote_snapshot_safety_stopped"):
-        gate._safe_preview(payload)
+
+def test_acceptance_returns_semantic_stop_as_safe_content_verdict() -> None:
+    report = gate.run_acceptance(
+        expected_git_sha=EXPECTED_SHA,
+        channels_disabled_attestation=gate.CHANNELS_DISABLED_ATTESTATION,
+        environ=_environment(),
+        requester=FakeRequester(
+            semantic_codes={"forum_text_conflict": 2},
+        ),
+    )
+
+    assert report["status"] == "STOP"
+    assert report["yonote_preview"]["quality_status"] == "STOP"
+    assert report["yonote_preview"]["semantic_integrity"] == {
+        "status": "STOP",
+        "codes": {"forum_text_conflict": 2},
+        "errors_total": 2,
+    }
+    assert report["yonote_preview"]["snapshot_safety"] == {
+        "status": "GO",
+        "reasons": [],
+    }
+    assert report["yonote_preview"]["receipt_created"] is False
+    assert report["non_mutation"]["only_private_preview_receipt_created"] is False
+    serialized = json.dumps(report, ensure_ascii=False)
+    for forbidden in (
+        RECEIPT_ID,
+        RECEIPT_SHA,
+        "semantic-private-id",
+        "semantic source text",
+    ):
+        assert forbidden not in serialized
+
+
+def test_preview_parser_preserves_simultaneous_semantic_and_snapshot_stops() -> None:
+    preview, clean = gate._safe_preview(
+        _preview(
+            semantic_codes={"malformed_link": 1},
+            snapshot_reasons=["removal_ratio_limit_exceeded"],
+        )
+    )
+
+    assert clean is False
+    assert preview["quality_status"] == "STOP"
+    assert preview["semantic_integrity"] == {
+        "status": "STOP",
+        "codes": {"malformed_link": 1},
+        "errors_total": 1,
+    }
+    assert preview["snapshot_safety"] == {
+        "status": "STOP",
+        "reasons": ["removal_ratio_limit_exceeded"],
+    }
+    assert preview["receipt_created"] is False
 
 
 def test_runtime_status_parser_rejects_seed_changed_during_scan() -> None:
@@ -431,6 +545,64 @@ def test_acceptance_requires_explicit_owner_channel_attestation() -> None:
         )
 
 
+def test_cli_uses_distinct_exit_code_for_safe_content_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        gate,
+        "run_acceptance",
+        lambda **_kwargs: {
+            "status": "STOP",
+            "yonote_preview": {
+                "quality_status": "STOP",
+                "semantic_integrity": {
+                    "status": "STOP",
+                    "codes": {"forum_text_conflict": 1},
+                    "errors_total": 1,
+                },
+            },
+            "non_mutation": {
+                "seed_unchanged": True,
+                "qdrant_and_cache_unchanged": True,
+                "hde_queue_unchanged": True,
+            },
+        },
+    )
+
+    exit_code = gate.main([EXPECTED_SHA, gate.CHANNELS_DISABLED_ATTESTATION])
+
+    assert exit_code == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "STOP"
+    assert output["yonote_preview"]["quality_status"] == "STOP"
+
+
+def test_cli_keeps_infrastructure_stop_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        gate,
+        "run_acceptance",
+        lambda **_kwargs: {
+            "status": "STOP",
+            "yonote_preview": {"quality_status": "STOP"},
+            "non_mutation": {
+                "seed_unchanged": True,
+                "qdrant_and_cache_unchanged": False,
+                "hde_queue_unchanged": True,
+            },
+        },
+    )
+
+    exit_code = gate.main([EXPECTED_SHA, gate.CHANNELS_DISABLED_ATTESTATION])
+
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "STOP"
+
+
 def _bash() -> str:
     if os.name != "nt":
         return "bash"
@@ -474,6 +646,12 @@ def test_server_local_wrapper_is_exact_sha_bound_and_does_not_use_remote_access(
     assert "org.opencontainers.image.revision" in shell
     assert 'sudo docker exec -i "$ADMIN_CONTAINER" python -' in shell
     assert '"$EXPECTED_SHA" "$OWNER_CHANNELS_ATTESTATION" < "$PYTHON_HELPER"' in shell
+    assert '[[ "$helper_status" -eq 2 ]]' in shell
+    assert (
+        "admin_kb_acceptance_server_local=STOP reason=yonote_preview_quality_stopped"
+        in shell
+    )
+    assert "exit 2" in shell
     assert "ssh " not in shell
     assert "scp " not in shell
     assert "rsync " not in shell

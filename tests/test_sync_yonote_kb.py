@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
+from hashlib import sha256
 
 import httpx
 import pytest
@@ -600,6 +602,213 @@ def test_build_records_from_api_documents_creates_valid_yonote_seed_records() ->
         for record in records
     )
     assert any(record["topic"] == "registraciya" for record in records)
+    validate_seed_items(records)
+
+
+def _chunk_identity_document(
+    *,
+    document_id: str,
+    url_id: str | None,
+    title: str = "Одинаковый заголовок",
+    collection_id: str = "collection-1",
+) -> YonoteDocument:
+    return YonoteDocument(
+        id=document_id,
+        title=title,
+        text="Описание\nДостаточно длинный подтверждённый текст для базы знаний.",
+        collection_id=collection_id,
+        collection_name="Росмолодёжь: мероприятия",
+        url=f"/doc/{document_id}",
+        url_id=url_id,
+        parent_document_id=None,
+        path_titles=(title,),
+        updated_at="2026-08-20T12:00:00.000Z",
+        created_at="2026-08-20T11:00:00.000Z",
+        document_type="document",
+    )
+
+
+def _document_scope_suffix(collection_id: str, document_id: str) -> str:
+    payload = f"{collection_id}\0{document_id}".encode()
+    return sha256(payload).hexdigest()[:12]
+
+
+def test_unique_url_id_preserves_legacy_chunk_id() -> None:
+    document = _chunk_identity_document(document_id="doc-1", url_id="legacy-url-id")
+
+    records = build_records_from_api_documents(
+        [document],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+
+    assert [record["chunk_id"] for record in records] == [
+        "yonote_api_legacy_url_id_s0001_opisanie"
+    ]
+
+
+def test_unique_title_fallback_uses_stable_document_scope_id() -> None:
+    document = _chunk_identity_document(
+        document_id="doc-1",
+        url_id=None,
+        title="Уникальный заголовок",
+    )
+
+    records = build_records_from_api_documents(
+        [document],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+
+    assert [record["chunk_id"] for record in records] == [
+        "yonote_api_doc_"
+        f"{_document_scope_suffix('collection-1', 'doc-1')}_s0001_opisanie"
+    ]
+
+
+def test_same_title_without_url_id_gets_unique_document_scope_ids() -> None:
+    documents = [
+        _chunk_identity_document(document_id="doc-1", url_id=None),
+        _chunk_identity_document(document_id="doc-2", url_id=None),
+    ]
+
+    records = build_records_from_api_documents(
+        documents,
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+
+    assert {record["chunk_id"] for record in records} == {
+        "yonote_api_doc_"
+        f"{_document_scope_suffix('collection-1', 'doc-1')}_s0001_opisanie",
+        "yonote_api_doc_"
+        f"{_document_scope_suffix('collection-1', 'doc-2')}_s0001_opisanie",
+    }
+    validate_seed_items(records)
+
+
+def test_document_scope_collision_ids_do_not_depend_on_api_order() -> None:
+    documents = [
+        _chunk_identity_document(document_id="doc-1", url_id=None),
+        _chunk_identity_document(document_id="doc-2", url_id=None),
+    ]
+
+    forward = build_records_from_api_documents(
+        documents,
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+    reversed_records = build_records_from_api_documents(
+        list(reversed(documents)),
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+
+    assert {record["chunk_id"] for record in forward} == {
+        record["chunk_id"] for record in reversed_records
+    }
+
+
+def test_title_fallback_id_stays_stable_when_collision_appears_and_disappears() -> None:
+    first = _chunk_identity_document(document_id="doc-1", url_id=None)
+    second = _chunk_identity_document(document_id="doc-2", url_id=None)
+
+    only_first = build_records_from_api_documents(
+        [first],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )[0]["chunk_id"]
+    with_collision = build_records_from_api_documents(
+        [first, second],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )[0]["chunk_id"]
+    after_removal = build_records_from_api_documents(
+        [first],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )[0]["chunk_id"]
+
+    assert only_first == with_collision == after_removal
+
+
+def test_title_fallback_id_stays_stable_when_document_is_renamed() -> None:
+    original = _chunk_identity_document(
+        document_id="doc-1",
+        url_id=None,
+        title="Первоначальный заголовок",
+    )
+    renamed = replace(original, title="Полностью новый заголовок")
+
+    original_id = build_records_from_api_documents(
+        [original],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )[0]["chunk_id"]
+    renamed_id = build_records_from_api_documents(
+        [renamed],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )[0]["chunk_id"]
+
+    assert original_id == renamed_id
+
+
+@pytest.mark.parametrize(
+    ("first_url_id", "second_url_id"),
+    [
+        ("shared-url-id", "shared-url-id"),
+        ("x" * 48 + "-first", "x" * 48 + "-second"),
+    ],
+)
+def test_duplicate_or_truncated_url_ids_are_disambiguated(
+    first_url_id: str,
+    second_url_id: str,
+) -> None:
+    documents = [
+        _chunk_identity_document(document_id="doc-1", url_id=first_url_id),
+        _chunk_identity_document(document_id="doc-2", url_id=second_url_id),
+    ]
+
+    records = build_records_from_api_documents(
+        documents,
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+
+    assert len({record["chunk_id"] for record in records}) == 2
+    assert all(
+        _document_scope_suffix("collection-1", document_id) in record["chunk_id"]
+        for document_id, record in zip(("doc-1", "doc-2"), records, strict=True)
+    )
+    validate_seed_items(records)
+
+
+def test_long_split_section_keeps_unique_part_ids_after_topic_truncation() -> None:
+    title = (
+        "Сверхдлинный заголовок подробного информационного раздела "
+        "мероприятия часть 2"
+    )
+    document = _chunk_identity_document(
+        document_id="doc-long",
+        url_id="stable-long-doc",
+        title="Документ с большим разделом",
+    )
+    document = replace(
+        document,
+        text=f"{title}\n" + ("Подтверждённый длинный текст. " * 360),
+    )
+
+    records = build_records_from_api_documents(
+        [document],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 20),
+    )
+
+    assert len(records) > 1
+    assert len({record["chunk_id"] for record in records}) == len(records)
+    assert not records[0]["chunk_id"].endswith("_p0001")
+    assert records[1]["chunk_id"].endswith("_p0002")
     validate_seed_items(records)
 
 

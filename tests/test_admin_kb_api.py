@@ -452,6 +452,24 @@ async def test_admin_kb_page_requires_enabled_admin_token(
     assert "receipt_id: receipt.id" in enabled.text
     assert "Apply заблокирован проверкой" in enabled.text
     assert "snapshot_safety" in enabled.text
+    assert "semantic_integrity" in enabled.text
+    assert "Apply заблокирован проверкой содержания" in enabled.text
+    assert "Apply заблокирован несколькими проверками" in enabled.text
+    assert "const previewApplyReady = (" in enabled.text
+    assert (
+        'snapshotSafety.status === "GO" && semanticIntegrity.status === "GO" &&'
+        in enabled.text
+    )
+    assert "Apply заблокирован проверкой чанков" in enabled.text
+    assert (
+        "const previewStopped = snapshotStopped || semanticStopped || "
+        "chunkAuditStopped;"
+    ) in enabled.text
+    assert "подробности изменений оставлены для проверки владельцем" in enabled.text
+    assert "КОДЫ СЕМАНТИЧЕСКОЙ ПРОВЕРКИ" in enabled.text
+    assert "Текст относится к другому мероприятию" in enabled.text
+    assert "Затронутые чанки" in enabled.text
+    assert "affected_chunk_ids" in enabled.text
     assert "может включать чувствительные данные" in enabled.text
     assert "не добавляй в Git" in enabled.text
     assert 'let activeWorkspace = "knowledge";' in enabled.text
@@ -892,6 +910,75 @@ async def test_admin_kb_api_previews_and_applies_yonote_sync(
 
 
 @pytest.mark.asyncio
+async def test_admin_kb_preview_returns_semantic_stop_with_http_200(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    _write_seed(seed_path)
+    monkeypatch.setattr(
+        "src.main.get_settings",
+        lambda: SimpleNamespace(
+            app_env="production",
+            admin_auth_token="admin-secret",
+            yonote_sync_enabled=True,
+            yonote_api_token="read-only-yonote-token",
+            kb_seed_path=str(seed_path),
+        ),
+    )
+
+    def semantic_stop_preview(
+        path: Path,
+        _settings: object,
+        *,
+        limit_documents: int | None,
+        receipt_dir: Path,
+    ) -> dict[str, object]:
+        assert path == seed_path
+        assert limit_documents is None
+        assert receipt_dir == seed_path.parent / ".yonote-sync-receipts"
+        return {
+            "ok": True,
+            "applied": False,
+            "snapshot_scope": "full",
+            "snapshot_safety": {"status": "GO", "reasons": []},
+            "semantic_integrity": {
+                "status": "STOP",
+                "codes": {"forum_text_conflict": 2},
+                "errors_total": 2,
+            },
+            "receipt": {
+                "apply_ready": False,
+                "reason": "semantic_integrity_failed",
+            },
+        }
+
+    monkeypatch.setattr("src.main.preview_yonote_sync", semantic_stop_preview)
+    transport = httpx.ASGITransport(app=fastapi_app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.post(
+            "/admin/kb/yonote/preview",
+            json={},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["semantic_integrity"] == {
+        "status": "STOP",
+        "codes": {"forum_text_conflict": 2},
+        "errors_total": 2,
+    }
+    assert payload["receipt"] == {
+        "apply_ready": False,
+        "reason": "semantic_integrity_failed",
+    }
+    assert "id" not in payload["receipt"]
+    assert "sha256" not in payload["receipt"]
+
+
+@pytest.mark.asyncio
 async def test_admin_kb_apply_requires_exact_preview_receipt_and_maps_conflict(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1163,7 +1250,11 @@ async def test_read_only_admin_yonote_preview_is_full_and_does_not_mutate_seed(
     assert response.json()["applied"] is False
     assert response.json()["index_required"] is False
     assert response.json()["snapshot_safety"]["status"] == "GO"
-    assert response.json()["receipt"]["apply_ready"] is True
+    assert response.json()["receipt"] == {
+        "apply_ready": False,
+        "reason": "chunk_audit_failed",
+    }
+    assert response.json()["chunk_audit"]["documents"]["without_chunks"] == 1
     assert seed_path.read_bytes() == original_seed
 
 

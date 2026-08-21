@@ -169,9 +169,11 @@ match, повторный seed hash после scan и нули divergence. Ес
   delete-cookie; повтор старой захваченной cookie после logout должен получить `401`.
 - Yonote capability по умолчанию выключена. При отдельном enable новый read-only token получает
   только `app-ml`, а generated egress policy добавляет только exact `rossmol.yonote.ru:443`.
-- В default read-only режиме аутентифицированный Preview читает полный configured collection set,
-  создаёт только приватный receipt с current/snapshot/merged SHA-256, но Apply возвращает `403`;
-  до и после Preview совпадают tracked-seed hash и Qdrant payload fingerprint, reindex не запускается.
+- В default read-only режиме аутентифицированный Preview читает полный configured collection set.
+  Приватный receipt с current/snapshot/merged SHA-256 создаётся только при одновременном
+  `snapshot=GO`, `semantic=GO` и чистом chunk audit; quality `STOP` возвращает диагностику без
+  receipt и инвалидирует старый active receipt. Apply возвращает `403`; до и после Preview
+  совпадают tracked-seed hash и Qdrant payload fingerprint, reindex не запускается.
 - Explicit test-editor mode требует согласованную пару capability flags и exact private working
   seed path. `app` монтирует working seed read-only, `app-ml` writable; tracked seed остаётся
   неизменным. Full index не публикуется admin HTTP endpoint, HDE остаётся выключен до backup,

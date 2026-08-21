@@ -42,8 +42,15 @@ done
 # exclusively in the app-ml environment; neither docker arguments nor stdout contains them.
 # This gate never forwards EXPECTED_KB_SEED_SHA256 and never starts index-kb. The owner supplies
 # the reviewed Preview/current seed hash only to the separate, explicit index-kb invocation.
-if ! sudo docker exec -i "$ADMIN_CONTAINER" python - \
+if sudo docker exec -i "$ADMIN_CONTAINER" python - \
   "$EXPECTED_SHA" "$OWNER_CHANNELS_ATTESTATION" < "$PYTHON_HELPER"; then
+  :
+else
+  readonly helper_status="$?"
+  if [[ "$helper_status" -eq 2 ]]; then
+    printf 'admin_kb_acceptance_server_local=STOP reason=yonote_preview_quality_stopped\n'
+    exit 2
+  fi
   fail "admin_api_acceptance_failed"
 fi
 

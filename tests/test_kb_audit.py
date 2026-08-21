@@ -322,6 +322,161 @@ def test_audit_detects_published_forum_text_conflict() -> None:
     assert finding["records"][0]["chunk_id"] == "wrong_event"
 
 
+def test_audit_warns_but_does_not_block_unknown_forum_cross_reference() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "new_event_overview",
+                "text_clean": "В программе также расскажут о форуме «Машук».",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Горизонт будущего 2027",
+                "topic": "overview",
+                "source_type": "yonote",
+                "source_file": "yonote",
+            }
+        ],
+        forum_registry=[
+            {"name": "Машук", "normalized": "Машук", "aliases": []},
+        ],
+    )
+
+    findings = {item["code"]: item for item in report["findings"]}
+    assert "forum_text_conflict" not in findings
+    assert findings["forum_not_in_registry"]["severity"] == "warning"
+    assert findings["forum_not_in_registry"]["forums"] == [
+        "Горизонт будущего 2027"
+    ]
+
+
+def test_audit_blocks_unknown_forum_whose_main_text_is_about_reviewed_event() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "wrong_new_event_scope",
+                "text_clean": "Форум «Машук» пройдёт с 9 по 23 августа.",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Горизонт будущего 2027",
+                "topic": "dates",
+                "source_type": "yonote",
+                "source_file": "yonote",
+            }
+        ],
+        forum_registry=[
+            {"name": "Машук", "normalized": "Машук", "aliases": []},
+        ],
+    )
+
+    findings = {item["code"]: item for item in report["findings"]}
+    assert findings["forum_text_conflict"]["severity"] == "error"
+    assert findings["forum_text_conflict"]["records"] == [
+        {
+            "chunk_id": "wrong_new_event_scope",
+            "record_forum": "Горизонт будущего 2027",
+            "mentioned_forum": "Машук",
+        }
+    ]
+    assert findings["forum_not_in_registry"]["severity"] == "warning"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Форум «Машук» пройдёт с 9 по 23 августа. Также будет трансляция.",
+        "Также форум «Машук» пройдёт с 9 по 23 августа.",
+        "На форуме «Машук» расскажут о программе развития.",
+        "Форум «Машук» упоминает новые направления.",
+        "Расскажем о форуме «Машук»: он пройдёт с 9 по 23 августа.",
+    ],
+)
+def test_audit_does_not_mistake_main_event_statement_for_secondary_reference(
+    text: str,
+) -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "wrong_new_event_scope",
+                "text_clean": text,
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Горизонт будущего 2027",
+                "topic": "dates",
+                "source_type": "yonote",
+                "source_file": "yonote",
+            }
+        ],
+        forum_registry=[
+            {"name": "Машук", "normalized": "Машук", "aliases": []},
+        ],
+    )
+
+    findings = {item["code"]: item for item in report["findings"]}
+    assert findings["forum_text_conflict"]["severity"] == "error"
+
+
+def test_audit_allows_explicit_secondary_reference_between_reviewed_forums() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "reviewed_event_cross_reference",
+                "text_clean": "В программе также расскажут о форуме «Машук».",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Амур",
+                "topic": "program",
+                "source_type": "yonote",
+                "source_file": "yonote",
+            }
+        ],
+        forum_registry=[
+            {"name": "Амур", "normalized": "Амур", "aliases": []},
+            {"name": "Машук", "normalized": "Машук", "aliases": []},
+        ],
+    )
+
+    assert not any(
+        item["code"] == "forum_text_conflict" for item in report["findings"]
+    )
+
+
+def test_audit_keeps_main_event_mismatch_after_forum_review() -> None:
+    report = audit_seed_records(
+        [
+            {
+                "chunk_id": "reviewed_event_overview",
+                "text_clean": "Форум «Машук» пройдёт с 9 по 23 августа.",
+                "status": "published",
+                "category": "форумы",
+                "forum_normalized": "Горизонт будущего 2027",
+                "topic": "overview",
+                "source_type": "yonote",
+                "source_file": "yonote",
+            }
+        ],
+        forum_registry=[
+            {
+                "name": "Горизонт будущего 2027",
+                "normalized": "Горизонт будущего 2027",
+                "aliases": [],
+            },
+            {"name": "Машук", "normalized": "Машук", "aliases": []},
+        ],
+    )
+
+    finding = next(
+        item for item in report["findings"] if item["code"] == "forum_text_conflict"
+    )
+    assert finding["severity"] == "error"
+    assert finding["records"] == [
+        {
+            "chunk_id": "reviewed_event_overview",
+            "record_forum": "Горизонт будущего 2027",
+            "mentioned_forum": "Машук",
+        }
+    ]
+
+
 def test_audit_detects_inflected_forum_alias_and_slet_conflicts() -> None:
     report = audit_seed_records(
         [
