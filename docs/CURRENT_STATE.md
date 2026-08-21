@@ -21,6 +21,17 @@ Placeholder-fix: 32% (16/50), commit f4d6aab, задеплоен.
   - ретеншен docker-образов: 58 образов забили диск до 100%, нужна авто-очистка в деплое.
   - .gitattributes eol=lf для eval-фикстур: 6 CRLF-тестов падают на коммитах со станции.
 
+Permission-binding relaxation (commit 2f1ea86b1e6fb550cd9861a3fd8424344221771b): в коде, не задеплоена.
+Ослабляет typed-guard permission при пустом source-permission, forbidden остаётся строгим.
+Ожидаемый эффект: +1-2 кейса (2 из 4 разобранных ложных). Деплой и замер — следующий шаг.
+Остаточный риск: нераспознанный source-запрет может пропустить ложное allowed (документирован в коде).
+
+Очередь правок:
+1. permission (готова, в коде) — deploy + прогон.
+2. conditional_branch_mismatch (2 ложных кейса: grant_agreement, fgais_lost_email) — механика не разобрана.
+
+TODO инфра: ретеншен docker-образов; .gitattributes eol=lf для eval-фикстур.
+
 **Обновлено:** 21 августа 2026
 
 **Ветка:** `codex/real-rag`
