@@ -1,5 +1,26 @@
 # Текущее состояние проекта
 
+## Прогресс калибровки контракта (обновлено 21.08.2026)
+
+Baseline: 30% (15/50), commit 6e1b6a6, calibration, directional, CI ≈ 18–45%.
+Placeholder-fix: 32% (16/50), commit f4d6aab, задеплоен.
+  - эскалаций 21→17, fact_binding 10→7, answer_rate 58%→66%, регрессий 0.
+  - retrieval стабильно 100% (50/50) на обоих прогонах.
+
+Метод подтверждён: правка промпта по trace-субпричине → deploy → перезамер на 50 → дельта.
+Диагноз провалов (trace f4d6aab, subreason):
+  insufficient_source_signal 10 (часть — ложный триггер «не указано» + плейсхолдеры),
+  condition_branch_mismatch 8 (guard часто прав — реальная ошибка ветки условия),
+  typed_fact_not_supported 6 (guard прав — полугаллюцинация),
+  selected_source_not_cited 4, cover_question 4, trailing_marker 2, multiple_urls 2.
+
+Следующий шаг: детектор «не указано» (узкая правка _response_signals_insufficient_sources),
+затем condition_branch — осторожно, не ослаблять guard.
+
+Открытые TODO (инфраструктура):
+  - ретеншен docker-образов: 58 образов забили диск до 100%, нужна авто-очистка в деплое.
+  - .gitattributes eol=lf для eval-фикстур: 6 CRLF-тестов падают на коммитах со станции.
+
 **Обновлено:** 21 августа 2026
 
 **Ветка:** `codex/real-rag`
