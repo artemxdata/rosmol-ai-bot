@@ -5,12 +5,41 @@
 **Ветка:** `codex/real-rag`
 
 **Exact runtime на тестовом сервере:**
-`6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`. Проверенный successor с исправлениями splitter,
-стабилизацией ID и классификацией chunk audit зафиксирован implementation commit
-`bc265b3a5cb4177ad678e3febb0a44d6a26f2120`; финальный handoff является его docs-only потомком.
-На сервер successor ещё не доставлен.
+`ba1408b48fa058f146dab31a73e0b13e250ed556`. Runtime `rosmol-app` и `rosmol-app-ml` на этом SHA
+вернули `ready`; HDE/VK остаются выключенными. Это docs-only потомок implementation commit
+`bc265b3a5cb4177ad678e3febb0a44d6a26f2120` с исправлениями splitter, стабилизацией ID и
+классификацией chunk audit.
 
-## 21 августа: runtime `6380acd` исправен, полный Yonote Preview дал содержательный STOP
+## 21 августа: одиночный ручной вопрос провален; готовится один глобальный прогон 25+25
+
+После развёртывания `ba1408b48fa058f146dab31a73e0b13e250ed556` владелец проверил через server-local
+`/ask` простой вопрос «Хочу попасть на Машук? Что делать». Вместо опубликованной инструкции по
+подаче заявки runtime безосновательно передал обращение оператору. Это неприемлемый продуктовый
+результат; по одному кейсу код больше не настраивается.
+
+Следующая проверка — один полный прогон exposed calibration-набора
+`pilot50_balanced_v5`: `25` типовых и `25` нетиповых формулировок, без выборочного retry. Новый
+server-local runner работает против уже запущенного exact runtime `ba1408`, использует signed
+cache bypass, требует `50/50` trace coverage, ограничивает LLM-бюджет `200 RUB` и после завершения
+строит только обезличенную глобальную сводку: pass/answer/escalation, retrieval/citation,
+failure/retry reasons, model paths, latency и длины ответов отдельно для typical/atypical и
+overall. Полные вопросы и ответы остаются только в private evidence на сервере.
+
+Runner не строит Docker images, не перезапускает runtime, не вызывает HDE/VK, не меняет seed,
+Qdrant, cache или Yonote и не выполняет Apply/index. Он задаёт обязательные Compose bindings и
+создаёт `run.started` до первого платного запроса: оборванный запуск нельзя незаметно повторить и
+оплатить второй раз. Текущая локальная редакция содержит только runner, анализатор, их тесты и
+этот handoff. Focused gate: `175 passed`; полный набор учтён без пересечений после известного
+Windows teardown-hang: `3591 passed`, штатный `1 skipped`, `0 failed`. Ruff, Bash syntax,
+KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. До commit/push
+серверный прогон не начинать.
+
+Точный следующий шаг: commit/push tooling-only SHA, затем владельцу одним коротким server-local
+блоком detached-checkout tooling SHA и запустить ровно один цикл `25+25` против runtime `ba1408`.
+После `balanced50_global_analysis=OK` разбирать весь агрегат и приватные ответы как один пакет;
+HDE/VK не включать.
+
+## Архив evidence 21 августа: runtime `6380acd` и первый полный Yonote Preview
 
 Владелец вручную развернул exact candidate
 `6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`; `rosmol-app` и `rosmol-app-ml` вернули `ready` с
@@ -58,10 +87,9 @@ advisory-наблюдения. Существующий либо не класс
 (`2186 valid / 2152 published`) и `git diff --check` — `OK`. Независимый финальный review не
 нашёл оставшихся P0/P1.
 
-Точный следующий шаг: закоммитить/push exact successor SHA и повторить при выключенных HDE/VK
-только read-only server acceptance. До нового Preview
-`GO`, ручного review приватного diff и отдельного controlled Apply/index gate seed/Qdrant не
-менять и каналы не включать.
+Этот исторический шаг завершён successor-коммитами `bc265b3` и `ba1408b`; актуальный следующий
+шаг указан в верхнем разделе. До нового Preview `GO`, ручного review приватного diff и отдельного
+controlled Apply/index gate seed/Qdrant не менять и каналы не включать.
 
 ## 20 августа: локальный кандидат гибкого RAG-ядра готов к read-only server acceptance
 
