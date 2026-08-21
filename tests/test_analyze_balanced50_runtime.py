@@ -15,10 +15,15 @@ def _result(ordinal: int) -> dict[str, object]:
     group = "typical" if ordinal <= 25 else "atypical"
     escalated = ordinal % 5 == 0
     passed = ordinal % 4 != 0
+    response = (
+        "Перевожу на оператора. Пожалуйста, ожидай."
+        if escalated
+        else f"PRIVATE_RESPONSE_SENTINEL_{ordinal}"
+    )
     return {
         "id": f"case-{ordinal:02d}",
         "query": f"PRIVATE_QUERY_SENTINEL_{ordinal}",
-        "response": f"PRIVATE_RESPONSE_SENTINEL_{ordinal}",
+        "response": response,
         "tags": ["pilot50:v5", f"type:{group}"],
         "http_success": True,
         "trace_found": True,
@@ -86,6 +91,14 @@ def test_builds_text_free_global_typical_and_atypical_summary() -> None:
     assert summary["generator_model_counts"] == {
         "GigaChat-2-Max": 25,
         "source_chunk": 25,
+    }
+    assert summary["response_quality_signals"] == {
+        "unique_normalized_responses": 41,
+        "duplicate_response_groups": 1,
+        "responses_in_duplicate_groups": 10,
+        "largest_duplicate_group": 10,
+        "operator_handoff_responses": 10,
+        "insufficient_data_responses": 0,
     }
     serialized = json.dumps(summary, ensure_ascii=False)
     assert "PRIVATE_QUERY_SENTINEL" not in serialized

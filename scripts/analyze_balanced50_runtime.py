@@ -19,6 +19,20 @@ EXPECTED_GROUP_TOTAL = 25
 MAX_REPORT_BYTES = 64 * 1024 * 1024
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 GROUPS = ("typical", "atypical")
+OPERATOR_HANDOFF_MARKERS = (
+    "перевожу на оператора",
+    "передаю оператору",
+    "подключу оператора",
+    "ожидай ответа оператора",
+)
+INSUFFICIENT_DATA_MARKERS = (
+    "нет подтверждённых данных",
+    "нет подтвержденных данных",
+    "не удалось найти",
+    "не нашлось информации",
+    "в базе нет данных",
+    "в базе нет подтвержд",
+)
 
 
 class AnalysisError(ValueError):
@@ -86,6 +100,33 @@ def _distribution(values: Sequence[int]) -> dict[str, int | None]:
 
 def _rate(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 6) if denominator else None
+
+
+def _normalized_response(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _response_quality_signals(
+    results: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    responses = [_normalized_response(result.get("response")) for result in results]
+    nonempty = [response for response in responses if response]
+    counts = Counter(nonempty)
+    duplicate_sizes = [count for count in counts.values() if count > 1]
+    return {
+        "unique_normalized_responses": len(counts),
+        "duplicate_response_groups": len(duplicate_sizes),
+        "responses_in_duplicate_groups": sum(duplicate_sizes),
+        "largest_duplicate_group": max(duplicate_sizes, default=0),
+        "operator_handoff_responses": sum(
+            any(marker in response for marker in OPERATOR_HANDOFF_MARKERS)
+            for response in responses
+        ),
+        "insufficient_data_responses": sum(
+            any(marker in response for marker in INSUFFICIENT_DATA_MARKERS)
+            for response in responses
+        ),
+    }
 
 
 def _boolean_metric(
@@ -296,6 +337,7 @@ def build_global_analysis(
         "observed_behavior_counts": _string_counter(
             results, "observed_behavior", default="unknown"
         ),
+        "response_quality_signals": _response_quality_signals(results),
         "manual_review_required": True,
         "disclaimer": (
             "Global automated regression analysis of the exposed balanced 50-case set. "
