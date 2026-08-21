@@ -335,6 +335,7 @@ _HTML_TEMPLATE = """
     .ops-preview { color: var(--text); font-size: 12px; line-height: 1.45; }
     .quality-note { border-left: 3px solid var(--cyan); background: #edf8fa; padding: 10px 12px; color: var(--text); line-height: 1.45; }
     .quality-note.danger { border-left-color: var(--danger); background: #fff1f0; }
+    .quality-note.advisory { border-left-color: var(--warn); background: var(--warn-soft); }
     .sync-guide { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
     .sync-step { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
     .sync-step-number { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-bottom: 7px; border-radius: 50%; background: var(--shell); color: #fff; font-size: 11px; font-weight: 800; }
@@ -1379,6 +1380,41 @@ _HTML_TEMPLATE = """
         </section>
       `;
     }
+    const yonoteWithoutChunkReasonLabels = Object.freeze({
+      existing_document_lost_all_chunks: "Существующий документ перестал давать чанки",
+      new_substantive_document_without_chunks: "Новый содержательный документ не дал чанков",
+      new_raw_empty_container: "Новый пустой контейнер",
+      new_below_minimum_container: "Новый документ короче минимального размера",
+      missing_document_identity: "Не определён ID документа",
+      missing_collection_identity: "Не определён ID коллекции",
+    });
+    function renderYonoteWithoutChunksSample(documentAudit) {
+      const rawSample = (documentAudit || {}).without_chunks_sample;
+      if (!Array.isArray(rawSample) || !rawSample.length) return "";
+      const rows = rawSample.slice(0, 20).map((item) => {
+        const reason = String((item || {}).reason || "unknown");
+        const label = yonoteWithoutChunkReasonLabels[reason] || "Требуется проверка документа";
+        return `
+          <div class="ops-item">
+            <div class="ops-line">
+              <span>${escapeHtml(label)}</span>
+              <span>${escapeHtml((item || {}).cleaned_chars || 0)} символов</span>
+            </div>
+            <div class="ops-meta mono">reason: ${escapeHtml(reason)}</div>
+            <div class="ops-meta mono">
+              collection: ${escapeHtml((item || {}).source_collection_id || "—")} ·
+              document: ${escapeHtml((item || {}).source_document_id || "—")}
+            </div>
+          </div>
+        `;
+      }).join("");
+      return `
+        <section class="ops-section">
+          <h3>Документы без чанков — приватная диагностика</h3>
+          <div class="ops-list">${rows}</div>
+        </section>
+      `;
+    }
     function renderYonoteChangeGroup(title, items, count, kind) {
       const visibleItems = (items || []).slice(0, 16);
       const badgeLabels = {
@@ -1445,6 +1481,45 @@ _HTML_TEMPLATE = """
       const mapping = (data.semantic_integrity || {}).affected_chunk_ids || {};
       return Array.isArray(mapping[code]) ? mapping[code].slice(0, 50) : [];
     }
+    function yonoteChunkAuditPolicy(chunkAudit) {
+      const audit = chunkAudit || {};
+      const blocking = audit.blocking || {};
+      const advisory = audit.advisory || {};
+      const blockingTotal = Number(blocking.total);
+      const advisoryTotal = Number(advisory.total);
+      const hasPolicyFields = ["policy_version", "status", "blocking", "advisory"]
+        .some((field) => Object.prototype.hasOwnProperty.call(audit, field));
+      const validPolicy = (
+        audit.policy_version === "yonote-chunk-audit-v1" &&
+        ["GO", "STOP"].includes(audit.status) &&
+        Number.isInteger(blockingTotal) && blockingTotal >= 0 &&
+        Number.isInteger(advisoryTotal) && advisoryTotal >= 0 &&
+        blocking && typeof blocking.findings === "object" &&
+        advisory && typeof advisory.findings === "object" &&
+        (audit.status === "GO") === (blockingTotal === 0)
+      );
+      if (validPolicy) {
+        return {
+          status: audit.status,
+          blockingTotal,
+          advisoryTotal,
+          legacy: false,
+        };
+      }
+      if (hasPolicyFields) {
+        return {status: "STOP", blockingTotal: Math.max(1, blockingTotal || 0), advisoryTotal: 0, legacy: false};
+      }
+      const legacyTotal = (
+        Number(audit.warnings_total || 0) +
+        Number((audit.documents || {}).without_chunks || 0)
+      );
+      return {
+        status: legacyTotal > 0 ? "STOP" : "GO",
+        blockingTotal: legacyTotal,
+        advisoryTotal: 0,
+        legacy: true,
+      };
+    }
     function buildYonoteTextReport(data) {
       const snapshotSafety = data.snapshot_safety || {};
       const semanticIntegrity = data.semantic_integrity || {};
@@ -1452,11 +1527,10 @@ _HTML_TEMPLATE = """
       const snapshotStopped = snapshotSafety.status === "STOP";
       const semanticStopped = semanticIntegrity.status === "STOP";
       const chunkAudit = data.chunk_audit || {};
-      const chunkDocuments = chunkAudit.documents || {};
-      const chunkAuditStopped = (
-        Number(chunkAudit.warnings_total || 0) > 0 ||
-        Number(chunkDocuments.without_chunks || 0) > 0
-      );
+      const chunkAuditPolicy = yonoteChunkAuditPolicy(chunkAudit);
+      const chunkAuditStopped = chunkAuditPolicy.status === "STOP";
+      const identity = data.identity_reconciliation || {};
+      const changes = data.change_classification || {};
       const lines = [
         "ОТЧЁТ О СИНХРОНИЗАЦИИ YONOTE",
         `Сформирован: ${new Date().toLocaleString("ru-RU")}`,
@@ -1473,6 +1547,14 @@ _HTML_TEMPLATE = """
         `Семантическая целостность: ${semanticIntegrity.status || "не проверена"}`,
         `Семантических ошибок: ${semanticIntegrity.errors_total || 0}`,
         `Контроль чанков: ${chunkAuditStopped ? "STOP" : "GO"}`,
+        `Блокирующих дефектов чанков: ${chunkAuditPolicy.blockingTotal}`,
+        `Рекомендаций к проверке чанков: ${chunkAuditPolicy.advisoryTotal}`,
+        `Сырых ID добавилось/исчезло: ${identity.raw_id_added || 0}/${identity.raw_id_removed || 0}`,
+        `Сохранено прежних ID по точному содержанию: ${identity.exact_content_rekeys || 0}`,
+        `Перестановок ID внутри прежнего набора: ${identity.same_set_identity_rotations || 0}`,
+        `Логически добавилось/исчезло: ${identity.logical_added || 0}/${identity.logical_removed || 0}`,
+        `Изменений только метаданных: ${changes.metadata_only || 0}`,
+        `Изменений содержания или источника: ${changes.content_or_source || 0}`,
       ];
       if ((snapshotSafety.reasons || []).length) {
         lines.push(
@@ -1485,6 +1567,22 @@ _HTML_TEMPLATE = """
           lines.push(`- ${yonoteSemanticLabel(code)} (${code}): ${count}`);
           const chunkIds = yonoteSemanticChunkIds(data, code);
           if (chunkIds.length) lines.push(`  Чанки: ${chunkIds.join(", ")}`);
+        });
+      }
+      const withoutChunkSample = Array.isArray((chunkAudit.documents || {}).without_chunks_sample)
+        ? chunkAudit.documents.without_chunks_sample.slice(0, 20)
+        : [];
+      if (withoutChunkSample.length) {
+        lines.push("", "ДОКУМЕНТЫ БЕЗ ЧАНКОВ — ПРИВАТНАЯ ДИАГНОСТИКА");
+        withoutChunkSample.forEach((item, index) => {
+          const reason = String((item || {}).reason || "unknown");
+          lines.push(
+            `${index + 1}. ${yonoteWithoutChunkReasonLabels[reason] || "Требуется проверка документа"}`,
+            `   reason: ${reason}`,
+            `   collection: ${(item || {}).source_collection_id || "—"}`,
+            `   document: ${(item || {}).source_document_id || "—"}`,
+            `   очищенных символов: ${(item || {}).cleaned_chars || 0}`,
+          );
         });
       }
       const collections = Object.entries(data.collection_counts || {});
@@ -1529,7 +1627,7 @@ _HTML_TEMPLATE = """
           : snapshotStopped
           ? "Apply заблокирован проверкой snapshot. Проверь источник и причины возможного массового удаления."
           : chunkAuditStopped
-          ? "Apply заблокирован проверкой чанков. Исправь пустые, слишком короткие, дублирующиеся или неполные записи."
+          ? "Apply заблокирован проверкой чанков. Исправь потерянные или слишком длинные чанки и неполные сведения об источнике."
           : data.applied
           ? "Изменения записаны в knowledge_base_seed.json. Для ответов бота нужна переиндексация Qdrant."
           : "Это только предпросмотр. Ничего не записано в базу бота."
@@ -1560,10 +1658,9 @@ _HTML_TEMPLATE = """
       const chunkAudit = data.chunk_audit || {};
       const findings = chunkAudit.findings || {};
       const documentAudit = chunkAudit.documents || {};
-      const chunkAuditStopped = (
-        Number(chunkAudit.warnings_total || 0) > 0 ||
-        Number(documentAudit.without_chunks || 0) > 0
-      );
+      const chunkAuditPolicy = yonoteChunkAuditPolicy(chunkAudit);
+      const chunkAuditStopped = chunkAuditPolicy.status === "STOP";
+      const chunkAuditAdvisory = chunkAuditPolicy.advisoryTotal > 0;
       const freshLengths = chunkAudit.fresh_lengths || {};
       const projection = data.index_projection || {};
       const snapshotSafety = data.snapshot_safety || {};
@@ -1571,6 +1668,8 @@ _HTML_TEMPLATE = """
       const semanticIntegrity = data.semantic_integrity || {};
       const semanticIntegrityStopped = semanticIntegrity.status === "STOP";
       const semanticEntries = yonoteSemanticEntries(data);
+      const identity = data.identity_reconciliation || {};
+      const changes = data.change_classification || {};
       const semanticCodeRows = semanticEntries.map(([code, count]) => {
         const chunkIds = yonoteSemanticChunkIds(data, code);
         return `
@@ -1642,9 +1741,26 @@ _HTML_TEMPLATE = """
             `
           : ""}
         ${chunkAuditStopped
-          ? `<div class="quality-note danger"><b>Apply заблокирован проверкой чанков:</b> предупреждений — ${escapeHtml(chunkAudit.warnings_total || 0)}, документов без чанков — ${escapeHtml(documentAudit.without_chunks || 0)}. Проверь подробный отчёт перед новым Preview.</div>`
+          ? `<div class="quality-note danger"><b>Apply заблокирован проверкой чанков:</b> блокирующих дефектов — ${escapeHtml(chunkAuditPolicy.blockingTotal)}. Исправь их и запусти новый Preview.</div>`
+          : ""}
+        ${chunkAuditAdvisory
+          ? `<div class="quality-note advisory"><b>Есть замечания для просмотра:</b> ${escapeHtml(chunkAuditPolicy.advisoryTotal)}. Они видны в отчёте, но сами по себе не блокируют Apply.</div>`
           : ""}
         <div class="ops-list">
+          <div class="ops-item">
+            <div class="ops-line"><span>Стабильность ID и тип изменений</span><span>проверено</span></div>
+            <div class="ops-meta">
+              сырых ID +${escapeHtml(identity.raw_id_added || 0)}/−${escapeHtml(identity.raw_id_removed || 0)} ·
+              сохранено прежних ID: ${escapeHtml(identity.exact_content_rekeys || 0)} ·
+              перестановок ID: ${escapeHtml(identity.same_set_identity_rotations || 0)} ·
+              неоднозначных групп: ${escapeHtml(identity.ambiguous_exact_content_groups || 0)}
+            </div>
+            <div class="ops-meta">
+              логически +${escapeHtml(identity.logical_added || 0)}/−${escapeHtml(identity.logical_removed || 0)} ·
+              только метаданные: ${escapeHtml(changes.metadata_only || 0)} ·
+              содержание/источник: ${escapeHtml(changes.content_or_source || 0)}
+            </div>
+          </div>
           <div class="ops-item">
             <div class="ops-line"><span>Проверяемый snapshot</span><span>${previewApplyReady ? "готов к Apply" : "только просмотр"}</span></div>
             <div class="ops-meta mono">current: ${escapeHtml(hashes.current_seed_sha256 || "—")}</div>
@@ -1652,7 +1768,11 @@ _HTML_TEMPLATE = """
             <div class="ops-meta mono">merged: ${escapeHtml(hashes.merged_seed_sha256 || "—")}</div>
           </div>
           <div class="ops-item">
-            <div class="ops-line"><span>Контроль чанков</span><span>предупреждений: ${escapeHtml(chunkAudit.warnings_total || 0)}</span></div>
+            <div class="ops-line"><span>Контроль чанков</span><span>${escapeHtml(chunkAuditPolicy.status)}</span></div>
+            <div class="ops-meta">
+              блокирующих дефектов: ${escapeHtml(chunkAuditPolicy.blockingTotal)} ·
+              рекомендаций к проверке: ${escapeHtml(chunkAuditPolicy.advisoryTotal)}
+            </div>
             <div class="ops-meta">
               пустых: ${escapeHtml(findings.empty_text || 0)} ·
               короче 20: ${escapeHtml(findings.too_short_under_20_chars || 0)} ·
@@ -1660,7 +1780,11 @@ _HTML_TEMPLATE = """
               групп дублей: ${escapeHtml(findings.duplicate_text_groups || 0)}
             </div>
             <div class="ops-meta">
-              документов без чанков: ${escapeHtml(documentAudit.without_chunks || 0)} ·
+              документов без чанков: ${escapeHtml(documentAudit.without_chunks || 0)}
+              (существующих: ${escapeHtml(documentAudit.existing_without_chunks || 0)},
+              новых пустых/коротких: ${escapeHtml(documentAudit.new_without_chunks || 0)},
+              новых содержательных: ${escapeHtml(documentAudit.new_substantive_without_chunks || 0)},
+              не классифицировано: ${escapeHtml(documentAudit.unclassified_without_chunks || 0)}) ·
               длина p50/p95/max: ${escapeHtml(freshLengths.p50 || 0)}/
               ${escapeHtml(freshLengths.p95 || 0)}/${escapeHtml(freshLengths.maximum || 0)}
             </div>
@@ -1670,6 +1794,7 @@ _HTML_TEMPLATE = """
             </div>
           </div>
         </div>
+        ${renderYonoteWithoutChunksSample(documentAudit)}
         ${renderYonoteCollections(data.collection_counts)}
         ${renderYonoteChangeGroup("Новые знания", data.added_items, data.added, "added")}
         ${renderYonoteChangeGroup("Обновлённые знания", data.changed_items, data.changed, "changed")}
@@ -2284,10 +2409,8 @@ _HTML_TEMPLATE = """
         const semanticIntegrity = data.semantic_integrity || {};
         const semanticStopped = semanticIntegrity.status === "STOP";
         const chunkAudit = data.chunk_audit || {};
-        const chunkAuditStopped = (
-          Number(chunkAudit.warnings_total || 0) > 0 ||
-          Number((chunkAudit.documents || {}).without_chunks || 0) > 0
-        );
+        const chunkAuditPolicy = yonoteChunkAuditPolicy(chunkAudit);
+        const chunkAuditStopped = chunkAuditPolicy.status === "STOP";
         const previewStopped = snapshotStopped || semanticStopped || chunkAuditStopped;
         const stopReasons = [];
         if (snapshotStopped) stopReasons.push(`snapshot: удалится ${data.removed || 0}`);
@@ -2297,14 +2420,17 @@ _HTML_TEMPLATE = """
           );
         }
         if (chunkAuditStopped) {
-          stopReasons.push(`чанки: ${chunkAudit.warnings_total || 0} предупреждений`);
+          stopReasons.push(`чанки: ${chunkAuditPolicy.blockingTotal} дефектов`);
         }
+        const advisorySuffix = chunkAuditPolicy.advisoryTotal > 0
+          ? `; замечаний для просмотра: ${chunkAuditPolicy.advisoryTotal}`
+          : "";
         setStatus(
           "detailStatus",
           previewStopped
             ? `Yonote проверен, но Apply заблокирован (${stopReasons.join("; ")})`
-            : `Yonote проверен: +${data.added}, изменится ${data.changed}, удалится ${data.removed}`,
-          previewStopped ? "warn" : "ok"
+            : `Yonote проверен: +${data.added}, изменится ${data.changed}, удалится ${data.removed}${advisorySuffix}`,
+          previewStopped || chunkAuditPolicy.advisoryTotal > 0 ? "warn" : "ok"
         );
       } catch (error) {
         setStatus("detailStatus", error.message, "error");

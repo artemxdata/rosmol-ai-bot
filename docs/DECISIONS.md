@@ -800,3 +800,33 @@ stdout содержит только агрегаты и хеши, без тек
 остаются выключенными. Calibration `49/50` сохраняется как regression, но не заменяет независимый
 full-ticket Blind50 с порогом не ниже `25/50`, нулём critical unsupported facts и всеми оценёнными
 кейсами.
+
+Первый полный server Preview по этой процедуре выполнен на exact runtime
+`6380acd96d5bf17d4c9f426b2cf68f2dd959aacf` при выключенных HDE/VK. Infrastructure/runtime gate
+прошёл: оба runtime готовы с exact SHA, текущий seed валиден (`2186`, из них `2152 published`),
+Qdrant содержит `2152` exact-matching payloads, divergence и cache равны нулю. Read-only Yonote
+snapshot прочитал `116` документов и построил `1489` свежих чанков; diff составил `241 added`,
+`603 changed`, `188 removed`, `645 unchanged`, merged seed — `2239` записей и `2212 published`.
+Preview получил quality `STOP`: `forum_text_conflict:1`, snapshot reason
+`absolute_removal_limit_exceeded`, а legacy chunk audit показал `25` duplicate-text groups,
+`7` oversized chunks и `3` документа без чанков. Receipt не создан; seed, Qdrant, cache и HDE
+queue не изменились; Apply, index, `/ask` и channel webhook не вызывались. Этот STOP является
+успешным fail-closed evidence и не разрешает ручной обход порогов.
+
+Следующий Preview обязан отдельно показывать raw provider-ID churn и логическое изменение знаний.
+Exact-content reconciliation допускается только для уникальной пары внутри того же immutable
+provider document scope; неоднозначные совпадения остаются видимыми и не переименовываются.
+API splitter обязан проверять длину уже нормализованного финального текста, чтобы каждый чанк
+соблюдал hard limit независимо от Markdown/HTML и добавленного heading context.
+
+Chunk audit получает additive policy `yonote-chunk-audit-v1`. Блокирующими остаются empty и
+oversized chunks, отсутствие source provenance, уже известный или не классифицированный документ,
+который неожиданно перестал давать чанки, а также новый содержательный документ без чанков.
+Short chunks, duplicate-text groups и только новый raw-empty либо below-minimum контейнер являются
+advisory: они обязательно видимы в UI и safe aggregates, но сами по себе не запрещают
+receipt/Apply. Payload без policy трактуется консервативно как
+legacy, где любое предупреждение блокирует. Server-local acceptance проверяет totals, разбиение
+empty documents, равенства `raw_id - exact_rekeys = logical_id`, соответствие logical counts
+основному diff и allowlisted change field counts; stdout по-прежнему не содержит текст, chunk/
+document IDs или receipt credentials. Эти изменения пока существуют только в незакоммиченном
+локальном successor и не считаются активными до полного gate, commit/push и exact detached deploy.

@@ -21,7 +21,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from scripts.build_yonote_kb_seed import (
     clean_markdown_text,
     merge_records,
-    split_section_text,
+    split_section_text_with_heading,
 )
 from scripts.index_kb import validate_seed_items
 from src.config import get_settings
@@ -548,13 +548,17 @@ def build_records_from_api_documents(
         category = infer_category(document, event_name)
         sections = parse_text_sections(document.title, document.text)
         for section in sections:
-            for part_index, part in enumerate(split_section_text(section.text), start=1):
+            clean_section_text = clean_markdown_text(section.text)
+            for part_index, clean_text in enumerate(
+                split_section_text_with_heading(
+                    clean_section_text,
+                    section.title,
+                ),
+                start=1,
+            ):
                 title = section.title
                 if part_index > 1:
                     title = f"{section.title}, часть {part_index}"
-                    if not part.startswith(section.title):
-                        part = f"{section.title}\n\n{part}"
-                clean_text = clean_markdown_text(part)
                 if len(clean_text) < 20:
                     continue
                 records.append(

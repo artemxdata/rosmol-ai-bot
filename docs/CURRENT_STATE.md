@@ -4,54 +4,61 @@
 
 **Ветка:** `codex/real-rag`
 
-**Implementation commit текущей коррекции:**
-`29e88355aafec7121b838d0ac8dbdd8d4aac501e`. Exact deployment SHA — его docs-only
-handoff-потомок после commit/push; на сервер эта коррекция ещё не устанавливалась.
+**Exact runtime на тестовом сервере:**
+`6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`. Локальный successor с исправлениями splitter,
+стабилизацией ID и классификацией chunk audit пока не закоммичен и на сервер не доставлен.
 
-## 21 августа: реальный Yonote Preview дошёл до данных; исправляется один semantic conflict
+## 21 августа: runtime `6380acd` исправен, полный Yonote Preview дал содержательный STOP
 
-Владелец вручную развернул exact runtime
-`3e185a70995c4c1cba42d5f33e9e8b8c47f2fa40`. Оба application-контейнера вернули `ready` с
-этим SHA. Server-local acceptance успешно прошёл runtime identity, admin auth/session/logout,
-Validate, Seed ↔ Qdrant status и проверки выключенных каналов, но полный Yonote Preview вернул
-HTTP `422`. Отдельная безопасная диагностика доказала: receipt storage доступен, активных/
-`applying`/`applied` receipts нет, egress allowlist и CONNECT работают, read-only API видит обе
-настроенные коллекции и `116` документов. Точная стадия — `merged_semantic_integrity`, единственная
-причина — `forum_text_conflict:1`. Это не сбой сети, токена, Docker или индекса.
+Владелец вручную развернул exact candidate
+`6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`; `rosmol-app` и `rosmol-app-ml` вернули `ready` с
+этим SHA. Server-local acceptance schema `v2` прошёл runtime identity, admin auth/session/logout,
+Validate, Seed ↔ Qdrant и non-mutation проверки. Текущий seed содержит `2186` валидных записей:
+`2152 published` и `34 archived`; semantic validation текущего seed — `0` ошибок и `0`
+предупреждений. Qdrant содержит ровно `2152` points, missing/stale/changed/invalid — по нулям,
+seed/Qdrant payload fingerprint совпадает:
+`30a32dde7547b49c99b7a01b8117eb86f3318f963af9d722303224c4033da68c`; response cache пуст.
 
-Ни seed, ни Qdrant, ни cache этим запуском не менялись; receipt не создан, Apply/index не
-запускались, HDE/VK остаются выключенными. Локальная коррекция не подгоняет ответ под конкретный
-форум: semantic gate теперь отличает явную вторичную ссылку на другое мероприятие от подмены
-основного события. Настоящее несовпадение по-прежнему блокирует публикацию. Semantic STOP
-возвращается как HTTP `200` с безопасными кодами, количеством и ID затронутых чанков в
-аутентифицированной админке, но без applyable receipt; server-local stdout вырезает ID и тексты.
+Полный read-only Yonote Preview прочитал `116` документов и построил `1489` свежих Yonote-чанков.
+Относительно текущих `1436` Yonote-записей он показал `241 added`, `603 changed`, `188 removed`,
+`645 unchanged`; merged seed содержит `2239` записей и проецирует `2212 published` points.
+Хеши evidence: current seed
+`aead5e930c513d9d5aeaacd3f3d4b8ce99fab536434343e7fcd6e9917de93e8a`, Yonote snapshot
+`6af7f3bc5caf152760e160fb63f216b16ed68cfed728ec70186a8a183f82381b`, merged seed
+`8b84620fa656102c84212a3236cb520843aa4082ff45133de33627cc958b718f`.
 
-Дополнительно закрыты общие дефекты импорта: документы без стабильного `urlId` и усечённые
-идентификаторы привязаны к immutable document scope, одинаковые названия не создают одинаковые
-chunk IDs, а части длинного раздела получают уникальные стабильные суффиксы. Любой новый полный
-STOP инвалидирует старый активный Preview receipt. Уже записанный seed можно идемпотентно
-финализировать после прерванного Apply даже при последующем ужесточении semantic rule, тогда как
-ещё не применённый receipt повторно проходит semantic gate и остаётся fail-closed.
+Preview endpoint вернул HTTP `200` и корректный quality `STOP` сразу по трём независимым классам.
+Semantic integrity нашёл один `forum_text_conflict`. Snapshot safety остановил `188` removals по
+причине
+`absolute_removal_limit_exceeded`. Chunk audit насчитал `32` прежних warnings: `25` групп
+одинакового текста и `7` чанков длиннее лимита; empty/too-short/missing source URL/document ID/
+updated-at — по нулям. Из `116` документов `113` дали чанки, `3` не дали ни одного; свежие длины
+имеют `p50=299`, `p95=1676`, `max=5140`, chunks-per-document — `p50=11`, `p95=33`, `max=100`.
+Это quality verdict, а не инфраструктурный сбой.
 
-Applyable receipt переведён на `yonote-sync-receipt-v2` и создаётся только при одновременном
-`GO` snapshot safety, semantic integrity и chunk audit. Receipt старой pre-audit schema
-отклоняется до захвата и записи seed, поэтому обновление runtime не оставляет обход новой
-проверки через ранее созданную квитанцию.
+Никаких изменений этот запуск не внёс: seed, Qdrant, cache и HDE queue до/после совпали, receipt
+не создан, Apply/index/reindex/`/ask` не вызывались. HDE/VK подтверждены выключенными; прямой VK
+webhook недоступен, VK credentials отсутствуют. Админка сейчас работает как явный тестовый
+редактор (`read_only=false`, `mutations_enabled=true`), однако все действия публикации остаются
+запрещены до нового полного Preview `GO` и отдельного owner review.
 
-Server-local acceptance переведён на schema `v2`: валидный Preview quality STOP имеет отдельный
-exit `2` и строку `yonote_preview_quality_stopped`; изменение seed/Qdrant/HDE остаётся техническим
-`FAIL` с exit `1`. В UI для semantic причин есть русские пояснения и затронутые chunk IDs, полный
-add/change/remove отчёт сохраняется, Apply виден только при одновременно `snapshot=GO`,
-`semantic=GO`, чистом chunk audit и точном receipt. Полный локальный gate выполнен по всем `157`
-test files: `3516 passed`, известный `1 skipped`, `0 failed`. Ruff — `OK`; KB validation —
-`2186 valid / 2152 published`; JavaScript админки, Bash syntax и `git diff --check` — `OK`.
+Локальный незакоммиченный successor устраняет общие причины, не подгоняя ответы под кейсы:
+длинные API-разделы режутся после нормализации с соблюдением hard limit; exact-content
+reconciliation сохраняет прежние chunk IDs при сдвиге секций и отделяет raw ID churn от
+логических add/remove; chunk audit policy `yonote-chunk-audit-v1` делит блокирующие дефекты и
+advisory-наблюдения. Существующий либо не классифицированный документ, потерявший все чанки, и
+новый содержательный документ без чанков блокируют receipt; только новый raw-empty/below-minimum
+контейнер, короткий чанк и группа дублей остаются видимыми advisory и сами по себе Apply не
+скрывают. Safe acceptance проверяет арифметику ID reconciliation и allowlisted field counts, не
+печатая chunk/document IDs или текст. Финальный focused gate прошёл: `193 passed`. Полный pytest
+прошёл: `3577 passed`, штатный `1 skipped`, `0 failed`; Ruff, KB validation
+(`2186 valid / 2152 published`) и `git diff --check` — `OK`. Независимый финальный review не
+нашёл оставшихся P0/P1.
 
-Точный следующий шаг: завершить полный локальный gate, сделать commit/push и передать владельцу
-новый exact 40-character SHA. Владелец снова разворачивает его detached при выключенных HDE/VK и
-повторяет только read-only admin acceptance. При `GO` сначала проверяются hashes/diff и заранее
-запечатываются три novel-вопроса; при semantic `STOP` исправляется показанный источник/metadata,
-но Apply/index не выполняются. Полная индексация, restart и RAG-тесты разрешены только после
-отдельного owner review успешного Preview.
+Точный следующий шаг: закоммитить/push exact successor SHA и повторить при выключенных HDE/VK
+только read-only server acceptance. До нового Preview
+`GO`, ручного review приватного diff и отдельного controlled Apply/index gate seed/Qdrant не
+менять и каналы не включать.
 
 ## 20 августа: локальный кандидат гибкого RAG-ядра готов к read-only server acceptance
 
@@ -2307,14 +2314,20 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
 - Rollback выполнять только по инструкции из `docs/pre_pilot_release_checklist.md` и только после
   фиксации логов и предыдущего commit.
 
-## 8. Известные ограничения и остаточные риски
+## 8. АРХИВ: ограничения и риски прежнего test-production — НЕ АКТИВНО
 
-### Активные ограничения сейчас
+Этот раздел фиксирует состояние прежнего handoff и сохранён только для истории. Он не является
+текущей эксплуатационной инструкцией: authoritative-статус, запреты и следующий шаг находятся в
+начале файла. В частности, HDE/VK сейчас выключены и не должны включаться до нового server-local
+gate.
+
+### Исторические ограничения на момент прежнего handoff
 
 - Старый сервер остаётся скомпрометированным и выключенным. Его credentials, images, volumes,
   runtime, data и backups недоверенны и не использовались в новом контуре.
-- Новый test-production подключён только к ограниченной тестовой HDE/VK-линии. Широкий traffic
-  не разрешён; независимой оценки полной multi-turn конверсии ещё нет.
+- На момент этого handoff новый test-production был подключён только к ограниченной тестовой
+  HDE/VK-линии. Это состояние отменено: сейчас оба канала выключены; независимой оценки полной
+  multi-turn конверсии ещё нет.
 - Начатый 15 июля cohort прерван и не объединяется с новой выборкой. Два domain-smoke события
   27 июля также исключаются из продуктовой конверсии.
 - Глобальный HDE API key по решению владельца остаётся `retained_exception` из-за зависимых
@@ -2325,10 +2338,9 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   операция после повторной проверки renewal.
 - Разовый зашифрованный off-host PostgreSQL backup подтверждён; автоматическое расписание и
   restore drill до широкого production traffic ещё не закрыты.
-- Локальная Yonote statistics/export итерация не committed и не deployed; она не входит в
-  release `b4bc23a`.
+- На тот момент локальная Yonote statistics/export итерация не входила в release `b4bc23a`.
 
-### Качество и продуктовый backlog
+### Исторический quality/product backlog
 
 - Тест Наты выявил два локально воспроизводимых дефекта: `Начать` не маршрутизировалось в greeting,
   а `Даты` после общего уточнения ошибочно трактовалось как неизвестное название. Первый дефект
@@ -2358,14 +2370,13 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml --profile ml \
   бессодержательная или опечаточная реплика не должна автоматически создавать лишнюю нагрузку
   оператору.
 
-## 9. Активный план после test-production handoff
+## 9. АРХИВ: прежний план после test-production handoff — НЕ АКТИВНО
 
-Recovery runbook `docs/recovery_test_production_runbook_20260720.md` остаётся источником rollback
-и повторного deployment, но clean rebuild, exact release acceptance, permanent TLS и HDE/VK smoke
-уже завершены.
+Ниже сохранён прежний план для аудита решений. Он полностью superseded актуальным планом в начале
+файла и не должен использоваться как команда на изменение каналов или runtime.
 
-1. Оставить включёнными только два test-scoped HDE rule на
-   `https://bot.zabotus.ru/webhook/hde`; не расширять scope без отдельного review.
+1. Исторически два test-scoped HDE rule были оставлены включёнными на прежнем endpoint. Это
+   разрешение отменено: HDE/VK сейчас выключены, старый endpoint не использовать.
 2. Начать новую измеримую test-production выборку со следующего реального обращения. Smoke 27 июля
    и interrupted cohort 15 июля не включать в conversion metrics.
 3. Наблюдать readiness, active/dead queues, delivery status, latency, cost и provider traffic.
@@ -2385,7 +2396,10 @@ Recovery runbook `docs/recovery_test_production_runbook_20260720.md` остаё�
    readiness, Qdrant-count, post-quality security и коротким HDE smoke. Push сам по себе не
    является deployment.
 
-## 10. Правило продолжения в новом чате
+## 10. АРХИВ: прежнее правило продолжения — НЕ АКТИВНО
+
+Следующий prompt и следующий шаг относятся к прежнему runtime и сохранены только как evidence;
+для новой задачи использовать authoritative-статус в начале файла.
 
 Первый запрос:
 
@@ -2399,10 +2413,8 @@ git log -5 и origin/master, затем кратко перескажи: цел�
 uncommitted Yonote-файлы и точный следующий gate.
 ```
 
-Точный следующий шаг: не менять healthy deployed runtime `b4bc23a`; собирать новую тестовую
-выборку и отдельно завершить локальную Yonote statistics/export итерацию без потери текущего
-dirty worktree. Любой новый deploy — только после отдельного review, commit/push, CI,
-SHA-bound rebuild/rescan и полного server gate.
+Исторический следующий шаг относился к runtime `b4bc23a` и больше не действует. Текущий exact
+runtime, запреты и следующий gate зафиксированы в начале файла; HDE/VK остаются выключенными.
 
 ## 11. Локальный product-quality change set 28 июля 2026
 

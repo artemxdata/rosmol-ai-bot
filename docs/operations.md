@@ -401,6 +401,20 @@ Partial previews never produce an applyable receipt. `Apply to KB`, `Save` and
 downloaded report can contain internal KB text; keep it only as private evidence, never in Git,
 chat or public logs.
 
+Chunk audit policy `yonote-chunk-audit-v1` separates publication blockers from review-only
+observations. Empty/oversized chunks, missing source provenance, an existing or unclassified
+document that unexpectedly loses all chunks, and a substantive new document that produces no
+chunks are blocking. Short chunks, duplicate-text groups and a newly discovered empty or
+below-minimum container are advisory: the UI highlights them in yellow and keeps Apply available
+when every other gate is `GO`. The authenticated UI includes a bounded private diagnostic sample
+with document/collection IDs, reason and cleaned length; server-local output strips that sample.
+A payload without this policy is handled
+conservatively as legacy and all its warnings remain blocking. Server-local output includes only
+aggregate blocking/advisory counts, exact-content ID reconciliation/rotation counts and allowlisted
+changed field counts; source text, document IDs and chunk IDs remain private to the authenticated
+UI. The Yonote snapshot hash is computed before reconciliation and ignores pull-time acquisition
+metadata and provider result ordering.
+
 Publishing reviewed Yonote changes is a separate release-engineering operation: preserve the
 reviewed snapshot, create a versioned seed change in Git, review its diff, run validation and
 regression, build a clean candidate, perform a controlled full index with rollback evidence, clear
@@ -490,9 +504,13 @@ keep both channels off until this server-local gate is complete.
 
 The clean runtime currently exposes the provisional HTTPS admin route
 `https://bot-135-106-167-124.sslip.io/admin/kb`. Its certificate and route belong to the new clean
-host. Manual login, list and read checks passed; a write attempt was correctly rejected by backend
-`403`, but revealed that the running UI still displayed writable controls. The local candidate
-fixes that UX contract; the fix is not active until the exact candidate is reviewed and deployed.
+host. On exact runtime `6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`, server-local acceptance
+confirmed login/session/logout and an explicit test-editor capability
+(`read_only=false`, `mutations_enabled=true`). The deployed backend and UI also implement the
+read-only contract: mutations are rejected and Save/Reindex/status/textarea controls are disabled
+when read-only is configured. Runtime `6380acd` itself is deliberately in test-editor mode for the
+Preview workflow, so it must not be described as a read-only deployment; publication actions
+remain prohibited until a later reviewed gate.
 A permanent corporate subdomain is pending. The former public address, its certificate, SSH tunnel
 and admin token belong to the compromised host and must not be used.
 

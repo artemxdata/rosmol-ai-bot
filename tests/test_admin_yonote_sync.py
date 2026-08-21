@@ -106,6 +106,27 @@ def _write_seed(path: Path) -> None:
     path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
 
 
+def _scoped_yonote_record(
+    chunk_id: str,
+    text: str,
+    *,
+    document_id: str = "doc-1",
+    source_row: int = 1,
+) -> dict[str, object]:
+    return {
+        "chunk_id": chunk_id,
+        "text_clean": text,
+        "status": "published",
+        "category": "general",
+        "source_type": "yonote",
+        "source_url": f"https://rossmol.yonote.ru/doc/{document_id}",
+        "source_collection_id": "collection-1",
+        "source_document_id": document_id,
+        "source_document_updated_at": "2026-08-20T12:00:00Z",
+        "source_row": source_row,
+    }
+
+
 def _seal_fresh_receipt(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -356,6 +377,293 @@ def test_preview_sync_does_not_write_seed_and_counts_changes(
     assert report["removed_items"][0]["title"] == "yonote_removed"
     assert report["collection_counts"] == {"Forum knowledge": 1, "unknown": 1}
     assert seed_path.read_text(encoding="utf-8") == original
+
+
+def test_preview_reconciles_exact_content_rekeys_before_removal_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    current = [
+        _scoped_yonote_record(
+            f"old-{index}",
+            f"Подтверждённый неизменный факт номер {index}.",
+            source_row=index + 1,
+        )
+        for index in range(40)
+    ]
+    seed_path.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+    fresh = [
+        _scoped_yonote_record(
+            f"fresh-{index}",
+            f"Подтверждённый неизменный факт номер {index}.",
+            source_row=index + 2,
+        )
+        for index in range(40)
+    ]
+    fresh.append(
+        _scoped_yonote_record(
+            "fresh-new",
+            "Новый подтверждённый опубликованный факт.",
+            source_row=1,
+        )
+    )
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: ([object()], fresh),
+    )
+
+    report = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert report["identity_reconciliation"] == {
+        "raw_id_added": 41,
+        "raw_id_removed": 40,
+        "exact_content_rekeys": 40,
+        "same_set_identity_rotations": 0,
+        "ambiguous_exact_content_groups": 0,
+        "logical_added": 1,
+        "logical_removed": 0,
+    }
+    assert report["added"] == 1
+    assert report["removed"] == 0
+    assert report["changed"] == 40
+    assert report["change_classification"] == {
+        "metadata_only": 40,
+        "content_or_source": 0,
+        "field_counts": {"source_row": 40},
+    }
+    assert report["snapshot_safety"]["status"] == "GO"
+    assert report["snapshot_safety"]["removal_ratio"] == 0.0
+    assert report["snapshot_safety"]["raw_id_removed"] == 40
+    assert report["snapshot_safety"]["exact_content_rekeys"] == 40
+    assert report["receipt"]["apply_ready"] is True
+
+
+def test_preview_does_not_reconcile_identical_text_across_document_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    current = [
+        _scoped_yonote_record(
+            f"old-{index}",
+            f"Подтверждённый факт номер {index} для проверки области.",
+            document_id="old-document",
+            source_row=index + 1,
+        )
+        for index in range(40)
+    ]
+    fresh = [
+        _scoped_yonote_record(
+            f"fresh-{index}",
+            f"Подтверждённый факт номер {index} для проверки области.",
+            document_id="new-document",
+            source_row=index + 1,
+        )
+        for index in range(40)
+    ]
+    seed_path.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: ([object()], fresh),
+    )
+
+    report = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert report["identity_reconciliation"]["exact_content_rekeys"] == 0
+    assert report["identity_reconciliation"]["raw_id_removed"] == 40
+    assert report["identity_reconciliation"]["logical_removed"] == 40
+    assert report["removed"] == 40
+    assert report["snapshot_safety"]["status"] == "STOP"
+    assert report["snapshot_safety"]["reasons"] == [
+        "removal_ratio_limit_exceeded"
+    ]
+    assert report["receipt"]["apply_ready"] is False
+    assert not receipt_dir.exists()
+
+
+def test_identity_reconciliation_preserves_insertion_chain_and_displaces_new_content() -> None:
+    old = [
+        _scoped_yonote_record("section-1", "Факт A."),
+        _scoped_yonote_record("section-2", "Факт B.", source_row=2),
+    ]
+    fresh = [
+        _scoped_yonote_record("section-1", "Новый факт."),
+        _scoped_yonote_record("section-2", "Факт A.", source_row=2),
+        _scoped_yonote_record("section-3", "Факт B.", source_row=3),
+    ]
+
+    reconciled, identity = yonote_sync._reconcile_exact_content_chunk_ids(
+        old,
+        fresh,
+    )
+
+    by_text = {str(record["text_clean"]): record["chunk_id"] for record in reconciled}
+    assert by_text == {
+        "Факт A.": "section-1",
+        "Факт B.": "section-2",
+        "Новый факт.": "section-3",
+    }
+    assert identity == {
+        "raw_id_added": 1,
+        "raw_id_removed": 0,
+        "exact_content_rekeys": 0,
+        "same_set_identity_rotations": 2,
+        "ambiguous_exact_content_groups": 0,
+    }
+
+
+def test_identity_reconciliation_never_allocates_vacated_id_across_documents() -> None:
+    old = [
+        _scoped_yonote_record(
+            "a-old",
+            "Неизменный факт документа A.",
+            document_id="doc-a",
+        ),
+        _scoped_yonote_record(
+            "b-1",
+            "Неизменный факт документа B.",
+            document_id="doc-b",
+        ),
+    ]
+    fresh = [
+        _scoped_yonote_record(
+            "a-new",
+            "Неизменный факт документа A.",
+            document_id="doc-a",
+        ),
+        _scoped_yonote_record(
+            "b-1",
+            "Новый факт документа B.",
+            document_id="doc-b",
+        ),
+        _scoped_yonote_record(
+            "b-2",
+            "Неизменный факт документа B.",
+            document_id="doc-b",
+            source_row=2,
+        ),
+    ]
+
+    reconciled, identity = yonote_sync._reconcile_exact_content_chunk_ids(
+        old,
+        fresh,
+    )
+
+    by_text = {str(record["text_clean"]): record["chunk_id"] for record in reconciled}
+    assert by_text == {
+        "Неизменный факт документа A.": "a-old",
+        "Неизменный факт документа B.": "b-1",
+        "Новый факт документа B.": "b-2",
+    }
+    assert identity == {
+        "raw_id_added": 2,
+        "raw_id_removed": 1,
+        "exact_content_rekeys": 1,
+        "same_set_identity_rotations": 1,
+        "ambiguous_exact_content_groups": 0,
+    }
+
+
+def test_identity_reconciliation_preserves_swapped_exact_contents() -> None:
+    old = [
+        _scoped_yonote_record("section-1", "Факт A."),
+        _scoped_yonote_record("section-2", "Факт B.", source_row=2),
+    ]
+    fresh = [
+        _scoped_yonote_record("section-1", "Факт B."),
+        _scoped_yonote_record("section-2", "Факт A.", source_row=2),
+    ]
+
+    reconciled, identity = yonote_sync._reconcile_exact_content_chunk_ids(
+        old,
+        fresh,
+    )
+
+    assert {
+        str(record["text_clean"]): record["chunk_id"] for record in reconciled
+    } == {"Факт A.": "section-1", "Факт B.": "section-2"}
+    assert identity["same_set_identity_rotations"] == 2
+    assert identity["exact_content_rekeys"] == 0
+    assert len({record["chunk_id"] for record in reconciled}) == 2
+
+
+def test_identity_reconciliation_is_order_independent_and_skips_ambiguity() -> None:
+    old = [
+        _scoped_yonote_record("old-a", "Уникальный факт A."),
+        _scoped_yonote_record("old-b1", "Повторяемый факт.", source_row=2),
+        _scoped_yonote_record("old-b2", "Повторяемый факт.", source_row=3),
+    ]
+    fresh = [
+        _scoped_yonote_record("fresh-a", "Уникальный факт A."),
+        _scoped_yonote_record("fresh-b1", "Повторяемый факт.", source_row=2),
+        _scoped_yonote_record("fresh-b2", "Повторяемый факт.", source_row=3),
+    ]
+
+    forward, forward_identity = yonote_sync._reconcile_exact_content_chunk_ids(
+        old,
+        fresh,
+    )
+    reversed_result, reversed_identity = (
+        yonote_sync._reconcile_exact_content_chunk_ids(
+            list(reversed(old)),
+            list(reversed(fresh)),
+        )
+    )
+
+    forward_mapping = {
+        str(record["text_clean"]) + ":" + str(record.get("source_row")): record[
+            "chunk_id"
+        ]
+        for record in forward
+    }
+    reversed_mapping = {
+        str(record["text_clean"]) + ":" + str(record.get("source_row")): record[
+            "chunk_id"
+        ]
+        for record in reversed_result
+    }
+    assert forward_mapping == reversed_mapping
+    assert forward_identity == reversed_identity
+    assert forward_identity["exact_content_rekeys"] == 1
+    assert forward_identity["ambiguous_exact_content_groups"] == 1
+    ambiguous_ids = {
+        record["chunk_id"]
+        for record in forward
+        if record["text_clean"] == "Повторяемый факт."
+    }
+    assert ambiguous_ids == {
+        "fresh-b1",
+        "fresh-b2",
+    }
+
+
+def test_identity_reconciliation_never_matches_across_document_scope() -> None:
+    old = [_scoped_yonote_record("old", "Одинаковый текст.", document_id="old-doc")]
+    fresh = [
+        _scoped_yonote_record("fresh", "Одинаковый текст.", document_id="new-doc")
+    ]
+
+    reconciled, identity = yonote_sync._reconcile_exact_content_chunk_ids(
+        old,
+        fresh,
+    )
+
+    assert [record["chunk_id"] for record in reconciled] == ["fresh"]
+    assert identity["exact_content_rekeys"] == 0
+    assert identity["same_set_identity_rotations"] == 0
 
 
 def test_apply_sync_writes_seed_and_keeps_non_yonote_records(
@@ -924,6 +1232,111 @@ def test_preview_sync_keeps_structural_validation_as_exception(
     assert not receipt_dir.exists()
 
 
+def test_invalid_full_snapshot_invalidates_older_active_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    first = _seal_fresh_receipt(
+        monkeypatch,
+        seed_path=seed_path,
+        receipt_dir=receipt_dir,
+    )
+    first_receipt = first["receipt"]
+    assert isinstance(first_receipt, dict)
+    assert len(list(receipt_dir.glob("*.json"))) == 1
+    duplicate = {
+        "chunk_id": "yonote_duplicate",
+        "text_clean": "Опубликованный подтверждённый факт.",
+        "status": "published",
+        "category": "general",
+        "source_type": "yonote",
+    }
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: (
+            [object(), object()],
+            [duplicate, dict(duplicate)],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="duplicate_chunk_id"):
+        yonote_sync.preview_sync(
+            seed_path,
+            SimpleNamespace(),
+            receipt_dir=receipt_dir,
+        )
+
+    assert not list(receipt_dir.glob("*.json"))
+    with pytest.raises(yonote_sync.YonoteReceiptNotFound):
+        yonote_sync.apply_sync(
+            seed_path,
+            receipt_dir=receipt_dir,
+            receipt_id=str(first_receipt["id"]),
+            receipt_sha256=str(first_receipt["sha256"]),
+        )
+
+
+def test_real_built_duplicate_snapshot_invalidates_active_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "knowledge_base_seed.json"
+    receipt_dir = tmp_path / "receipts"
+    _write_seed(seed_path)
+    real_load_fresh = yonote_sync._load_fresh_yonote_records
+    first = _seal_fresh_receipt(
+        monkeypatch,
+        seed_path=seed_path,
+        receipt_dir=receipt_dir,
+    )
+    first_receipt = first["receipt"]
+    assert isinstance(first_receipt, dict)
+    duplicate_document = yonote_sync.YonoteDocument(
+        id="duplicate-document",
+        title="Опубликованный документ",
+        text="Описание\nПодтверждённый опубликованный факт для проверки снимка.",
+        collection_id="collection-1",
+        collection_name="Росмолодёжь: мероприятия",
+        url="/doc/duplicate-document",
+        url_id="duplicate-document",
+        parent_document_id=None,
+        path_titles=("Опубликованный документ",),
+        updated_at="2026-08-21T00:00:00Z",
+        created_at="2026-08-20T00:00:00Z",
+        document_type="document",
+    )
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        real_load_fresh,
+    )
+    monkeypatch.setattr(
+        yonote_sync,
+        "load_yonote_documents_from_settings",
+        lambda *_args, **_kwargs: [duplicate_document, duplicate_document],
+    )
+
+    with pytest.raises(ValueError, match="duplicate_chunk_id"):
+        yonote_sync.preview_sync(
+            seed_path,
+            SimpleNamespace(yonote_base_url="https://rossmol.yonote.ru"),
+            receipt_dir=receipt_dir,
+        )
+
+    assert not list(receipt_dir.glob("*.json"))
+    with pytest.raises(yonote_sync.YonoteReceiptNotFound):
+        yonote_sync.apply_sync(
+            seed_path,
+            receipt_dir=receipt_dir,
+            receipt_id=str(first_receipt["id"]),
+            receipt_sha256=str(first_receipt["sha256"]),
+        )
+
+
 def test_apply_sync_rechecks_semantic_integrity_and_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1238,12 +1651,211 @@ def test_full_preview_reports_hashes_chunk_audit_and_index_projection(
         "missing_source_document_id": 0,
         "missing_source_updated_at": 0,
     }
+    assert report["chunk_audit"]["policy_version"] == "yonote-chunk-audit-v1"
+    assert report["chunk_audit"]["status"] == "GO"
+    assert report["chunk_audit"]["blocking"] == {
+        "total": 0,
+        "findings": {
+            "empty_text": 0,
+            "oversized_over_max_chars": 0,
+            "missing_source_url": 0,
+                "missing_source_document_id": 0,
+                "missing_source_updated_at": 0,
+                "existing_documents_without_chunks": 0,
+                "new_substantive_documents_without_chunks": 0,
+                "unclassified_documents_without_chunks": 0,
+        },
+    }
     assert report["index_projection"] == {
         "current_published_points": 3,
         "expected_published_points": 2,
         "stale_prune_required": True,
         "full_reindex_required": True,
     }
+
+
+def test_chunk_audit_allows_new_empty_document_but_blocks_existing_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    existing = _scoped_yonote_record(
+        "existing",
+        "Существующий подтверждённый опубликованный факт.",
+        document_id="existing-document",
+    )
+    seed_path.write_text(json.dumps([existing], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: (
+            [
+                SimpleNamespace(
+                    id="existing-document",
+                    collection_id="collection-1",
+                    text=str(existing["text_clean"]),
+                ),
+                SimpleNamespace(
+                    id="new-empty-document",
+                    collection_id="collection-1",
+                    text="",
+                ),
+            ],
+            [dict(existing)],
+        ),
+    )
+
+    advisory = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert advisory["chunk_audit"]["status"] == "GO"
+    assert advisory["chunk_audit"]["documents"]["new_without_chunks"] == 1
+    assert advisory["chunk_audit"]["documents"][
+        "new_substantive_without_chunks"
+    ] == 0
+    assert advisory["chunk_audit"]["advisory"]["findings"][
+        "new_documents_without_chunks"
+    ] == 1
+    assert advisory["receipt"]["apply_ready"] is True
+
+    second = _scoped_yonote_record(
+        "lost",
+        "Другой существующий подтверждённый опубликованный факт.",
+        document_id="lost-document",
+    )
+    seed_path.write_text(
+        json.dumps([existing, second], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    receipt_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: (
+            [
+                SimpleNamespace(
+                    id="existing-document",
+                    collection_id="collection-1",
+                    text=str(existing["text_clean"]),
+                ),
+                SimpleNamespace(
+                    id="lost-document",
+                    collection_id="collection-1",
+                    text=str(second["text_clean"]),
+                ),
+            ],
+            [dict(existing)],
+        ),
+    )
+
+    blocked = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    assert blocked["snapshot_safety"]["status"] == "GO"
+    assert blocked["chunk_audit"]["status"] == "STOP"
+    assert blocked["chunk_audit"]["documents"]["existing_without_chunks"] == 1
+    assert blocked["chunk_audit"]["blocking"]["findings"][
+        "existing_documents_without_chunks"
+    ] == 1
+    assert blocked["receipt"] == {
+        "apply_ready": False,
+        "reason": "chunk_audit_failed",
+    }
+
+
+def test_chunk_audit_blocks_substantive_new_document_without_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "kb.json"
+    receipt_dir = tmp_path / "receipts"
+    seed_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        yonote_sync,
+        "_load_fresh_yonote_records",
+        lambda _settings, *, limit_documents: (
+            [
+                SimpleNamespace(
+                    id="substantive-new",
+                    collection_id="collection-1",
+                    text="Новый опубликованный документ содержит важный подтверждённый факт.",
+                )
+            ],
+            [],
+        ),
+    )
+
+    report = yonote_sync.preview_sync(
+        seed_path,
+        SimpleNamespace(),
+        receipt_dir=receipt_dir,
+    )
+
+    audit = report["chunk_audit"]
+    assert audit["status"] == "STOP"
+    assert audit["blocking"]["findings"][
+        "new_substantive_documents_without_chunks"
+    ] == 1
+    assert audit["documents"]["without_chunks"] == 1
+    assert audit["documents"]["existing_without_chunks"] == 0
+    assert audit["documents"]["new_without_chunks"] == 0
+    assert audit["documents"]["new_substantive_without_chunks"] == 1
+    assert audit["documents"]["unclassified_without_chunks"] == 0
+    sample = audit["documents"]["without_chunks_sample"]
+    assert sample[0]["source_collection_id"] == "collection-1"
+    assert sample[0]["source_document_id"] == "substantive-new"
+    assert sample[0]["reason"] == "new_substantive_document_without_chunks"
+    assert sample[0]["cleaned_chars"] >= 20
+    assert report["receipt"] == {
+        "apply_ready": False,
+        "reason": "chunk_audit_failed",
+    }
+    assert not receipt_dir.exists()
+
+
+def test_chunk_audit_keeps_same_document_id_isolated_by_collection() -> None:
+    first = {
+        **_scoped_yonote_record("first", "Факт первой коллекции."),
+        "source_collection_id": "collection-a",
+    }
+    second = {
+        **_scoped_yonote_record("second", "Факт второй коллекции."),
+        "source_collection_id": "collection-b",
+    }
+
+    audit = yonote_sync._chunk_audit(
+        documents_count=2,
+        loaded_documents=[
+            SimpleNamespace(
+                id="doc-1",
+                collection_id="collection-a",
+                text=first["text_clean"],
+            ),
+            SimpleNamespace(
+                id="doc-1",
+                collection_id="collection-b",
+                text=second["text_clean"],
+            ),
+        ],
+        current_yonote_records=[first, second],
+        fresh_yonote_records=[second],
+        merged_records=[second],
+    )
+
+    assert audit["status"] == "STOP"
+    assert audit["documents"]["with_chunks"] == 1
+    assert audit["documents"]["existing_without_chunks"] == 1
+    assert audit["documents"]["without_chunks"] == 1
+    assert audit["documents"]["without_chunks_sample"][0][
+        "source_collection_id"
+    ] == "collection-a"
 
 
 def test_full_preview_replaces_superseded_active_receipt(
@@ -1477,6 +2089,100 @@ def test_next_day_preview_preserves_unchanged_yonote_record_and_hash(
         "reason": "chunk_audit_failed",
     }
     assert not list(receipt_dir.glob("*.json"))
+
+
+def test_provider_snapshot_hash_is_independent_of_current_ids_and_pull_date(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first_seed = tmp_path / "first.json"
+    second_seed = tmp_path / "second.json"
+    stable_text = "Один и тот же опубликованный подтверждённый факт."
+    first_seed.write_text(
+        json.dumps(
+            [_scoped_yonote_record("old-a", stable_text)],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    second_seed.write_text(
+        json.dumps(
+            [_scoped_yonote_record("old-b", stable_text)],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    call_count = 0
+
+    def fake_load(_settings: object, *, limit_documents: int | None):
+        nonlocal call_count
+        assert limit_documents is None
+        call_count += 1
+        extraction_date = f"2026-08-{20 + call_count}"
+        fresh = {
+            **_scoped_yonote_record("fresh-provider-id", stable_text),
+            "extraction_date": extraction_date,
+        }
+        return [SimpleNamespace(id="doc-1", text=stable_text)], [fresh]
+
+    monkeypatch.setattr(yonote_sync, "_load_fresh_yonote_records", fake_load)
+
+    first = yonote_sync.preview_sync(
+        first_seed,
+        SimpleNamespace(),
+        receipt_dir=tmp_path / "first-receipts",
+    )
+    second = yonote_sync.preview_sync(
+        second_seed,
+        SimpleNamespace(),
+        receipt_dir=tmp_path / "second-receipts",
+    )
+
+    assert first["hashes"]["yonote_snapshot_sha256"] == second["hashes"][
+        "yonote_snapshot_sha256"
+    ]
+    for report, receipt_dir in (
+        (first, tmp_path / "first-receipts"),
+        (second, tmp_path / "second-receipts"),
+    ):
+        receipt = json.loads(next(receipt_dir.glob("*.json")).read_text("utf-8"))
+        assert receipt["bindings"]["yonote_snapshot_sha256"] == report["hashes"][
+            "yonote_snapshot_sha256"
+        ]
+
+
+def test_provider_snapshot_hash_ignores_fallback_dates_but_tracks_source_change() -> None:
+    base = {
+        **_scoped_yonote_record("provider-id", "Подтверждённый факт."),
+        "source_document_updated_at": None,
+        "extraction_date": "2026-08-20",
+        "updated_at": "2026-08-20",
+    }
+    next_day = {
+        **base,
+        "extraction_date": "2026-08-21",
+        "updated_at": "2026-08-21",
+    }
+    changed_source = {
+        **next_day,
+        "source_url": "https://rossmol.yonote.ru/doc/changed",
+    }
+    second_record = {
+        **_scoped_yonote_record(
+            "provider-id-2",
+            "Другой подтверждённый факт.",
+            document_id="doc-2",
+        ),
+        "extraction_date": "2026-08-20",
+    }
+
+    baseline_hash = yonote_sync._provider_snapshot_sha256([base])
+
+    assert yonote_sync._provider_snapshot_sha256([next_day]) == baseline_hash
+    assert yonote_sync._provider_snapshot_sha256([changed_source]) != baseline_hash
+    assert yonote_sync._provider_snapshot_sha256(
+        [base, second_record]
+    ) == yonote_sync._provider_snapshot_sha256([second_record, base])
 
 
 def test_next_day_preview_keeps_real_content_and_source_change(

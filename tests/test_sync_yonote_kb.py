@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 import scripts.sync_yonote_kb as sync_yonote_kb
+from scripts.build_yonote_kb_seed import MAX_CHUNK_CHARS
 from scripts.index_kb import validate_seed_items
 from scripts.sync_yonote_kb import (
     YonoteApiError,
@@ -809,6 +810,34 @@ def test_long_split_section_keeps_unique_part_ids_after_topic_truncation() -> No
     assert len({record["chunk_id"] for record in records}) == len(records)
     assert not records[0]["chunk_id"].endswith("_p0001")
     assert records[1]["chunk_id"].endswith("_p0002")
+    assert all(len(record["text_clean"]) <= MAX_CHUNK_CHARS for record in records)
+    assert all(record["text_clean"].startswith(title) for record in records)
+    assert title not in {record["text_clean"].strip() for record in records}
+    validate_seed_items(records)
+
+
+def test_api_builder_splits_an_oversized_sentence_after_a_short_sentence() -> None:
+    heading = "Документы для участия"
+    document = _chunk_identity_document(
+        document_id="doc-oversized-sentence",
+        url_id="stable-oversized-sentence",
+        title="Документ с длинным разделом",
+    )
+    document = replace(
+        document,
+        text=f"{heading}\nВведение. " + ("подтверждённый факт " * 500),
+    )
+
+    records = build_records_from_api_documents(
+        [document],
+        base_url="https://rossmol.yonote.ru",
+        extraction_date=date(2026, 8, 21),
+    )
+
+    assert len(records) > 2
+    assert all(20 <= len(record["text_clean"]) <= MAX_CHUNK_CHARS for record in records)
+    assert all(record["text_clean"].startswith(heading) for record in records)
+    assert heading not in {record["text_clean"].strip() for record in records}
     validate_seed_items(records)
 
 

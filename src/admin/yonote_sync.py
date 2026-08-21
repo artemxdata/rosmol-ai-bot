@@ -10,7 +10,11 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from scripts.build_yonote_kb_seed import MAX_CHUNK_CHARS, merge_records
+from scripts.build_yonote_kb_seed import (
+    MAX_CHUNK_CHARS,
+    clean_markdown_text,
+    merge_records,
+)
 from scripts.index_kb import (
     load_forum_registry,
     validate_seed_items,
@@ -44,6 +48,14 @@ COMPARE_FIELDS = (
     "registration_deadline",
     "valid_from",
     "valid_to",
+)
+METADATA_ONLY_CHANGE_FIELDS = frozenset(
+    {
+        "extraction_date",
+        "source_document_updated_at",
+        "source_row",
+        "updated_at",
+    }
 )
 RECEIPT_SCHEMA_VERSION = "yonote-sync-receipt-v2"
 RECEIPT_TTL = timedelta(hours=24)
@@ -97,28 +109,51 @@ def preview_sync(
         settings,
         limit_documents=limit_documents,
     )
-    fresh_yonote_records = _preserve_unchanged_yonote_records(
-        current_records,
-        fresh_yonote_records,
-    )
-    merged_records = merge_records(
-        current_records,
-        fresh_yonote_records,
-        replace_existing_yonote=True,
-    )
-    semantic_integrity = _validate_merged_seed(seed_path, merged_records)
-    report = _build_sync_report(
-        current_records=current_records,
-        fresh_yonote_records=fresh_yonote_records,
-        merged_records=merged_records,
-        documents_count=len(documents),
-        applied=False,
-        seed_path=seed_path,
-    )
+    try:
+        validate_seed_items(fresh_yonote_records)
+        raw_yonote_snapshot_sha256 = _provider_snapshot_sha256(
+            fresh_yonote_records
+        )
+        fresh_yonote_records, identity_reconciliation = (
+            _reconcile_exact_content_chunk_ids(
+                current_records,
+                fresh_yonote_records,
+            )
+        )
+        fresh_yonote_records = _preserve_unchanged_yonote_records(
+            current_records,
+            fresh_yonote_records,
+        )
+        merged_records = merge_records(
+            current_records,
+            fresh_yonote_records,
+            replace_existing_yonote=True,
+        )
+        semantic_integrity = _validate_merged_seed(seed_path, merged_records)
+        report = _build_sync_report(
+            current_records=current_records,
+            fresh_yonote_records=fresh_yonote_records,
+            merged_records=merged_records,
+            documents_count=len(documents),
+            loaded_documents=documents,
+            applied=False,
+            seed_path=seed_path,
+            identity_reconciliation=identity_reconciliation,
+        )
+    except Exception as error:
+        if limit_documents is None:
+            try:
+                _invalidate_active_receipts(resolved_receipt_dir)
+            except Exception as invalidation_error:
+                error.add_note(
+                    "active Yonote Preview receipts could not be invalidated: "
+                    f"{type(invalidation_error).__name__}"
+                )
+        raise
     report["semantic_integrity"] = semantic_integrity
     report["hashes"] = {
         "current_seed_sha256": current_seed_sha256,
-        "yonote_snapshot_sha256": _canonical_sha256(fresh_yonote_records),
+        "yonote_snapshot_sha256": raw_yonote_snapshot_sha256,
         "merged_seed_sha256": _seed_sha256(merged_records),
     }
     if limit_documents is not None:
@@ -163,7 +198,7 @@ def preview_sync(
         seed_path=seed_path,
         receipt_dir=resolved_receipt_dir,
         current_seed_sha256=current_seed_sha256,
-        fresh_yonote_records=fresh_yonote_records,
+        yonote_snapshot_sha256=raw_yonote_snapshot_sha256,
         merged_records=merged_records,
         report=report,
     )
@@ -329,7 +364,7 @@ def _seal_preview_receipt(
     seed_path: Path,
     receipt_dir: Path,
     current_seed_sha256: str,
-    fresh_yonote_records: list[dict[str, Any]],
+    yonote_snapshot_sha256: str,
     merged_records: list[dict[str, Any]],
     report: dict[str, Any],
 ) -> dict[str, Any]:
@@ -338,7 +373,7 @@ def _seal_preview_receipt(
     bindings = {
         "seed_path": str(seed_path.resolve(strict=True)),
         "current_seed_sha256": current_seed_sha256,
-        "yonote_snapshot_sha256": _canonical_sha256(fresh_yonote_records),
+        "yonote_snapshot_sha256": yonote_snapshot_sha256,
         "merged_seed_sha256": _seed_sha256(merged_records),
     }
     sealed_report = dict(report)
@@ -652,6 +687,23 @@ def _canonical_sha256(value: Any) -> str:
     return sha256(_canonical_json_bytes(value)).hexdigest()
 
 
+def _provider_snapshot_sha256(records: list[dict[str, Any]]) -> str:
+    """Hash provider-derived records without pull-time fallback metadata."""
+
+    stable_records: list[dict[str, Any]] = []
+    for record in records:
+        stable = {
+            key: value
+            for key, value in record.items()
+            if key != "extraction_date"
+        }
+        if _uses_acquisition_date_as_updated_at(record):
+            stable.pop("updated_at", None)
+        stable_records.append(stable)
+    stable_records.sort(key=_canonical_json_bytes)
+    return _canonical_sha256(stable_records)
+
+
 def _seed_bytes(records: list[dict[str, Any]]) -> bytes:
     return f"{json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True)}\n".encode()
 
@@ -682,7 +734,6 @@ def _load_fresh_yonote_records(
         base_url=base_url,
         extraction_date=date.today(),
     )
-    validate_seed_items(records)
     return documents, records
 
 
@@ -730,6 +781,153 @@ def load_yonote_documents_from_settings(
             include_empty=include_empty,
             max_total_text_bytes=max_total_text_bytes,
         )
+
+
+def _reconcile_exact_content_chunk_ids(
+    current_records: list[dict[str, Any]],
+    fresh_yonote_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Preserve unique exact-content identity inside one provider document.
+
+    Yonote section ordinals are part of legacy chunk IDs. A heading insertion
+    can therefore rotate content through IDs that still exist in both raw ID
+    sets. Match unique exact content across the complete immutable document
+    scope, then give displaced new content a deterministic vacated raw ID.
+    Duplicate/ambiguous content and missing scope metadata are never guessed.
+    """
+
+    old_by_id = {
+        str(record.get("chunk_id") or ""): record
+        for record in current_records
+        if str(record.get("source_type") or "") == "yonote"
+        and str(record.get("chunk_id") or "")
+    }
+    fresh_by_id = {
+        str(record.get("chunk_id") or ""): record
+        for record in fresh_yonote_records
+        if str(record.get("chunk_id") or "")
+    }
+    old_ids = set(old_by_id)
+    fresh_ids = set(fresh_by_id)
+    raw_removed_ids = old_ids - fresh_ids
+    raw_added_ids = fresh_ids - old_ids
+
+    old_by_content: dict[tuple[str, str, str], list[str]] = {}
+    fresh_by_content: dict[tuple[str, str, str], list[str]] = {}
+    for chunk_id, record in old_by_id.items():
+        key = _exact_document_content_key(record)
+        if key is not None:
+            old_by_content.setdefault(key, []).append(chunk_id)
+    for chunk_id, record in fresh_by_id.items():
+        key = _exact_document_content_key(record)
+        if key is not None:
+            fresh_by_content.setdefault(key, []).append(chunk_id)
+
+    fresh_to_old: dict[str, str] = {}
+    ambiguous_groups = 0
+    for key in sorted(old_by_content.keys() & fresh_by_content.keys()):
+        old_candidates = sorted(old_by_content[key])
+        fresh_candidates = sorted(fresh_by_content[key])
+        if len(old_candidates) == 1 and len(fresh_candidates) == 1:
+            fresh_to_old[fresh_candidates[0]] = old_candidates[0]
+        else:
+            ambiguous_groups += 1
+
+    matched_targets = set(fresh_to_old.values())
+    assigned_ids: dict[str, str] = dict(fresh_to_old)
+    unmatched_fresh_ids = sorted(fresh_ids - set(fresh_to_old))
+    reserved_unmatched_ids = {
+        chunk_id for chunk_id in unmatched_fresh_ids if chunk_id not in matched_targets
+    }
+    available_vacated_ids = sorted(
+        fresh_ids - matched_targets - reserved_unmatched_ids
+    )
+    displaced_fresh_ids = [
+        chunk_id
+        for chunk_id in unmatched_fresh_ids
+        if chunk_id in matched_targets
+    ]
+    available_by_scope: dict[tuple[str, str], list[str]] = {}
+    for chunk_id in available_vacated_ids:
+        scope = _immutable_document_scope(fresh_by_id[chunk_id])
+        if scope is None:
+            raise ValueError(
+                "Yonote identity reconciliation has an unscoped vacated ID"
+            )
+        available_by_scope.setdefault(scope, []).append(chunk_id)
+    displaced_by_scope: dict[tuple[str, str], list[str]] = {}
+    for chunk_id in displaced_fresh_ids:
+        scope = _immutable_document_scope(fresh_by_id[chunk_id])
+        if scope is None:
+            raise ValueError(
+                "Yonote identity reconciliation has an unscoped displaced ID"
+            )
+        displaced_by_scope.setdefault(scope, []).append(chunk_id)
+    for scope in sorted(displaced_by_scope):
+        displaced = displaced_by_scope[scope]
+        available = available_by_scope.get(scope, [])
+        if len(available) < len(displaced):
+            raise ValueError(
+                "Yonote identity reconciliation has no collision-free ID "
+                "inside one document scope"
+            )
+        assigned_ids.update(zip(displaced, available, strict=False))
+    for chunk_id in reserved_unmatched_ids:
+        assigned_ids[chunk_id] = chunk_id
+
+    reconciled: list[dict[str, Any]] = []
+    for record in fresh_yonote_records:
+        rendered = dict(record)
+        raw_chunk_id = str(record.get("chunk_id") or "")
+        rendered["chunk_id"] = assigned_ids.get(raw_chunk_id, raw_chunk_id)
+        reconciled.append(rendered)
+
+    reconciled_ids = [str(record.get("chunk_id") or "") for record in reconciled]
+    if len(reconciled_ids) != len(set(reconciled_ids)):
+        raise ValueError("Yonote identity reconciliation produced duplicate chunk IDs")
+
+    reconciled_id_set = set(reconciled_ids)
+    exact_rekeys_from_added = len(raw_added_ids) - len(reconciled_id_set - old_ids)
+    exact_rekeys_from_removed = len(raw_removed_ids) - len(old_ids - reconciled_id_set)
+    if (
+        exact_rekeys_from_added != exact_rekeys_from_removed
+        or exact_rekeys_from_added < 0
+    ):
+        raise ValueError("Yonote identity reconciliation set arithmetic is inconsistent")
+    exact_content_rekeys = exact_rekeys_from_added
+    same_set_identity_rotations = sum(
+        not (fresh_id in raw_added_ids and old_id in raw_removed_ids)
+        for fresh_id, old_id in fresh_to_old.items()
+        if fresh_id != old_id
+    )
+
+    return reconciled, {
+        "raw_id_added": len(raw_added_ids),
+        "raw_id_removed": len(raw_removed_ids),
+        "exact_content_rekeys": exact_content_rekeys,
+        "same_set_identity_rotations": same_set_identity_rotations,
+        "ambiguous_exact_content_groups": ambiguous_groups,
+    }
+
+
+def _exact_document_content_key(
+    record: dict[str, Any],
+) -> tuple[str, str, str] | None:
+    scope = _immutable_document_scope(record)
+    text = str(record.get("text_clean") or record.get("text_raw") or "").strip()
+    if scope is None or not text:
+        return None
+    return (*scope, sha256(text.encode("utf-8")).hexdigest())
+
+
+def _immutable_document_scope(
+    record: dict[str, Any],
+) -> tuple[str, str] | None:
+    collection_id = str(record.get("source_collection_id") or "").strip()
+    document_id = str(record.get("source_document_id") or "").strip()
+    if not collection_id or not document_id:
+        return None
+    return collection_id, document_id
 
 
 def _validate_merged_seed(
@@ -790,8 +988,10 @@ def _build_sync_report(
     fresh_yonote_records: list[dict[str, Any]],
     merged_records: list[dict[str, Any]],
     documents_count: int,
+    loaded_documents: list[Any],
     applied: bool,
     seed_path: Path,
+    identity_reconciliation: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     old_yonote_records = [
         record
@@ -818,7 +1018,34 @@ def _build_sync_report(
         _changed_record_summary(old_by_id[chunk_id], fresh_by_id[chunk_id])
         for chunk_id in changed_ids
     ]
+    changed_field_counts = Counter(
+        field
+        for item in changed_items
+        for field in item.get("changed_fields") or []
+    )
+    metadata_only_changed = sum(
+        bool(fields) and set(fields) <= METADATA_ONLY_CHANGE_FIELDS
+        for fields in (
+            item.get("changed_fields") or []
+            for item in changed_items
+        )
+    )
     changed_total = len(added_ids) + len(changed_ids) + len(removed_ids)
+    identity_report = dict(identity_reconciliation or {})
+    identity_report.update(
+        {
+            "logical_added": len(added_ids),
+            "logical_removed": len(removed_ids),
+        }
+    )
+    raw_added = identity_report.get("raw_id_added", len(added_ids))
+    raw_removed = identity_report.get("raw_id_removed", len(removed_ids))
+    exact_rekeys = identity_report.get("exact_content_rekeys", 0)
+    if (
+        raw_added - exact_rekeys != len(added_ids)
+        or raw_removed - exact_rekeys != len(removed_ids)
+    ):
+        raise ValueError("Yonote identity reconciliation counts are inconsistent")
 
     return {
         "ok": True,
@@ -840,6 +1067,12 @@ def _build_sync_report(
         "added_items": added_items,
         "changed_items": changed_items,
         "removed_items": removed_items,
+        "identity_reconciliation": identity_report,
+        "change_classification": {
+            "metadata_only": metadata_only_changed,
+            "content_or_source": len(changed_ids) - metadata_only_changed,
+            "field_counts": dict(sorted(changed_field_counts.items())),
+        },
         "category_counts": _count_field(fresh_yonote_records, "category"),
         "forum_counts": _count_field(fresh_yonote_records, "forum_normalized"),
         "collection_counts": _count_field(
@@ -848,6 +1081,8 @@ def _build_sync_report(
         ),
         "chunk_audit": _chunk_audit(
             documents_count=documents_count,
+            loaded_documents=loaded_documents,
+            current_yonote_records=old_yonote_records,
             fresh_yonote_records=fresh_yonote_records,
             merged_records=merged_records,
         ),
@@ -870,6 +1105,11 @@ def _snapshot_safety(report: dict[str, Any]) -> dict[str, Any]:
     current_count = int(report.get("current_yonote_records") or 0)
     fresh_count = int(report.get("fresh_yonote_records") or 0)
     removed_count = int(report.get("removed") or 0)
+    identity = report.get("identity_reconciliation")
+    if not isinstance(identity, dict):
+        identity = {}
+    raw_removed_count = int(identity.get("raw_id_removed") or removed_count)
+    exact_content_rekeys = int(identity.get("exact_content_rekeys") or 0)
     removal_ratio = (removed_count / current_count) if current_count else 0.0
     reasons: list[str] = []
     if current_count > 0 and fresh_count == 0:
@@ -885,6 +1125,8 @@ def _snapshot_safety(report: dict[str, Any]) -> dict[str, Any]:
         "status": "STOP" if reasons else "GO",
         "reasons": reasons,
         "removed": removed_count,
+        "raw_id_removed": raw_removed_count,
+        "exact_content_rekeys": exact_content_rekeys,
         "current_yonote_records": current_count,
         "fresh_yonote_records": fresh_count,
         "removal_ratio": round(removal_ratio, 6),
@@ -897,17 +1139,20 @@ def _chunk_audit_allows_apply(report: dict[str, Any]) -> bool:
     audit = report.get("chunk_audit")
     if not isinstance(audit, dict):
         return False
-    documents = audit.get("documents")
+    blocking = audit.get("blocking")
     return (
-        isinstance(documents, dict)
-        and audit.get("warnings_total") == 0
-        and documents.get("without_chunks") == 0
+        audit.get("policy_version") == "yonote-chunk-audit-v1"
+        and audit.get("status") == "GO"
+        and isinstance(blocking, dict)
+        and blocking.get("total") == 0
     )
 
 
 def _chunk_audit(
     *,
     documents_count: int,
+    loaded_documents: list[Any],
+    current_yonote_records: list[dict[str, Any]],
     fresh_yonote_records: list[dict[str, Any]],
     merged_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -915,10 +1160,15 @@ def _chunk_audit(
     merged_lengths = [_record_text_length(record) for record in merged_records]
     duplicate_text_groups = _duplicate_text_groups(fresh_yonote_records)
     chunks_by_document = Counter(
-        str(record.get("source_document_id") or "").strip()
+        _record_document_scope(record)
         for record in fresh_yonote_records
-        if str(record.get("source_document_id") or "").strip()
+        if _record_document_scope(record) is not None
     )
+    current_document_scopes = {
+        scope
+        for record in current_yonote_records
+        if (scope := _record_document_scope(record)) is not None
+    }
     findings = {
         "empty_text": sum(length == 0 for length in fresh_lengths),
         "too_short_under_20_chars": sum(0 < length < 20 for length in fresh_lengths),
@@ -939,24 +1189,196 @@ def _chunk_audit(
             for record in fresh_yonote_records
         ),
     }
+    (
+        without_chunk_sample,
+        existing_documents_without_chunks,
+        new_documents_without_chunks,
+        substantive_new_documents_without_chunks,
+        unresolved_inventory_sample,
+    ) = _classify_documents_without_chunks(
+        loaded_documents=loaded_documents,
+        chunk_document_scopes=set(chunks_by_document),
+        current_document_scopes=current_document_scopes,
+    )
+    known_documents_without_chunks = (
+        existing_documents_without_chunks
+        + new_documents_without_chunks
+        + substantive_new_documents_without_chunks
+    )
+    unclassified_documents_without_chunks = max(
+        0,
+        documents_count - len(chunks_by_document),
+        known_documents_without_chunks,
+    ) - known_documents_without_chunks
+    documents_without_chunks = (
+        known_documents_without_chunks + unclassified_documents_without_chunks
+    )
+    if unclassified_documents_without_chunks:
+        without_chunk_sample.extend(
+            unresolved_inventory_sample[:unclassified_documents_without_chunks]
+        )
+        del without_chunk_sample[20:]
+    blocking_findings = {
+        name: findings[name]
+        for name in (
+            "empty_text",
+            "oversized_over_max_chars",
+            "missing_source_url",
+            "missing_source_document_id",
+            "missing_source_updated_at",
+        )
+    }
+    blocking_findings.update(
+        {
+            "existing_documents_without_chunks": existing_documents_without_chunks,
+            "new_substantive_documents_without_chunks": (
+                substantive_new_documents_without_chunks
+            ),
+            "unclassified_documents_without_chunks": (
+                unclassified_documents_without_chunks
+            ),
+        }
+    )
+    advisory_findings = {
+        "too_short_under_20_chars": findings["too_short_under_20_chars"],
+        "duplicate_text_groups": findings["duplicate_text_groups"],
+        "new_documents_without_chunks": new_documents_without_chunks,
+    }
+    blocking_total = sum(blocking_findings.values())
+    advisory_total = sum(advisory_findings.values())
     return {
+        "policy_version": "yonote-chunk-audit-v1",
+        "status": "STOP" if blocking_total else "GO",
         "max_chunk_chars": MAX_CHUNK_CHARS,
         "fresh_lengths": _length_summary(fresh_lengths),
         "merged_lengths": _length_summary(merged_lengths),
+        "blocking": {
+            "total": blocking_total,
+            "findings": blocking_findings,
+        },
+        "advisory": {
+            "total": advisory_total,
+            "findings": advisory_findings,
+        },
         "documents": {
             "read": documents_count,
             "with_chunks": len(chunks_by_document),
-            "without_chunks": max(0, documents_count - len(chunks_by_document)),
+            "without_chunks": documents_without_chunks,
+            "existing_without_chunks": existing_documents_without_chunks,
+            "new_without_chunks": new_documents_without_chunks,
+            "new_substantive_without_chunks": (
+                substantive_new_documents_without_chunks
+            ),
+            "unclassified_without_chunks": unclassified_documents_without_chunks,
+            "without_chunks_sample": without_chunk_sample,
             "chunks_per_document": _length_summary(list(chunks_by_document.values())),
             "largest_documents": [
-                {"source_document_id": document_id, "chunks": count}
-                for document_id, count in chunks_by_document.most_common(10)
+                {
+                    "source_collection_id": scope[0],
+                    "source_document_id": scope[1],
+                    "chunks": count,
+                }
+                for scope, count in chunks_by_document.most_common(10)
             ],
         },
         "findings": findings,
         "duplicate_text_sample": duplicate_text_groups[:10],
         "warnings_total": sum(findings.values()),
     }
+
+
+def _classify_documents_without_chunks(
+    *,
+    loaded_documents: list[Any],
+    chunk_document_scopes: set[tuple[str, str]],
+    current_document_scopes: set[tuple[str, str]],
+) -> tuple[list[dict[str, Any]], int, int, int, list[dict[str, Any]]]:
+    known_scopes = chunk_document_scopes | current_document_scopes
+    loaded_by_scope: dict[tuple[str, str], Any] = {}
+    sample: list[dict[str, Any]] = []
+    unresolved_sample: list[dict[str, Any]] = []
+    for document in loaded_documents:
+        document_id = str(getattr(document, "id", "") or "").strip()
+        collection_id = str(
+            getattr(document, "collection_id", "") or ""
+        ).strip()
+        if not document_id:
+            if len(unresolved_sample) < 20:
+                unresolved_sample.append(
+                    {
+                        "source_collection_id": collection_id[:128],
+                        "source_document_id": "",
+                        "reason": "missing_document_identity",
+                        "cleaned_chars": 0,
+                    }
+                )
+            continue
+        if not collection_id:
+            candidates = sorted(scope for scope in known_scopes if scope[1] == document_id)
+            if len(candidates) == 1:
+                collection_id = candidates[0][0]
+        if not collection_id:
+            if len(unresolved_sample) < 20:
+                unresolved_sample.append(
+                    {
+                        "source_collection_id": "",
+                        "source_document_id": document_id[:128],
+                        "reason": "missing_collection_identity",
+                        "cleaned_chars": len(
+                            clean_markdown_text(
+                                str(getattr(document, "text", "") or "").strip()
+                            )
+                        ),
+                    }
+                )
+            continue
+        loaded_by_scope.setdefault((collection_id, document_id), document)
+
+    existing = 0
+    advisory_new = 0
+    substantive_new = 0
+    for scope in sorted(set(loaded_by_scope) - chunk_document_scopes):
+        collection_id, document_id = scope
+        document = loaded_by_scope[scope]
+        raw_text = str(getattr(document, "text", "") or "").strip()
+        cleaned_text = clean_markdown_text(raw_text)
+        if scope in current_document_scopes:
+            existing += 1
+            reason = "existing_document_lost_all_chunks"
+        elif len(cleaned_text) >= 20:
+            substantive_new += 1
+            reason = "new_substantive_document_without_chunks"
+        else:
+            advisory_new += 1
+            reason = (
+                "new_raw_empty_container"
+                if not raw_text
+                else "new_below_minimum_container"
+            )
+        if len(sample) < 20:
+            sample.append(
+                {
+                    "source_collection_id": collection_id[:128],
+                    "source_document_id": document_id[:128],
+                    "reason": reason,
+                    "cleaned_chars": len(cleaned_text),
+                }
+            )
+    return (
+        sample,
+        existing,
+        advisory_new,
+        substantive_new,
+        unresolved_sample,
+    )
+
+
+def _record_document_scope(record: dict[str, Any]) -> tuple[str, str] | None:
+    collection_id = str(record.get("source_collection_id") or "").strip()
+    document_id = str(record.get("source_document_id") or "").strip()
+    if not document_id:
+        return None
+    return collection_id, document_id
 
 
 def _record_text_length(record: dict[str, Any]) -> int:

@@ -6,9 +6,12 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from scripts.build_yonote_kb_seed import (
+    MAX_CHUNK_CHARS,
     build_yonote_records,
     clean_markdown_text,
     merge_records,
+    split_long_paragraph,
+    split_section_text_with_heading,
 )
 from scripts.index_kb import validate_seed_items
 
@@ -98,3 +101,43 @@ def test_clean_markdown_text_removes_unresolved_social_link_labels() -> None:
     assert clean_markdown_text(
         "Контакты: test@example.ru, VK TG"
     ) == "Контакты: test@example.ru,"
+
+
+def test_split_long_paragraph_bounds_one_oversized_sentence_among_others() -> None:
+    paragraph = "Краткое введение. " + ("подтверждённый факт " * 80) + "Конец."
+
+    parts = split_long_paragraph(paragraph, max_chars=120)
+
+    assert len(parts) > 2
+    assert all(0 < len(part) <= 120 for part in parts)
+    assert " ".join(" ".join(parts).split()) == " ".join(paragraph.split())
+
+
+def test_split_section_text_with_heading_reserves_context_budget() -> None:
+    heading = "Документы для подачи заявки"
+    text = f"{heading}\n\n" + ("Подтверждённый текст без точек " * 80)
+
+    parts = split_section_text_with_heading(text, heading, max_chars=180)
+
+    assert len(parts) > 1
+    assert all(part.startswith(f"{heading}\n\n") for part in parts)
+    assert all(len(part) <= 180 for part in parts)
+    assert heading not in {part.strip() for part in parts}
+
+
+def test_markdown_builder_never_emits_chunks_over_configured_maximum(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "yonote"
+    source_dir.mkdir()
+    heading = "Обязательные документы"
+    markdown = f"# {heading}\n\nВведение. " + ("длинный факт " * 600)
+    with ZipFile(source_dir / "Волга 2026.zip", "w") as archive:
+        archive.writestr("Волга 2026.md", markdown)
+
+    records = build_yonote_records(source_dir, date(2026, 8, 21))
+
+    assert len(records) > 1
+    assert all(20 <= len(record["text_clean"]) <= MAX_CHUNK_CHARS for record in records)
+    assert all(record["text_clean"].startswith(heading) for record in records)
+    assert heading not in {record["text_clean"].strip() for record in records}

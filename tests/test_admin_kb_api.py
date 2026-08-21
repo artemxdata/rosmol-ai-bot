@@ -461,6 +461,23 @@ async def test_admin_kb_page_requires_enabled_admin_token(
         in enabled.text
     )
     assert "Apply заблокирован проверкой чанков" in enabled.text
+    assert "yonote-chunk-audit-v1" in enabled.text
+    assert "Есть замечания для просмотра" in enabled.text
+    assert "сами по себе не блокируют Apply" in enabled.text
+    assert "quality-note advisory" in enabled.text
+    assert "chunkAuditPolicy.status === \"STOP\"" in enabled.text
+    assert "chunkAuditPolicy.advisoryTotal > 0" in enabled.text
+    assert "Стабильность ID и тип изменений" in enabled.text
+    assert "identity_reconciliation" in enabled.text
+    assert "change_classification" in enabled.text
+    assert "same_set_identity_rotations" in enabled.text
+    assert "existing_without_chunks" in enabled.text
+    assert "new_without_chunks" in enabled.text
+    assert "new_substantive_without_chunks" in enabled.text
+    assert "unclassified_without_chunks" in enabled.text
+    assert "renderYonoteWithoutChunksSample(documentAudit)" in enabled.text
+    assert "new_substantive_document_without_chunks" in enabled.text
+    assert "ДОКУМЕНТЫ БЕЗ ЧАНКОВ — ПРИВАТНАЯ ДИАГНОСТИКА" in enabled.text
     assert (
         "const previewStopped = snapshotStopped || semanticStopped || "
         "chunkAuditStopped;"

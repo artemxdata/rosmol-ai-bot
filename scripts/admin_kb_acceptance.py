@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -25,6 +26,91 @@ SNAPSHOT_SAFETY_REASONS = frozenset(
         "yonote_snapshot_empty",
         "absolute_removal_limit_exceeded",
         "removal_ratio_limit_exceeded",
+    }
+)
+MAX_REMOVAL_RATIO_WITHOUT_WAIVER = 0.25
+MIN_REMOVALS_FOR_RATIO_GUARD = 10
+MAX_REMOVALS_WITHOUT_WAIVER = 100
+CHUNK_AUDIT_POLICY_VERSION = "yonote-chunk-audit-v1"
+CHUNK_AUDIT_LEGACY_FINDINGS = (
+    "empty_text",
+    "too_short_under_20_chars",
+    "oversized_over_max_chars",
+    "duplicate_text_groups",
+    "missing_source_url",
+    "missing_source_document_id",
+    "missing_source_updated_at",
+)
+CHUNK_AUDIT_BLOCKING_FINDINGS = (
+    "empty_text",
+    "oversized_over_max_chars",
+    "missing_source_url",
+    "missing_source_document_id",
+    "missing_source_updated_at",
+    "existing_documents_without_chunks",
+    "new_substantive_documents_without_chunks",
+    "unclassified_documents_without_chunks",
+)
+CHUNK_AUDIT_ADVISORY_FINDINGS = (
+    "too_short_under_20_chars",
+    "duplicate_text_groups",
+    "new_documents_without_chunks",
+)
+WITHOUT_CHUNKS_SAMPLE_REASONS = frozenset(
+    {
+        "existing_document_lost_all_chunks",
+        "new_substantive_document_without_chunks",
+        "new_raw_empty_container",
+        "new_below_minimum_container",
+        "missing_document_identity",
+        "missing_collection_identity",
+    }
+)
+YONOTE_CHANGE_FIELDS = frozenset(
+    {
+        "category",
+        "char_count",
+        "conditions_summary",
+        "dates",
+        "dates_mentioned",
+        "emails",
+        "extraction_date",
+        "forum",
+        "forum_normalized",
+        "has_conditional_logic",
+        "intent_examples",
+        "intent_examples_count",
+        "intent_name",
+        "is_generic",
+        "links",
+        "parent_chunk_id",
+        "phones",
+        "quality_review_reason",
+        "registration_deadline",
+        "source",
+        "source_category",
+        "source_collection_id",
+        "source_collection_name",
+        "source_columns",
+        "source_document_id",
+        "source_document_updated_at",
+        "source_file",
+        "source_heading_path",
+        "source_paragraph_end",
+        "source_paragraph_start",
+        "source_row",
+        "source_sheet",
+        "source_table_index",
+        "source_type",
+        "source_url",
+        "status",
+        "text_clean",
+        "text_raw",
+        "topic",
+        "updated_at",
+        "valid_from",
+        "valid_to",
+        "version",
     }
 )
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -138,6 +224,17 @@ def _require_non_negative_int(value: Any, reason: str) -> int:
     return value
 
 
+def _require_non_negative_number(value: Any, reason: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise AcceptanceError(reason)
+    return float(value)
+
+
 def _require_sha256(value: Any, reason: str) -> str:
     normalized = str(value or "").strip().casefold()
     if SHA256.fullmatch(normalized) is None:
@@ -190,9 +287,35 @@ def _ready_snapshot(payload: Mapping[str, Any], expected_git_sha: str) -> dict[s
 def _length_summary(value: Any, reason: str) -> dict[str, int]:
     if not isinstance(value, dict):
         raise AcceptanceError(reason)
-    return {
+    summary = {
         key: _require_non_negative_int(value.get(key), reason)
         for key in ("count", "minimum", "p50", "p95", "maximum")
+    }
+    ordered = (
+        summary["minimum"],
+        summary["p50"],
+        summary["p95"],
+        summary["maximum"],
+    )
+    if (
+        (summary["count"] == 0 and any(ordered))
+        or (summary["count"] > 0 and not (ordered[0] <= ordered[1] <= ordered[2] <= ordered[3]))
+    ):
+        raise AcceptanceError(reason)
+    return summary
+
+
+def _finding_counts(
+    value: Any,
+    *,
+    expected: tuple[str, ...],
+    reason: str,
+) -> dict[str, int]:
+    if not isinstance(value, dict) or set(value) != set(expected):
+        raise AcceptanceError(reason)
+    return {
+        name: _require_non_negative_int(value.get(name), reason)
+        for name in expected
     }
 
 
@@ -304,6 +427,8 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     projection = payload.get("index_projection")
     snapshot_safety = payload.get("snapshot_safety")
     semantic_integrity = payload.get("semantic_integrity")
+    identity_reconciliation = payload.get("identity_reconciliation")
+    change_classification = payload.get("change_classification")
     if not all(
         isinstance(item, dict)
         for item in (
@@ -313,6 +438,8 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
             projection,
             snapshot_safety,
             semantic_integrity,
+            identity_reconciliation,
+            change_classification,
         )
     ):
         raise AcceptanceError("yonote_preview_invalid")
@@ -322,12 +449,47 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     assert isinstance(projection, dict)
     assert isinstance(snapshot_safety, dict)
     assert isinstance(semantic_integrity, dict)
+    assert isinstance(identity_reconciliation, dict)
+    assert isinstance(change_classification, dict)
     if (
         payload.get("ok") is not True
         or payload.get("applied") is not False
         or payload.get("snapshot_scope") != "full"
     ):
         raise AcceptanceError("yonote_preview_invalid")
+
+    safe_counts = {
+        name: _require_non_negative_int(
+            payload.get(name), "yonote_preview_counts_invalid"
+        )
+        for name in (
+            "documents",
+            "current_records",
+            "current_yonote_records",
+            "fresh_yonote_records",
+            "merged_records",
+            "added",
+            "changed",
+            "removed",
+            "unchanged",
+        )
+    }
+    if (
+        safe_counts["current_yonote_records"] > safe_counts["current_records"]
+        or safe_counts["current_yonote_records"]
+        != safe_counts["removed"]
+        + safe_counts["changed"]
+        + safe_counts["unchanged"]
+        or safe_counts["fresh_yonote_records"]
+        != safe_counts["added"]
+        + safe_counts["changed"]
+        + safe_counts["unchanged"]
+        or safe_counts["merged_records"]
+        != safe_counts["current_records"]
+        - safe_counts["current_yonote_records"]
+        + safe_counts["fresh_yonote_records"]
+    ):
+        raise AcceptanceError("yonote_preview_counts_inconsistent")
 
     semantic_status = semantic_integrity.get("status")
     raw_semantic_codes = semantic_integrity.get("codes")
@@ -364,14 +526,59 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
 
     snapshot_status = snapshot_safety.get("status")
     snapshot_reasons = snapshot_safety.get("reasons")
+    current_yonote_records = safe_counts["current_yonote_records"]
+    fresh_yonote_records = safe_counts["fresh_yonote_records"]
+    removed_records = safe_counts["removed"]
+    removal_ratio = (
+        removed_records / current_yonote_records if current_yonote_records else 0.0
+    )
+    expected_snapshot_reasons: list[str] = []
+    if current_yonote_records > 0 and fresh_yonote_records == 0:
+        expected_snapshot_reasons.append("yonote_snapshot_empty")
+    if removed_records > MAX_REMOVALS_WITHOUT_WAIVER:
+        expected_snapshot_reasons.append("absolute_removal_limit_exceeded")
     if (
-        snapshot_status not in {"GO", "STOP"}
+        removed_records >= MIN_REMOVALS_FOR_RATIO_GUARD
+        and removal_ratio > MAX_REMOVAL_RATIO_WITHOUT_WAIVER
+    ):
+        expected_snapshot_reasons.append("removal_ratio_limit_exceeded")
+    expected_snapshot_status = "STOP" if expected_snapshot_reasons else "GO"
+    if (
+        snapshot_status != expected_snapshot_status
         or not isinstance(snapshot_reasons, list)
         or not all(isinstance(reason, str) for reason in snapshot_reasons)
         or len(snapshot_reasons) != len(set(snapshot_reasons))
         or any(reason not in SNAPSHOT_SAFETY_REASONS for reason in snapshot_reasons)
-        or (snapshot_status == "GO" and snapshot_reasons)
-        or (snapshot_status == "STOP" and not snapshot_reasons)
+        or snapshot_reasons != expected_snapshot_reasons
+        or _require_non_negative_int(
+            snapshot_safety.get("removed"), "yonote_snapshot_safety_invalid"
+        )
+        != removed_records
+        or _require_non_negative_int(
+            snapshot_safety.get("current_yonote_records"),
+            "yonote_snapshot_safety_invalid",
+        )
+        != current_yonote_records
+        or _require_non_negative_int(
+            snapshot_safety.get("fresh_yonote_records"),
+            "yonote_snapshot_safety_invalid",
+        )
+        != fresh_yonote_records
+        or _require_non_negative_number(
+            snapshot_safety.get("removal_ratio"),
+            "yonote_snapshot_safety_invalid",
+        )
+        != round(removal_ratio, 6)
+        or _require_non_negative_number(
+            snapshot_safety.get("maximum_removal_ratio_without_waiver"),
+            "yonote_snapshot_safety_invalid",
+        )
+        != MAX_REMOVAL_RATIO_WITHOUT_WAIVER
+        or _require_non_negative_int(
+            snapshot_safety.get("maximum_removals_without_waiver"),
+            "yonote_snapshot_safety_invalid",
+        )
+        != MAX_REMOVALS_WITHOUT_WAIVER
     ):
         raise AcceptanceError("yonote_snapshot_safety_invalid")
     semantic_stopped = semantic_status == "STOP"
@@ -381,10 +588,11 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     documents = audit.get("documents")
     if not isinstance(findings, dict) or not isinstance(documents, dict):
         raise AcceptanceError("yonote_chunk_audit_invalid")
-    safe_findings = {
-        name: _require_non_negative_int(value, "yonote_chunk_audit_invalid")
-        for name, value in findings.items()
-    }
+    safe_findings = _finding_counts(
+        findings,
+        expected=CHUNK_AUDIT_LEGACY_FINDINGS,
+        reason="yonote_chunk_audit_invalid",
+    )
     safe_documents = {
         "read": _require_non_negative_int(documents.get("read"), "yonote_chunk_audit_invalid"),
         "with_chunks": _require_non_negative_int(
@@ -397,13 +605,179 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
             documents.get("chunks_per_document"), "yonote_chunk_audit_invalid"
         ),
     }
+    safe_fresh_lengths = _length_summary(
+        audit.get("fresh_lengths"), "yonote_chunk_audit_invalid"
+    )
+    safe_merged_lengths = _length_summary(
+        audit.get("merged_lengths"), "yonote_chunk_audit_invalid"
+    )
+    if (
+        safe_documents["read"] != safe_counts["documents"]
+        or safe_documents["with_chunks"] + safe_documents["without_chunks"]
+        != safe_documents["read"]
+        or safe_documents["chunks_per_document"]["count"]
+        != safe_documents["with_chunks"]
+        or safe_documents["with_chunks"] > safe_counts["fresh_yonote_records"]
+        or (
+            safe_documents["with_chunks"] > 0
+            and safe_documents["chunks_per_document"]["minimum"] < 1
+        )
+        or safe_fresh_lengths["count"] != safe_counts["fresh_yonote_records"]
+        or safe_merged_lengths["count"] != safe_counts["merged_records"]
+    ):
+        raise AcceptanceError("yonote_chunk_audit_counts_inconsistent")
     warnings_total = _require_non_negative_int(
         audit.get("warnings_total"), "yonote_chunk_audit_invalid"
     )
     if warnings_total != sum(safe_findings.values()):
         raise AcceptanceError("yonote_chunk_audit_invalid")
-    audit_clean = warnings_total == 0 and safe_documents["without_chunks"] == 0
-    audit_stopped = not audit_clean
+    policy_version = audit.get("policy_version")
+    blocking = audit.get("blocking")
+    advisory = audit.get("advisory")
+    audit_status = audit.get("status")
+    if policy_version is None and blocking is None and advisory is None and audit_status is None:
+        # Older runtimes did not distinguish advisory observations from blockers.
+        # Keep that contract fail-closed: every legacy warning remains blocking.
+        legacy_blocking_findings = {
+            "legacy_warnings": warnings_total,
+            "documents_without_chunks": safe_documents["without_chunks"],
+        }
+        blocking_total = sum(legacy_blocking_findings.values())
+        advisory_total = 0
+        safe_blocking = legacy_blocking_findings
+        safe_advisory: dict[str, int] = {}
+        safe_policy_version = "legacy-conservative"
+        audit_status = "STOP" if blocking_total else "GO"
+        safe_documents.update(
+            {
+                "existing_without_chunks": 0,
+                "new_without_chunks": 0,
+                "new_substantive_without_chunks": 0,
+                "unclassified_without_chunks": safe_documents["without_chunks"],
+            }
+        )
+    else:
+        if (
+            policy_version != CHUNK_AUDIT_POLICY_VERSION
+            or audit_status not in {"GO", "STOP"}
+            or not isinstance(blocking, dict)
+            or not isinstance(advisory, dict)
+        ):
+            raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+        safe_blocking = _finding_counts(
+            blocking.get("findings"),
+            expected=CHUNK_AUDIT_BLOCKING_FINDINGS,
+            reason="yonote_chunk_audit_policy_invalid",
+        )
+        safe_advisory = _finding_counts(
+            advisory.get("findings"),
+            expected=CHUNK_AUDIT_ADVISORY_FINDINGS,
+            reason="yonote_chunk_audit_policy_invalid",
+        )
+        document_without_chunk_classes = {
+            name: _require_non_negative_int(
+                documents.get(name), "yonote_chunk_audit_policy_invalid"
+            )
+            for name in (
+                "existing_without_chunks",
+                "new_without_chunks",
+                "new_substantive_without_chunks",
+                "unclassified_without_chunks",
+            )
+        }
+        if (
+            sum(document_without_chunk_classes.values())
+            != safe_documents["without_chunks"]
+        ):
+            raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+        without_chunks_sample = documents.get("without_chunks_sample")
+        if (
+            not isinstance(without_chunks_sample, list)
+            or len(without_chunks_sample) > 20
+            or len(without_chunks_sample) > safe_documents["without_chunks"]
+        ):
+            raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+        sample_reason_counts = {
+            reason: 0 for reason in WITHOUT_CHUNKS_SAMPLE_REASONS
+        }
+        for item in without_chunks_sample:
+            if not isinstance(item, dict) or set(item) != {
+                "source_collection_id",
+                "source_document_id",
+                "reason",
+                "cleaned_chars",
+            }:
+                raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+            collection_id = item.get("source_collection_id")
+            document_id = item.get("source_document_id")
+            reason = item.get("reason")
+            if (
+                not isinstance(collection_id, str)
+                or len(collection_id) > 128
+                or not isinstance(document_id, str)
+                or len(document_id) > 128
+                or reason not in WITHOUT_CHUNKS_SAMPLE_REASONS
+            ):
+                raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+            _require_non_negative_int(
+                item.get("cleaned_chars"), "yonote_chunk_audit_policy_invalid"
+            )
+            sample_reason_counts[reason] += 1
+        if (
+            sample_reason_counts["existing_document_lost_all_chunks"]
+            > document_without_chunk_classes["existing_without_chunks"]
+            or sample_reason_counts["new_substantive_document_without_chunks"]
+            > document_without_chunk_classes["new_substantive_without_chunks"]
+            or sample_reason_counts["new_raw_empty_container"]
+            + sample_reason_counts["new_below_minimum_container"]
+            > document_without_chunk_classes["new_without_chunks"]
+            or sample_reason_counts["missing_document_identity"]
+            + sample_reason_counts["missing_collection_identity"]
+            > document_without_chunk_classes["unclassified_without_chunks"]
+        ):
+            raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+        safe_documents.update(document_without_chunk_classes)
+        expected_blocking = {
+            name: safe_findings[name]
+            for name in CHUNK_AUDIT_BLOCKING_FINDINGS
+            if name in safe_findings
+        }
+        expected_blocking.update(
+            {
+                "existing_documents_without_chunks": safe_documents[
+                    "existing_without_chunks"
+                ],
+                "new_substantive_documents_without_chunks": safe_documents[
+                    "new_substantive_without_chunks"
+                ],
+                "unclassified_documents_without_chunks": safe_documents[
+                    "unclassified_without_chunks"
+                ],
+            }
+        )
+        expected_advisory = {
+            "too_short_under_20_chars": safe_findings[
+                "too_short_under_20_chars"
+            ],
+            "duplicate_text_groups": safe_findings["duplicate_text_groups"],
+            "new_documents_without_chunks": safe_documents["new_without_chunks"],
+        }
+        blocking_total = _require_non_negative_int(
+            blocking.get("total"), "yonote_chunk_audit_policy_invalid"
+        )
+        advisory_total = _require_non_negative_int(
+            advisory.get("total"), "yonote_chunk_audit_policy_invalid"
+        )
+        if (
+            safe_blocking != expected_blocking
+            or safe_advisory != expected_advisory
+            or blocking_total != sum(safe_blocking.values())
+            or advisory_total != sum(safe_advisory.values())
+            or (audit_status == "GO") != (blocking_total == 0)
+        ):
+            raise AcceptanceError("yonote_chunk_audit_policy_invalid")
+        safe_policy_version = CHUNK_AUDIT_POLICY_VERSION
+    audit_stopped = audit_status == "STOP"
     preview_stopped = semantic_stopped or snapshot_stopped or audit_stopped
     if preview_stopped:
         expected_receipt_reason = (
@@ -445,6 +819,75 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     for name in ("stale_prune_required", "full_reindex_required"):
         if not isinstance(projection.get(name), bool):
             raise AcceptanceError("yonote_projection_invalid")
+    if (
+        safe_projection["stale_prune_required"] != (safe_counts["removed"] > 0)
+        or safe_projection["full_reindex_required"]
+        != (safe_counts["added"] + safe_counts["changed"] + safe_counts["removed"] > 0)
+    ):
+        raise AcceptanceError("yonote_projection_invalid")
+
+    safe_identity = {
+        name: _require_non_negative_int(
+            identity_reconciliation.get(name), "yonote_identity_reconciliation_invalid"
+        )
+        for name in (
+            "raw_id_added",
+            "raw_id_removed",
+            "exact_content_rekeys",
+            "same_set_identity_rotations",
+            "ambiguous_exact_content_groups",
+            "logical_added",
+            "logical_removed",
+        )
+    }
+    if (
+        safe_identity["raw_id_added"] - safe_identity["exact_content_rekeys"]
+        != safe_identity["logical_added"]
+        or safe_identity["raw_id_removed"]
+        - safe_identity["exact_content_rekeys"]
+        != safe_identity["logical_removed"]
+        or safe_identity["logical_added"] != safe_counts["added"]
+        or safe_identity["logical_removed"] != safe_counts["removed"]
+        or safe_identity["same_set_identity_rotations"]
+        > min(
+            safe_counts["current_yonote_records"],
+            safe_counts["fresh_yonote_records"],
+        )
+        or safe_identity["ambiguous_exact_content_groups"]
+        > min(
+            safe_counts["current_yonote_records"],
+            safe_counts["fresh_yonote_records"],
+        )
+    ):
+        raise AcceptanceError("yonote_identity_reconciliation_invalid")
+
+    metadata_only = _require_non_negative_int(
+        change_classification.get("metadata_only"),
+        "yonote_change_classification_invalid",
+    )
+    content_or_source = _require_non_negative_int(
+        change_classification.get("content_or_source"),
+        "yonote_change_classification_invalid",
+    )
+    raw_field_counts = change_classification.get("field_counts")
+    if not isinstance(raw_field_counts, dict):
+        raise AcceptanceError("yonote_change_classification_invalid")
+    safe_field_counts: dict[str, int] = {}
+    for raw_name, raw_count in raw_field_counts.items():
+        if not isinstance(raw_name, str) or raw_name not in YONOTE_CHANGE_FIELDS:
+            raise AcceptanceError("yonote_change_classification_invalid")
+        count = _require_non_negative_int(
+            raw_count, "yonote_change_classification_invalid"
+        )
+        if count == 0 or count > safe_counts["changed"]:
+            raise AcceptanceError("yonote_change_classification_invalid")
+        safe_field_counts[raw_name] = count
+    if (
+        metadata_only + content_or_source != safe_counts["changed"]
+        or (safe_counts["changed"] == 0) != (not safe_field_counts)
+        or sum(safe_field_counts.values()) < safe_counts["changed"]
+    ):
+        raise AcceptanceError("yonote_change_classification_invalid")
 
     safe = {
         "snapshot_scope": "full",
@@ -469,35 +912,34 @@ def _safe_preview(payload: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
                 hashes.get("merged_seed_sha256"), "yonote_preview_hash_invalid"
             ),
         },
-        "counts": {
-            name: _require_non_negative_int(payload.get(name), "yonote_preview_counts_invalid")
-            for name in (
-                "documents",
-                "current_records",
-                "current_yonote_records",
-                "fresh_yonote_records",
-                "merged_records",
-                "added",
-                "changed",
-                "removed",
-                "unchanged",
-            )
+        "counts": safe_counts,
+        "identity_reconciliation": safe_identity,
+        "change_classification": {
+            "metadata_only": metadata_only,
+            "content_or_source": content_or_source,
+            "field_counts": dict(sorted(safe_field_counts.items())),
         },
         "chunk_audit": {
-            "fresh_lengths": _length_summary(
-                audit.get("fresh_lengths"), "yonote_chunk_audit_invalid"
-            ),
-            "merged_lengths": _length_summary(
-                audit.get("merged_lengths"), "yonote_chunk_audit_invalid"
-            ),
+            "policy_version": safe_policy_version,
+            "status": audit_status,
+            "blocking": {
+                "total": blocking_total,
+                "findings": safe_blocking,
+            },
+            "advisory": {
+                "total": advisory_total,
+                "findings": safe_advisory,
+            },
+            "fresh_lengths": safe_fresh_lengths,
+            "merged_lengths": safe_merged_lengths,
             "documents": safe_documents,
             "findings": safe_findings,
             "warnings_total": warnings_total,
         },
         "index_projection": safe_projection,
-        "quality_status": "GO" if audit_clean and not preview_stopped else "STOP",
+        "quality_status": "STOP" if preview_stopped else "GO",
     }
-    return safe, audit_clean and not preview_stopped
+    return safe, not preview_stopped
 
 
 def _same_runtime_status(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
@@ -713,6 +1155,11 @@ def run_acceptance(
             "yonote_preview_failed",
         )
     )
+    if (
+        preview["index_projection"]["current_published_points"]
+        != runtime_before["published_records"]
+    ):
+        raise AcceptanceError("yonote_projection_runtime_mismatch")
     runtime_after = _safe_runtime_status(
         _json_object(
             requester(

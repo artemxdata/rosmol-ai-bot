@@ -74,11 +74,15 @@ def build_yonote_records(source_dir: Path, extraction_date: date) -> list[dict[s
 
         sections = parse_markdown_sections(document.text)
         for section in sections:
-            for part_index, text in enumerate(split_section_text(section.text), start=1):
+            clean_section_text = clean_markdown_text(section.text)
+            for part_index, clean_text in enumerate(
+                split_section_text_with_heading(
+                    clean_section_text,
+                    section.title,
+                ),
+                start=1,
+            ):
                 title = section.title if part_index == 1 else f"{section.title}, часть {part_index}"
-                if part_index > 1 and not text.startswith(section.title):
-                    text = f"{section.title}\n\n{text}"
-                clean_text = clean_markdown_text(text)
                 if len(clean_text) < MIN_SECTION_CHARS:
                     continue
                 records.append(
@@ -169,6 +173,8 @@ def parse_markdown_sections(text: str) -> list[Section]:
 
 
 def split_section_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
     clean = text.strip()
     if len(clean) <= max_chars:
         return [clean]
@@ -196,7 +202,54 @@ def split_section_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]
     return chunks
 
 
+def split_section_text_with_heading(
+    text: str,
+    heading: str,
+    *,
+    max_chars: int = MAX_CHUNK_CHARS,
+) -> list[str]:
+    """Split final cleaned section text while keeping heading context in every part.
+
+    The generic paragraph splitter treats a heading separated by a blank line as
+    its own paragraph. For a long following paragraph that used to produce a
+    useless heading-only chunk, then prepend the heading to an already full
+    chunk and exceed ``MAX_CHUNK_CHARS``. Reserve the heading budget before
+    splitting instead, and validate the final strings rather than the raw
+    provider representation.
+    """
+
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    clean = text.strip()
+    if not clean or len(clean) <= max_chars:
+        return [clean]
+
+    clean_heading = clean_markdown_text(heading)
+    prefix = f"{clean_heading}\n\n" if clean_heading else ""
+    if not prefix or len(prefix) >= max_chars:
+        return split_section_text(clean, max_chars=max_chars)
+
+    starts_with_heading = clean == clean_heading or clean.startswith(prefix)
+    body = clean[len(prefix) :].lstrip() if starts_with_heading else clean
+    if not body:
+        return split_section_text(clean, max_chars=max_chars)
+
+    body_parts = split_section_text(
+        body,
+        max_chars=max_chars - len(prefix),
+    )
+    contextualized = [
+        f"{prefix}{part}" if starts_with_heading or index > 0 else part
+        for index, part in enumerate(body_parts)
+    ]
+    if any(len(part) > max_chars for part in contextualized):
+        raise AssertionError("section splitter produced an oversized chunk")
+    return contextualized
+
+
 def split_long_paragraph(paragraph: str, max_chars: int) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
     if len(paragraph) <= max_chars:
         return [paragraph]
 
@@ -206,16 +259,18 @@ def split_long_paragraph(paragraph: str, max_chars: int) -> list[str]:
         if sentence.strip()
     ]
     if len(sentences) <= 1:
-        return [
-            paragraph[index : index + max_chars].strip()
-            for index in range(0, len(paragraph), max_chars)
-            if paragraph[index : index + max_chars].strip()
-        ]
+        return _split_oversized_fragment(paragraph, max_chars=max_chars)
+
+    bounded_sentences = [
+        fragment
+        for sentence in sentences
+        for fragment in _split_oversized_fragment(sentence, max_chars=max_chars)
+    ]
 
     chunks: list[str] = []
     current: list[str] = []
     current_len = 0
-    for sentence in sentences:
+    for sentence in bounded_sentences:
         extra = len(sentence) + (1 if current else 0)
         if current and current_len + extra > max_chars:
             chunks.append(" ".join(current))
@@ -227,6 +282,32 @@ def split_long_paragraph(paragraph: str, max_chars: int) -> list[str]:
     if current:
         chunks.append(" ".join(current))
     return chunks
+
+
+def _split_oversized_fragment(text: str, *, max_chars: int) -> list[str]:
+    """Bound one sentence/fragment, preferring whitespace over hard slicing."""
+
+    remaining = text.strip()
+    parts: list[str] = []
+    while len(remaining) > max_chars:
+        window = remaining[: max_chars + 1]
+        boundary = max(
+            window.rfind(" "),
+            window.rfind("\n"),
+            window.rfind("\t"),
+        )
+        if boundary <= 0:
+            boundary = max_chars
+        part = remaining[:boundary].strip()
+        if not part:
+            boundary = max_chars
+            part = remaining[:boundary].strip()
+        if part:
+            parts.append(part)
+        remaining = remaining[boundary:].strip()
+    if remaining:
+        parts.append(remaining)
+    return parts
 
 
 def clean_markdown_text(text: str) -> str:
