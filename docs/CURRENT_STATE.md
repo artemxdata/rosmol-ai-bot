@@ -34,6 +34,15 @@ Windows teardown-hang: `3591 passed`, штатный `1 skipped`, `0 failed`. Ru
 KB validation (`2186 valid / 2152 published`) и `git diff --check` — `OK`. До commit/push
 серверный прогон не начинать.
 
+Первая доставка tooling SHA `814e45b` остановилась до Compose и до первого `/ask` с
+`cost_ledger_not_writable`: runner ошибочно проверял доступ UID `10001` через полный host path;
+такая проверка зависит от прав родительского `/var/lib/rosmol` и не доказывает доступ к bind mount
+в контейнере. Платных запросов и reservation не было. Successor валидирует, что в exact ledger
+есть только обычные файлы/каталоги на одном filesystem, при необходимости безопасно нормализует
+их owner/mode без изменения содержимого и затем доказывает запись временного файла именно из
+exact `quality-acceptance` container до создания `run.started`. После этой правки `127` связанных
+runner/Compose/cost-governance тестов прошли; Ruff, Bash syntax, KB validation и diff-check — `OK`.
+
 Точный следующий шаг: commit/push tooling-only SHA, затем владельцу одним коротким server-local
 блоком detached-checkout tooling SHA и запустить ровно один цикл `25+25` против runtime `ba1408`.
 После `balanced50_global_analysis=OK` разбирать весь агрегат и приватные ответы как один пакет;

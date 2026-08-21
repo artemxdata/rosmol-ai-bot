@@ -80,6 +80,7 @@ def test_runner_materializes_exact_v5_25_plus_25_once() -> None:
 def test_runner_has_200_ruble_approval_and_persistent_cost_ledger() -> None:
     text = _text()
     run = _function(text, "run_eval_once")
+    ledger = _function(text, "normalize_cost_ledger_access")
 
     assert 'COST_CAP_RUB="200"' in text
     assert 'COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"' in text
@@ -90,6 +91,24 @@ def test_runner_has_200_ruble_approval_and_persistent_cost_ledger() -> None:
         text, "build_compose_command"
     )
     assert "run.binding.json" in text
+    assert "cost_ledger_not_writable" not in text
+    assert "stat.S_ISDIR" in ledger and "stat.S_ISREG" in ledger
+    assert "value.st_dev == root_device" in ledger
+    assert 'chown -R --no-dereference "$APP_UID:$APP_GID"' in ledger
+    assert '-type d -exec chmod 0700' in ledger
+    assert '-type f -exec chmod 0600' in ledger
+    assert 'value.st_uid == app_uid and value.st_gid == app_gid' in ledger
+    assert 'stat.S_IMODE(value.st_mode) & 0o700 == 0o700' in ledger
+    assert 'stat.S_IMODE(value.st_mode) & 0o400 == 0o400' in ledger
+    assert 'sudo -u "#$APP_UID"' not in ledger
+    container_probe = _function(text, "verify_cost_ledger_container_access")
+    assert "quality-acceptance" in container_probe
+    assert 'dir="/cost-ledger"' in container_probe
+    assert "os.unlink(path)" in container_probe
+    assert "eval.run_ask" not in container_probe
+    assert _function(text, "main").index(
+        "verify_cost_ledger_container_access"
+    ) < _function(text, "main").index("run_eval_once")
 
 
 def test_compose_sets_required_inactive_phase0_bindings() -> None:

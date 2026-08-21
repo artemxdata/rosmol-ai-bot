@@ -210,12 +210,67 @@ prepare_private_directories() {
   if sudo test -e "$COST_LEDGER_DIR" || sudo test -L "$COST_LEDGER_DIR"; then
     sudo test -d "$COST_LEDGER_DIR" || fail "cost_ledger_not_directory"
     sudo test ! -L "$COST_LEDGER_DIR" || fail "cost_ledger_not_regular"
-    sudo -u "#$APP_UID" test -w "$COST_LEDGER_DIR" \
-      || fail "cost_ledger_not_writable"
   else
     sudo install -d -m 0700 -o "$APP_UID" -g "$APP_GID" "$COST_LEDGER_DIR" \
       >/dev/null 2>&1 || fail "cost_ledger_create_failed"
   fi
+  normalize_cost_ledger_access
+}
+
+normalize_cost_ledger_access() {
+  local access_status
+  [[ "$(sudo readlink -f -- "$COST_LEDGER_DIR")" == "$COST_LEDGER_DIR" ]] \
+    || fail "cost_ledger_not_regular"
+  sudo python3 - "$COST_LEDGER_DIR" \
+    >/dev/null 2>&1 <<'PY' || fail "cost_ledger_contents_unsafe"
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+root_device = root.stat().st_dev
+for current, directories, files in os.walk(root, followlinks=False):
+    current_path = Path(current)
+    for path in [current_path, *(current_path / name for name in directories + files)]:
+        value = path.lstat()
+        assert value.st_dev == root_device
+        assert stat.S_ISDIR(value.st_mode) or stat.S_ISREG(value.st_mode)
+PY
+  if sudo python3 - "$COST_LEDGER_DIR" "$APP_UID" "$APP_GID" \
+    >/dev/null 2>&1 <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+app_uid = int(sys.argv[2])
+app_gid = int(sys.argv[3])
+for current, directories, files in os.walk(root, followlinks=False):
+    current_path = Path(current)
+    directory_paths = [current_path, *(current_path / name for name in directories)]
+    for path in directory_paths:
+        value = path.stat()
+        assert value.st_uid == app_uid and value.st_gid == app_gid
+        assert stat.S_IMODE(value.st_mode) & 0o700 == 0o700
+    for name in files:
+        value = (current_path / name).stat()
+        assert value.st_uid == app_uid and value.st_gid == app_gid
+        assert stat.S_IMODE(value.st_mode) & 0o400 == 0o400
+PY
+  then
+    access_status="unchanged"
+  else
+    sudo chown -R --no-dereference "$APP_UID:$APP_GID" "$COST_LEDGER_DIR" \
+      >/dev/null 2>&1 || fail "cost_ledger_owner_repair_failed"
+    sudo find "$COST_LEDGER_DIR" -xdev -type d -exec chmod 0700 {} + \
+      >/dev/null 2>&1 || fail "cost_ledger_mode_repair_failed"
+    sudo find "$COST_LEDGER_DIR" -xdev -type f -exec chmod 0600 {} + \
+      >/dev/null 2>&1 || fail "cost_ledger_mode_repair_failed"
+    access_status="repaired"
+  fi
+  printf 'balanced50_cost_ledger_access=%s\n' "$access_status"
 }
 
 build_compose_command() {
@@ -245,6 +300,13 @@ build_compose_command() {
     --profile ml
     --profile acceptance
   )
+}
+
+verify_cost_ledger_container_access() {
+  "${compose[@]}" run --rm --no-deps --pull never \
+    --entrypoint python quality-acceptance -c \
+    'import os,tempfile; descriptor,path=tempfile.mkstemp(prefix=".balanced50-access-",dir="/cost-ledger"); os.close(descriptor); os.unlink(path)' \
+    >/dev/null || fail "cost_ledger_container_access_failed"
 }
 
 write_or_validate_binding() {
@@ -392,6 +454,7 @@ main() {
   prepare_private_directories
   build_compose_command
   "${compose[@]}" config --quiet >/dev/null || fail "compose_config_failed"
+  verify_cost_ledger_container_access
   write_or_validate_binding || fail "run_binding_conflict"
   prepare_cases_if_needed
   printf 'balanced50_runtime_run=START cases=50 typical=25 atypical=25 cost_cap_rub=200 channels=HDE_VK_DISABLED\n'
