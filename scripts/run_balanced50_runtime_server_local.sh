@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 
 umask 077
-exec 2>/dev/null
 
 readonly SERVER_PROJECT_DIR="/opt/rosmol-ai-bot"
 readonly ENV_FILE="$SERVER_PROJECT_DIR/.env.production"
@@ -12,7 +11,7 @@ readonly MANIFEST_REL="eval/cases/pilot50_balanced_v5.json"
 readonly EXPECTED_MANIFEST_SHA256="12747d62190cc5e70d70490e9a649d91596ec69a316b5c2de3843ac3df6f85b4"
 readonly EXPECTED_CASES_SHA256="9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529"
 readonly TARGET="http://app-ml:8000/ask"
-readonly COST_CAP_RUB="200"
+readonly COST_CAP_RUB="100"
 readonly BASE_DIR="/var/lib/rosmol/balanced50-runtime-v1"
 readonly COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"
 readonly APP_UID="10001"
@@ -31,21 +30,87 @@ STAGING_DIR=""
 RUN_DIR=""
 EVIDENCE_DIR=""
 PROVENANCE_DIR=""
+DIAGNOSTIC_STDERR_FILE=""
+PRIMARY_RESULTS_PRESERVED="false"
 compose=()
 
+initialize_diagnostics() {
+  local exit_code
+  if DIAGNOSTIC_STDERR_FILE="$(mktemp -t balanced50-runtime-stderr.XXXXXX)"; then
+    chmod 0600 "$DIAGNOSTIC_STDERR_FILE"
+    exec 2>>"$DIAGNOSTIC_STDERR_FILE"
+    return
+  else
+    exit_code="$?"
+  fi
+  printf 'balanced50_runtime_server_local=FAIL step=diagnostic_capture_create exit_code=%s\n' \
+    "$exit_code"
+  printf 'stderr_tail_begin\n(stderr capture unavailable)\nstderr_tail_end\n'
+  exit "$exit_code"
+}
+
+print_stderr_tail() {
+  local count index start
+  local -a stderr_lines=()
+
+  printf 'stderr_tail_begin\n'
+  if [[ -n "$DIAGNOSTIC_STDERR_FILE" && -s "$DIAGNOSTIC_STDERR_FILE" ]]; then
+    mapfile -t stderr_lines <"$DIAGNOSTIC_STDERR_FILE"
+    count="${#stderr_lines[@]}"
+    start=0
+    if ((count > 20)); then
+      start=$((count - 20))
+    fi
+    for ((index = start; index < count; index++)); do
+      printf '%s\n' "${stderr_lines[$index]}"
+    done
+  else
+    printf '(stderr empty)\n'
+  fi
+  printf 'stderr_tail_end\n'
+}
+
 fail() {
-  printf 'balanced50_runtime_server_local=FAIL reason=%s\n' "$1"
-  exit 1
+  local observed_exit_code="$?"
+  local step="${1:-unknown_step}"
+  local exit_code="${2:-$observed_exit_code}"
+
+  trap - ERR
+  if [[ ! "$exit_code" =~ ^[0-9]+$ ]] || ((exit_code < 1 || exit_code > 255)); then
+    exit_code=1
+  fi
+  printf 'balanced50_runtime_server_local=FAIL step=%s exit_code=%s primary_results_preserved=%s\n' \
+    "$step" "$exit_code" "$PRIMARY_RESULTS_PRESERVED"
+  print_stderr_tail
+  exit "$exit_code"
+}
+
+unexpected_error() {
+  local line="$1"
+  local exit_code="$2"
+  fail "unexpected_error_line_${line}" "$exit_code"
+}
+
+diagnostic_self_test() {
+  local line
+  for ((line = 1; line <= 25; line++)); do
+    printf 'intentional diagnostic stderr line %02d\n' "$line" >&2
+  done
+  return 23
 }
 
 cleanup() {
   if [[ -n "$STAGING_DIR" && "$STAGING_DIR" == "$BASE_DIR/tooling/.staging-"* ]]; then
     sudo rm -rf --one-file-system -- "$STAGING_DIR" >/dev/null 2>&1 || true
   fi
+  if [[ -n "$DIAGNOSTIC_STDERR_FILE" ]]; then
+    rm -f -- "$DIAGNOSTIC_STDERR_FILE" >/dev/null 2>&1 || true
+  fi
 }
 
+initialize_diagnostics
 trap cleanup EXIT
-trap 'fail unexpected_error' ERR
+trap 'unexpected_error "$LINENO" "$?"' ERR
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$2"
@@ -63,7 +128,7 @@ validate_inputs() {
 verify_tooling_delta() {
   local changed_path
   git -C "$TOOLING_ROOT" merge-base --is-ancestor \
-    "$EXPECTED_RUNTIME_SHA" "$TOOLING_SHA" >/dev/null 2>&1 \
+    "$EXPECTED_RUNTIME_SHA" "$TOOLING_SHA" >/dev/null \
     || fail "tooling_not_descended_from_runtime"
   while IFS= read -r changed_path; do
     case "$changed_path" in
@@ -83,16 +148,16 @@ verify_tooling_delta() {
 
 verify_runtime_ready() {
   [[ "$(sudo docker inspect -f '{{.State.Running}}' \
-    "$RUNTIME_CONTAINER" 2>/dev/null)" == "true" ]] || return 1
+    "$RUNTIME_CONTAINER")" == "true" ]] || return 1
   [[ "$(sudo docker inspect \
     -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    "$RUNTIME_CONTAINER" 2>/dev/null)" == "$EXPECTED_RUNTIME_SHA" ]] || return 1
-  [[ "$(sudo docker inspect -f '{{.Image}}' "$RUNTIME_CONTAINER" 2>/dev/null)" == \
+    "$RUNTIME_CONTAINER")" == "$EXPECTED_RUNTIME_SHA" ]] || return 1
+  [[ "$(sudo docker inspect -f '{{.Image}}' "$RUNTIME_CONTAINER")" == \
     "$(sudo docker image inspect -f '{{.Id}}' \
-      "rosmol-ai-bot-ml:$EXPECTED_RUNTIME_SHA" 2>/dev/null)" ]] || return 1
-  [[ -z "$(sudo docker port "$RUNTIME_CONTAINER" 2>/dev/null)" ]] || return 1
+      "rosmol-ai-bot-ml:$EXPECTED_RUNTIME_SHA")" ]] || return 1
+  [[ -z "$(sudo docker port "$RUNTIME_CONTAINER")" ]] || return 1
   sudo docker exec -i "$RUNTIME_CONTAINER" python - "$EXPECTED_RUNTIME_SHA" \
-    >/dev/null 2>&1 <<'PY'
+    >/dev/null <<'PY'
 import json
 import sys
 import urllib.request
@@ -108,6 +173,35 @@ assert all(value == "ok" for value in checks.values())
 PY
 }
 
+verify_runtime_pricing() {
+  sudo docker exec -i "$RUNTIME_CONTAINER" python - \
+    "$SIMPLE_PRICE" "$COMPLEX_PRICE" >/dev/null <<'PY'
+import sys
+
+from src.config import get_settings
+
+simple_price, complex_price = map(float, sys.argv[1:])
+settings = get_settings()
+
+assert settings.cloud_ru_model_simple_input_price_rub_per_million == simple_price
+assert settings.cloud_ru_model_simple_output_price_rub_per_million == simple_price
+assert settings.cloud_ru_model_complex_input_price_rub_per_million == complex_price
+assert settings.cloud_ru_model_complex_output_price_rub_per_million == complex_price
+
+recognized_models = {
+    str(settings.cloud_ru_model_simple or "").strip(),
+    str(settings.cloud_ru_model_complex or "").strip(),
+    str(settings.cloud_ru_model or "").strip(),
+}
+recognized_models.discard("")
+for role_model in (
+    str(settings.cloud_ru_model_analyzer or "").strip(),
+    str(settings.cloud_ru_model_judge or "").strip(),
+):
+    assert not role_model or role_model in recognized_models
+PY
+}
+
 load_state() {
   require_command git "git_missing"
   require_command sudo "sudo_missing"
@@ -119,16 +213,16 @@ load_state() {
   require_command sort "sort_missing"
   require_command readlink "readlink_missing"
 
-  sudo -v >/dev/null 2>&1 || fail "sudo_auth_failed"
-  TOOLING_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" \
+  sudo -v >/dev/null || fail "sudo_auth_failed"
+  TOOLING_ROOT="$(git rev-parse --show-toplevel)" \
     || fail "not_in_git_worktree"
   [[ "$TOOLING_ROOT" == "$SERVER_PROJECT_DIR" ]] || fail "wrong_server_project"
   [[ "$(readlink -f -- "$TOOLING_ROOT")" == "$TOOLING_ROOT" ]] \
     || fail "server_project_not_regular"
-  TOOLING_SHA="$(git -C "$TOOLING_ROOT" rev-parse HEAD 2>/dev/null)" \
+  TOOLING_SHA="$(git -C "$TOOLING_ROOT" rev-parse HEAD)" \
     || fail "tooling_sha_unavailable"
   [[ "$TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "tooling_sha_invalid"
-  ! git -C "$TOOLING_ROOT" symbolic-ref -q HEAD >/dev/null 2>&1 \
+  ! git -C "$TOOLING_ROOT" symbolic-ref -q HEAD >/dev/null \
     || fail "tooling_not_detached"
   [[ -z "$(git -C "$TOOLING_ROOT" status --porcelain=v1 --untracked-files=all)" ]] \
     || fail "tooling_worktree_not_clean"
@@ -139,8 +233,9 @@ load_state() {
   sudo test -f "$ENV_FILE" || fail "server_env_missing"
   sudo test ! -L "$ENV_FILE" || fail "server_env_not_regular"
   sudo docker image inspect "rosmol-ai-bot-ml:$EXPECTED_RUNTIME_SHA" \
-    >/dev/null 2>&1 || fail "runtime_image_missing"
+    >/dev/null || fail "runtime_image_missing"
   verify_runtime_ready || fail "runtime_not_ready"
+  verify_runtime_pricing || fail "runtime_pricing_invalid"
 
   SOURCE_DIR="$BASE_DIR/tooling/$TOOLING_SHA"
   RUN_DIR="$BASE_DIR/runs/$DATASET_ID-$EXPECTED_RUNTIME_SHA"
@@ -163,7 +258,7 @@ verify_source_snapshot() {
     || fail "source_snapshot_contains_env"
   sudo git -c core.fileMode=false -c "safe.directory=$TOOLING_ROOT" \
     --git-dir="$TOOLING_ROOT/.git" --work-tree="$SOURCE_DIR" \
-    diff --quiet "$TOOLING_SHA" -- >/dev/null 2>&1 \
+    diff --quiet "$TOOLING_SHA" -- >/dev/null \
     || fail "source_snapshot_mismatch"
   expected_paths_sha="$(source_paths_sha)"
   actual_paths_sha="$(sudo find "$SOURCE_DIR" -mindepth 1 -printf '%P\0' \
@@ -178,7 +273,7 @@ verify_source_snapshot() {
 
 prepare_source_snapshot() {
   sudo install -d -m 0750 -o "$APP_UID" -g "$APP_GID" \
-    "$BASE_DIR" "$BASE_DIR/tooling" "$BASE_DIR/runs" >/dev/null 2>&1 \
+    "$BASE_DIR" "$BASE_DIR/tooling" "$BASE_DIR/runs" >/dev/null \
     || fail "base_directory_unavailable"
   if sudo test -e "$SOURCE_DIR" || sudo test -L "$SOURCE_DIR"; then
     verify_source_snapshot
@@ -186,18 +281,18 @@ prepare_source_snapshot() {
   fi
   STAGING_DIR="$BASE_DIR/tooling/.staging-$TOOLING_SHA-$$"
   sudo install -d -m 0750 -o "$APP_UID" -g "$APP_GID" "$STAGING_DIR" \
-    >/dev/null 2>&1 || fail "source_staging_create_failed"
+    >/dev/null || fail "source_staging_create_failed"
   if ! (git -C "$TOOLING_ROOT" archive --format=tar "$TOOLING_SHA" \
-    | sudo tar -xf - -C "$STAGING_DIR" --no-same-owner) >/dev/null 2>&1; then
+    | sudo tar -xf - -C "$STAGING_DIR" --no-same-owner) >/dev/null; then
     fail "source_snapshot_create_failed"
   fi
-  sudo chown -R "$APP_UID:$APP_GID" "$STAGING_DIR" >/dev/null 2>&1 \
+  sudo chown -R "$APP_UID:$APP_GID" "$STAGING_DIR" >/dev/null \
     || fail "source_snapshot_owner_failed"
-  sudo find "$STAGING_DIR" -type d -exec chmod 0550 {} + >/dev/null 2>&1 \
+  sudo find "$STAGING_DIR" -type d -exec chmod 0550 {} + >/dev/null \
     || fail "source_snapshot_mode_failed"
-  sudo find "$STAGING_DIR" -type f -exec chmod 0440 {} + >/dev/null 2>&1 \
+  sudo find "$STAGING_DIR" -type f -exec chmod 0440 {} + >/dev/null \
     || fail "source_snapshot_mode_failed"
-  sudo mv -T -- "$STAGING_DIR" "$SOURCE_DIR" >/dev/null 2>&1 \
+  sudo mv -T -- "$STAGING_DIR" "$SOURCE_DIR" >/dev/null \
     || fail "source_snapshot_publish_failed"
   STAGING_DIR=""
   verify_source_snapshot
@@ -205,14 +300,14 @@ prepare_source_snapshot() {
 
 prepare_private_directories() {
   sudo install -d -m 0700 -o "$APP_UID" -g "$APP_GID" \
-    "$RUN_DIR" "$EVIDENCE_DIR" "$PROVENANCE_DIR" >/dev/null 2>&1 \
+    "$RUN_DIR" "$EVIDENCE_DIR" "$PROVENANCE_DIR" >/dev/null \
     || fail "run_directory_unavailable"
   if sudo test -e "$COST_LEDGER_DIR" || sudo test -L "$COST_LEDGER_DIR"; then
     sudo test -d "$COST_LEDGER_DIR" || fail "cost_ledger_not_directory"
     sudo test ! -L "$COST_LEDGER_DIR" || fail "cost_ledger_not_regular"
   else
     sudo install -d -m 0700 -o "$APP_UID" -g "$APP_GID" "$COST_LEDGER_DIR" \
-      >/dev/null 2>&1 || fail "cost_ledger_create_failed"
+      >/dev/null || fail "cost_ledger_create_failed"
   fi
   normalize_cost_ledger_access
 }
@@ -222,7 +317,7 @@ normalize_cost_ledger_access() {
   [[ "$(sudo readlink -f -- "$COST_LEDGER_DIR")" == "$COST_LEDGER_DIR" ]] \
     || fail "cost_ledger_not_regular"
   sudo python3 - "$COST_LEDGER_DIR" \
-    >/dev/null 2>&1 <<'PY' || fail "cost_ledger_contents_unsafe"
+    >/dev/null <<'PY' || fail "cost_ledger_contents_unsafe"
 import os
 import stat
 import sys
@@ -238,7 +333,7 @@ for current, directories, files in os.walk(root, followlinks=False):
         assert stat.S_ISDIR(value.st_mode) or stat.S_ISREG(value.st_mode)
 PY
   if sudo python3 - "$COST_LEDGER_DIR" "$APP_UID" "$APP_GID" \
-    >/dev/null 2>&1 <<'PY'
+    >/dev/null <<'PY'
 import os
 import stat
 import sys
@@ -263,11 +358,11 @@ PY
     access_status="unchanged"
   else
     sudo chown -R --no-dereference "$APP_UID:$APP_GID" "$COST_LEDGER_DIR" \
-      >/dev/null 2>&1 || fail "cost_ledger_owner_repair_failed"
+      >/dev/null || fail "cost_ledger_owner_repair_failed"
     sudo find "$COST_LEDGER_DIR" -xdev -type d -exec chmod 0700 {} + \
-      >/dev/null 2>&1 || fail "cost_ledger_mode_repair_failed"
+      >/dev/null || fail "cost_ledger_mode_repair_failed"
     sudo find "$COST_LEDGER_DIR" -xdev -type f -exec chmod 0600 {} + \
-      >/dev/null 2>&1 || fail "cost_ledger_mode_repair_failed"
+      >/dev/null || fail "cost_ledger_mode_repair_failed"
     access_status="repaired"
   fi
   printf 'balanced50_cost_ledger_access=%s\n' "$access_status"
@@ -303,7 +398,7 @@ build_compose_command() {
 }
 
 verify_cost_ledger_container_access() {
-  "${compose[@]}" run --rm --no-deps --pull never \
+  "${compose[@]}" run --rm --remove-orphans --no-deps --pull never \
     --entrypoint python quality-acceptance -c \
     'import os,tempfile; descriptor,path=tempfile.mkstemp(prefix=".balanced50-access-",dir="/cost-ledger"); os.close(descriptor); os.unlink(path)' \
     >/dev/null || fail "cost_ledger_container_access_failed"
@@ -311,7 +406,7 @@ verify_cost_ledger_container_access() {
 
 write_or_validate_binding() {
   sudo python3 - "$EVIDENCE_DIR/run.binding.json" "$TOOLING_SHA" \
-    "$EXPECTED_RUNTIME_SHA" "$APPROVAL_ID" <<'PY'
+    "$EXPECTED_RUNTIME_SHA" "$APPROVAL_ID" "$COST_CAP_RUB" <<'PY'
 import json
 import os
 import sys
@@ -325,7 +420,7 @@ expected = {
     "approval_id": sys.argv[4],
     "dataset_id": "pilot50_balanced_v5",
     "cases_sha256": "9d53114722191330214f5917ee3baf4ccfcf4eb644be34a0253c60531b225529",
-    "cost_cap_rub": 200,
+    "cost_cap_rub": float(sys.argv[5]),
     "channels_status": "HDE_VK_DISABLED",
 }
 payload = (json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -346,7 +441,7 @@ validate_cases() {
   sudo test ! -L "$cases_path" || fail "cases_not_regular"
   [[ "$(sudo sha256sum "$cases_path" | cut -d ' ' -f 1)" == \
     "$EXPECTED_CASES_SHA256" ]] || fail "cases_sha_mismatch"
-  sudo python3 - "$cases_path" >/dev/null 2>&1 <<'PY'
+  sudo python3 - "$cases_path" >/dev/null <<'PY'
 import json
 import sys
 from collections import Counter
@@ -368,7 +463,7 @@ prepare_cases_if_needed() {
     validate_cases
     return
   fi
-  "${compose[@]}" run --rm --no-deps --pull never \
+  "${compose[@]}" run --rm --remove-orphans --no-deps --pull never \
     --entrypoint python quality-acceptance \
     -m scripts.pilot50 prepare \
     --manifest "/workspace/$MANIFEST_REL" \
@@ -380,7 +475,7 @@ prepare_cases_if_needed() {
 write_marker_once() {
   local path="$1"
   local value="$2"
-  sudo python3 - "$path" "$value" >/dev/null 2>&1 <<'PY'
+  sudo python3 - "$path" "$value" >/dev/null <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -399,31 +494,52 @@ PY
 }
 
 analyze_and_print() {
-  "${compose[@]}" run --rm --no-deps --pull never \
+  "${compose[@]}" run --rm --remove-orphans --no-deps --pull never \
     --entrypoint python quality-acceptance \
     /workspace/scripts/analyze_balanced50_runtime.py \
     --report /evidence/report.json \
     --output /evidence/global-summary.json \
     --expected-runtime-git-sha "$EXPECTED_RUNTIME_SHA" \
-    || fail "global_analysis_failed"
+    --expected-cost-cap-rub "$COST_CAP_RUB" \
+    || fail "global_analysis"
+}
+
+preserve_primary_results() {
+  local report_path="$1"
+  local eval_exit_code="$2"
+
+  sudo test -f "$report_path" || fail "ask_report_missing" "$eval_exit_code"
+  sudo test ! -L "$report_path" || fail "ask_report_not_regular" "$eval_exit_code"
+  PRIMARY_RESULTS_PRESERVED="true"
+  printf 'balanced50_primary_results=PRESERVED cases=50 report=%s eval_exit_code=%s\n' \
+    "$report_path" "$eval_exit_code"
+}
+
+finalize_preserved_results() {
+  local completed_path="$1"
+
+  verify_runtime_ready || fail "postflight_runtime_ready"
+  analyze_and_print
+  write_marker_once "$completed_path" "$EXPECTED_RUNTIME_SHA"
 }
 
 run_eval_once() {
   local report_path="$EVIDENCE_DIR/report.json"
   local started_path="$EVIDENCE_DIR/run.started"
   local completed_path="$EVIDENCE_DIR/run.completed"
+  local eval_exit_code=0
 
   if sudo test -e "$started_path" || sudo test -L "$started_path"; then
     sudo test -f "$report_path" || fail "interrupted_after_start_no_retry"
-    analyze_and_print
-    write_marker_once "$completed_path" "$EXPECTED_RUNTIME_SHA"
+    preserve_primary_results "$report_path" 0
+    finalize_preserved_results "$completed_path"
     return
   fi
   sudo test ! -e "$report_path" || fail "unbound_report_exists"
   sudo test ! -e "$completed_path" || fail "unbound_completed_marker"
   write_marker_once "$started_path" "$EXPECTED_RUNTIME_SHA"
 
-  if ! "${compose[@]}" run --rm --no-deps --pull never \
+  if "${compose[@]}" run --rm --remove-orphans --no-deps --pull never \
     --entrypoint python quality-acceptance \
     -m eval.run_ask \
     --cases /evidence/cases.json \
@@ -439,15 +555,25 @@ run_eval_once() {
     --kb-seed /workspace/data/knowledge_base_seed.json \
     --bypass-cache \
     --require-complete-traces >/dev/null; then
-    fail "ask_eval_failed_no_retry"
+    eval_exit_code=0
+  else
+    eval_exit_code="$?"
   fi
-  sudo test -f "$report_path" || fail "ask_report_missing"
-  verify_runtime_ready || fail "runtime_changed_during_run"
-  analyze_and_print
-  write_marker_once "$completed_path" "$EXPECTED_RUNTIME_SHA"
+  preserve_primary_results "$report_path" "$eval_exit_code"
+  finalize_preserved_results "$completed_path"
+  if ((eval_exit_code != 0)); then
+    fail "ask_eval_auxiliary_failure_after_report" "$eval_exit_code"
+  fi
 }
 
 main() {
+  if [[ "$#" -eq 1 && "$1" == "diagnostic-self-test" ]]; then
+    if diagnostic_self_test; then
+      fail "intentional_diagnostic_step_unexpected_success" 1
+    else
+      fail "intentional_diagnostic_step" "$?"
+    fi
+  fi
   validate_inputs "$@"
   load_state
   prepare_source_snapshot
@@ -457,9 +583,10 @@ main() {
   verify_cost_ledger_container_access
   write_or_validate_binding || fail "run_binding_conflict"
   prepare_cases_if_needed
-  printf 'balanced50_runtime_run=START cases=50 typical=25 atypical=25 cost_cap_rub=200 channels=HDE_VK_DISABLED\n'
+  verify_runtime_pricing || fail "runtime_pricing_changed_before_run"
+  printf 'balanced50_runtime_run=START cases=50 typical=25 atypical=25 cost_cap_rub=%s channels=HDE_VK_DISABLED\n' \
+    "$COST_CAP_RUB"
   run_eval_once
-  verify_runtime_ready || fail "runtime_not_ready_after_analysis"
   printf 'balanced50_runtime_server_local=OK runtime_sha=%s tooling_sha=%s channels=HDE_VK_DISABLED\n' \
     "$EXPECTED_RUNTIME_SHA" "$TOOLING_SHA"
 }

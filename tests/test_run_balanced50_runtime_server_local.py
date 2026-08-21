@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +11,26 @@ SCRIPT = ROOT / "scripts" / "run_balanced50_runtime_server_local.sh"
 
 def _text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
+
+
+def _bash_execution() -> tuple[str, dict[str, str]]:
+    environment = os.environ.copy()
+    if os.name == "nt":
+        git_root = (
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Git"
+        )
+        git_bash = git_root / "usr" / "bin" / "bash.exe"
+        if git_bash.is_file():
+            environment["PATH"] = os.pathsep.join(
+                [
+                    str(git_root / "usr" / "bin"),
+                    str(git_root / "bin"),
+                    environment.get("PATH", ""),
+                ]
+            )
+            return str(git_bash), environment
+    return "bash", environment
 
 
 def _function(text: str, name: str) -> str:
@@ -26,7 +48,10 @@ def test_runner_is_server_local_exact_runtime_and_channel_bound() -> None:
 
     assert text.startswith("#!/usr/bin/env bash\nset -Eeuo pipefail\n")
     assert "umask 077" in text
-    assert "exec 2>/dev/null" in text
+    assert "exec 2>/dev/null" not in text
+    assert "DIAGNOSTIC_STDERR_FILE" in text
+    assert "stderr_tail_begin" in _function(text, "print_stderr_tail")
+    assert "step=%s exit_code=%s" in _function(text, "fail")
     assert 'SERVER_PROJECT_DIR="/opt/rosmol-ai-bot"' in text
     assert 'RUNTIME_CONTAINER="rosmol-app-ml"' in text
     assert 'CHANNEL_ATTESTATION" == "HDE_VK_DISABLED"' in text
@@ -34,7 +59,7 @@ def test_runner_is_server_local_exact_runtime_and_channel_bound() -> None:
     assert "tooling_worktree_not_clean" in text
     assert "tooling_contains_runtime_change" in text
     assert "runtime_image_identity_mismatch" not in text
-    assert "runtime_changed_during_run" in text
+    assert "postflight_runtime_ready" in text
     assert "release_git_sha" in _function(text, "verify_runtime_ready")
 
     lowered = text.casefold()
@@ -77,12 +102,15 @@ def test_runner_materializes_exact_v5_25_plus_25_once() -> None:
     assert "interrupted_after_start_no_retry" in run
 
 
-def test_runner_has_200_ruble_approval_and_persistent_cost_ledger() -> None:
+def test_runner_has_100_ruble_approval_and_persistent_cost_ledger() -> None:
     text = _text()
     run = _function(text, "run_eval_once")
     ledger = _function(text, "normalize_cost_ledger_access")
 
-    assert 'COST_CAP_RUB="200"' in text
+    assert 'COST_CAP_RUB="100"' in text
+    assert '"cost_cap_rub": float(sys.argv[5])' in _function(
+        text, "write_or_validate_binding"
+    )
     assert 'COST_LEDGER_DIR="/var/lib/rosmol/eval-cost-ledger-v1"' in text
     assert '--max-llm-cost-rub "$COST_CAP_RUB"' in run
     assert '--high-cost-approval-id "$APPROVAL_ID"' in run
@@ -109,6 +137,27 @@ def test_runner_has_200_ruble_approval_and_persistent_cost_ledger() -> None:
     assert _function(text, "main").index(
         "verify_cost_ledger_container_access"
     ) < _function(text, "main").index("run_eval_once")
+
+
+def test_runner_verifies_pricing_inside_target_runtime_before_start() -> None:
+    text = _text()
+    pricing = _function(text, "verify_runtime_pricing")
+    load_state = _function(text, "load_state")
+    main = _function(text, "main")
+    run = _function(text, "run_eval_once")
+
+    assert 'docker exec -i "$RUNTIME_CONTAINER" python -' in pricing
+    assert "from src.config import get_settings" in pricing
+    assert "cloud_ru_model_simple_input_price_rub_per_million" in pricing
+    assert "cloud_ru_model_simple_output_price_rub_per_million" in pricing
+    assert "cloud_ru_model_complex_input_price_rub_per_million" in pricing
+    assert "cloud_ru_model_complex_output_price_rub_per_million" in pricing
+    assert "cloud_ru_model_analyzer" in pricing
+    assert "cloud_ru_model_judge" in pricing
+    assert "runtime_pricing_invalid" in load_state
+    assert "runtime_pricing_changed_before_run" in main
+    assert main.index("verify_runtime_pricing") < main.index("run_eval_once")
+    assert "verify_runtime_pricing" not in run
 
 
 def test_compose_sets_required_inactive_phase0_bindings() -> None:
@@ -142,7 +191,60 @@ def test_runner_uses_archived_source_and_prints_only_global_analysis() -> None:
     assert "source_snapshot_writable" in _function(text, "verify_source_snapshot")
     assert "/workspace/scripts/analyze_balanced50_runtime.py" in analyze
     assert "global-summary.json" in analyze
+    assert '--expected-cost-cap-rub "$COST_CAP_RUB"' in analyze
     assert "response" not in analyze
     assert "query" not in analyze
     assert "request_id" not in analyze
     assert ">/dev/null" in _function(text, "run_eval_once")
+
+
+def test_runner_removes_orphans_for_every_compose_run() -> None:
+    text = _text()
+
+    assert text.count('"${compose[@]}" run') == 4
+    assert text.count("run --rm --remove-orphans --no-deps --pull never") == 4
+
+
+def test_runner_preserves_primary_results_before_postflight_and_analysis() -> None:
+    text = _text()
+    run = _function(text, "run_eval_once")
+    preserve = _function(text, "preserve_primary_results")
+    finalize = _function(text, "finalize_preserved_results")
+    fail = _function(text, "fail")
+
+    assert 'PRIMARY_RESULTS_PRESERVED="true"' in preserve
+    assert "balanced50_primary_results=PRESERVED" in preserve
+    assert "postflight_runtime_ready" in finalize
+    assert finalize.index("verify_runtime_ready") < finalize.index("analyze_and_print")
+    assert run.index("preserve_primary_results") < run.index(
+        "finalize_preserved_results"
+    )
+    assert run.index("finalize_preserved_results") < run.index(
+        "ask_eval_auxiliary_failure_after_report"
+    )
+    assert "primary_results_preserved=%s" in fail
+
+
+def test_diagnostic_self_test_prints_step_exit_code_and_last_20_stderr_lines() -> None:
+    bash, environment = _bash_execution()
+    completed = subprocess.run(
+        [bash, SCRIPT.as_posix(), "diagnostic-self-test"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert completed.returncode == 23
+    assert completed.stderr == ""
+    lines = completed.stdout.splitlines()
+    assert lines[0] == (
+        "balanced50_runtime_server_local=FAIL step=intentional_diagnostic_step "
+        "exit_code=23 primary_results_preserved=false"
+    )
+    assert lines[1] == "stderr_tail_begin"
+    assert lines[2] == "intentional diagnostic stderr line 06"
+    assert lines[21] == "intentional diagnostic stderr line 25"
+    assert lines[22] == "stderr_tail_end"
+    assert "intentional diagnostic stderr line 05" not in completed.stdout

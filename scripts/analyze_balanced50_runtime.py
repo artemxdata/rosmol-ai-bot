@@ -6,17 +6,23 @@ import json
 import math
 import os
 import re
+import sys
 import tempfile
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
+from urllib import request
 
 SCHEMA_VERSION = "balanced50-global-analysis-v1"
 DATASET_ID = "pilot50_balanced_v5"
+DEFAULT_COST_CAP_RUB = 100.0
 EXPECTED_CASES_TOTAL = 50
 EXPECTED_GROUP_TOTAL = 25
 MAX_REPORT_BYTES = 64 * 1024 * 1024
+RUNTIME_READY_URL = "http://app-ml:8000/ready"
+RUNTIME_READY_TIMEOUT_SECONDS = 30
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 GROUPS = ("typical", "atypical")
 OPERATOR_HANDOFF_MARKERS = (
@@ -173,7 +179,26 @@ def _list_counter(
     return dict(sorted(counts.items()))
 
 
-def _validate_runtime_identity(report: Mapping[str, Any], expected_sha: str) -> None:
+def _live_ready_release_git_sha() -> str:
+    try:
+        with request.urlopen(
+            RUNTIME_READY_URL,
+            timeout=RUNTIME_READY_TIMEOUT_SECONDS,
+        ) as response:
+            payload = json.load(response)
+    except (HTTPException, OSError, UnicodeError, ValueError) as exc:
+        raise AnalysisError("runtime_postflight_unverifiable") from exc
+    if not isinstance(payload, dict) or payload.get("status") != "ready":
+        raise AnalysisError("runtime_postflight_unverifiable")
+    release_git_sha = payload.get("release_git_sha")
+    if not isinstance(release_git_sha, str) or SHA_RE.fullmatch(release_git_sha) is None:
+        raise AnalysisError("runtime_postflight_unverifiable")
+    return release_git_sha
+
+
+def _validate_runtime_identity(
+    report: Mapping[str, Any], expected_sha: str
+) -> tuple[str, str]:
     identity = report.get("runtime_identity")
     if not isinstance(identity, dict):
         raise AnalysisError("runtime_identity_missing")
@@ -183,17 +208,25 @@ def _validate_runtime_identity(report: Mapping[str, Any], expected_sha: str) -> 
         raise AnalysisError("runtime_identity_status_invalid")
     if identity.get("preflight_release_git_sha") != expected_sha:
         raise AnalysisError("runtime_preflight_sha_mismatch")
-    if identity.get("postflight_release_git_sha") != expected_sha:
-        raise AnalysisError("runtime_postflight_sha_mismatch")
-    if identity.get("verified_release_git_sha") != expected_sha:
-        raise AnalysisError("runtime_observed_sha_mismatch")
+    if "postflight_release_git_sha" not in identity:
+        raise AnalysisError("runtime_postflight_sha_missing")
+    postflight_sha = identity.get("postflight_release_git_sha")
+    if postflight_sha is not None:
+        if postflight_sha != expected_sha:
+            raise AnalysisError("runtime_postflight_sha_mismatch")
+        return postflight_sha, "postflight"
+    live_sha = _live_ready_release_git_sha()
+    if live_sha != expected_sha:
+        raise AnalysisError("runtime_postflight_sha_mismatch_live")
+    return live_sha, "live_ready"
 
 
 def _validate_report(
     report: Mapping[str, Any],
     *,
     expected_runtime_sha: str,
-) -> list[dict[str, Any]]:
+    expected_cost_cap_rub: float,
+) -> tuple[list[dict[str, Any]], str, str]:
     if report.get("cases_total") != EXPECTED_CASES_TOTAL:
         raise AnalysisError("cases_total_invalid")
     results = report.get("results")
@@ -231,10 +264,12 @@ def _validate_report(
     maximum = _finite_nonnegative(
         report.get("llm_budget_rub"), reason="llm_budget_invalid"
     )
-    if maximum != 200.0 or cost > maximum:
+    if expected_cost_cap_rub <= 0 or maximum != expected_cost_cap_rub or cost > maximum:
         raise AnalysisError("llm_budget_binding_invalid")
-    _validate_runtime_identity(report, expected_runtime_sha)
-    return results
+    verified_sha, verified_sha_source = _validate_runtime_identity(
+        report, expected_runtime_sha
+    )
+    return results, verified_sha, verified_sha_source
 
 
 def _group_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -296,8 +331,13 @@ def build_global_analysis(
     *,
     expected_runtime_sha: str,
     report_sha256: str,
+    expected_cost_cap_rub: float = DEFAULT_COST_CAP_RUB,
 ) -> dict[str, Any]:
-    results = _validate_report(report, expected_runtime_sha=expected_runtime_sha)
+    results, verified_sha, verified_sha_source = _validate_report(
+        report,
+        expected_runtime_sha=expected_runtime_sha,
+        expected_cost_cap_rub=expected_cost_cap_rub,
+    )
     grouped = {
         group: [result for result in results if _group_for_result(result) == group]
         for group in GROUPS
@@ -309,14 +349,16 @@ def build_global_analysis(
         "dataset_id": DATASET_ID,
         "classification": "exposed_calibration_regression",
         "human_product_verdict": False,
-        "runtime_git_sha": expected_runtime_sha,
+        "runtime_git_sha": verified_sha,
+        "verified_release_git_sha": verified_sha,
+        "verified_sha_source": verified_sha_source,
         "report_sha256": report_sha256,
         "execution": {
             "cases_total": EXPECTED_CASES_TOTAL,
             "trace_coverage": 1.0,
             "cache_hits": 0,
             "llm_cost_rub": round(float(report.get("llm_estimated_cost_rub", 0)), 6),
-            "llm_cost_cap_rub": 200,
+            "llm_cost_cap_rub": expected_cost_cap_rub,
         },
         "outcomes": {
             "overall": overall,
@@ -390,24 +432,49 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-runtime-git-sha", required=True)
+    parser.add_argument(
+        "--expected-cost-cap-rub", type=float, default=DEFAULT_COST_CAP_RUB
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    step = "validate_arguments"
     try:
         if SHA_RE.fullmatch(args.expected_runtime_git_sha) is None:
             raise AnalysisError("runtime_sha_invalid")
+        expected_cost_cap_rub = _finite_nonnegative(
+            args.expected_cost_cap_rub,
+            reason="cost_cap_invalid",
+        )
+        if expected_cost_cap_rub <= 0:
+            raise AnalysisError("cost_cap_invalid")
+        step = "read_report"
         report, report_bytes = _read_json_object(args.report)
+        step = "build_global_analysis"
         summary = build_global_analysis(
             report,
             expected_runtime_sha=args.expected_runtime_git_sha,
             report_sha256=hashlib.sha256(report_bytes).hexdigest(),
+            expected_cost_cap_rub=expected_cost_cap_rub,
         )
         payload = _canonical_bytes(summary)
+        step = "write_global_analysis"
         _write_idempotent(args.output, payload)
-    except (AnalysisError, OSError):
-        print("balanced50_global_analysis=FAIL reason=validation_failed")
+    except AnalysisError as exc:
+        print(
+            "balanced50_global_analysis=FAIL "
+            f"step={step} exit_code=2 error={exc}",
+            file=sys.stderr,
+        )
+        return 2
+    except OSError as exc:
+        print(
+            "balanced50_global_analysis=FAIL "
+            f"step={step} exit_code=2 error={type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         return 2
     print("balanced50_global_analysis=OK")
     print(payload.decode("utf-8"), end="")

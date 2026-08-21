@@ -4,11 +4,59 @@
 
 **Ветка:** `codex/real-rag`
 
+Baseline 30% (15/50), прогон 21.08.2026, directional, calibration, CI ≈ 18-45%. Типовые 36% (9/25), нетиповые 24% (6/25), эскалация 38% (19/50), стоимость 37,9 ₽.
+
 **Exact runtime на тестовом сервере:**
 `ba1408b48fa058f146dab31a73e0b13e250ed556`. Runtime `rosmol-app` и `rosmol-app-ml` на этом SHA
 вернули `ready`; HDE/VK остаются выключенными. Это docs-only потомок implementation commit
 `bc265b3a5cb4177ad678e3febb0a44d6a26f2120` с исправлениями splitter, стабилизацией ID и
 классификацией chunk audit.
+
+## 21 августа: Balanced50 завершён; подтверждённый quality baseline — 30%, статус STOP
+
+По прямому решению владельца проверка выполнена server-local через `/ask`, а не вручную через
+VK/HDE. Frozen exposed calibration-набор `pilot50_balanced_v5` содержит ровно `50` обращений:
+`25 typical` и `25 atypical`. Это calibration/regression baseline на 21 августа 2026 года, а не
+независимый holdout и не измерение production ticket conversion.
+
+Первый one-shot на tooling `26bfe9cd9a2f13ad80cc6bb0faf39ed0de206432` остановился после
+`1/50`: целевой `rosmol-app-ml` учитывал Max по тарифу, но simple-модель оставалась с нулевой
+ценой. Cost guard корректно остановил выполнение; reservation с cap `200 RUB` и исходный evidence
+сохранены, повтор этого запуска запрещён. После явного разрешения владельца два несекретных тарифа
+simple-модели установлены в `12.2/12.2 RUB per million`, пересоздан только `rosmol-app-ml`, и
+внутри target runtime подтверждены exact SHA
+`ba1408b48fa058f146dab31a73e0b13e250ed556` и полный pricing mapping.
+
+Отдельный replacement one-shot с новым approval и cap `100 RUB` выполнил все `50/50` запросов.
+Safe aggregate подтверждает `50 HTTP success`, `50 trace found`, `0 cache hits`, отсутствие
+budget/pricing stop и стоимость `37.897798 RUB`. Preflight и verified runtime SHA совпали с
+`ba1408b48fa058f146dab31a73e0b13e250ed556`; после запуска текущий `/ready` также вернул этот
+exact SHA. In-band `postflight_sha` в generic bypass report равен `null`: generic runner его не
+собирает, хотя старый анализатор ошибочно требовал это поле. Поэтому canonical global-summary и
+`run.completed` не созданы; raw report не изменять и 50 запросов не повторять.
+
+Зафиксированные метрики качества:
+
+- строгий `passed`: `15/50 = 30%` overall, `9/25 = 36%` typical,
+  `6/25 = 24%` atypical;
+- ответ без оператора: `31/50 = 62%` overall, `20/25 = 80%` typical,
+  `11/25 = 44%` atypical;
+- эскалация: `19/50 = 38%` overall, `5/25 = 20%` typical,
+  `14/25 = 56%` atypical;
+- failure reasons пересекаются и поэтому не суммируются: `answer_contains_mismatch=35`,
+  `unexpected_escalation=19`, `behavior_mismatch:answer!=escalate=19`,
+  `expected_chunk_not_cited=18`, `expected_or_equivalent_chunk_not_cited=1`,
+  `temporal_polarity_mismatch=6`.
+
+Главная продуктовая метрика требует подтверждённого закрытия тикета, а не только отсутствия
+эскалации. Поэтому `62% bot-only` нельзя выдавать за конверсию. Честный текущий baseline —
+`30%`, целевые `>=60%` не достигнуты, quality verdict — `STOP`.
+
+По команде владельца работа на этом месте остановлена: не выполнять новый eval, selective retry,
+настройку prompts/thresholds/routing/KB, включение HDE/VK или дальнейшую очистку файлов. При
+возобновлении сначала анализировать весь private failure-пакет как единый cohort и отделить общие
+причины retrieval/citation, unjustified escalation и temporal polarity; исправленные случаи
+остаются regression и не доказывают обобщающую способность.
 
 ## 21 августа: одиночный ручной вопрос провален; готовится один глобальный прогон 25+25
 

@@ -4579,8 +4579,23 @@ async def test_server_local_eval_runs_after_authorized_capability_probe(
         bypass_cache=True,
     )
 
-    assert requests == [("GET", "/ready"), ("POST", "/ask")]
+    assert requests == [("GET", "/ready"), ("POST", "/ask"), ("GET", "/ready")]
     assert metrics["http_success_rate"] == 1.0
+    assert metrics["runtime_identity"]["preflight_release_git_sha"] == "1" * 40
+    assert metrics["runtime_identity"]["postflight_release_git_sha"] == "1" * 40
+
+
+def test_runtime_identity_never_promotes_preflight_to_verified() -> None:
+    identity = run_ask_module._runtime_identity_report(
+        expected_runtime_git_sha=None,
+        preflight_release_git_sha=SOURCE_DIAGNOSTIC_RUNTIME_SHA,
+        postflight_release_git_sha=None,
+        required=False,
+    )
+
+    assert identity["preflight_release_git_sha"] == SOURCE_DIAGNOSTIC_RUNTIME_SHA
+    assert identity["postflight_release_git_sha"] is None
+    assert identity["verified_release_git_sha"] is None
 
 
 @pytest.mark.asyncio

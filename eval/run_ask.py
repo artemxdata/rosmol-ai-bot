@@ -1799,6 +1799,7 @@ async def run_eval(
                 or validated_repricing_contract is not None
                 or validated_candidate_contract is not None
                 or targeted_runtime_contract
+                or (bypass_cache and _requires_signed_cache_bypass(target))
             ):
                 phase0_execution_stage = "runtime_postflight"
                 try:
@@ -3571,9 +3572,7 @@ def _runtime_identity_report(
         "expected_runtime_git_sha": expected,
         "preflight_release_git_sha": preflight,
         "postflight_release_git_sha": postflight,
-        "verified_release_git_sha": (
-            expected if verified else postflight or preflight
-        ),
+        "verified_release_git_sha": postflight,
         "matched_expected_runtime": verified if expected else None,
     }
 
