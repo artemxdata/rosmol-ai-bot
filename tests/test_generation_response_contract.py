@@ -18,6 +18,7 @@ from src.graph.nodes.generate import (
     _question_topic_group,
     _source_chunk_covers_question,
     _source_matches_explicit_question_constraints,
+    _typed_fact_dimensions_match,
     generate,
 )
 from src.graph.nodes.verify import verify
@@ -2137,6 +2138,24 @@ def test_single_source_binding_rejects_reversed_permission() -> None:
     assert not _llm_claims_have_bound_source_facts(
         "На площадку можно приносить животных [src:yonote_rules]",
         [source],
+    )
+
+
+def test_typed_fact_dimensions_allow_missing_source_permission() -> None:
+    assert _typed_fact_dimensions_match({"permission:allowed"}, set())
+
+
+def test_typed_fact_dimensions_reject_conflicting_source_permission() -> None:
+    assert not _typed_fact_dimensions_match(
+        {"permission:allowed"},
+        {"permission:forbidden"},
+    )
+
+
+def test_typed_fact_dimensions_keep_payer_strict() -> None:
+    assert not _typed_fact_dimensions_match(
+        {"payer:participant"},
+        {"payer:organizer"},
     )
 
 

@@ -2135,6 +2135,10 @@ def _typed_fact_dimensions_match(
             key for key in required_keys if key.partition(":")[0] == dimension
         }
         available = {key for key in source_keys if key.partition(":")[0] == dimension}
+        # Residual risk: an unrecognized source prohibition also looks like missing
+        # permission evidence and can let an allowed claim pass this dimension.
+        if dimension == "permission" and not available:
+            continue
         if not available or not required & available:
             return False
     return True
