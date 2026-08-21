@@ -5,8 +5,10 @@
 **Ветка:** `codex/real-rag`
 
 **Exact runtime на тестовом сервере:**
-`6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`. Локальный successor с исправлениями splitter,
-стабилизацией ID и классификацией chunk audit пока не закоммичен и на сервер не доставлен.
+`6380acd96d5bf17d4c9f426b2cf68f2dd959aacf`. Проверенный successor с исправлениями splitter,
+стабилизацией ID и классификацией chunk audit зафиксирован implementation commit
+`bc265b3a5cb4177ad678e3febb0a44d6a26f2120`; финальный handoff является его docs-only потомком.
+На сервер successor ещё не доставлен.
 
 ## 21 августа: runtime `6380acd` исправен, полный Yonote Preview дал содержательный STOP
 
@@ -42,7 +44,8 @@ webhook недоступен, VK credentials отсутствуют. Админ�
 редактор (`read_only=false`, `mutations_enabled=true`), однако все действия публикации остаются
 запрещены до нового полного Preview `GO` и отдельного owner review.
 
-Локальный незакоммиченный successor устраняет общие причины, не подгоняя ответы под кейсы:
+Implementation commit `bc265b3a5cb4177ad678e3febb0a44d6a26f2120` устраняет общие причины, не
+подгоняя ответы под кейсы:
 длинные API-разделы режутся после нормализации с соблюдением hard limit; exact-content
 reconciliation сохраняет прежние chunk IDs при сдвиге секций и отделяет raw ID churn от
 логических add/remove; chunk audit policy `yonote-chunk-audit-v1` делит блокирующие дефекты и
