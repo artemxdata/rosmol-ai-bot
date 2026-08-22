@@ -1090,6 +1090,58 @@ def test_conditional_parent_chunk_rejects_swapped_rows_and_date_permutation() ->
     )
 
 
+def test_conditional_binding_collects_compatible_grant_deadlines() -> None:
+    source = ScoredChunk(
+        chunk_id="yonote_grant_agreement_review",
+        text=(
+            "Первичная проверка проекта занимает до 30 дней. "
+            "Общий срок заключения соглашения составляет 60 дней."
+        ),
+        metadata={"source_type": "yonote", "has_conditional_logic": True},
+        reranker_score=0.95,
+    )
+
+    assert _llm_claims_have_bound_source_facts(
+        "Проверка занимает до 30 дней, общий срок составляет 60 дней "
+        "[src:yonote_grant_agreement_review]",
+        [source],
+    )
+
+
+def test_conditional_binding_rejects_collective_conflicting_audiences() -> None:
+    source = ScoredChunk(
+        chunk_id="yonote_audience_parent",
+        text=(
+            "Для наставников: первый срок составляет 30 дней.\n"
+            "Для школьников: второй срок составляет 60 дней."
+        ),
+        metadata={"source_type": "yonote", "has_conditional_logic": True},
+        reranker_score=0.95,
+    )
+
+    assert not _llm_claims_have_bound_source_facts(
+        "Сроки составляют 30 и 60 дней [src:yonote_audience_parent]",
+        [source],
+    )
+
+
+def test_conditional_binding_rejects_collective_conflicting_age_branches() -> None:
+    source = ScoredChunk(
+        chunk_id="yonote_age_parent",
+        text=(
+            "Участники 14–17 лет: первый срок составляет 30 дней.\n"
+            "Участники 18–35 лет: второй срок составляет 60 дней."
+        ),
+        metadata={"source_type": "yonote", "has_conditional_logic": True},
+        reranker_score=0.95,
+    )
+
+    assert not _llm_claims_have_bound_source_facts(
+        "Сроки составляют 30 и 60 дней [src:yonote_age_parent]",
+        [source],
+    )
+
+
 @pytest.mark.parametrize(
     ("query", "minor_matches", "adult_matches"),
     [

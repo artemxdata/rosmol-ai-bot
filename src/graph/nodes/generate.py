@@ -1925,7 +1925,7 @@ def _chunk_supports_claim_facts(
             if _explicit_age_values(question.text)
         )
     claim_typed_facts = _critical_nonnumeric_fact_keys(claim)
-    return any(
+    if any(
         claim_numbers.issubset(_claim_fact_numbers(group))
         and set(_date_signatures(claim)).issubset(_date_signatures(group))
         and _condition_dimensions_match(
@@ -1941,7 +1941,88 @@ def _chunk_supports_claim_facts(
             _critical_nonnumeric_fact_keys(group),
         )
         for group in groups
-    )
+    ):
+        return True
+    if required_condition_keys or explicit_age_text:
+        return False
+
+    claim_dates = set(_date_signatures(claim))
+    claim_typed_dimensions = {
+        key.partition(":")[0] for key in claim_typed_facts
+    }
+    states = [(frozenset(), frozenset(), frozenset(), {})]
+    seen_states = {(frozenset(), frozenset(), frozenset(), ())}
+    for group in groups:
+        group_numbers = claim_numbers & _claim_fact_numbers(group)
+        group_dates = claim_dates & set(_date_signatures(group))
+        group_typed_facts = {
+            key
+            for key in _critical_nonnumeric_fact_keys(group)
+            if key.partition(":")[0] in claim_typed_dimensions
+        }
+        if not group_numbers and not group_dates and not group_typed_facts:
+            continue
+
+        group_condition_values: dict[str, set[str]] = {}
+        for key in _condition_keys(group):
+            group_condition_values.setdefault(_condition_dimension(key), set()).add(key)
+
+        next_states = list(states)
+        for covered_numbers, covered_dates, covered_typed_facts, condition_values in states:
+            merged_condition_values = {
+                dimension: set(values)
+                for dimension, values in condition_values.items()
+            }
+            has_condition_conflict = False
+            for dimension, values in group_condition_values.items():
+                existing_values = merged_condition_values.get(dimension)
+                if existing_values is None:
+                    merged_condition_values[dimension] = set(values)
+                    continue
+                compatible_values = existing_values & values
+                if not compatible_values:
+                    has_condition_conflict = True
+                    break
+                merged_condition_values[dimension] = compatible_values
+            if has_condition_conflict:
+                continue
+
+            merged_numbers = covered_numbers | group_numbers
+            merged_dates = covered_dates | group_dates
+            merged_typed_facts = covered_typed_facts | group_typed_facts
+            if (
+                claim_numbers.issubset(merged_numbers)
+                and claim_dates.issubset(merged_dates)
+                and _typed_fact_dimensions_match(
+                    claim_typed_facts,
+                    set(merged_typed_facts),
+                )
+            ):
+                return True
+
+            state_key = (
+                merged_numbers,
+                merged_dates,
+                merged_typed_facts,
+                tuple(
+                    sorted(
+                        (dimension, tuple(sorted(values)))
+                        for dimension, values in merged_condition_values.items()
+                    )
+                ),
+            )
+            if state_key not in seen_states:
+                seen_states.add(state_key)
+                next_states.append(
+                    (
+                        merged_numbers,
+                        merged_dates,
+                        merged_typed_facts,
+                        merged_condition_values,
+                    )
+                )
+        states = next_states
+    return False
 
 
 def _source_fact_binding_subreason(
